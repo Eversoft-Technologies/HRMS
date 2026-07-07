@@ -17,6 +17,8 @@ class JobPost(models.Model):
     description = models.TextField(null=True, blank=True)
     openings = models.IntegerField(default=1)
     is_remote = models.BooleanField(default=False)
+    status = models.CharField(max_length=20, default='Active')
+    priority = models.CharField(max_length=20, default='Normal')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

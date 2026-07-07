@@ -171,12 +171,14 @@ class JobPostSerializer(serializers.ModelSerializer):
     description = serializers.CharField(
         required=False, allow_blank=True, allow_null=True, default='',
     )
+    createdAt = serializers.DateTimeField(source='created_at', read_only=True)
 
     class Meta:
         model = JobPost
         fields = [
             'id', 'title', 'dept', 'location', 'type', 'salary', 'applicants',
-            'color', 'description', 'openings', 'remote',
+            'color', 'description', 'openings', 'remote', 'status', 'priority',
+            'createdAt',
         ]
         read_only_fields = ['id', 'applicants', 'color']
         extra_kwargs = {
@@ -184,6 +186,8 @@ class JobPostSerializer(serializers.ModelSerializer):
             'type': {'required': False, 'default': 'Full-time'},
             'salary': {'required': False, 'default': ''},
             'openings': {'required': False, 'default': 1},
+            'status': {'required': False, 'default': 'Active'},
+            'priority': {'required': False, 'default': 'Normal'},
         }
 
     def to_representation(self, instance):
@@ -199,6 +203,9 @@ class JobPostSerializer(serializers.ModelSerializer):
             'description': instance.description or '',
             'openings': instance.openings,
             'remote': bool(instance.is_remote),
+            'status': instance.status or 'Active',
+            'priority': instance.priority or 'Normal',
+            'createdAt': instance.created_at.strftime(DATETIME_FMT) if instance.created_at else None,
         }
 
     def create(self, validated_data):

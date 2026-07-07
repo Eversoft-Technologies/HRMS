@@ -1,0 +1,1 @@
+function B({label:e,value:t,sub:r,trend:i,color:o="blue"}
