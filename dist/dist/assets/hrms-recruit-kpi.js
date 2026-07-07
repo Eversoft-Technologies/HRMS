@@ -1,12 +1,9 @@
 /**
- * hrms-recruit-kpi.js  v1
+ * hrms-recruit-kpi.js  v3
  * Recruitment KPI Dashboard — a full-screen analytics overlay.
  *
  * Injects a "📊 KPI Dashboard" button into the Recruitment page and opens a
  * rich analytics modal wired to GET /api/recruitment/kpis.
- *
- * Tabs (individual):  Overview | Pipeline | Resume Scoring | Recordings | Trends
- * Tabs (admin extra): Jobs | Team Performance
  *
  * Same no-rebuild injection pattern as hrms-rbac.js / hrms-attendance.js.
  */
@@ -18,12 +15,26 @@
   var REFRESH_MS  = 60000;
 
   var state = {
-    tab:    'overview',
-    scope:  'me',
-    range:  'all',
-    data:   null,
-    loading: false,
-    timer:  null,
+    tab:             'overview',
+    scope:           'me',
+    range:           'all',
+    role:            '',
+    interviewer:     '',
+    dept:            '',
+    
+    // Tab-specific interactive filters
+    interview_type:  '',
+    status:          '',
+    outcome:         '',
+    source:          '',
+    verdict:         '',
+    job_type:        '',
+
+    data:            null,
+    loading:         false,
+    timer:           null,
+    charts:          [], // Keep track of active Chart.js instances
+    lastRenderedTab: null // Tracks the active tab to prevent unnecessary HTML rebuilds
   };
 
   /* ── session helpers ──────────────────────────────────────────────────── */
@@ -35,7 +46,7 @@
   function isAdmin() {
     var s = session();
     var r = (s.role || s.userRole || '').toLowerCase();
-    return r === 'admin' || r === 'hr' || r === 'hr manager' || r === 'super admin';
+    return r === 'admin' || r === 'hr' || r === 'hr manager' || r === 'super admin' || r === 'recruitment' || r === 'hr executive';
   }
 
   /* ── API helper ───────────────────────────────────────────────────────── */
@@ -56,7 +67,22 @@
 
   function fetchKpis() {
     var scope = isAdmin() ? state.scope : 'me';
-    return api('/recruitment/kpis?scope=' + scope + '&range=' + state.range);
+    var url = '/recruitment/kpis?scope=' + scope + '&range=' + state.range;
+    if (state.role) url += '&role=' + encodeURIComponent(state.role);
+    if (scope === 'all') {
+      if (state.interviewer) url += '&interviewer=' + encodeURIComponent(state.interviewer);
+      if (state.dept) url += '&dept=' + encodeURIComponent(state.dept);
+    }
+    
+    // Pass dynamic tab filters if set
+    if (state.interview_type) url += '&interview_type=' + encodeURIComponent(state.interview_type);
+    if (state.status) url += '&status=' + encodeURIComponent(state.status);
+    if (state.outcome) url += '&outcome=' + encodeURIComponent(state.outcome);
+    if (state.source) url += '&source=' + encodeURIComponent(state.source);
+    if (state.verdict) url += '&verdict=' + encodeURIComponent(state.verdict);
+    if (state.job_type) url += '&job_type=' + encodeURIComponent(state.job_type);
+
+    return api(url);
   }
 
   /* ── escape ───────────────────────────────────────────────────────────── */
@@ -71,17 +97,37 @@
   function num(v) { return (v == null ? '—' : v); }
   function score(v) { return (v == null || v === 0 ? '—' : v.toFixed(1)); }
 
-  /* ── bar helper ───────────────────────────────────────────────────────── */
-  function miniBar(value, max, color) {
-    var w = max > 0 ? Math.round((value / max) * 100) : 0;
-    return '<div style="width:100%;background:var(--border);border-radius:4px;height:6px;margin-top:4px">' +
-      '<div style="width:' + w + '%;background:' + color + ';border-radius:4px;height:6px;transition:width .4s"></div>' +
-      '</div>';
+  function kpiCard(label, val, sub, color, id) {
+    var idAttr = id ? ' id="' + id + '-val"' : '';
+    var subIdAttr = id ? ' id="' + id + '-sub"' : '';
+    return '<div class="kpi-card c-' + color + '">' +
+      '<div class="kpi-card-lbl">' + esc(label) + '</div>' +
+      '<div class="kpi-card-val"' + idAttr + '>' + esc(String(val == null ? '—' : val)) + '</div>' +
+      (sub ? '<div class="kpi-card-sub"' + subIdAttr + '>' + esc(sub) + '</div>' : '<div class="kpi-card-sub"' + subIdAttr + ' style="display:none"></div>') +
+    '</div>';
   }
 
-  /* ── color map ────────────────────────────────────────────────────────── */
-  var OUTCOME_COLORS = { Selected: '#22c55e', Rejected: '#ef4444', Waitlisted: '#f59e0b', Pending: '#94a3b8' };
-  var VERDICT_COLORS = { PASS: '#22c55e', HOLD: '#f59e0b', FAIL: '#ef4444' };
+  /* ── Chart.js Loader ───────────────────────────────────────────────────── */
+  function loadChartJs(callback) {
+    if (window.Chart) {
+      callback();
+      return;
+    }
+    var existing = document.querySelector('script[src*="chart.js"]');
+    if (existing) {
+      var interval = setInterval(function () {
+        if (window.Chart) {
+          clearInterval(interval);
+          callback();
+        }
+      }, 50);
+      return;
+    }
+    var s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/chart.js';
+    s.onload = callback;
+    document.head.appendChild(s);
+  }
 
   /* ── inject styles ────────────────────────────────────────────────────── */
   function injectStyle() {
@@ -92,75 +138,66 @@
       /* overlay backdrop */
       '#hrms-kpi-overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9900;display:flex;align-items:center;justify-content:center;padding:16px;backdrop-filter:blur(4px)}',
       /* modal */
-      '.kpi-modal{background:var(--card,#fff);border-radius:16px;width:100%;max-width:960px;max-height:90vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 24px 64px rgba(0,0,0,.25)}',
+      '.kpi-modal{background:var(--card,#fff);border-radius:16px;width:100%;max-width:1000px;max-height:92vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 24px 64px rgba(0,0,0,.25);border:1px solid var(--border,#e5e7eb)}',
       /* header */
       '.kpi-head{display:flex;align-items:center;justify-content:space-between;padding:20px 24px 0;flex-shrink:0}',
-      '.kpi-title{font-size:17px;font-weight:700;color:var(--text1,#111)}',
+      '.kpi-title{font-size:18px;font-weight:700;color:var(--text1,#111)}',
       '.kpi-sub{font-size:12px;color:var(--text3,#888);margin-top:2px}',
-      '.kpi-x{background:none;border:none;font-size:22px;cursor:pointer;color:var(--text3,#888);line-height:1;padding:4px 8px;border-radius:6px}',
-      '.kpi-x:hover{background:var(--hover,#f3f4f6)}',
+      '.kpi-x{background:none;border:none;font-size:24px;cursor:pointer;color:var(--text3,#888);line-height:1;padding:4px 8px;border-radius:6px;transition:.15s}',
+      '.kpi-x:hover{background:var(--hover,#f3f4f6);color:var(--text1,#111)}',
       /* toolbar */
-      '.kpi-toolbar{display:flex;align-items:center;gap:10px;padding:14px 24px 0;flex-wrap:wrap;flex-shrink:0}',
-      '.kpi-scope-btn{padding:5px 13px;border-radius:20px;border:1.5px solid var(--border,#e5e7eb);font-size:12px;cursor:pointer;background:transparent;color:var(--text2,#555);font-weight:500;transition:.15s}',
+      '.kpi-toolbar{display:flex;align-items:center;gap:12px;padding:14px 24px 10px;flex-wrap:wrap;flex-shrink:0;border-bottom:1px solid var(--border,#e5e7eb)}',
+      '.kpi-scope-btn{padding:6px 14px;border-radius:20px;border:1.5px solid var(--border,#e5e7eb);font-size:12px;cursor:pointer;background:transparent;color:var(--text2,#555);font-weight:600;transition:.15s}',
       '.kpi-scope-btn.active{background:var(--accent,#6366f1);color:#fff;border-color:var(--accent,#6366f1)}',
-      '.kpi-range-sel{border:1.5px solid var(--border,#e5e7eb);border-radius:8px;padding:5px 10px;font-size:12px;background:var(--card,#fff);color:var(--text1,#111);cursor:pointer}',
-      '.kpi-refresh{margin-left:auto;font-size:11px;color:var(--text3,#888)}',
+      '.kpi-filter-select{border:1.5px solid var(--border,#e5e7eb);border-radius:8px;padding:6px 12px;font-size:12px;background:var(--card,#fff);color:var(--text1,#111);cursor:pointer;outline:none;font-weight:500;transition:.15s}',
+      '.kpi-filter-select:hover{border-color:var(--accent,#6366f1)}',
+      '.kpi-filter-select:focus{border-color:var(--accent,#6366f1);box-shadow:0 0 0 3px rgba(99,102,241,0.15)}',
+      '.kpi-refresh{margin-left:auto;font-size:11px;color:var(--text3,#888);font-weight:500;display:inline-flex;align-items:center;gap:6px}',
+      /* loading spinner */
+      '.kpi-spinner{display:inline-block;width:12px;height:12px;border:2px solid rgba(0,0,0,0.1);border-radius:50%;border-top-color:var(--accent,#6366f1);animation:kpi-spin 0.8s linear infinite;vertical-align:middle}',
+      '@keyframes kpi-spin{to{transform:rotate(360deg)}}',
       /* tabs */
-      '.kpi-tabs{display:flex;gap:4px;padding:12px 24px 0;border-bottom:1.5px solid var(--border,#e5e7eb);flex-shrink:0;overflow-x:auto}',
-      '.kpi-tab{padding:7px 14px;border-radius:8px 8px 0 0;border:none;background:transparent;font-size:12.5px;cursor:pointer;color:var(--text2,#666);font-weight:500;border-bottom:2.5px solid transparent;white-space:nowrap}',
-      '.kpi-tab.active{color:var(--accent,#6366f1);border-bottom-color:var(--accent,#6366f1);font-weight:700}',
+      '.kpi-tabs{display:flex;gap:6px;padding:10px 24px 0;background:var(--bg2,#f8fafc);border-bottom:1.5px solid var(--border,#e5e7eb);flex-shrink:0;overflow-x:auto}',
+      '.kpi-tab{padding:8px 16px;border-radius:8px 8px 0 0;border:none;background:transparent;font-size:12.5px;cursor:pointer;color:var(--text2,#666);font-weight:600;border-bottom:2.5px solid transparent;white-space:nowrap;transition:.15s}',
+      '.kpi-tab.active{color:var(--accent,#6366f1);border-bottom-color:var(--accent,#6366f1);background:var(--card,#fff);border:1px solid var(--border,#e5e7eb);border-bottom-color:transparent;margin-bottom:-1.5px}',
       /* body */
-      '.kpi-body{flex:1;overflow-y:auto;padding:20px 24px 24px}',
+      '.kpi-body{flex:1;overflow-y:auto;padding:24px;background:var(--card,#fff);transition:opacity 0.25s ease}',
       /* cards grid */
-      '.kpi-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;margin-bottom:20px}',
-      '.kpi-card{background:var(--bg2,#f8fafc);border:1.5px solid var(--border,#e5e7eb);border-radius:12px;padding:14px 16px;position:relative;overflow:hidden}',
-      '.kpi-card::before{content:"";position:absolute;top:0;left:0;right:0;height:3px}',
-      '.kpi-card.c-green::before{background:linear-gradient(90deg,#22c55e,#86efac)}',
-      '.kpi-card.c-blue::before{background:linear-gradient(90deg,#6366f1,#a5b4fc)}',
-      '.kpi-card.c-amber::before{background:linear-gradient(90deg,#f59e0b,#fde68a)}',
-      '.kpi-card.c-red::before{background:linear-gradient(90deg,#ef4444,#fca5a5)}',
-      '.kpi-card.c-purple::before{background:linear-gradient(90deg,#a855f7,#d8b4fe)}',
-      '.kpi-card.c-cyan::before{background:linear-gradient(90deg,#06b6d4,#a5f3fc)}',
-      '.kpi-card.c-indigo::before{background:linear-gradient(90deg,#4f46e5,#818cf8)}',
-      '.kpi-card.c-pink::before{background:linear-gradient(90deg,#ec4899,#f9a8d4)}',
-      '.kpi-card-val{font-size:26px;font-weight:800;color:var(--text1,#111);line-height:1.1;margin-top:6px}',
-      '.kpi-card-lbl{font-size:11px;font-weight:600;color:var(--text3,#888);text-transform:uppercase;letter-spacing:.5px}',
-      '.kpi-card-sub{font-size:11px;color:var(--text3,#888);margin-top:3px}',
+      '.kpi-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:16px;margin-bottom:24px}',
+      '.kpi-card{background:var(--bg2,#f8fafc);border:1.5px solid var(--border,#e5e7eb);border-radius:12px;padding:16px;position:relative;overflow:hidden;transition:transform .2s, box-shadow .2s;box-sizing:border-box}',
+      '.kpi-card:hover{transform:translateY(-2px);box-shadow:0 6px 16px rgba(0,0,0,.04)}',
+      '.kpi-card::before{content:"";position:absolute;top:0;left:0;right:0;height:4px}',
+      '.kpi-card.c-green::before{background:linear-gradient(90deg,#10b981,#34d399)}',
+      '.kpi-card.c-blue::before{background:linear-gradient(90deg,#6366f1,#818cf8)}',
+      '.kpi-card.c-amber::before{background:linear-gradient(90deg,#f59e0b,#fbbf24)}',
+      '.kpi-card.c-red::before{background:linear-gradient(90deg,#ef4444,#f87171)}',
+      '.kpi-card.c-purple::before{background:linear-gradient(90deg,#a855f7,#c084fc)}',
+      '.kpi-card.c-cyan::before{background:linear-gradient(90deg,#06b6d4,#22d3ee)}',
+      '.kpi-card.c-indigo::before{background:linear-gradient(90deg,#4f46e5,#6366f1)}',
+      '.kpi-card.c-pink::before{background:linear-gradient(90deg,#ec4899,#f472b6)}',
+      '.kpi-card-val{font-size:28px;font-weight:800;color:var(--text1,#111);line-height:1.1;margin-top:6px;font-family:\'Syne\',sans-serif}',
+      '.kpi-card-lbl{font-size:11px;font-weight:700;color:var(--text3,#888);text-transform:uppercase;letter-spacing:.5px}',
+      '.kpi-card-sub{font-size:11px;color:var(--text3,#888);margin-top:4px}',
       /* section */
-      '.kpi-section{margin-bottom:22px}',
-      '.kpi-section-title{font-size:13px;font-weight:700;color:var(--text1,#111);margin-bottom:12px;display:flex;align-items:center;gap:8px}',
+      '.kpi-section{margin-bottom:24px}',
+      '.kpi-section-title{font-size:14px;font-weight:700;color:var(--text1,#111);margin-bottom:16px;display:flex;align-items:center;gap:10px}',
       '.kpi-section-title::after{content:"";flex:1;height:1px;background:var(--border,#e5e7eb)}',
-      /* pill list */
-      '.kpi-pills{display:flex;flex-wrap:wrap;gap:8px}',
-      '.kpi-pill{display:flex;align-items:center;gap:6px;background:var(--bg2,#f8fafc);border:1.5px solid var(--border,#e5e7eb);border-radius:20px;padding:4px 12px;font-size:12px;color:var(--text1,#111)}',
-      '.kpi-pill-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}',
-      '.kpi-pill-val{font-weight:700;margin-left:2px}',
       /* table */
       '.kpi-tbl{width:100%;border-collapse:collapse;font-size:12.5px}',
-      '.kpi-tbl th{text-align:left;padding:8px 10px;font-weight:700;color:var(--text3,#888);font-size:11px;text-transform:uppercase;border-bottom:1.5px solid var(--border,#e5e7eb)}',
-      '.kpi-tbl td{padding:9px 10px;border-bottom:1px solid var(--border,#e5e7eb);color:var(--text1,#111)}',
+      '.kpi-tbl th{text-align:left;padding:10px 12px;font-weight:700;color:var(--text3,#888);font-size:11px;text-transform:uppercase;border-bottom:1.5px solid var(--border,#e5e7eb)}',
+      '.kpi-tbl td{padding:10px 12px;border-bottom:1px solid var(--border,#e5e7eb);color:var(--text1,#111)}',
       '.kpi-tbl tr:last-child td{border-bottom:none}',
       '.kpi-tbl tr:hover td{background:var(--hover,#f8fafc)}',
-      /* trend chart */
-      '.kpi-trend{display:flex;align-items:flex-end;gap:6px;height:100px;padding:8px 0}',
-      '.kpi-trend-bar-wrap{flex:1;display:flex;flex-direction:column;align-items:center;gap:4px}',
-      '.kpi-trend-bar{width:100%;border-radius:4px 4px 0 0;min-height:2px;transition:height .4s}',
-      '.kpi-trend-lbl{font-size:9px;color:var(--text3,#888);text-align:center;white-space:nowrap;overflow:hidden;max-width:40px;text-overflow:ellipsis}',
-      /* scores bar */
-      '.kpi-score-row{display:flex;align-items:center;gap:10px;margin-bottom:10px}',
-      '.kpi-score-lbl{width:130px;font-size:12px;color:var(--text2,#555);flex-shrink:0}',
-      '.kpi-score-track{flex:1;background:var(--border,#e5e7eb);border-radius:20px;height:8px;overflow:hidden}',
-      '.kpi-score-fill{height:100%;border-radius:20px;transition:width .6s}',
-      '.kpi-score-val{width:36px;text-align:right;font-size:12px;font-weight:700;color:var(--text1,#111)}',
       /* loading */
-      '.kpi-loading{display:flex;align-items:center;justify-content:center;height:200px;color:var(--text3,#888);font-size:13px}',
+      '.kpi-loading{display:flex;align-items:center;justify-content:center;height:240px;color:var(--text3,#888);font-size:14px;font-weight:500}',
       /* empty */
-      '.kpi-empty{text-align:center;color:var(--text3,#888);font-size:13px;padding:40px 0}',
-      /* two-col */
-      '.kpi-two{display:grid;grid-template-columns:1fr 1fr;gap:16px}',
-      '@media(max-width:580px){.kpi-two{grid-template-columns:1fr}.kpi-cards{grid-template-columns:repeat(2,1fr)}}',
-      /* inject button */
-      '#hrms-kpi-btn{display:inline-flex;align-items:center;gap:6px;padding:7px 14px;border-radius:8px;border:1.5px solid var(--border,#e5e7eb);background:var(--card,#fff);color:var(--text1,#111);font-size:12.5px;font-weight:600;cursor:pointer;transition:.15s;white-space:nowrap}',
+      '.kpi-empty{text-align:center;color:var(--text3,#888);font-size:14px;padding:48px 0}',
+      /* layout and grid wrappers */
+      '.kpi-two{display:grid;grid-template-columns:1fr 1fr;gap:20px}',
+      '@media(max-width:768px){.kpi-two{grid-template-columns:1fr}.kpi-cards{grid-template-columns:repeat(2,1fr)}}',
+      '.chart-wrapper{background:var(--bg2,#f8fafc);border:1px solid var(--border,#e5e7eb);border-radius:12px;padding:16px;box-sizing:border-box}',
+      /* trigger button */
+      '#hrms-kpi-btn{display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border-radius:8px;border:1.5px solid var(--border,#e5e7eb);background:var(--card,#fff);color:var(--text1,#111);font-size:13px;font-weight:600;cursor:pointer;transition:.15s;white-space:nowrap}',
       '#hrms-kpi-btn:hover{background:var(--accent,#6366f1);color:#fff;border-color:var(--accent,#6366f1)}',
     ].join('\n');
     document.head.appendChild(s);
@@ -176,7 +213,11 @@
     document.body.appendChild(o);
     document.addEventListener('keydown', onKey);
     buildShell();
-    loadAndRender();
+    
+    loadChartJs(function () {
+      loadAndRender();
+    });
+
     state.timer = setInterval(function () {
       if (document.getElementById(OVERLAY_ID)) loadAndRender();
       else clearInterval(state.timer);
@@ -185,10 +226,17 @@
 
   function close() {
     clearInterval(state.timer);
+    if (state.charts && state.charts.length) {
+      state.charts.forEach(function (c) {
+        try { c.destroy(); } catch (_) {}
+      });
+      state.charts = [];
+    }
     var o = document.getElementById(OVERLAY_ID);
     if (o) o.parentNode.removeChild(o);
     document.removeEventListener('keydown', onKey);
     state.data = null;
+    state.lastRenderedTab = null;
   }
 
   function onKey(e) { if (e.key === 'Escape') close(); }
@@ -228,12 +276,13 @@
         '</div>' +
         '<div class="kpi-toolbar">' +
           scopeBtns +
-          '<select class="kpi-range-sel" data-kact="range">' +
+          '<select class="kpi-filter-select" data-kact="range" id="kpi-range-sel">' +
             '<option value="all"' + (state.range === 'all'     ? ' selected' : '') + '>All Time</option>' +
             '<option value="week"' + (state.range === 'week'   ? ' selected' : '') + '>This Week</option>' +
             '<option value="month"' + (state.range === 'month' ? ' selected' : '') + '>This Month</option>' +
             '<option value="quarter"' + (state.range === 'quarter' ? ' selected' : '') + '>Last 90 Days</option>' +
           '</select>' +
+          '<span id="kpi-dynamic-filters" style="display:inline-flex;gap:10px;align-items:center;flex-wrap:wrap"></span>' +
           '<span class="kpi-refresh" id="kpi-refresh-lbl"></span>' +
         '</div>' +
         '<div class="kpi-tabs" id="kpi-tabs-bar">' +
@@ -249,32 +298,67 @@
   function wire() {
     var o = document.getElementById(OVERLAY_ID);
     if (!o) return;
-    o.addEventListener('click', function (e) {
+    
+    o.onclick = function (e) {
       var el = e.target.closest('[data-kact]');
       if (!el) return;
       var act = el.getAttribute('data-kact');
       if (act === 'close') { close(); return; }
       if (act === 'tab') {
         state.tab = el.getAttribute('data-tab');
+        
+        // Reset tab-specific filters to keep switching clean
+        state.interview_type = '';
+        state.status = '';
+        state.outcome = '';
+        state.source = '';
+        state.verdict = '';
+        state.job_type = '';
+
         updateTabs();
-        renderBody();
+        buildShell();
+        loadAndRender();
         return;
       }
       if (act === 'scope') {
         state.scope = el.getAttribute('data-val');
-        // Reset to valid tab if admin tabs disappear
+        if (state.scope === 'me') {
+          state.interviewer = '';
+          state.dept = '';
+        }
         if (state.scope === 'me' && (state.tab === 'jobs' || state.tab === 'team')) state.tab = 'overview';
         buildShell();
         loadAndRender();
         return;
       }
-    });
-    o.addEventListener('change', function (e) {
-      if (e.target && e.target.getAttribute('data-kact') === 'range') {
+    };
+
+    o.onchange = function (e) {
+      var act = e.target.getAttribute('data-kact');
+      if (!act) return;
+      if (act === 'range') {
         state.range = e.target.value;
-        loadAndRender();
+      } else if (act === 'filter-role') {
+        state.role = e.target.value;
+      } else if (act === 'filter-dept') {
+        state.dept = e.target.value;
+      } else if (act === 'filter-interviewer') {
+        state.interviewer = e.target.value;
+      } else if (act === 'filter-type') {
+        state.interview_type = e.target.value;
+      } else if (act === 'filter-status') {
+        state.status = e.target.value;
+      } else if (act === 'filter-outcome') {
+        state.outcome = e.target.value;
+      } else if (act === 'filter-source') {
+        state.source = e.target.value;
+      } else if (act === 'filter-verdict') {
+        state.verdict = e.target.value;
+      } else if (act === 'filter-jobtype') {
+        state.job_type = e.target.value;
       }
-    });
+      loadAndRender();
+    };
   }
 
   function updateTabs() {
@@ -286,18 +370,119 @@
   }
 
   function setBody(html) {
+    if (state.charts && state.charts.length) {
+      state.charts.forEach(function (c) {
+        try { c.destroy(); } catch (_) {}
+      });
+      state.charts = [];
+    }
     var b = document.getElementById('kpi-body');
     if (b) b.innerHTML = html;
   }
 
+  function populateFilters() {
+    var container = document.getElementById('kpi-dynamic-filters');
+    if (!container || !state.data || !state.data.filters) return;
+    
+    var filters = state.data.filters;
+    var html = '';
+    
+    // 1. Role filter (Show on all tabs except Jobs)
+    if (state.tab !== 'jobs') {
+      html += '<select class="kpi-filter-select" data-kact="filter-role" id="kpi-role-sel">';
+      html += '<option value="">All Roles</option>';
+      (filters.roles || []).forEach(function (role) {
+        html += '<option value="' + esc(role) + '"' + (state.role === role ? ' selected' : '') + '>' + esc(role) + '</option>';
+      });
+      html += '</select>';
+    }
+
+    // 2. Department & Recruiter filters
+    if (isAdmin() && state.scope === 'all') {
+      html += '<select class="kpi-filter-select" data-kact="filter-dept" id="kpi-dept-sel">';
+      html += '<option value="">All Departments</option>';
+      (filters.departments || []).forEach(function (dept) {
+        html += '<option value="' + esc(dept) + '"' + (state.dept === dept ? ' selected' : '') + '>' + esc(dept) + '</option>';
+      });
+      html += '</select>';
+      
+      if (state.tab !== 'jobs') {
+        html += '<select class="kpi-filter-select" data-kact="filter-interviewer" id="kpi-interviewer-sel">';
+        html += '<option value="">All Recruiters</option>';
+        (filters.interviewers || []).forEach(function (intv) {
+          html += '<option value="' + esc(intv) + '"' + (state.interviewer === intv ? ' selected' : '') + '>' + esc(intv) + '</option>';
+        });
+        html += '</select>';
+      }
+    }
+
+    // 3. Tab-Specific Filters
+    if (state.tab === 'pipeline') {
+      html += '<select class="kpi-filter-select" data-kact="filter-type" id="kpi-type-sel">';
+      html += '<option value="">All Interview Types</option>';
+      (filters.interview_types || []).forEach(function (t) {
+        html += '<option value="' + esc(t) + '"' + (state.interview_type === t ? ' selected' : '') + '>' + esc(t) + '</option>';
+      });
+      html += '</select>';
+
+      html += '<select class="kpi-filter-select" data-kact="filter-status" id="kpi-status-sel">';
+      html += '<option value="">All Statuses</option>';
+      (filters.statuses || []).forEach(function (s) {
+        html += '<option value="' + esc(s) + '"' + (state.status === s ? ' selected' : '') + '>' + esc(s) + '</option>';
+      });
+      html += '</select>';
+
+      html += '<select class="kpi-filter-select" data-kact="filter-outcome" id="kpi-outcome-sel">';
+      html += '<option value="">All Outcomes</option>';
+      (filters.outcomes || []).forEach(function (o) {
+        html += '<option value="' + esc(o) + '"' + (state.outcome === o ? ' selected' : '') + '>' + esc(o) + '</option>';
+      });
+      html += '</select>';
+    } else if (state.tab === 'resumes') {
+      html += '<select class="kpi-filter-select" data-kact="filter-source" id="kpi-source-sel">';
+      html += '<option value="">All Sources</option>';
+      (filters.sources || []).forEach(function (src) {
+        html += '<option value="' + esc(src) + '"' + (state.source === src ? ' selected' : '') + '>' + esc(src) + '</option>';
+      });
+      html += '</select>';
+    } else if (state.tab === 'recordings') {
+      html += '<select class="kpi-filter-select" data-kact="filter-verdict" id="kpi-verdict-sel">';
+      html += '<option value="">All Verdicts</option>';
+      (filters.verdicts || []).forEach(function (v) {
+        html += '<option value="' + esc(v) + '"' + (state.verdict === v ? ' selected' : '') + '>' + esc(v) + '</option>';
+      });
+      html += '</select>';
+    } else if (state.tab === 'jobs') {
+      html += '<select class="kpi-filter-select" data-kact="filter-jobtype" id="kpi-jobtype-sel">';
+      html += '<option value="">All Job Types</option>';
+      (filters.job_types || []).forEach(function (jt) {
+        html += '<option value="' + esc(jt) + '"' + (state.job_type === jt ? ' selected' : '') + '>' + esc(jt) + '</option>';
+      });
+      html += '</select>';
+    }
+    
+    container.innerHTML = html;
+  }
+
   function loadAndRender() {
-    setBody('<div class="kpi-loading">Loading KPI data…</div>');
+    var refreshLbl = document.getElementById('kpi-refresh-lbl');
+    if (refreshLbl) {
+      refreshLbl.innerHTML = '<span class="kpi-spinner"></span> Updating…';
+    }
+    var bodyEl = document.getElementById('kpi-body');
+    if (bodyEl) {
+      bodyEl.style.opacity = '0.65';
+      bodyEl.style.transition = 'opacity 0.2s ease';
+    }
+
     fetchKpis().then(function (r) {
+      if (bodyEl) bodyEl.style.opacity = '1';
       if (!r.ok || !r.data) {
         setBody('<div class="kpi-empty">Failed to load KPIs. Check the server is running.</div>');
         return;
       }
       state.data = r.data;
+      populateFilters();
       var lbl = document.getElementById('kpi-refresh-lbl');
       if (lbl) lbl.textContent = 'Updated ' + new Date().toLocaleTimeString();
       renderBody();
@@ -307,18 +492,127 @@
   function renderBody() {
     var d = state.data;
     if (!d) { setBody('<div class="kpi-loading">Loading…</div>'); return; }
-    if (state.tab === 'overview')    return setBody(renderOverview(d));
-    if (state.tab === 'pipeline')    return setBody(renderPipeline(d));
-    if (state.tab === 'resumes')     return setBody(renderResumes(d));
-    if (state.tab === 'recordings')  return setBody(renderRecordings(d));
-    if (state.tab === 'trends')      return setBody(renderTrends(d));
-    if (state.tab === 'jobs')        return setBody(renderJobs(d));
-    if (state.tab === 'team')        return setBody(renderTeam(d));
+    
+    var b = document.getElementById('kpi-body');
+    var needsRebuild = !b || b.innerHTML === '' || state.lastRenderedTab !== state.tab;
+    state.lastRenderedTab = state.tab;
+
+    if (state.tab === 'overview') {
+      if (needsRebuild) setBody(renderOverview(d));
+      else updateOverviewCards(d);
+      initOverviewCharts(d);
+    } else if (state.tab === 'pipeline') {
+      if (needsRebuild) setBody(renderPipeline(d));
+      else updatePipelineCards(d);
+      initPipelineCharts(d);
+    } else if (state.tab === 'resumes') {
+      if (needsRebuild) setBody(renderResumes(d));
+      else updateResumesCards(d);
+      initResumesCharts(d);
+    } else if (state.tab === 'recordings') {
+      if (needsRebuild) setBody(renderRecordings(d));
+      else updateRecordingsCards(d);
+      initRecordingsCharts(d);
+    } else if (state.tab === 'trends') {
+      if (needsRebuild) setBody(renderTrends(d));
+      initTrendsCharts(d);
+    } else if (state.tab === 'jobs') {
+      if (needsRebuild) setBody(renderJobs(d));
+      else updateJobsCards(d);
+      initJobsCharts(d);
+    } else if (state.tab === 'team') {
+      if (needsRebuild) setBody(renderTeam(d));
+      initTeamCharts(d);
+    }
   }
 
-  /* ═══════════════════════════════════════════════════════════════════════
-   * TAB RENDERERS
-   * ═════════════════════════════════════════════════════════════════════ */
+  /* ── helper: update values without destroying canvas elements ───────── */
+  function updateVal(id, val, sub) {
+    var valEl = document.getElementById(id + '-val');
+    if (valEl) valEl.textContent = val;
+    var subEl = document.getElementById(id + '-sub');
+    if (subEl) {
+      if (sub) {
+        subEl.textContent = sub;
+        subEl.style.display = '';
+      } else {
+        subEl.style.display = 'none';
+      }
+    }
+  }
+
+  /* ── Chart configuration helpers ───────────────────────────────────────── */
+  function getThemeColors() {
+    var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+    return {
+      gridColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)',
+      textColor: isDark ? 'rgba(255, 255, 255, 0.7)' : 'rgba(0, 0, 0, 0.6)',
+      accent: '#6366f1',
+      success: '#10b981',
+      warning: '#f59e0b',
+      danger: '#ef4444',
+      info: '#06b6d4',
+      neutral: isDark ? '#475569' : '#94a3b8',
+      cardBg: isDark ? '#1e293b' : '#ffffff'
+    };
+  }
+
+  function doughnutOptions(colors) {
+    return {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: {
+          position: 'right',
+          labels: {
+            color: colors.textColor,
+            font: { family: "'DM Sans', sans-serif", size: 11, weight: '500' }
+          }
+        },
+        tooltip: {
+          backgroundColor: colors.cardBg,
+          titleColor: colors.textColor,
+          bodyColor: colors.textColor,
+          borderColor: colors.gridColor,
+          borderWidth: 1
+        }
+      }
+    };
+  }
+
+  function barOptions(colors, displayLegend, horizontal) {
+    return {
+      indexAxis: horizontal ? 'y' : 'x',
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: {
+          display: !!displayLegend,
+          labels: {
+            color: colors.textColor,
+            font: { family: "'DM Sans', sans-serif", size: 11, weight: '500' }
+          }
+        },
+        tooltip: {
+          backgroundColor: colors.cardBg,
+          titleColor: colors.textColor,
+          bodyColor: colors.textColor,
+          borderColor: colors.gridColor,
+          borderWidth: 1
+        }
+      },
+      scales: {
+        x: {
+          grid: { color: colors.gridColor },
+          ticks: { color: colors.textColor, font: { family: "'DM Sans', sans-serif", size: 10 } }
+        },
+        y: {
+          grid: { color: colors.gridColor },
+          ticks: { color: colors.textColor, font: { family: "'DM Sans', sans-serif", size: 10 } }
+        }
+      }
+    };
+  }
 
   /* ── Overview ─────────────────────────────────────────────────────────── */
   function renderOverview(d) {
@@ -327,52 +621,122 @@
     var rc = d.recordings || {};
 
     var cards = [
-      { label: 'Total Interviews', val: num(p.total), sub: '', color: 'blue' },
-      { label: 'Shortlist Rate',   val: pct(p.shortlistRate), sub: num(p.byOutcome && p.byOutcome.find && (p.byOutcome.find(function(x){return x.outcome==='Selected';}) || {}).count || 0) + ' selected', color: 'green' },
-      { label: 'Rejection Rate',   val: pct(p.rejectionRate), sub: num((p.byOutcome && p.byOutcome.find && (p.byOutcome.find(function(x){return x.outcome==='Rejected';}) || {}).count) || 0) + ' rejected', color: 'red' },
-      { label: 'Avg Candidate Score', val: score(p.avgCandidateScore), sub: 'out of 100', color: 'indigo' },
-      { label: 'Resumes Screened',  val: num(rs.total), sub: '', color: 'cyan' },
-      { label: 'High-Match Resumes', val: num(rs.highMatch), sub: 'score ≥ 75', color: 'green' },
-      { label: 'Avg Resume Score',   val: score(rs.avgScore), sub: 'out of 100', color: 'purple' },
-      { label: 'Recorded Interviews',val: num(rc.total), sub: '', color: 'amber' },
+      { id: 'kpi-ov-total', label: 'Total Interviews', val: num(p.total), sub: '', color: 'blue' },
+      { id: 'kpi-ov-shortlist', label: 'Shortlist Rate',   val: pct(p.shortlistRate), sub: num(p.byOutcome && p.byOutcome.find && (p.byOutcome.find(function(x){return x.outcome==='Selected';}) || {}).count || 0) + ' selected', color: 'green' },
+      { id: 'kpi-ov-rejection', label: 'Rejection Rate',   val: pct(p.rejectionRate), sub: num((p.byOutcome && p.byOutcome.find && (p.byOutcome.find(function(x){return x.outcome==='Rejected';}) || {}).count) || 0) + ' rejected', color: 'red' },
+      { id: 'kpi-ov-avg-score', label: 'Avg Candidate Score', val: score(p.avgCandidateScore), sub: 'out of 100', color: 'indigo' },
+      { id: 'kpi-ov-resumes', label: 'Resumes Screened',  val: num(rs.total), sub: '', color: 'cyan' },
+      { id: 'kpi-ov-high-match', label: 'High-Match Resumes', val: num(rs.highMatch), sub: 'score ≥ 75', color: 'green' },
+      { id: 'kpi-ov-avg-resume', label: 'Avg Resume Score',   val: score(rs.avgScore), sub: 'out of 100', color: 'purple' },
+      { id: 'kpi-ov-recordings', label: 'Recorded Interviews',val: num(rc.total), sub: '', color: 'amber' },
     ];
     if (d.jobs) {
-      cards.push({ label: 'Open Positions', val: num(d.jobs.totalOpenings), sub: num(d.jobs.totalJobs) + ' job posts', color: 'pink' });
+      cards.push({ id: 'kpi-ov-jobs', label: 'Open Positions', val: num(d.jobs.totalOpenings), sub: num(d.jobs.totalJobs) + ' job posts', color: 'pink' });
     }
 
     var html = '<div class="kpi-cards">' +
       cards.map(function (c) {
-        return '<div class="kpi-card c-' + c.color + '">' +
-          '<div class="kpi-card-lbl">' + esc(c.label) + '</div>' +
-          '<div class="kpi-card-val">' + esc(String(c.val)) + '</div>' +
-          (c.sub ? '<div class="kpi-card-sub">' + esc(c.sub) + '</div>' : '') +
-        '</div>';
+        return kpiCard(c.label, c.val, c.sub, c.color, c.id);
       }).join('') +
     '</div>';
 
-    // Mini funnel
-    html += '<div class="kpi-section">' +
-      '<div class="kpi-section-title">Outcome Funnel</div>' +
-      '<div class="kpi-pills">';
-    (p.byOutcome || []).forEach(function (row) {
-      var col = OUTCOME_COLORS[row.outcome] || '#94a3b8';
-      html += '<div class="kpi-pill">' +
-        '<div class="kpi-pill-dot" style="background:' + col + '"></div>' +
-        esc(row.outcome) + '<span class="kpi-pill-val">' + row.count + '</span>' +
-      '</div>';
-    });
-    html += '</div></div>';
-
-    // Email delivery
-    html += '<div class="kpi-section">' +
-      '<div class="kpi-section-title">Email Delivery</div>' +
-      '<div class="kpi-cards" style="grid-template-columns:repeat(3,1fr)">' +
-      '<div class="kpi-card c-green"><div class="kpi-card-lbl">Sent</div><div class="kpi-card-val">' + num(p.emailsSent) + '</div></div>' +
-      '<div class="kpi-card c-amber"><div class="kpi-card-lbl">Pending</div><div class="kpi-card-val">' + num(p.emailsPending) + '</div></div>' +
-      '<div class="kpi-card c-red"><div class="kpi-card-lbl">Awaiting Outcome</div><div class="kpi-card-val">' + num(p.pendingOutcome) + '</div></div>' +
-      '</div></div>';
+    html += '<div class="kpi-two">' +
+      '<div class="chart-wrapper">' +
+        '<div class="kpi-section-title">Outcome Distribution</div>' +
+        '<div style="position:relative;height:220px;"><canvas id="chart-overview-outcome"></canvas></div>' +
+      '</div>' +
+      '<div class="chart-wrapper">' +
+        '<div class="kpi-section-title">Email Delivery Status</div>' +
+        '<div style="position:relative;height:220px;"><canvas id="chart-overview-emails"></canvas></div>' +
+      '</div>' +
+    '</div>';
 
     return html;
+  }
+
+  function updateOverviewCards(d) {
+    var p = d.pipeline || {};
+    var rs = d.resumeScoring || {};
+    var rc = d.recordings || {};
+
+    updateVal('kpi-ov-total', num(p.total));
+    updateVal('kpi-ov-shortlist', pct(p.shortlistRate), num(p.byOutcome && p.byOutcome.find && (p.byOutcome.find(function(x){return x.outcome==='Selected';}) || {}).count || 0) + ' selected');
+    updateVal('kpi-ov-rejection', pct(p.rejectionRate), num((p.byOutcome && p.byOutcome.find && (p.byOutcome.find(function(x){return x.outcome==='Rejected';}) || {}).count) || 0) + ' rejected');
+    updateVal('kpi-ov-avg-score', score(p.avgCandidateScore));
+    updateVal('kpi-ov-resumes', num(rs.total));
+    updateVal('kpi-ov-high-match', num(rs.highMatch));
+    updateVal('kpi-ov-avg-resume', score(rs.avgScore));
+    updateVal('kpi-ov-recordings', num(rc.total));
+    if (d.jobs) {
+      updateVal('kpi-ov-jobs', num(d.jobs.totalOpenings), num(d.jobs.totalJobs) + ' job posts');
+    }
+  }
+
+  function initOverviewCharts(d) {
+    if (!window.Chart) return;
+    var colors = getThemeColors();
+    var p = d.pipeline || {};
+
+    var outcomes = p.byOutcome || [];
+    var labels = outcomes.map(function(x) { return x.outcome; });
+    var data = outcomes.map(function(x) { return x.count; });
+    var bg = outcomes.map(function(x) {
+      if (x.outcome === 'Selected') return colors.success;
+      if (x.outcome === 'Rejected') return colors.danger;
+      if (x.outcome === 'Waitlisted') return colors.warning;
+      return colors.neutral;
+    });
+
+    var c1 = state.charts.find(function(c) { return c.canvas.id === 'chart-overview-outcome'; });
+    if (c1) {
+      c1.data.labels = labels.length ? labels : ['No Data'];
+      c1.data.datasets[0].data = data.length ? data : [0];
+      c1.data.datasets[0].backgroundColor = bg.length ? bg : [colors.neutral];
+      c1.update();
+    } else {
+      var ctx1 = document.getElementById('chart-overview-outcome');
+      if (ctx1) {
+        var chart1 = new Chart(ctx1, {
+          type: 'doughnut',
+          data: {
+            labels: labels.length ? labels : ['No Data'],
+            datasets: [{
+              data: data.length ? data : [0],
+              backgroundColor: bg.length ? bg : [colors.neutral],
+              borderWidth: 1,
+              borderColor: colors.cardBg
+            }]
+          },
+          options: doughnutOptions(colors)
+        });
+        state.charts.push(chart1);
+      }
+    }
+
+    var c2 = state.charts.find(function(c) { return c.canvas.id === 'chart-overview-emails'; });
+    if (c2) {
+      c2.data.datasets[0].data = [p.emailsSent || 0, p.emailsPending || 0, p.pendingOutcome || 0];
+      c2.update();
+    } else {
+      var ctx2 = document.getElementById('chart-overview-emails');
+      if (ctx2) {
+        var chart2 = new Chart(ctx2, {
+          type: 'bar',
+          data: {
+            labels: ['Sent', 'Pending', 'Awaiting Decision'],
+            datasets: [{
+              label: 'Emails',
+              data: [p.emailsSent || 0, p.emailsPending || 0, p.pendingOutcome || 0],
+              backgroundColor: [colors.success, colors.warning, colors.danger],
+              borderWidth: 0,
+              borderRadius: 6
+            }]
+          },
+          options: barOptions(colors, false, false)
+        });
+        state.charts.push(chart2);
+      }
+    }
   }
 
   /* ── Pipeline ─────────────────────────────────────────────────────────── */
@@ -380,39 +744,145 @@
     var p = d.pipeline || {};
     var html = '';
 
-    // Rate cards
     html += '<div class="kpi-cards">' +
-      kpiCard('Total Interviews', p.total, '', 'blue') +
-      kpiCard('Shortlist Rate', pct(p.shortlistRate), '', 'green') +
-      kpiCard('Rejection Rate', pct(p.rejectionRate), '', 'red') +
-      kpiCard('Waitlist Rate', pct(p.waitlistRate), '', 'amber') +
-      kpiCard('Avg Score', score(p.avgCandidateScore), 'out of 100', 'indigo') +
-      kpiCard('Emails Sent', p.emailsSent, '', 'green') +
-      kpiCard('Pending', p.emailsPending, 'not sent', 'amber') +
-      kpiCard('Awaiting Outcome', p.pendingOutcome, 'no decision', 'red') +
+      kpiCard('Total Interviews', p.total, '', 'blue', 'kpi-pl-total') +
+      kpiCard('Shortlist Rate', pct(p.shortlistRate), '', 'green', 'kpi-pl-shortlist') +
+      kpiCard('Rejection Rate', pct(p.rejectionRate), '', 'red', 'kpi-pl-rejection') +
+      kpiCard('Waitlist Rate', pct(p.waitlistRate), '', 'amber', 'kpi-pl-waitlist') +
+      kpiCard('Avg Score', score(p.avgCandidateScore), 'out of 100', 'indigo', 'kpi-pl-avg-score') +
+      kpiCard('Emails Sent', p.emailsSent, '', 'green', 'kpi-pl-emails') +
+      kpiCard('Pending', p.emailsPending, 'not sent', 'amber', 'kpi-pl-pending') +
+      kpiCard('Awaiting Outcome', p.pendingOutcome, 'no decision', 'red', 'kpi-pl-awaiting') +
     '</div>';
 
-    // By status
-    html += '<div class="kpi-two">';
-    html += '<div class="kpi-section"><div class="kpi-section-title">By Status</div>';
-    html += pillTable(p.byStatus || [], 'status', '#6366f1');
-    html += '</div>';
+    html += '<div class="kpi-two">' +
+      '<div class="chart-wrapper">' +
+        '<div class="kpi-section-title">Interview Status Breakdown</div>' +
+        '<div style="position:relative;height:240px;"><canvas id="chart-pipeline-status"></canvas></div>' +
+      '</div>' +
+      '<div class="chart-wrapper">' +
+        '<div class="kpi-section-title">Interview Outcomes</div>' +
+        '<div style="position:relative;height:240px;"><canvas id="chart-pipeline-outcome"></canvas></div>' +
+      '</div>' +
+    '</div>';
 
-    // By outcome
-    html += '<div class="kpi-section"><div class="kpi-section-title">By Outcome</div>';
-    html += pillTable(p.byOutcome || [], 'outcome', function (row) { return OUTCOME_COLORS[row.outcome] || '#6366f1'; });
-    html += '</div>';
-    html += '</div>';
-
-    // By interview type
-    html += '<div class="kpi-section"><div class="kpi-section-title">By Interview Type</div>' +
-      '<div class="kpi-pills">';
-    (p.byInterviewType || []).forEach(function (row) {
-      html += '<div class="kpi-pill"><span style="font-weight:600">' + esc(row.type) + '</span><span class="kpi-pill-val">' + row.count + '</span></div>';
-    });
-    html += '</div></div>';
+    html += '<div class="kpi-section" style="margin-top:20px;">' +
+      '<div class="chart-wrapper">' +
+        '<div class="kpi-section-title">By Interview Type</div>' +
+        '<div style="position:relative;height:200px;"><canvas id="chart-pipeline-type"></canvas></div>' +
+      '</div>' +
+    '</div>';
 
     return html;
+  }
+
+  function updatePipelineCards(d) {
+    var p = d.pipeline || {};
+    updateVal('kpi-pl-total', num(p.total));
+    updateVal('kpi-pl-shortlist', pct(p.shortlistRate));
+    updateVal('kpi-pl-rejection', pct(p.rejectionRate));
+    updateVal('kpi-pl-waitlist', pct(p.waitlistRate));
+    updateVal('kpi-pl-avg-score', score(p.avgCandidateScore));
+    updateVal('kpi-pl-emails', num(p.emailsSent));
+    updateVal('kpi-pl-pending', num(p.emailsPending));
+    updateVal('kpi-pl-awaiting', num(p.pendingOutcome));
+  }
+
+  function initPipelineCharts(d) {
+    if (!window.Chart) return;
+    var colors = getThemeColors();
+    var p = d.pipeline || {};
+    var byStatus = p.byStatus || [];
+    var outcomes = p.byOutcome || [];
+    var byType = p.byInterviewType || [];
+
+    var c1 = state.charts.find(function(c) { return c.canvas.id === 'chart-pipeline-status'; });
+    if (c1) {
+      c1.data.labels = byStatus.map(function(x){return x.status || 'Unknown';});
+      c1.data.datasets[0].data = byStatus.map(function(x){return x.count;});
+      c1.update();
+    } else {
+      var ctx1 = document.getElementById('chart-pipeline-status');
+      if (ctx1) {
+        var chart1 = new Chart(ctx1, {
+          type: 'bar',
+          data: {
+            labels: byStatus.map(function(x){return x.status || 'Unknown';}),
+            datasets: [{
+              label: 'Interviews',
+              data: byStatus.map(function(x){return x.count;}),
+              backgroundColor: colors.accent,
+              borderRadius: 4
+            }]
+          },
+          options: barOptions(colors, false, true)
+        });
+        state.charts.push(chart1);
+      }
+    }
+
+    var c2 = state.charts.find(function(c) { return c.canvas.id === 'chart-pipeline-outcome'; });
+    if (c2) {
+      var bg = outcomes.map(function(x) {
+        if (x.outcome === 'Selected') return colors.success;
+        if (x.outcome === 'Rejected') return colors.danger;
+        if (x.outcome === 'Waitlisted') return colors.warning;
+        return colors.neutral;
+      });
+      c2.data.labels = outcomes.map(function(x){return x.outcome;});
+      c2.data.datasets[0].data = outcomes.map(function(x){return x.count;});
+      c2.data.datasets[0].backgroundColor = bg;
+      c2.update();
+    } else {
+      var ctx2 = document.getElementById('chart-pipeline-outcome');
+      if (ctx2) {
+        var bg = outcomes.map(function(x) {
+          if (x.outcome === 'Selected') return colors.success;
+          if (x.outcome === 'Rejected') return colors.danger;
+          if (x.outcome === 'Waitlisted') return colors.warning;
+          return colors.neutral;
+        });
+        var chart2 = new Chart(ctx2, {
+          type: 'doughnut',
+          data: {
+            labels: outcomes.map(function(x){return x.outcome;}),
+            datasets: [{
+              data: outcomes.map(function(x){return x.count;}),
+              backgroundColor: bg,
+              borderWidth: 1,
+              borderColor: colors.cardBg
+            }]
+          },
+          options: doughnutOptions(colors)
+        });
+        state.charts.push(chart2);
+      }
+    }
+
+    var c3 = state.charts.find(function(c) { return c.canvas.id === 'chart-pipeline-type'; });
+    if (c3) {
+      c3.data.labels = byType.map(function(x){return x.type;});
+      c3.data.datasets[0].data = byType.map(function(x){return x.count;});
+      c3.update();
+    } else {
+      var ctx3 = document.getElementById('chart-pipeline-type');
+      if (ctx3) {
+        var chart3 = new Chart(ctx3, {
+          type: 'bar',
+          data: {
+            labels: byType.map(function(x){return x.type;}),
+            datasets: [{
+              label: 'Interviews',
+              data: byType.map(function(x){return x.count;}),
+              backgroundColor: colors.info,
+              borderRadius: 6
+            }]
+          },
+          options: barOptions(colors, false, false)
+        });
+        state.charts.push(chart3);
+      }
+    }
   }
 
   /* ── Resume Scoring ───────────────────────────────────────────────────── */
@@ -421,41 +891,112 @@
     var html = '';
 
     html += '<div class="kpi-cards">' +
-      kpiCard('Total Screened', rs.total, '', 'blue') +
-      kpiCard('High-Match ≥75', rs.highMatch, '', 'green') +
-      kpiCard('High-Match Rate', pct(rs.highMatchRate), '', 'green') +
-      kpiCard('Avg Overall Score', score(rs.avgScore), 'out of 100', 'indigo') +
+      kpiCard('Total Screened', rs.total, '', 'blue', 'kpi-res-total') +
+      kpiCard('High-Match ≥75', rs.highMatch, '', 'green', 'kpi-res-high') +
+      kpiCard('High-Match Rate', pct(rs.highMatchRate), '', 'green', 'kpi-res-rate') +
+      kpiCard('Avg Overall Score', score(rs.avgScore), 'out of 100', 'indigo', 'kpi-res-avg') +
     '</div>';
 
-    // Score breakdown bars
-    var scores = [
-      { label: 'Overall Score',   val: rs.avgScore,      color: '#6366f1' },
-      { label: 'Technical',       val: rs.avgTechnical,  color: '#06b6d4' },
-      { label: 'Experience',      val: rs.avgExperience, color: '#22c55e' },
-      { label: 'Domain',          val: rs.avgDomain,     color: '#f59e0b' },
-    ];
-    html += '<div class="kpi-section"><div class="kpi-section-title">Score Breakdown (avg)</div>';
-    scores.forEach(function (s) {
-      var w = Math.min(100, Math.max(0, s.val || 0));
-      html += '<div class="kpi-score-row">' +
-        '<div class="kpi-score-lbl">' + esc(s.label) + '</div>' +
-        '<div class="kpi-score-track">' +
-          '<div class="kpi-score-fill" style="width:' + w + '%;background:' + s.color + '"></div>' +
-        '</div>' +
-        '<div class="kpi-score-val">' + (s.val ? s.val.toFixed(1) : '—') + '</div>' +
-      '</div>';
-    });
-    html += '</div>';
-
-    // By source
-    html += '<div class="kpi-section"><div class="kpi-section-title">By Source</div>' +
-      '<div class="kpi-pills">';
-    (rs.bySource || []).forEach(function (row) {
-      html += '<div class="kpi-pill">' + esc(row.source) + '<span class="kpi-pill-val">' + row.count + '</span></div>';
-    });
-    html += '</div></div>';
+    html += '<div class="kpi-two">' +
+      '<div class="chart-wrapper">' +
+        '<div class="kpi-section-title">Average Resume Scores</div>' +
+        '<div style="position:relative;height:240px;"><canvas id="chart-resumes-scores"></canvas></div>' +
+      '</div>' +
+      '<div class="chart-wrapper">' +
+        '<div class="kpi-section-title">Resumes by Source</div>' +
+        '<div style="position:relative;height:240px;"><canvas id="chart-resumes-sources"></canvas></div>' +
+      '</div>' +
+    '</div>';
 
     return html;
+  }
+
+  function updateResumesCards(d) {
+    var rs = d.resumeScoring || {};
+    updateVal('kpi-res-total', num(rs.total));
+    updateVal('kpi-res-high', num(rs.highMatch));
+    updateVal('kpi-res-rate', pct(rs.highMatchRate));
+    updateVal('kpi-res-avg', score(rs.avgScore));
+  }
+
+  function initResumesCharts(d) {
+    if (!window.Chart) return;
+    var colors = getThemeColors();
+    var rs = d.resumeScoring || {};
+
+    var c1 = state.charts.find(function(c) { return c.canvas.id === 'chart-resumes-scores'; });
+    if (c1) {
+      c1.data.datasets[0].data = [rs.avgScore || 0, rs.avgTechnical || 0, rs.avgExperience || 0, rs.avgDomain || 0];
+      c1.update();
+    } else {
+      var ctx1 = document.getElementById('chart-resumes-scores');
+      if (ctx1) {
+        var chart1 = new Chart(ctx1, {
+          type: 'radar',
+          data: {
+            labels: ['Overall', 'Technical', 'Experience', 'Domain'],
+            datasets: [{
+              label: 'Average Score',
+              data: [rs.avgScore || 0, rs.avgTechnical || 0, rs.avgExperience || 0, rs.avgDomain || 0],
+              backgroundColor: 'rgba(99, 102, 241, 0.2)',
+              borderColor: colors.accent,
+              pointBackgroundColor: colors.accent,
+              pointBorderColor: '#fff',
+              pointHoverBackgroundColor: '#fff',
+              pointHoverBorderColor: colors.accent,
+              borderWidth: 2
+            }]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: { display: false },
+              tooltip: { backgroundColor: colors.cardBg, titleColor: colors.textColor, bodyColor: colors.textColor }
+            },
+            scales: {
+              r: {
+                angleLines: { color: colors.gridColor },
+                grid: { color: colors.gridColor },
+                pointLabels: { color: colors.textColor, font: { family: "'DM Sans', sans-serif", size: 10 } },
+                ticks: { backdropColor: 'transparent', color: colors.textColor, min: 0, max: 100, stepSize: 20 }
+              }
+            }
+          }
+        });
+        state.charts.push(chart1);
+      }
+    }
+
+    var c2 = state.charts.find(function(c) { return c.canvas.id === 'chart-resumes-sources'; });
+    if (c2) {
+      var sources = rs.bySource || [];
+      var bgColors = [colors.accent, colors.success, colors.warning, colors.info, colors.danger];
+      c2.data.labels = sources.map(function(x){return x.source;});
+      c2.data.datasets[0].data = sources.map(function(x){return x.count;});
+      c2.data.datasets[0].backgroundColor = bgColors.slice(0, sources.length);
+      c2.update();
+    } else {
+      var ctx2 = document.getElementById('chart-resumes-sources');
+      if (ctx2) {
+        var sources = rs.bySource || [];
+        var bgColors = [colors.accent, colors.success, colors.warning, colors.info, colors.danger];
+        var chart2 = new Chart(ctx2, {
+          type: 'pie',
+          data: {
+            labels: sources.map(function(x){return x.source;}),
+            datasets: [{
+              data: sources.map(function(x){return x.count;}),
+              backgroundColor: bgColors.slice(0, sources.length),
+              borderWidth: 1,
+              borderColor: colors.cardBg
+            }]
+          },
+          options: doughnutOptions(colors)
+        });
+        state.charts.push(chart2);
+      }
+    }
   }
 
   /* ── Recordings ───────────────────────────────────────────────────────── */
@@ -464,51 +1005,103 @@
     var html = '';
 
     html += '<div class="kpi-cards">' +
-      kpiCard('Total Recordings', rc.total, '', 'blue') +
-      kpiCard('Avg Total Score', score(rc.avgTotalScore), 'out of 100', 'indigo') +
-      kpiCard('Avg Tech Score', score(rc.avgTechScore), 'out of 100', 'cyan') +
-      kpiCard('Avg Comm Score', score(rc.avgCommScore), 'out of 100', 'green') +
-      kpiCard('Avg Integrity', score(rc.avgIntegrityScore), 'out of 100', 'purple') +
-      kpiCard('Avg Duration', rc.avgDuration || '—', '', 'amber') +
+      kpiCard('Total Recordings', rc.total, '', 'blue', 'kpi-rec-total') +
+      kpiCard('Avg Total Score', score(rc.avgTotalScore), 'out of 100', 'indigo', 'kpi-rec-avg-total') +
+      kpiCard('Avg Tech Score', score(rc.avgTechScore), 'out of 100', 'cyan', 'kpi-rec-avg-tech') +
+      kpiCard('Avg Comm Score', score(rc.avgCommScore), 'out of 100', 'green', 'kpi-rec-avg-comm') +
+      kpiCard('Avg Integrity', score(rc.avgIntegrityScore), 'out of 100', 'purple', 'kpi-rec-avg-integ') +
+      kpiCard('Avg Duration', rc.avgDuration || '—', '', 'amber', 'kpi-rec-avg-dur') +
     '</div>';
 
-    // Verdict breakdown
-    html += '<div class="kpi-section"><div class="kpi-section-title">By Verdict</div>' +
-      '<div class="kpi-pills">';
-    (rc.byVerdict || []).forEach(function (row) {
-      var col = VERDICT_COLORS[row.verdict] || '#6366f1';
-      html += '<div class="kpi-pill">' +
-        '<div class="kpi-pill-dot" style="background:' + col + '"></div>' +
-        esc(row.verdict) + '<span class="kpi-pill-val">' + row.count + '</span>' +
-      '</div>';
-    });
-    if (!rc.byVerdict || rc.byVerdict.length === 0) {
-      html += '<div class="kpi-empty" style="padding:12px 0">No recording data available.</div>';
-    }
-    html += '</div></div>';
-
-    // Score bars
-    var scores = [
-      { label: 'Technical',  val: rc.avgTechScore,      color: '#06b6d4' },
-      { label: 'Communication', val: rc.avgCommScore,   color: '#22c55e' },
-      { label: 'Integrity',  val: rc.avgIntegrityScore, color: '#a855f7' },
-    ];
-    if (rc.avgTotalScore) {
-      html += '<div class="kpi-section"><div class="kpi-section-title">Score Breakdown (avg)</div>';
-      scores.forEach(function (s) {
-        var w = Math.min(100, Math.max(0, s.val || 0));
-        html += '<div class="kpi-score-row">' +
-          '<div class="kpi-score-lbl">' + esc(s.label) + '</div>' +
-          '<div class="kpi-score-track">' +
-            '<div class="kpi-score-fill" style="width:' + w + '%;background:' + s.color + '"></div>' +
-          '</div>' +
-          '<div class="kpi-score-val">' + (s.val ? s.val.toFixed(1) : '—') + '</div>' +
-        '</div>';
-      });
-      html += '</div>';
-    }
+    html += '<div class="kpi-two">' +
+      '<div class="chart-wrapper">' +
+        '<div class="kpi-section-title">A.I. Verdict Distribution</div>' +
+        '<div style="position:relative;height:240px;"><canvas id="chart-recordings-verdict"></canvas></div>' +
+      '</div>' +
+      '<div class="chart-wrapper">' +
+        '<div class="kpi-section-title">A.I. Performance Breakdown</div>' +
+        '<div style="position:relative;height:240px;"><canvas id="chart-recordings-scores"></canvas></div>' +
+      '</div>' +
+    '</div>';
 
     return html;
+  }
+
+  function updateRecordingsCards(d) {
+    var rc = d.recordings || {};
+    updateVal('kpi-rec-total', num(rc.total));
+    updateVal('kpi-rec-avg-total', score(rc.avgTotalScore));
+    updateVal('kpi-rec-avg-tech', score(rc.avgTechScore));
+    updateVal('kpi-rec-avg-comm', score(rc.avgCommScore));
+    updateVal('kpi-rec-avg-integ', score(rc.avgIntegrityScore));
+    updateVal('kpi-rec-avg-dur', rc.avgDuration || '—');
+  }
+
+  function initRecordingsCharts(d) {
+    if (!window.Chart) return;
+    var colors = getThemeColors();
+    var rc = d.recordings || {};
+    var verdicts = rc.byVerdict || [];
+
+    var c1 = state.charts.find(function(c) { return c.canvas.id === 'chart-recordings-verdict'; });
+    if (c1) {
+      var bg = verdicts.map(function(x) {
+        if (x.verdict === 'PASS') return colors.success;
+        if (x.verdict === 'FAIL') return colors.danger;
+        return colors.warning;
+      });
+      c1.data.labels = verdicts.map(function(x){return x.verdict;});
+      c1.data.datasets[0].data = verdicts.map(function(x){return x.count;});
+      c1.data.datasets[0].backgroundColor = bg;
+      c1.update();
+    } else {
+      var ctx1 = document.getElementById('chart-recordings-verdict');
+      if (ctx1) {
+        var bg = verdicts.map(function(x) {
+          if (x.verdict === 'PASS') return colors.success;
+          if (x.verdict === 'FAIL') return colors.danger;
+          return colors.warning;
+        });
+        var chart1 = new Chart(ctx1, {
+          type: 'doughnut',
+          data: {
+            labels: verdicts.map(function(x){return x.verdict;}),
+            datasets: [{
+              data: verdicts.map(function(x){return x.count;}),
+              backgroundColor: bg,
+              borderWidth: 1,
+              borderColor: colors.cardBg
+            }]
+          },
+          options: doughnutOptions(colors)
+        });
+        state.charts.push(chart1);
+      }
+    }
+
+    var c2 = state.charts.find(function(c) { return c.canvas.id === 'chart-recordings-scores'; });
+    if (c2) {
+      c2.data.datasets[0].data = [rc.avgTechScore || 0, rc.avgCommScore || 0, rc.avgIntegrityScore || 0, rc.avgTotalScore || 0];
+      c2.update();
+    } else {
+      var ctx2 = document.getElementById('chart-recordings-scores');
+      if (ctx2) {
+        var chart2 = new Chart(ctx2, {
+          type: 'bar',
+          data: {
+            labels: ['Technical', 'Communication', 'Integrity', 'Total Score'],
+            datasets: [{
+              label: 'Average Score',
+              data: [rc.avgTechScore || 0, rc.avgCommScore || 0, rc.avgIntegrityScore || 0, rc.avgTotalScore || 0],
+              backgroundColor: [colors.info, colors.success, colors.purple, colors.accent],
+              borderRadius: 6
+            }]
+          },
+          options: barOptions(colors, false, false)
+        });
+        state.charts.push(chart2);
+      }
+    }
   }
 
   /* ── Trends ───────────────────────────────────────────────────────────── */
@@ -518,53 +1111,29 @@
     var weekly  = tr.weekly  || [];
     var html = '';
 
-    // Monthly trend bar chart
-    html += '<div class="kpi-section"><div class="kpi-section-title">Monthly Interviews (last 12 months)</div>';
-    if (monthly.length === 0) {
-      html += '<div class="kpi-empty">No trend data available.</div>';
-    } else {
-      var maxTotal = Math.max.apply(null, monthly.map(function (m) { return m.total || 0; })) || 1;
-      html += '<div style="display:flex;align-items:flex-end;gap:8px;height:120px;padding-bottom:24px;position:relative;overflow-x:auto">';
-      monthly.forEach(function (m) {
-        var h = Math.max(4, Math.round(((m.total || 0) / maxTotal) * 100));
-        var sh = Math.max(2, Math.round(((m.selected || 0) / maxTotal) * 100));
-        var lbl = m.month ? m.month.replace(/^\d{4}-/, '') : '';
-        html += '<div style="display:flex;flex-direction:column;align-items:center;gap:3px;flex:1;min-width:30px">' +
-          '<div style="font-size:9px;color:var(--text3,#888)">' + m.total + '</div>' +
-          '<div style="display:flex;align-items:flex-end;gap:2px;height:96px">' +
-            '<div title="Total: ' + m.total + '" style="width:12px;height:' + h + 'px;background:#6366f1;border-radius:3px 3px 0 0;opacity:.5"></div>' +
-            '<div title="Selected: ' + (m.selected||0) + '" style="width:12px;height:' + sh + 'px;background:#22c55e;border-radius:3px 3px 0 0"></div>' +
-          '</div>' +
-          '<div style="font-size:9px;color:var(--text3,#888);text-align:center">' + esc(lbl) + '</div>' +
-        '</div>';
-      });
-      html += '</div>';
-      html += '<div style="display:flex;gap:16px;font-size:11px;color:var(--text2,#666);margin-top:4px">' +
-        '<span><span style="display:inline-block;width:10px;height:10px;background:#6366f1;border-radius:2px;opacity:.5;margin-right:4px"></span>Total</span>' +
-        '<span><span style="display:inline-block;width:10px;height:10px;background:#22c55e;border-radius:2px;margin-right:4px"></span>Selected</span>' +
+    html += '<div class="kpi-section">' +
+      '<div class="chart-wrapper">' +
+        '<div class="kpi-section-title">Monthly Recruitment Activity (Last 12 Months)</div>' +
+        '<div style="position:relative;height:260px;"><canvas id="chart-trends-monthly"></canvas></div>' +
+      '</div>' +
+    '</div>';
+
+    if (weekly.length > 0) {
+      html += '<div class="kpi-section" style="margin-top:20px;">' +
+        '<div class="chart-wrapper">' +
+          '<div class="kpi-section-title">Weekly Activity (Last 12 Weeks)</div>' +
+          '<div style="position:relative;height:240px;"><canvas id="chart-trends-weekly"></canvas></div>' +
+        '</div>' +
       '</div>';
     }
-    html += '</div>';
 
-    // Monthly table
     if (monthly.length > 0) {
-      html += '<div class="kpi-section"><div class="kpi-section-title">Monthly Breakdown</div>' +
+      html += '<div class="kpi-section" style="margin-top:20px;"><div class="kpi-section-title">Monthly Breakdown</div>' +
         '<div style="overflow-x:auto"><table class="kpi-tbl">' +
         '<thead><tr><th>Month</th><th>Total</th><th>Selected</th><th>Shortlist Rate</th></tr></thead><tbody>';
       monthly.slice().reverse().forEach(function (m) {
         html += '<tr><td>' + esc(m.month || '—') + '</td><td>' + m.total + '</td><td>' + (m.selected || 0) + '</td>' +
-          '<td><span style="color:#22c55e;font-weight:700">' + pct(m.shortlistRate) + '</span></td></tr>';
-      });
-      html += '</tbody></table></div></div>';
-    }
-
-    // Weekly trend (if available)
-    if (weekly.length > 0) {
-      html += '<div class="kpi-section"><div class="kpi-section-title">Weekly Trend (last 12 weeks)</div>' +
-        '<div style="overflow-x:auto"><table class="kpi-tbl">' +
-        '<thead><tr><th>Week of</th><th>Total</th><th>Selected</th></tr></thead><tbody>';
-      weekly.slice().reverse().slice(0, 8).forEach(function (w) {
-        html += '<tr><td>' + esc(w.week || '—') + '</td><td>' + w.total + '</td><td>' + (w.selected || 0) + '</td></tr>';
+          '<td><span style="color:#10b981;font-weight:700">' + pct(m.shortlistRate) + '</span></td></tr>';
       });
       html += '</tbody></table></div></div>';
     }
@@ -572,52 +1141,191 @@
     return html;
   }
 
-  /* ── Jobs (admin only) ────────────────────────────────────────────────── */
+  function initTrendsCharts(d) {
+    if (!window.Chart) return;
+    var colors = getThemeColors();
+    var tr = d.trends || {};
+    var monthly = tr.monthly || [];
+    var weekly = tr.weekly || [];
+
+    var c1 = state.charts.find(function(c) { return c.canvas.id === 'chart-trends-monthly'; });
+    if (c1 && monthly.length > 0) {
+      c1.data.labels = monthly.map(function(m){ return m.month ? m.month.replace(/^\d{4}-/, '') : ''; });
+      c1.data.datasets[0].data = monthly.map(function(m){return m.selected || 0;});
+      c1.data.datasets[1].data = monthly.map(function(m){return m.total || 0;});
+      c1.update();
+    } else {
+      var ctx1 = document.getElementById('chart-trends-monthly');
+      if (ctx1 && monthly.length > 0) {
+        var chart1 = new Chart(ctx1, {
+          type: 'bar',
+          data: {
+            labels: monthly.map(function(m){
+              return m.month ? m.month.replace(/^\d{4}-/, '') : '';
+            }),
+            datasets: [
+              {
+                type: 'line',
+                label: 'Selected Candidates',
+                data: monthly.map(function(m){return m.selected || 0;}),
+                borderColor: colors.success,
+                borderWidth: 2,
+                tension: 0.3,
+                fill: false,
+                pointBackgroundColor: colors.success
+              },
+              {
+                type: 'bar',
+                label: 'Total Interviews',
+                data: monthly.map(function(m){return m.total || 0;}),
+                backgroundColor: 'rgba(99, 102, 241, 0.4)',
+                borderColor: colors.accent,
+                borderWidth: 1,
+                borderRadius: 4
+              }
+            ]
+          },
+          options: barOptions(colors, true, false)
+        });
+        state.charts.push(chart1);
+      }
+    }
+
+    var c2 = state.charts.find(function(c) { return c.canvas.id === 'chart-trends-weekly'; });
+    if (c2 && weekly.length > 0) {
+      c2.data.labels = weekly.map(function(w){return w.week || '';});
+      c2.data.datasets[0].data = weekly.map(function(w){return w.total || 0;});
+      c2.data.datasets[1].data = weekly.map(function(w){return w.selected || 0;});
+      c2.update();
+    } else {
+      var ctx2 = document.getElementById('chart-trends-weekly');
+      if (ctx2 && weekly.length > 0) {
+        var chart2 = new Chart(ctx2, {
+          type: 'line',
+          data: {
+            labels: weekly.map(function(w){return w.week || '';}),
+            datasets: [
+              {
+                label: 'Total Interviews',
+                data: weekly.map(function(w){return w.total || 0;}),
+                borderColor: colors.accent,
+                backgroundColor: 'rgba(99, 102, 241, 0.1)',
+                fill: true,
+                tension: 0.3
+              },
+              {
+                label: 'Selected',
+                data: weekly.map(function(w){return w.selected || 0;}),
+                borderColor: colors.success,
+                fill: false,
+                tension: 0.3
+              }
+            ]
+          },
+          options: barOptions(colors, true, false)
+        });
+        state.charts.push(chart2);
+      }
+    }
+  }
+
+  /* ── Jobs ─────────────────────────────────────────────────────────────── */
   function renderJobs(d) {
     var j = d.jobs;
     if (!j) return '<div class="kpi-empty">Jobs data not available. Switch to Org View.</div>';
     var html = '';
 
     html += '<div class="kpi-cards">' +
-      kpiCard('Total Job Posts', j.totalJobs, '', 'blue') +
-      kpiCard('Total Openings', j.totalOpenings, 'positions', 'green') +
-      kpiCard('Remote', j.remote, 'jobs', 'cyan') +
-      kpiCard('On-Site', j.onsite, 'jobs', 'amber') +
+      kpiCard('Total Job Posts', j.totalJobs, '', 'blue', 'kpi-jb-total') +
+      kpiCard('Total Openings', j.totalOpenings, 'positions', 'green', 'kpi-jb-openings') +
+      kpiCard('Remote', j.remote, 'jobs', 'cyan', 'kpi-jb-remote') +
+      kpiCard('On-Site', j.onsite, 'jobs', 'amber', 'kpi-jb-onsite') +
     '</div>';
 
-    // By department
-    html += '<div class="kpi-two">';
-    html += '<div class="kpi-section"><div class="kpi-section-title">By Department</div>';
-    if (j.byDepartment && j.byDepartment.length) {
-      var maxD = j.byDepartment[0].count || 1;
-      html += '<table class="kpi-tbl"><thead><tr><th>Department</th><th>Jobs</th></tr></thead><tbody>';
-      j.byDepartment.forEach(function (row) {
-        html += '<tr><td>' + esc(row.dept) + '</td><td>' +
-          '<div style="display:flex;align-items:center;gap:8px">' +
-            '<div style="flex:1;background:var(--border,#e5e7eb);border-radius:4px;height:5px"><div style="width:' + Math.round(row.count/maxD*100) + '%;background:#6366f1;border-radius:4px;height:5px"></div></div>' +
-            row.count +
-          '</div></td></tr>';
-      });
-      html += '</tbody></table>';
-    } else html += '<div class="kpi-empty" style="padding:12px 0">No department data.</div>';
-    html += '</div>';
-
-    // By type
-    html += '<div class="kpi-section"><div class="kpi-section-title">By Job Type</div>';
-    if (j.byType && j.byType.length) {
-      html += '<div class="kpi-pills">';
-      j.byType.forEach(function (row) {
-        html += '<div class="kpi-pill">' + esc(row.type) + '<span class="kpi-pill-val">' + row.count + '</span></div>';
-      });
-      html += '</div>';
-    }
-    html += '</div>';
-    html += '</div>';
+    html += '<div class="kpi-two">' +
+      '<div class="chart-wrapper">' +
+        '<div class="kpi-section-title">Jobs by Department</div>' +
+        '<div style="position:relative;height:240px;"><canvas id="chart-jobs-dept"></canvas></div>' +
+      '</div>' +
+      '<div class="chart-wrapper">' +
+        '<div class="kpi-section-title">Jobs by Type</div>' +
+        '<div style="position:relative;height:240px;"><canvas id="chart-jobs-type"></canvas></div>' +
+      '</div>' +
+    '</div>';
 
     return html;
   }
 
-  /* ── Team Performance (admin only) ───────────────────────────────────── */
+  function updateJobsCards(d) {
+    var j = d.jobs || {};
+    updateVal('kpi-jb-total', num(j.totalJobs));
+    updateVal('kpi-jb-openings', num(j.totalOpenings));
+    updateVal('kpi-jb-remote', num(j.remote));
+    updateVal('kpi-jb-onsite', num(j.onsite));
+  }
+
+  function initJobsCharts(d) {
+    if (!window.Chart) return;
+    var colors = getThemeColors();
+    var j = d.jobs || {};
+    var depts = j.byDepartment || [];
+    var types = j.byType || [];
+
+    var c1 = state.charts.find(function(c) { return c.canvas.id === 'chart-jobs-dept'; });
+    if (c1) {
+      var bgColors = [colors.accent, colors.success, colors.warning, colors.info, colors.danger, colors.neutral, '#ec4899', '#a855f7'];
+      c1.data.labels = depts.map(function(x){return x.dept;});
+      c1.data.datasets[0].data = depts.map(function(x){return x.count;});
+      c1.data.datasets[0].backgroundColor = bgColors.slice(0, depts.length);
+      c1.update();
+    } else {
+      var ctx1 = document.getElementById('chart-jobs-dept');
+      if (ctx1 && j.byDepartment) {
+        var bgColors = [colors.accent, colors.success, colors.warning, colors.info, colors.danger, colors.neutral, '#ec4899', '#a855f7'];
+        var chart1 = new Chart(ctx1, {
+          type: 'doughnut',
+          data: {
+            labels: depts.map(function(x){return x.dept;}),
+            datasets: [{
+              data: depts.map(function(x){return x.count;}),
+              backgroundColor: bgColors.slice(0, depts.length),
+              borderWidth: 1,
+              borderColor: colors.cardBg
+            }]
+          },
+          options: doughnutOptions(colors)
+        });
+        state.charts.push(chart1);
+      }
+    }
+
+    var c2 = state.charts.find(function(c) { return c.canvas.id === 'chart-jobs-type'; });
+    if (c2) {
+      c2.data.labels = types.map(function(x){return x.type;});
+      c2.data.datasets[0].data = types.map(function(x){return x.count;});
+      c2.update();
+    } else {
+      var ctx2 = document.getElementById('chart-jobs-type');
+      if (ctx2 && j.byType) {
+        var chart2 = new Chart(ctx2, {
+          type: 'bar',
+          data: {
+            labels: types.map(function(x){return x.type;}),
+            datasets: [{
+              label: 'Jobs',
+              data: types.map(function(x){return x.count;}),
+              backgroundColor: colors.info,
+              borderRadius: 6
+            }]
+          },
+          options: barOptions(colors, false, false)
+        });
+        state.charts.push(chart2);
+      }
+    }
+  }
+
+  /* ── Team Performance ─────────────────────────────────────────────────── */
   function renderTeam(d) {
     var stats = d.recruiterStats;
     if (!stats) return '<div class="kpi-empty">Team data not available. Switch to Org View.</div>';
@@ -629,12 +1337,12 @@
 
     stats.forEach(function (r, i) {
       var rate = r.shortlistRate || 0;
-      var barColor = rate >= 50 ? '#22c55e' : rate >= 25 ? '#f59e0b' : '#ef4444';
+      var barColor = rate >= 50 ? '#10b981' : rate >= 25 ? '#f59e0b' : '#ef4444';
       html += '<tr>' +
         '<td style="color:var(--text3,#888);font-weight:700">' + (i+1) + '</td>' +
         '<td><div style="font-weight:600">' + esc(r.interviewer) + '</div></td>' +
         '<td>' + r.total + '</td>' +
-        '<td><span style="color:#22c55e;font-weight:700">' + r.selected + '</span></td>' +
+        '<td><span style="color:#10b981;font-weight:700">' + r.selected + '</span></td>' +
         '<td><span style="color:#ef4444">' + r.rejected + '</span></td>' +
         '<td>' +
           '<div style="display:flex;align-items:center;gap:8px">' +
@@ -647,11 +1355,17 @@
     });
     html += '</tbody></table></div></div>';
 
-    // Aggregate summary
+    html += '<div class="kpi-section" style="margin-top:24px;">' +
+      '<div class="chart-wrapper">' +
+        '<div class="kpi-section-title">Recruiter Activity Comparison</div>' +
+        '<div style="position:relative;height:240px;"><canvas id="chart-team-activity"></canvas></div>' +
+      '</div>' +
+    '</div>';
+
     var totalInterviews = stats.reduce(function (s, r) { return s + r.total; }, 0);
     var totalSelected   = stats.reduce(function (s, r) { return s + r.selected; }, 0);
     var orgRate = totalInterviews > 0 ? (totalSelected / totalInterviews * 100).toFixed(1) : '0.0';
-    html += '<div class="kpi-cards" style="margin-top:16px">' +
+    html += '<div class="kpi-cards" style="margin-top:20px">' +
       kpiCard('Recruiters Active', stats.length, '', 'blue') +
       kpiCard('Org Shortlist Rate', orgRate + '%', '', 'green') +
       kpiCard('Total by Team', totalInterviews, '', 'indigo') +
@@ -661,39 +1375,51 @@
     return html;
   }
 
-  /* ── mini helpers ─────────────────────────────────────────────────────── */
-  function kpiCard(label, val, sub, color) {
-    return '<div class="kpi-card c-' + color + '">' +
-      '<div class="kpi-card-lbl">' + esc(label) + '</div>' +
-      '<div class="kpi-card-val">' + esc(String(val == null ? '—' : val)) + '</div>' +
-      (sub ? '<div class="kpi-card-sub">' + esc(sub) + '</div>' : '') +
-    '</div>';
-  }
+  function initTeamCharts(d) {
+    if (!window.Chart) return;
+    var colors = getThemeColors();
+    var stats = d.recruiterStats || [];
 
-  function pillTable(rows, keyField, colorOrFn) {
-    if (!rows || rows.length === 0) return '<div class="kpi-empty" style="padding:8px 0">No data.</div>';
-    var max = rows[0].count || 1;
-    var html = '<div style="display:flex;flex-direction:column;gap:8px">';
-    rows.forEach(function (row) {
-      var col = typeof colorOrFn === 'function' ? colorOrFn(row) : colorOrFn;
-      var w = Math.round((row.count / max) * 100);
-      html += '<div>' +
-        '<div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px">' +
-          '<span style="font-weight:600;color:var(--text1,#111)">' + esc(row[keyField]) + '</span>' +
-          '<span style="color:var(--text3,#888)">' + row.count + '</span>' +
-        '</div>' +
-        '<div style="background:var(--border,#e5e7eb);border-radius:4px;height:6px">' +
-          '<div style="width:' + w + '%;background:' + col + ';border-radius:4px;height:6px;transition:width .4s"></div>' +
-        '</div>' +
-      '</div>';
-    });
-    return html + '</div>';
+    var c1 = state.charts.find(function(c) { return c.canvas.id === 'chart-team-activity'; });
+    if (c1 && stats.length > 0) {
+      c1.data.labels = stats.map(function(x){ return x.interviewer.split('@')[0]; });
+      c1.data.datasets[0].data = stats.map(function(x){return x.total;});
+      c1.data.datasets[1].data = stats.map(function(x){return x.selected;});
+      c1.update();
+    } else {
+      var ctx = document.getElementById('chart-team-activity');
+      if (ctx && stats.length > 0) {
+        var chart = new Chart(ctx, {
+          type: 'bar',
+          data: {
+            labels: stats.map(function(x){
+              return x.interviewer.split('@')[0];
+            }),
+            datasets: [
+              {
+                label: 'Total Interviews',
+                data: stats.map(function(x){return x.total;}),
+                backgroundColor: 'rgba(99, 102, 241, 0.5)',
+                borderRadius: 4
+              },
+              {
+                label: 'Selected',
+                data: stats.map(function(x){return x.selected;}),
+                backgroundColor: colors.success,
+                borderRadius: 4
+              }
+            ]
+          },
+          options: barOptions(colors, true, false)
+        });
+        state.charts.push(chart);
+      }
+    }
   }
 
   /* ── inject trigger button ─────────────────────────────────────────────── */
   function injectButton() {
     if (document.getElementById(BTN_ID)) return;
-    // Try to find the recruitment page topbar / page header
     var selectors = [
       '[data-route*="recruit"] .page-header',
       '[class*="recruit"] .page-actions',
@@ -707,7 +1433,7 @@
       target = document.querySelector(selectors[i]);
       if (target) break;
     }
-    if (!target) return; // not on recruitment page yet
+    if (!target) return;
 
     injectStyle();
     var btn = document.createElement('button');
@@ -720,36 +1446,29 @@
     target.appendChild(btn);
   }
 
-  /* ── also expose via window.__hrmsOpenRecruitKPI ──────────────────────── */
   window.__hrmsOpenRecruitKPI = open;
 
-  /* ── mount on route change ────────────────────────────────────────────── */
   function tryMount() {
-    // Detect if we're on a recruitment-related URL
     var path = window.location.pathname + window.location.hash;
     var onRecruit = /recruit|job|interview/i.test(path);
     if (onRecruit) {
       injectButton();
     } else {
-      // Remove button if navigated away
       var btn = document.getElementById(BTN_ID);
       if (btn) btn.parentNode.removeChild(btn);
     }
   }
 
-  /* ── boot ─────────────────────────────────────────────────────────────── */
   function boot() {
     tryMount();
-    // Observe URL changes (React SPA uses pushState)
     var lastPath = window.location.pathname + window.location.hash;
     setInterval(function () {
       var current = window.location.pathname + window.location.hash;
       if (current !== lastPath) {
         lastPath = current;
-        setTimeout(tryMount, 300); // wait for React to render
+        setTimeout(tryMount, 300);
       }
     }, 500);
-    // Also observe DOM for React rendering the page
     var obs = new MutationObserver(function () {
       if (!document.getElementById(BTN_ID)) tryMount();
     });

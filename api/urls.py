@@ -67,7 +67,22 @@ urlpatterns = [
     path('attendance/events', views.attendance_events),
     path('attendance/team', views.attendance_team),
     path('attendance/presence', views.attendance_presence),
+    path('attendance/overtime', views.attendance_overtime),
+    path('attendance/auto-correct', views.attendance_auto_correct),
+    path('attendance/analytics', views.attendance_analytics),
+    path('attendance/geofences', views.attendance_geofences),
+    path('attendance/geofences/<int:pk>', views.attendance_geofence_detail),
+    path('attendance/wfh', views.wfh_requests),
+    path('attendance/wfh/<int:pk>', views.wfh_request_detail),
+    path('attendance/corrections', views.attendance_corrections),
+    path('attendance/corrections/<int:pk>', views.attendance_correction_detail),
     path('attendance/<int:pk>', views.attendance_detail),
+
+    # Shifts
+    path('shifts', views.shifts),
+    path('shifts/<int:pk>', views.shift_detail),
+    path('shift-assignments', views.shift_assignments),
+    path('shift-assignments/<int:pk>', views.shift_assignment_detail),
 
     # Employees module — Leave Management
     path('leave', views.leave),

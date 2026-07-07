@@ -56,6 +56,11 @@ from .models import (
     UserEmailConfig,
     UserProfile,
     WorkSubmission,
+    Shift,
+    ShiftAssignment,
+    AttendanceCorrection,
+    GeoFence,
+    WfhRequest,
 )
 from .serializers import (
     AppUserSerializer,
@@ -72,11 +77,17 @@ from .serializers import (
     InterviewRecordingSerializer,
     JobPostSerializer,
     LeaveRequestSerializer,
+    QuestionSetSerializer,
     ResumeScoreSerializer,
     UserDocumentSerializer,
     UserEmailConfigSerializer,
     UserProfileSerializer,
     WorkSubmissionSerializer,
+    ShiftSerializer,
+    ShiftAssignmentSerializer,
+    AttendanceCorrectionSerializer,
+    GeoFenceSerializer,
+    WfhRequestSerializer,
 )
 
 # ---------------------------------------------------------------------------
@@ -1092,6 +1103,58 @@ def attendance(request):
     return Response(EmployeeAttendanceSerializer(qs, many=True).data)
 
 
+def _haversine_distance(lat1, lon1, lat2, lon2):
+    import math
+    R = 6371000.0  # Earth radius in meters
+    phi1 = math.radians(lat1)
+    phi2 = math.radians(lat2)
+    delta_phi = math.radians(lat2 - lat1)
+    delta_lambda = math.radians(lon2 - lon1)
+    a = math.sin(delta_phi / 2.0)**2 + math.cos(phi1) * math.cos(phi2) * math.sin(delta_lambda / 2.0)**2
+    c = 2.0 * math.atan2(math.sqrt(a), math.sqrt(1.0 - a))
+    return R * c
+
+
+def _get_active_shift(email, date_val):
+    # Check shift assignment
+    assignment = ShiftAssignment.objects.filter(
+        email=email,
+        effective_from__lte=date_val
+    ).filter(
+        Q(effective_to__isnull=True) | Q(effective_to__gte=date_val)
+    ).select_related('shift').first()
+
+    if assignment and assignment.shift:
+        return assignment.shift
+
+    # Fallback to General Shift (id=1)
+    fallback = Shift.objects.filter(id=1).first()
+    if not fallback:
+        fallback = Shift.objects.create(
+            id=1,
+            name='General Shift',
+            start_time='09:00:00',
+            end_time='18:00:00',
+            break_minutes=60,
+            grace_minutes=15,
+            is_flexible=False,
+            flex_hours_per_day=8.0,
+            overtime_after_minutes=540,
+            created_by='system'
+        )
+    return fallback
+
+
+def _check_geofence(lat, lng):
+    if lat is None or lng is None:
+        return False, None
+    for fence in GeoFence.objects.filter(is_active=True):
+        dist = _haversine_distance(lat, lng, fence.latitude, fence.longitude)
+        if dist <= fence.radius_meters:
+            return True, fence
+    return False, None
+
+
 def _is_checked_in(obj):
     """True when there is an open work session (checked in after last checkout)."""
     return bool(obj.check_in and (obj.check_out is None or obj.check_in > obj.check_out))
@@ -1100,8 +1163,7 @@ def _is_checked_in(obj):
 @api_view(['POST'])
 @require_perm('attendance.create', or_self=True)
 def attendance_check_in(request):
-    """Start a work session. Re-checking-in later the same day starts a new
-    session; previously accumulated ``worked_minutes`` are preserved."""
+    """Start a work session with shift, WFH, and geofence tracking."""
     body = request.data
     email = norm_email(body.get('email'))
     if not email:
@@ -1113,22 +1175,81 @@ def attendance_check_in(request):
         obj.employee_name = name
     if body.get('device'):
         obj.device = body.get('device')
-    # Status (present/late) is decided by the first check-in of the day only.
+
+    # Get active shift
+    shift = _get_active_shift(email, now.date())
+    obj.shift_id = shift.id
+
+    # WFH verification
+    is_wfh = bool(body.get('isWfh') or body.get('is_wfh') or False)
+    has_approved_wfh = WfhRequest.objects.filter(
+        email=email,
+        status='Approved',
+        from_date__lte=now.date(),
+        to_date__gte=now.date()
+    ).exists()
+    if has_approved_wfh:
+        is_wfh = True
+    obj.is_wfh = is_wfh
+
+    # GPS / Geofence verification
+    lat = body.get('latitude')
+    lng = body.get('longitude')
+    try:
+        lat = float(lat) if lat is not None else None
+        lng = float(lng) if lng is not None else None
+    except (ValueError, TypeError):
+        lat = None
+        lng = None
+
+    fence_obj = None
+    if is_wfh:
+        obj.geo_verified = True
+        loc_desc = 'Home'
+    else:
+        if lat is not None and lng is not None:
+            is_inside, fence_obj = _check_geofence(lat, lng)
+            obj.geo_verified = is_inside
+            obj.location_lat = lat
+            obj.location_lng = lng
+            loc_desc = fence_obj.name if fence_obj else 'Unverified Location'
+        else:
+            obj.geo_verified = False
+            loc_desc = 'Office'
+
+    # Status (present/late) based on first check-in
     if created:
-        obj.status = 'late' if (now.hour, now.minute) > ATTENDANCE_LATE_AFTER else 'present'
-    # Start a new session: stamp the session start, leave worked_minutes intact.
+        if shift.is_flexible:
+            obj.late_minutes = 0
+            obj.status = 'present'
+        else:
+            shift_start = datetime.combine(now.date(), shift.start_time)
+            grace_start = shift_start + timedelta(minutes=shift.grace_minutes)
+            if now > grace_start:
+                diff_min = int((now - shift_start).total_seconds() // 60)
+                obj.late_minutes = max(diff_min, 0)
+                obj.status = 'late'
+            else:
+                obj.late_minutes = 0
+                obj.status = 'present'
+
+    # Start a new session
     obj.check_in = now
     obj.save()
-    # Drop a "Check In" event onto today's activity log / team status feed.
+
+    # Create event
     AttendanceEvent.objects.create(
         email=email, employee_name=obj.employee_name, date=now.date(),
-        event='check-in', location=('Home' if obj.device == 'mobile' else 'Office'),
+        event='check-in', location=loc_desc,
+        latitude=lat, longitude=lng,
+        geo_fence_id=fence_obj.id if fence_obj else None,
         at=now,
     )
+
     create_notification(
         email,
         'Checked in',
-        'You have successfully checked in for today.',
+        f'You have successfully checked in for today at {loc_desc}.',
         'success',
         '/employees/attendance',
     )
@@ -1138,8 +1259,7 @@ def attendance_check_in(request):
 @api_view(['POST'])
 @require_perm('attendance.create', or_self=True)
 def attendance_check_out(request):
-    """Close the open work session, ADDING its minutes to the running total so
-    multiple check-in/out cycles in one day accumulate."""
+    """Close the open work session, calculating early exit and overtime."""
     body = request.data
     email = norm_email(body.get('email'))
     if not email:
@@ -1148,17 +1268,67 @@ def attendance_check_out(request):
     obj = EmployeeAttendance.objects.filter(email=email, date=now.date()).first()
     if not obj:
         return err('No check-in found for today', 404)
+
+    # GPS check for event
+    lat = body.get('latitude')
+    lng = body.get('longitude')
+    try:
+        lat = float(lat) if lat is not None else None
+        lng = float(lng) if lng is not None else None
+    except (ValueError, TypeError):
+        lat = None
+        lng = None
+
+    fence_obj = None
+    if obj.is_wfh:
+        loc_desc = 'Home'
+    else:
+        if lat is not None and lng is not None:
+            is_inside, fence_obj = _check_geofence(lat, lng)
+            loc_desc = fence_obj.name if fence_obj else 'Unverified Location'
+        else:
+            loc_desc = 'Office'
+
+    # Close session
     if _is_checked_in(obj):
         session = max(int((now - obj.check_in).total_seconds() // 60), 0)
         obj.worked_minutes = (obj.worked_minutes or 0) + session
+
     obj.check_out = now
-    obj.presence = ''          # leaving for the day clears live presence
+    obj.presence = ''
     obj.presence_at = now
+
+    # Calculations based on active shift
+    shift = _get_active_shift(email, now.date())
+    if shift.is_flexible:
+        req_minutes = int(shift.flex_hours_per_day * 60)
+        if obj.worked_minutes > req_minutes:
+            obj.overtime_minutes = obj.worked_minutes - req_minutes
+        else:
+            obj.overtime_minutes = 0
+        obj.early_exit_minutes = max(req_minutes - obj.worked_minutes, 0)
+    else:
+        shift_end = datetime.combine(now.date(), shift.end_time)
+        if now < shift_end:
+            obj.early_exit_minutes = int((shift_end - now).total_seconds() // 60)
+        else:
+            obj.early_exit_minutes = 0
+
+        if obj.worked_minutes > shift.overtime_after_minutes:
+            obj.overtime_minutes = obj.worked_minutes - shift.overtime_after_minutes
+        else:
+            obj.overtime_minutes = 0
+
     obj.save()
+
     AttendanceEvent.objects.create(
         email=email, employee_name=obj.employee_name, date=now.date(),
-        event='check-out', location='', at=now,
+        event='check-out', location=loc_desc,
+        latitude=lat, longitude=lng,
+        geo_fence_id=fence_obj.id if fence_obj else None,
+        at=now,
     )
+
     create_notification(
         email,
         'Checked out',
@@ -1182,6 +1352,8 @@ def attendance_today(request):
             'email': email, 'date': datetime.now().strftime('%Y-%m-%d'),
             'checkedIn': False, 'checkIn': None, 'checkOut': None,
             'workedMinutes': 0, 'status': 'absent',
+            'isWfh': False, 'breakMinutes': 0, 'overtimeMinutes': 0,
+            'lateMinutes': 0, 'earlyExitMinutes': 0, 'geoVerified': False,
         })
     return Response(EmployeeAttendanceSerializer(obj).data)
 
@@ -1215,7 +1387,7 @@ ATTENDANCE_EVENT_TYPES = (
 @require_perm({'GET': 'attendance.view', 'POST': 'attendance.create'}, or_self=True)
 def attendance_events(request):
     """GET: today's (or ?date=) activity-log events for ?email=.
-    POST: append an event (break / mode switch) to the signed-in user's day."""
+    POST: append an event (break / mode switch) to the signed-in user's day with GPS."""
     if request.method == 'GET':
         day = parse_date(request.GET.get('date')) or datetime.now().date()
         qs = AttendanceEvent.objects.filter(date=day)
@@ -1231,23 +1403,51 @@ def attendance_events(request):
         return err('email is required')
     if event not in ATTENDANCE_EVENT_TYPES:
         return err('event must be one of: ' + ', '.join(ATTENDANCE_EVENT_TYPES))
+
+    lat = body.get('latitude')
+    lng = body.get('longitude')
+    try:
+        lat = float(lat) if lat is not None else None
+        lng = float(lng) if lng is not None else None
+    except (ValueError, TypeError):
+        lat = None
+        lng = None
+
+    fence_obj = None
+    if lat is not None and lng is not None:
+        _, fence_obj = _check_geofence(lat, lng)
+
     now = datetime.now()
     obj = AttendanceEvent.objects.create(
         email=email,
         employee_name=body.get('employee') or body.get('name') or '',
         date=now.date(),
         event=event,
-        location=str(body.get('location') or '').strip(),
+        location=fence_obj.name if fence_obj else str(body.get('location') or '').strip(),
+        latitude=lat,
+        longitude=lng,
+        geo_fence_id=fence_obj.id if fence_obj else None,
         at=now,
     )
-    # Keep the day's presence in step with break transitions so the Team Status
-    # panel matches the activity log (start break -> Away; end break -> clear).
+
+    # Manage live presence & break duration
     if event in ('break-start', 'break-end'):
         att = EmployeeAttendance.objects.filter(email=email, date=now.date()).first()
         if att:
-            att.presence = 'Away' if event == 'break-start' else ''
+            if event == 'break-start':
+                att.presence = 'Away'
+            else:
+                att.presence = ''
+                # Calculate break minutes since last break-start today
+                last_start = AttendanceEvent.objects.filter(
+                    email=email, date=now.date(), event='break-start'
+                ).order_by('-at').first()
+                if last_start:
+                    brk_min = int((now - last_start.at).total_seconds() // 60)
+                    att.break_minutes = (att.break_minutes or 0) + max(brk_min, 0)
             att.presence_at = now
             att.save()
+
     return Response(AttendanceEventSerializer(obj).data, status=201)
 
 
@@ -2189,6 +2389,17 @@ def recruitment_kpis(request):
     from .permissions import check_perm, _is_super_admin, _resolve_role
     scope = request.GET.get('scope', 'me')
     range_param = request.GET.get('range', 'all')
+    role_param = request.GET.get('role', '')
+    interviewer_param = request.GET.get('interviewer', '')
+    dept_param = request.GET.get('dept', '')
+    
+    # Tab-specific new filters
+    interview_type_param = request.GET.get('interview_type', '')
+    status_param = request.GET.get('status', '')
+    outcome_param = request.GET.get('outcome', '')
+    source_param = request.GET.get('source', '')
+    verdict_param = request.GET.get('verdict', '')
+    job_type_param = request.GET.get('job_type', '')
 
     # Resolve caller
     caller_email = norm_email(
@@ -2198,11 +2409,22 @@ def recruitment_kpis(request):
 
     # Admin check for scope=all
     is_admin = caller_user and (_is_super_admin(caller_user) or (
-        caller_user.role_ref and caller_user.role_ref.name in ('HR Manager', 'Super Admin')
-    ) or (caller_user.role or '').lower() in ('admin', 'hr'))
+        caller_user.role_ref and caller_user.role_ref.name in ('HR Manager', 'Super Admin', 'HR Executive', 'Recruitment')
+    ) or (caller_user.role or '').lower() in ('admin', 'hr', 'recruitment'))
 
     if scope == 'all' and not is_admin:
         return JsonResponse({'message': 'Admin access required for org-wide KPIs'}, status=403)
+
+    # Collect lists of all available options for filters (BEFORE filtering base querysets)
+    all_roles = sorted(list(set([x for x in InterviewLink.objects.values_list('role', flat=True) if x])))
+    all_interviewers = sorted(list(set([x for x in InterviewLink.objects.values_list('interviewer', flat=True) if x])))
+    all_depts = sorted(list(set([x for x in JobPost.objects.values_list('dept', flat=True) if x])))
+    all_interview_types = sorted(list(set([x for x in InterviewLink.objects.values_list('interview_type', flat=True) if x])))
+    all_statuses = sorted(list(set([x for x in InterviewLink.objects.values_list('status', flat=True) if x])))
+    all_outcomes = sorted(list(set([x for x in InterviewLink.objects.values_list('outcome', flat=True) if x])))
+    all_sources = sorted(list(set([x for x in ResumeScore.objects.values_list('source', flat=True) if x])))
+    all_verdicts = sorted(list(set([x for x in InterviewRecording.objects.values_list('verdict', flat=True) if x])))
+    all_job_types = sorted(list(set([x for x in JobPost.objects.values_list('type', flat=True) if x])))
 
     # ── Base querysets ────────────────────────────────────────────────────
     il_qs = InterviewLink.objects.all()
@@ -2210,6 +2432,7 @@ def recruitment_kpis(request):
     ir_qs = InterviewRecording.objects.all()
     jp_qs = JobPost.objects.all()
 
+    # Apply scope & interviewer filter
     if scope == 'me' and caller_email:
         il_qs = il_qs.filter(interviewer__iexact=caller_email)
         # ResumeScore has no interviewer field — filter by role name via interviews
@@ -2218,6 +2441,41 @@ def recruitment_kpis(request):
         # InterviewRecording has no direct interviewer — use candidate_email match
         emails_for_user = il_qs.values_list('email', flat=True).distinct()
         ir_qs = ir_qs.filter(candidate_email__in=emails_for_user)
+    elif scope == 'all' and interviewer_param:
+        il_qs = il_qs.filter(interviewer__iexact=interviewer_param)
+        roles_for_user = il_qs.values_list('role', flat=True).distinct()
+        rs_qs = rs_qs.filter(role__in=roles_for_user)
+        emails_for_user = il_qs.values_list('email', flat=True).distinct()
+        ir_qs = ir_qs.filter(candidate_email__in=emails_for_user)
+
+    # Apply role filter
+    if role_param:
+        il_qs = il_qs.filter(role__iexact=role_param)
+        rs_qs = rs_qs.filter(role__iexact=role_param)
+        ir_qs = ir_qs.filter(role__iexact=role_param)
+        jp_qs = jp_qs.filter(title__iexact=role_param)
+
+    # Apply department filter
+    if dept_param:
+        jp_qs = jp_qs.filter(dept__iexact=dept_param)
+        roles_in_dept = JobPost.objects.filter(dept__iexact=dept_param).values_list('title', flat=True).distinct()
+        il_qs = il_qs.filter(role__in=roles_in_dept)
+        rs_qs = rs_qs.filter(role__in=roles_in_dept)
+        ir_qs = ir_qs.filter(role__in=roles_in_dept)
+
+    # Apply tab-specific new filters
+    if interview_type_param:
+        il_qs = il_qs.filter(interview_type__iexact=interview_type_param)
+    if status_param:
+        il_qs = il_qs.filter(status__iexact=status_param)
+    if outcome_param:
+        il_qs = il_qs.filter(outcome__iexact=outcome_param)
+    if source_param:
+        rs_qs = rs_qs.filter(source__iexact=source_param)
+    if verdict_param:
+        ir_qs = ir_qs.filter(verdict__iexact=verdict_param)
+    if job_type_param:
+        jp_qs = jp_qs.filter(type__iexact=job_type_param)
 
     # Apply time range to interview_links (created_at)
     il_qs = _date_filter(il_qs, 'created_at', range_param)
@@ -2390,6 +2648,17 @@ def recruitment_kpis(request):
     response = {
         'scope': scope,
         'range': range_param,
+        'filters': {
+            'roles': all_roles,
+            'interviewers': all_interviewers,
+            'departments': all_depts,
+            'interview_types': all_interview_types,
+            'statuses': all_statuses,
+            'outcomes': all_outcomes,
+            'sources': all_sources,
+            'verdicts': all_verdicts,
+            'job_types': all_job_types,
+        },
         'pipeline': {
             'total': total_interviews,
             'byStatus': [{'status': k, 'count': v} for k, v in sorted(status_counts.items(), key=lambda x: -x[1])],
@@ -2434,3 +2703,411 @@ def recruitment_kpis(request):
         response['recruiterStats'] = recruiter_stats
 
     return Response(response)
+
+
+# ===========================================================================
+# Advanced Attendance Management — View functions
+# ===========================================================================
+
+@api_view(['GET', 'POST'])
+@require_perm({'GET': 'settings.view', 'POST': 'settings.manage'})
+def shifts(request):
+    if request.method == 'GET':
+        qs = Shift.objects.all()
+        return Response(ShiftSerializer(qs, many=True).data)
+    # POST
+    ser = ShiftSerializer(data=request.data)
+    if not ser.is_valid():
+        return serializer_err(ser)
+    ser.save(created_by=_resolve_recipient_email(request, 'system'))
+    return Response(ser.data, status=201)
+
+
+@api_view(['GET', 'PUT', 'DELETE'])
+@require_perm({'GET': 'settings.view', 'PUT': 'settings.manage', 'DELETE': 'settings.manage'})
+def shift_detail(request, pk):
+    obj = Shift.objects.filter(pk=pk).first()
+    if not obj:
+        return err('Shift not found', 404)
+    if request.method == 'DELETE':
+        obj.delete()
+        return Response({'ok': True})
+    if request.method == 'PUT':
+        ser = ShiftSerializer(obj, data=request.data, partial=True)
+        if not ser.is_valid():
+            return serializer_err(ser)
+        ser.save()
+        return Response(ser.data)
+    return Response(ShiftSerializer(obj).data)
+
+
+@api_view(['GET', 'POST'])
+@require_perm({'GET': 'employee.view', 'POST': 'settings.manage'})
+def shift_assignments(request):
+    if request.method == 'GET':
+        qs = ShiftAssignment.objects.select_related('shift').all()
+        email = norm_email(request.GET.get('email'))
+        if email:
+            qs = qs.filter(email=email)
+        return Response(ShiftAssignmentSerializer(qs, many=True).data)
+    # POST
+    ser = ShiftAssignmentSerializer(data=request.data)
+    if not ser.is_valid():
+        return serializer_err(ser)
+    ser.save(created_by=_resolve_recipient_email(request, 'system'))
+    return Response(ser.data, status=201)
+
+
+@api_view(['GET', 'PUT', 'DELETE'])
+@require_perm({'GET': 'employee.view', 'PUT': 'settings.manage', 'DELETE': 'settings.manage'})
+def shift_assignment_detail(request, pk):
+    obj = ShiftAssignment.objects.filter(pk=pk).first()
+    if not obj:
+        return err('Assignment not found', 404)
+    if request.method == 'DELETE':
+        obj.delete()
+        return Response({'ok': True})
+    if request.method == 'PUT':
+        ser = ShiftAssignmentSerializer(obj, data=request.data, partial=True)
+        if not ser.is_valid():
+            return serializer_err(ser)
+        ser.save()
+        return Response(ser.data)
+    return Response(ShiftAssignmentSerializer(obj).data)
+
+
+@api_view(['GET', 'POST'])
+@require_perm({'GET': 'attendance.view', 'POST': 'settings.manage'})
+def attendance_geofences(request):
+    if request.method == 'GET':
+        qs = GeoFence.objects.all()
+        return Response(GeoFenceSerializer(qs, many=True).data)
+    # POST
+    ser = GeoFenceSerializer(data=request.data)
+    if not ser.is_valid():
+        return serializer_err(ser)
+    ser.save(created_by=_resolve_recipient_email(request, 'system'))
+    return Response(ser.data, status=201)
+
+
+@api_view(['GET', 'PUT', 'DELETE'])
+@require_perm({'GET': 'attendance.view', 'PUT': 'settings.manage', 'DELETE': 'settings.manage'})
+def attendance_geofence_detail(request, pk):
+    obj = GeoFence.objects.filter(pk=pk).first()
+    if not obj:
+        return err('Geofence not found', 404)
+    if request.method == 'DELETE':
+        obj.delete()
+        return Response({'ok': True})
+    if request.method == 'PUT':
+        ser = GeoFenceSerializer(obj, data=request.data, partial=True)
+        if not ser.is_valid():
+            return serializer_err(ser)
+        ser.save()
+        return Response(ser.data)
+    return Response(GeoFenceSerializer(obj).data)
+
+
+@api_view(['GET', 'POST'])
+@require_perm({'GET': 'attendance.view', 'POST': 'attendance.create'}, or_self=True)
+def wfh_requests(request):
+    if request.method == 'GET':
+        qs = WfhRequest.objects.all()
+        email = norm_email(request.GET.get('email'))
+        if email:
+            qs = qs.filter(email=email)
+        return Response(WfhRequestSerializer(qs, many=True).data)
+    # POST
+    body = request.data
+    email = norm_email(body.get('email'))
+    if not email:
+        return err('email is required')
+    ser = WfhRequestSerializer(data=body)
+    if not ser.is_valid():
+        return serializer_err(ser)
+    inst = ser.save()
+    notify_approvers(
+        'settings.manage',
+        'New WFH Request',
+        f"{inst.employee_name or email} has requested WFH from {inst.from_date} to {inst.to_date}.",
+        '/employees/attendance',
+    )
+    return Response(ser.data, status=201)
+
+
+@api_view(['GET', 'PUT', 'DELETE'])
+@require_perm({'GET': 'attendance.view', 'PUT': 'settings.manage', 'DELETE': 'attendance.delete'})
+def wfh_request_detail(request, pk):
+    obj = WfhRequest.objects.filter(pk=pk).first()
+    if not obj:
+        return err('WFH request not found', 404)
+    if request.method == 'DELETE':
+        obj.delete()
+        return Response({'ok': True})
+    if request.method == 'PUT':
+        ser = WfhRequestSerializer(obj, data=request.data, partial=True)
+        if not ser.is_valid():
+            return serializer_err(ser)
+        inst = ser.save()
+        status_val = request.data.get('status')
+        if status_val in ('Approved', 'Rejected'):
+            create_notification(
+                obj.email,
+                f'WFH Request {status_val}',
+                f'Your WFH request has been {status_val.lower()} by HR.',
+                'success' if status_val == 'Approved' else 'warning',
+                '/employees/attendance',
+            )
+        return Response(ser.data)
+    return Response(WfhRequestSerializer(obj).data)
+
+
+@api_view(['GET', 'POST'])
+@require_perm({'GET': 'attendance.view', 'POST': 'attendance.create'}, or_self=True)
+def attendance_corrections(request):
+    if request.method == 'GET':
+        qs = AttendanceCorrection.objects.all()
+        email = norm_email(request.GET.get('email'))
+        if email:
+            qs = qs.filter(email=email)
+        return Response(AttendanceCorrectionSerializer(qs, many=True).data)
+    # POST
+    body = request.data
+    email = norm_email(body.get('email'))
+    if not email:
+        return err('email is required')
+    ser = AttendanceCorrectionSerializer(data=body)
+    if not ser.is_valid():
+        return serializer_err(ser)
+    inst = ser.save()
+    notify_approvers(
+        'settings.manage',
+        'New Attendance Correction Request',
+        f"{inst.employee_name or email} has requested a correction for {inst.attendance_date}.",
+        '/employees/attendance',
+    )
+    return Response(ser.data, status=201)
+
+
+@api_view(['GET', 'PUT', 'DELETE'])
+@require_perm({'GET': 'attendance.view', 'PUT': 'settings.manage', 'DELETE': 'attendance.delete'})
+def attendance_correction_detail(request, pk):
+    obj = AttendanceCorrection.objects.filter(pk=pk).first()
+    if not obj:
+        return err('Correction request not found', 404)
+    if request.method == 'DELETE':
+        obj.delete()
+        return Response({'ok': True})
+    if request.method == 'PUT':
+        ser = AttendanceCorrectionSerializer(obj, data=request.data, partial=True)
+        if not ser.is_valid():
+            return serializer_err(ser)
+        inst = ser.save()
+        status_val = request.data.get('status')
+        if status_val == 'Approved':
+            att, created = EmployeeAttendance.objects.get_or_create(
+                email=inst.email,
+                date=inst.attendance_date
+            )
+            if inst.requested_check_in:
+                att.check_in = inst.requested_check_in
+            if inst.requested_check_out:
+                att.check_out = inst.requested_check_out
+
+            shift = _get_active_shift(inst.email, inst.attendance_date)
+            att.shift_id = shift.id
+            if att.check_in and att.check_out:
+                att.worked_minutes = max(int((att.check_out - att.check_in).total_seconds() // 60), 0)
+
+                if shift.is_flexible:
+                    req_min = int(shift.flex_hours_per_day * 60)
+                    att.overtime_minutes = max(att.worked_minutes - req_min, 0)
+                    att.early_exit_minutes = max(req_min - att.worked_minutes, 0)
+                    att.late_minutes = 0
+                    att.status = 'present'
+                else:
+                    shift_start = datetime.combine(inst.attendance_date, shift.start_time)
+                    grace_start = shift_start + timedelta(minutes=shift.grace_minutes)
+                    if att.check_in > grace_start:
+                        att.late_minutes = int((att.check_in - shift_start).total_seconds() // 60)
+                        att.status = 'late'
+                    else:
+                        att.late_minutes = 0
+                        att.status = 'present'
+
+                    shift_end = datetime.combine(inst.attendance_date, shift.end_time)
+                    if att.check_out < shift_end:
+                        att.early_exit_minutes = int((shift_end - att.check_out).total_seconds() // 60)
+                    else:
+                        att.early_exit_minutes = 0
+
+                    if att.worked_minutes > shift.overtime_after_minutes:
+                        att.overtime_minutes = att.worked_minutes - shift.overtime_after_minutes
+                    else:
+                        att.overtime_minutes = 0
+            att.save()
+
+            create_notification(
+                obj.email,
+                'Attendance Correction Approved',
+                f'Your attendance correction for {inst.attendance_date} was approved and applied.',
+                'success',
+                '/employees/attendance',
+            )
+        elif status_val == 'Rejected':
+            create_notification(
+                obj.email,
+                'Attendance Correction Rejected',
+                f'Your attendance correction for {inst.attendance_date} was rejected.',
+                'warning',
+                '/employees/attendance',
+            )
+        return Response(ser.data)
+    return Response(AttendanceCorrectionSerializer(obj).data)
+
+
+@api_view(['GET'])
+@require_perm('attendance.view', or_self=True)
+def attendance_overtime(request):
+    """Retrieve list of attendance records with overtime_minutes > 0."""
+    qs = EmployeeAttendance.objects.filter(overtime_minutes__gt=0)
+    email = norm_email(request.GET.get('email'))
+    if email:
+        qs = qs.filter(email=email)
+    frm = parse_date(request.GET.get('from'))
+    if frm:
+        qs = qs.filter(date__gte=frm)
+    to = parse_date(request.GET.get('to'))
+    if to:
+        qs = qs.filter(date__lte=to)
+    return Response(EmployeeAttendanceSerializer(qs, many=True).data)
+
+
+@api_view(['POST'])
+@require_perm('settings.manage')
+def attendance_auto_correct(request):
+    """Scan all active users, identify missing checkout for past dates and auto checkout at shift end."""
+    today = datetime.now().date()
+
+    updated_count = 0
+    records = EmployeeAttendance.objects.filter(
+        date__lt=today,
+        date__gte=today - timedelta(days=7),
+        check_in__isnull=False,
+        check_out__isnull=True
+    )
+    for rec in records:
+        shift = _get_active_shift(rec.email, rec.date)
+        checkout_dt = datetime.combine(rec.date, shift.end_time)
+        rec.check_out = checkout_dt
+        rec.worked_minutes = max(int((checkout_dt - rec.check_in).total_seconds() // 60), 0)
+
+        if shift.is_flexible:
+            req_min = int(shift.flex_hours_per_day * 60)
+            rec.overtime_minutes = max(rec.worked_minutes - req_min, 0)
+            rec.early_exit_minutes = max(req_min - rec.worked_minutes, 0)
+        else:
+            rec.early_exit_minutes = 0
+            if rec.worked_minutes > shift.overtime_after_minutes:
+                rec.overtime_minutes = rec.worked_minutes - shift.overtime_after_minutes
+
+        rec.note = '[Auto Corrected Checkout]'
+        rec.save()
+        updated_count += 1
+
+        create_notification(
+            rec.email,
+            'Auto Attendance Correction',
+            f'Your missing checkout on {rec.date} has been automatically corrected to shift end.',
+            'info',
+            '/employees/attendance'
+        )
+    return Response({'ok': True, 'correctedCount': updated_count})
+
+
+@api_view(['GET'])
+@require_perm('attendance.view', or_self=True)
+def attendance_analytics(request):
+    """Comprehensive high-performance analytics payload."""
+    from django.db.models import Sum
+    email = norm_email(request.GET.get('email'))
+    range_param = request.GET.get('range', 'month')
+
+    now = datetime.now().date()
+    if range_param == 'week':
+        days_back = 7
+    elif range_param == 'quarter':
+        days_back = 90
+    else:
+        days_back = 30
+
+    start_date = now - timedelta(days=days_back)
+
+    qs = EmployeeAttendance.objects.filter(date__gte=start_date, date__lte=now)
+    if email:
+        qs = qs.filter(email=email)
+
+    total_records = qs.count()
+    if total_records == 0:
+        return Response({
+            'attendanceRate': 0.0,
+            'lateRate': 0.0,
+            'wfhRate': 0.0,
+            'avgWorkedHours': 0.0,
+            'totalOvertimeHours': 0.0,
+            'trends': [],
+        })
+
+    late_count = qs.filter(status='late').count()
+    wfh_count = qs.filter(is_wfh=True).count()
+
+    agg = qs.aggregate(
+        total_worked=Sum('worked_minutes'),
+        total_ot=Sum('overtime_minutes')
+    )
+
+    total_worked_hours = round((agg['total_worked'] or 0) / 60.0, 1)
+    total_ot_hours = round((agg['total_ot'] or 0) / 60.0, 1)
+    avg_worked_hours = round(total_worked_hours / total_records, 1)
+
+    headcount = AppUser.objects.count()
+    if email:
+        headcount = 1
+
+    expected_days = days_back
+    if headcount == 0:
+        headcount = 1
+    total_expected = expected_days * headcount
+    if total_expected == 0:
+        total_expected = 1
+
+    attendance_rate = round((total_records / total_expected) * 100, 1)
+    late_rate = round((late_count / total_records) * 100, 1)
+    wfh_rate = round((wfh_count / total_records) * 100, 1)
+
+    from django.db.models import Avg
+    trend_qs = qs.values('date').annotate(
+        count=Count('id'),
+        wfh=Count('id', filter=Q(is_wfh=True)),
+        late=Count('id', filter=Q(status='late')),
+        avg_worked=Avg('worked_minutes')
+    ).order_by('date')
+
+    trends = []
+    for r in trend_qs:
+        trends.append({
+            'date': r['date'].strftime('%Y-%m-%d'),
+            'attendanceRate': round((r['count'] / headcount) * 100, 1),
+            'wfhRate': round((r['wfh'] / r['count']) * 100, 1) if r['count'] else 0.0,
+            'lateRate': round((r['late'] / r['count']) * 100, 1) if r['count'] else 0.0,
+            'avgWorkedHours': round((r['avg_worked'] or 0) / 60.0, 1),
+        })
+
+    return Response({
+        'attendanceRate': min(attendance_rate, 100.0),
+        'lateRate': late_rate,
+        'wfhRate': wfh_rate,
+        'avgWorkedHours': avg_worked_hours,
+        'totalOvertimeHours': total_ot_hours,
+        'trends': trends,
+    })

@@ -272,7 +272,12 @@ class LiveSession(models.Model):
 class EmployeeAttendance(models.Model):
     """One row per employee per day. Check-in stamps ``check_in`` (and the
     device it came from); check-out stamps ``check_out`` and computes
-    ``worked_minutes``. ``status`` is derived on check-in (present/late)."""
+    ``worked_minutes``. ``status`` is derived on check-in (present/late).
+
+    Extended columns (attendance_migrations.sql):
+      shift_id, is_wfh, break_minutes, overtime_minutes, late_minutes,
+      early_exit_minutes, location_lat, location_lng, geo_verified
+    """
     email = models.CharField(max_length=255, db_index=True)
     employee_name = models.CharField(max_length=255, default='', blank=True)
     date = models.DateField(db_index=True)
@@ -286,6 +291,16 @@ class EmployeeAttendance(models.Model):
     presence_at = models.DateTimeField(null=True, blank=True)
     worked_minutes = models.IntegerField(default=0)
     note = models.CharField(max_length=255, default='', blank=True)
+    # --- Advanced attendance fields (added via attendance_migrations.sql) ---
+    shift_id = models.IntegerField(null=True, blank=True)
+    is_wfh = models.BooleanField(default=False)
+    break_minutes = models.IntegerField(default=0)
+    overtime_minutes = models.IntegerField(default=0)
+    late_minutes = models.IntegerField(default=0)
+    early_exit_minutes = models.IntegerField(default=0)
+    location_lat = models.FloatField(null=True, blank=True)
+    location_lng = models.FloatField(null=True, blank=True)
+    geo_verified = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -357,19 +372,126 @@ class AttendanceEvent(models.Model):
     """A single timeline event on an employee's day — check-in / check-out,
     break start / end, or a work-mode switch (office <-> remote). These rows
     drive the "Today's Activity Log" panel (per employee) and the
-    "Team Status Now" panel (latest event per employee → live status)."""
+    "Team Status Now" panel (latest event per employee → live status).
+
+    Extended columns (attendance_migrations.sql): latitude, longitude, geo_fence_id
+    """
     # check-in | check-out | break-start | break-end | remote-switch | office-switch
     email = models.CharField(max_length=255, db_index=True)
     employee_name = models.CharField(max_length=255, default='', blank=True)
     date = models.DateField(db_index=True)
     event = models.CharField(max_length=30)
     location = models.CharField(max_length=120, default='', blank=True)
+    latitude = models.FloatField(null=True, blank=True)
+    longitude = models.FloatField(null=True, blank=True)
+    geo_fence_id = models.IntegerField(null=True, blank=True)
     at = models.DateTimeField()
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         db_table = 'attendance_events'
         ordering = ['at', 'id']
+
+
+# ===========================================================================
+# Advanced Attendance Management — New models
+# attendance_migrations.sql creates the backing tables.
+# ===========================================================================
+
+class Shift(models.Model):
+    """A named work schedule with start/end times, break, grace and OT config."""
+    name = models.CharField(max_length=100)
+    start_time = models.TimeField(default='09:00')
+    end_time = models.TimeField(default='18:00')
+    break_minutes = models.IntegerField(default=60)
+    grace_minutes = models.IntegerField(default=15)
+    is_flexible = models.BooleanField(default=False)
+    flex_hours_per_day = models.FloatField(default=8.0)
+    overtime_after_minutes = models.IntegerField(default=540)
+    is_night_shift = models.BooleanField(default=False)
+    is_active = models.BooleanField(default=True)
+    created_by = models.CharField(max_length=255, default='', blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'attendance_shifts'
+        ordering = ['name']
+
+    def total_work_minutes(self):
+        """Net work minutes = shift duration - standard break."""
+        from datetime import datetime, date
+        start = datetime.combine(date.today(), self.start_time)
+        end = datetime.combine(date.today(), self.end_time)
+        if self.is_night_shift and end <= start:
+            from datetime import timedelta
+            end += timedelta(days=1)
+        return int((end - start).total_seconds() / 60) - self.break_minutes
+
+
+class ShiftAssignment(models.Model):
+    """Maps an employee to a shift for a date range."""
+    email = models.CharField(max_length=255, db_index=True)
+    shift = models.ForeignKey(Shift, on_delete=models.CASCADE, related_name='assignments')
+    effective_from = models.DateField()
+    effective_to = models.DateField(null=True, blank=True)  # NULL = open-ended
+    created_by = models.CharField(max_length=255, default='', blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'shift_assignments'
+        ordering = ['-effective_from']
+
+
+class AttendanceCorrection(models.Model):
+    """Employee-submitted request to correct a past attendance record."""
+    email = models.CharField(max_length=255, db_index=True)
+    employee_name = models.CharField(max_length=255, default='', blank=True)
+    attendance_date = models.DateField(db_index=True)
+    requested_check_in = models.DateTimeField(null=True, blank=True)
+    requested_check_out = models.DateTimeField(null=True, blank=True)
+    reason = models.TextField(null=True, blank=True)
+    status = models.CharField(max_length=20, default='Pending')  # Pending|Approved|Rejected
+    reviewer = models.CharField(max_length=255, default='', blank=True)
+    reviewer_note = models.TextField(null=True, blank=True)
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'attendance_corrections'
+        ordering = ['-id']
+
+
+class GeoFence(models.Model):
+    """A GPS circle zone. Check-ins inside are marked geo_verified=True."""
+    name = models.CharField(max_length=100)
+    latitude = models.FloatField()
+    longitude = models.FloatField()
+    radius_meters = models.IntegerField(default=200)
+    is_active = models.BooleanField(default=True)
+    created_by = models.CharField(max_length=255, default='', blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'attendance_geofences'
+        ordering = ['name']
+
+
+class WfhRequest(models.Model):
+    """Employee request to work from home for a date range."""
+    email = models.CharField(max_length=255, db_index=True)
+    employee_name = models.CharField(max_length=255, default='', blank=True)
+    from_date = models.DateField()
+    to_date = models.DateField()
+    days = models.IntegerField(default=1)
+    reason = models.TextField(null=True, blank=True)
+    status = models.CharField(max_length=20, default='Pending')  # Pending|Approved|Rejected
+    approver = models.CharField(max_length=255, default='', blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'wfh_requests'
+        ordering = ['-id']
 
 
 # ===========================================================================

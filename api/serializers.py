@@ -37,6 +37,11 @@ from .models import (
     UserEmailConfig,
     UserProfile,
     WorkSubmission,
+    Shift,
+    ShiftAssignment,
+    AttendanceCorrection,
+    GeoFence,
+    WfhRequest,
 )
 
 # Datetime wire format used everywhere by the original API (naive, USE_TZ=False).
@@ -573,6 +578,9 @@ class EmployeeAttendanceSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'email', 'employee_name', 'date', 'check_in', 'check_out',
             'device', 'status', 'worked_minutes', 'note',
+            'shift_id', 'is_wfh', 'break_minutes', 'overtime_minutes',
+            'late_minutes', 'early_exit_minutes', 'location_lat', 'location_lng',
+            'geo_verified',
         ]
         read_only_fields = ['id']
 
@@ -596,6 +604,15 @@ class EmployeeAttendanceSerializer(serializers.ModelSerializer):
             'presence': instance.presence or '',
             'workedMinutes': instance.worked_minutes,
             'note': instance.note or '',
+            'shiftId': instance.shift_id,
+            'isWfh': bool(instance.is_wfh),
+            'breakMinutes': instance.break_minutes,
+            'overtimeMinutes': instance.overtime_minutes,
+            'lateMinutes': instance.late_minutes,
+            'earlyExitMinutes': instance.early_exit_minutes,
+            'locationLat': instance.location_lat,
+            'locationLng': instance.location_lng,
+            'geoVerified': bool(instance.geo_verified),
         }
 
 
@@ -764,6 +781,9 @@ class AttendanceEventSerializer(serializers.ModelSerializer):
             'time': instance.at.strftime('%I:%M %p') if instance.at else '',
             'color': ATTENDANCE_EVENT_COLORS.get(instance.event, 'gray'),
             'at': instance.at.strftime(DATETIME_FMT) if instance.at else None,
+            'latitude': instance.latitude,
+            'longitude': instance.longitude,
+            'geoFenceId': instance.geo_fence_id,
         }
 
 
@@ -874,3 +894,155 @@ class PermissionSerializer(serializers.ModelSerializer):
             'group': (i.group.name if i.group_id and i.group else ''),
             'module': (i.group.module.name if i.group_id and i.group and i.group.module_id and i.group.module else ''),
         }
+
+
+# ===========================================================================
+# Advanced Attendance Management — Serializers
+# ===========================================================================
+
+class ShiftSerializer(serializers.ModelSerializer):
+    startTime = serializers.TimeField(source='start_time')
+    endTime = serializers.TimeField(source='end_time')
+    breakMinutes = serializers.IntegerField(source='break_minutes', required=False, default=60)
+    graceMinutes = serializers.IntegerField(source='grace_minutes', required=False, default=15)
+    isFlexible = serializers.BooleanField(source='is_flexible', required=False, default=False)
+    flexHoursPerDay = serializers.FloatField(source='flex_hours_per_day', required=False, default=8.0)
+    overtimeAfterMinutes = serializers.IntegerField(source='overtime_after_minutes', required=False, default=540)
+    isNightShift = serializers.BooleanField(source='is_night_shift', required=False, default=False)
+    isActive = serializers.BooleanField(source='is_active', required=False, default=True)
+    createdBy = serializers.CharField(source='created_by', required=False, allow_blank=True, default='')
+
+    class Meta:
+        model = Shift
+        fields = [
+            'id', 'name', 'startTime', 'endTime', 'breakMinutes', 'graceMinutes',
+            'isFlexible', 'flexHoursPerDay', 'overtimeAfterMinutes', 'isNightShift',
+            'isActive', 'createdBy'
+        ]
+        read_only_fields = ['id']
+
+    def to_representation(self, instance):
+        return {
+            'id': instance.id,
+            'name': instance.name,
+            'startTime': instance.start_time.strftime('%H:%M') if instance.start_time else '09:00',
+            'endTime': instance.end_time.strftime('%H:%M') if instance.end_time else '18:00',
+            'breakMinutes': instance.break_minutes,
+            'graceMinutes': instance.grace_minutes,
+            'isFlexible': bool(instance.is_flexible),
+            'flexHoursPerDay': instance.flex_hours_per_day,
+            'overtimeAfterMinutes': instance.overtime_after_minutes,
+            'isNightShift': bool(instance.is_night_shift),
+            'isActive': bool(instance.is_active),
+            'createdBy': instance.created_by or '',
+            'createdAt': instance.created_at.strftime(DATETIME_FMT) if instance.created_at else None,
+        }
+
+
+class ShiftAssignmentSerializer(serializers.ModelSerializer):
+    effectiveFrom = serializers.DateField(source='effective_from')
+    effectiveTo = serializers.DateField(source='effective_to', required=False, allow_null=True)
+    createdBy = serializers.CharField(source='created_by', required=False, allow_blank=True, default='')
+    shiftName = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ShiftAssignment
+        fields = ['id', 'email', 'shift', 'effectiveFrom', 'effectiveTo', 'createdBy', 'shiftName']
+        read_only_fields = ['id']
+
+    def get_shiftName(self, obj):
+        return obj.shift.name if obj.shift else ''
+
+    def to_representation(self, instance):
+        ret = super().to_representation(instance)
+        if instance.effective_from:
+            ret['effectiveFrom'] = instance.effective_from.strftime(DATE_FMT)
+        if instance.effective_to:
+            ret['effectiveTo'] = instance.effective_to.strftime(DATE_FMT)
+        else:
+            ret['effectiveTo'] = None
+        ret['createdAt'] = instance.created_at.strftime(DATETIME_FMT) if instance.created_at else None
+        return ret
+
+
+class AttendanceCorrectionSerializer(serializers.ModelSerializer):
+    employee = serializers.CharField(source='employee_name', required=False, allow_blank=True, default='')
+    attendanceDate = serializers.DateField(source='attendance_date')
+    requestedCheckIn = serializers.DateTimeField(source='requested_check_in', required=False, allow_null=True)
+    requestedCheckOut = serializers.DateTimeField(source='requested_check_out', required=False, allow_null=True)
+    reviewerNote = serializers.CharField(source='reviewer_note', required=False, allow_blank=True, allow_null=True, default='')
+    reviewedAt = serializers.DateTimeField(source='reviewed_at', read_only=True)
+
+    class Meta:
+        model = AttendanceCorrection
+        fields = [
+            'id', 'email', 'employee', 'attendanceDate', 'requestedCheckIn',
+            'requestedCheckOut', 'reason', 'status', 'reviewer', 'reviewerNote',
+            'reviewedAt'
+        ]
+        read_only_fields = ['id']
+
+    def to_representation(self, instance):
+        return {
+            'id': instance.id,
+            'email': instance.email,
+            'employee': instance.employee_name or '',
+            'attendanceDate': instance.attendance_date.strftime(DATE_FMT) if instance.attendance_date else None,
+            'requestedCheckIn': instance.requested_check_in.strftime(DATETIME_FMT) if instance.requested_check_in else None,
+            'requestedCheckOut': instance.requested_check_out.strftime(DATETIME_FMT) if instance.requested_check_out else None,
+            'reason': instance.reason or '',
+            'status': instance.status,
+            'reviewer': instance.reviewer or '',
+            'reviewerNote': instance.reviewer_note or '',
+            'reviewedAt': instance.reviewed_at.strftime(DATETIME_FMT) if instance.reviewed_at else None,
+            'createdAt': instance.created_at.strftime(DATETIME_FMT) if instance.created_at else None,
+        }
+
+
+class GeoFenceSerializer(serializers.ModelSerializer):
+    radiusMeters = serializers.IntegerField(source='radius_meters', required=False, default=200)
+    isActive = serializers.BooleanField(source='is_active', required=False, default=True)
+    createdBy = serializers.CharField(source='created_by', required=False, allow_blank=True, default='')
+
+    class Meta:
+        model = GeoFence
+        fields = ['id', 'name', 'latitude', 'longitude', 'radiusMeters', 'isActive', 'createdBy']
+        read_only_fields = ['id']
+
+    def to_representation(self, instance):
+        return {
+            'id': instance.id,
+            'name': instance.name,
+            'latitude': instance.latitude,
+            'longitude': instance.longitude,
+            'radiusMeters': instance.radius_meters,
+            'isActive': bool(instance.is_active),
+            'createdBy': instance.created_by or '',
+            'createdAt': instance.created_at.strftime(DATETIME_FMT) if instance.created_at else None,
+        }
+
+
+class WfhRequestSerializer(serializers.ModelSerializer):
+    employee = serializers.CharField(source='employee_name', required=False, allow_blank=True, default='')
+    fromDate = serializers.DateField(source='from_date')
+    toDate = serializers.DateField(source='to_date')
+
+    class Meta:
+        model = WfhRequest
+        fields = ['id', 'email', 'employee', 'fromDate', 'toDate', 'days', 'reason', 'status', 'approver']
+        read_only_fields = ['id']
+
+    def to_representation(self, instance):
+        return {
+            'id': instance.id,
+            'email': instance.email,
+            'employee': instance.employee_name or '',
+            'fromDate': instance.from_date.strftime(DATE_FMT) if instance.from_date else None,
+            'toDate': instance.to_date.strftime(DATE_FMT) if instance.to_date else None,
+            'days': instance.days,
+            'reason': instance.reason or '',
+            'status': instance.status,
+            'approver': instance.approver or '',
+            'createdAt': instance.created_at.strftime(DATETIME_FMT) if instance.created_at else None,
+        }
+

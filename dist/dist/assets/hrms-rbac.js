@@ -12,7 +12,7 @@
 (function () {
   'use strict';
 
-  var OVERLAY_ID = 'hrms-rbac-overlay';
+  var PAGE_ID = 'hrms-rbac-page';
   var NAV_ID = 'hrms-rbac-nav';
 
   /* ── icons ───────────────────────────────────────────────────────────── */
@@ -25,7 +25,7 @@
   function isAdmin() {
     try {
       var r = (JSON.parse(localStorage.getItem('hrms_session') || '{}').role || '').toLowerCase();
-      return r === 'admin';
+      return r === 'admin' || r === 'hr' || r === 'recruitment' || r === 'hr manager' || r === 'hr executive' || r === 'super admin';
     } catch (_) { return false; }
   }
   function esc(s) {
@@ -112,58 +112,74 @@
     return (sel.value || '').trim();
   }
 
-  /* ── overlay shell ───────────────────────────────────────────────────── */
+  /* ── page shell (full-page, replaces .content area) ─────────────────── */
   function open() {
-    if (document.getElementById(OVERLAY_ID)) return;
+    if (document.getElementById(PAGE_ID)) return;
     injectStyle();
-    var o = document.createElement('div');
-    o.id = OVERLAY_ID;
-    o.addEventListener('click', function (e) { if (e.target === o) close(); });
-    document.body.appendChild(o);
+    // Save the current .content children so we can restore on close
+    var content = document.querySelector('.content');
+    if (!content) return;
+    // Hide existing children
+    Array.prototype.forEach.call(content.children, function (el) { el.style.display = 'none'; });
+    content._rbacPrevChildren = content.children;
+
+    var page = document.createElement('div');
+    page.id = PAGE_ID;
+    page.className = 'hrms-rbac-page';
+    content.appendChild(page);
     document.addEventListener('keydown', onKey);
-    buildSkeleton();   // build the modal chrome (head + tabs + body slot) ONCE
+    buildSkeleton();
     render();
   }
   function close() {
-    var o = document.getElementById(OVERLAY_ID);
-    if (o) o.parentNode.removeChild(o);
+    var page = document.getElementById(PAGE_ID);
+    if (page && page.parentNode) {
+      // Restore hidden sibling children
+      Array.prototype.forEach.call(page.parentNode.children, function (el) {
+        if (el !== page) el.style.display = '';
+      });
+      page.parentNode.removeChild(page);
+    }
     document.removeEventListener('keydown', onKey);
     state.sub = null;
   }
   function onKey(e) { if (e.key === 'Escape') close(); }
 
-  /* Build the modal chrome once. Tab switches only swap the body (see shell()),
-     so the modal never blinks/closes-and-reopens when changing tabs. */
+  /* Build the page chrome once. Tab switches only swap the body, so the page
+     never re-renders the header/tabs when switching. */
   function buildSkeleton() {
-    var o = document.getElementById(OVERLAY_ID);
-    if (!o) return;
-    o.innerHTML =
-      '<div class="hrms-rbac-modal">' +
-        '<div class="hrms-rbac-head">' +
-          '<div><div class="hrms-rbac-title">Role-Based Access Control</div>' +
-          '<div class="hrms-rbac-sub">Create roles, group permissions, and assign access</div></div>' +
-          '<button class="hrms-rbac-x" data-act="close" aria-label="Close">&times;</button>' +
+    var page = document.getElementById(PAGE_ID);
+    if (!page) return;
+    page.innerHTML =
+      '<div class="hrms-rbac-topbar">' +
+        '<div class="hrms-rbac-topbar-left">' +
+          '<div class="hrms-rbac-title">' + SHIELD + ' Role-Based Access Control</div>' +
+          '<div class="hrms-rbac-sub">Create roles, group permissions, and assign access to users</div>' +
         '</div>' +
-        '<div class="hrms-rbac-tabs">' +
-          TABS.map(function (t) {
-            return '<button class="hrms-rbac-tab" data-act="tab" data-tab="' + t[0] + '">' + t[1] + '</button>';
-          }).join('') +
-        '</div>' +
-        '<div class="hrms-rbac-body"></div>' +
-        '<div id="hrms-rbac-toast" class="hrms-rbac-toast"></div>' +
-      '</div>';
+        '<button class="hrms-rbac-back-btn" data-act="close">' +
+          '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>' +
+          ' Back to Settings' +
+        '</button>' +
+      '</div>' +
+      '<div class="hrms-rbac-tabs">' +
+        TABS.map(function (t) {
+          return '<button class="hrms-rbac-tab" data-act="tab" data-tab="' + t[0] + '">' + t[1] + '</button>';
+        }).join('') +
+      '</div>' +
+      '<div class="hrms-rbac-body"></div>' +
+      '<div id="hrms-rbac-toast" class="hrms-rbac-toast"></div>';
     wire();
   }
 
   /* Update ONLY the body + the active-tab highlight — the header/tabs DOM is
      preserved, so switching tabs is a smooth in-place swap, not a rebuild. */
   function shell(bodyHtml) {
-    var o = document.getElementById(OVERLAY_ID);
-    if (!o) return;
-    var body = o.querySelector('.hrms-rbac-body');
-    if (!body) { buildSkeleton(); body = o.querySelector('.hrms-rbac-body'); }
+    var page = document.getElementById(PAGE_ID);
+    if (!page) return;
+    var body = page.querySelector('.hrms-rbac-body');
+    if (!body) { buildSkeleton(); body = page.querySelector('.hrms-rbac-body'); }
     if (body) body.innerHTML = bodyHtml;
-    var tabs = o.querySelectorAll('.hrms-rbac-tab');
+    var tabs = page.querySelectorAll('.hrms-rbac-tab');
     for (var i = 0; i < tabs.length; i++) {
       var active = tabs[i].getAttribute('data-tab') === state.tab && !state.sub;
       if (active) tabs[i].classList.add('active'); else tabs[i].classList.remove('active');
@@ -493,7 +509,7 @@
   function val(id) { var e = document.getElementById(id); return e ? e.value.trim() : ''; }
 
   function wire() {
-    var o = document.getElementById(OVERLAY_ID);
+    var o = document.getElementById(PAGE_ID);
     if (!o) return;
     o.onclick = function (e) {
       var b = e.target.closest ? e.target.closest('[data-act]') : null;
@@ -503,7 +519,7 @@
       handle(act, id, b, e);
     };
     /* property assignment (not addEventListener) so it replaces, not stacks,
-       across re-renders; `change` bubbles from the checkboxes to the overlay */
+       across re-renders; `change` bubbles from the checkboxes to the page */
     o.onchange = function (e) {
       if (e.target.classList && e.target.classList.contains('rbac-grpall')) {
         var g = e.target.getAttribute('data-group');
@@ -619,7 +635,7 @@
   }
   function saveRolePerms(id) {
     var ids = [];
-    document.querySelectorAll('#' + OVERLAY_ID + ' .rbac-perm:checked').forEach(function (c) { ids.push(+c.value); });
+    document.querySelectorAll('#' + PAGE_ID + ' .rbac-perm:checked').forEach(function (c) { ids.push(+c.value); });
     api('/roles/' + id + '/permissions', { method: 'POST', body: { permissionIds: ids } }).then(function (r) {
       if (!r.ok) { toast('Could not save permissions'); return; }
       var saved = r.data && r.data.total != null ? r.data.total : ids.length;
@@ -716,30 +732,39 @@
     sec.querySelector('#hrms-rbac-link').addEventListener('click', function (ev) { ev.preventDefault(); open(); });
   }
 
-  /* ── styles (overlay chrome only; content reuses app classes) ────────── */
+  /* ── styles (page-level; reuses app classes for content) ────────────── */
   function injectStyle() {
     if (document.getElementById('hrms-rbac-style')) return;
     var css =
-      '#' + OVERLAY_ID + '{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:900;display:flex;align-items:flex-start;justify-content:center;padding:24px 16px;overflow:auto;overscroll-behavior:contain;}' +
-      '.hrms-rbac-modal{position:relative;background:var(--bg2,#141a24);border:1px solid var(--border2);border-radius:16px;width:1060px;max-width:97vw;margin:auto;box-shadow:0 24px 70px rgba(0,0,0,.5);}' +
-      '.hrms-rbac-head{display:flex;align-items:center;justify-content:space-between;padding:18px 22px;border-bottom:1px solid var(--border2);}' +
-      '.hrms-rbac-title{font-family:var(--font-d);font-size:17px;font-weight:800;}' +
-      '.hrms-rbac-sub{font-size:12px;color:var(--text3);margin-top:2px;}' +
-      '.hrms-rbac-x{background:none;border:none;color:var(--text3);font-size:26px;line-height:1;cursor:pointer;}' +
-      '.hrms-rbac-tabs{display:flex;gap:4px;padding:12px 22px 0;flex-wrap:wrap;border-bottom:1px solid var(--border2);}' +
-      '.hrms-rbac-tab{padding:8px 15px;border-radius:9px 9px 0 0;cursor:pointer;font-size:13px;font-weight:600;color:var(--text3);background:none;border:1px solid transparent;border-bottom:none;margin-bottom:-1px;}' +
+      /* Full-page container — sits inside .content, no overlay */
+      '#' + PAGE_ID + '{display:flex;flex-direction:column;min-height:100%;background:var(--bg2,#141a24);animation:rbacFadeIn .18s ease;}' +
+      '@keyframes rbacFadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}' +
+      /* Top bar */
+      '.hrms-rbac-topbar{display:flex;align-items:flex-start;justify-content:space-between;padding:20px 28px 0;border-bottom:1px solid var(--border2);margin-bottom:0;}' +
+      '.hrms-rbac-topbar-left{display:flex;flex-direction:column;gap:3px;}' +
+      '.hrms-rbac-title{font-family:var(--font-d);font-size:18px;font-weight:800;display:flex;align-items:center;gap:8px;}' +
+      '.hrms-rbac-sub{font-size:12px;color:var(--text3);margin-top:2px;margin-bottom:14px;}' +
+      '.hrms-rbac-back-btn{display:inline-flex;align-items:center;gap:6px;padding:7px 14px;border-radius:8px;background:var(--bg3);border:1px solid var(--border2);color:var(--text2);font-size:12px;font-weight:600;cursor:pointer;transition:all .15s;white-space:nowrap;margin-top:4px;}' +
+      '.hrms-rbac-back-btn:hover{background:var(--bg4,var(--bg3));border-color:var(--accent);color:var(--text);}' +
+      /* Tab bar */
+      '.hrms-rbac-tabs{display:flex;gap:4px;padding:0 28px;flex-wrap:wrap;border-bottom:1px solid var(--border2);}' +
+      '.hrms-rbac-tab{padding:10px 16px;border-radius:9px 9px 0 0;cursor:pointer;font-size:13px;font-weight:600;color:var(--text3);background:none;border:1px solid transparent;border-bottom:none;margin-bottom:-1px;transition:all .12s;}' +
       '.hrms-rbac-tab.active{color:var(--text);background:var(--bg3);border-color:var(--border2);}' +
-      '.hrms-rbac-body{padding:18px 22px 24px;max-height:calc(100vh - 120px);overflow:auto;overscroll-behavior:contain;}' +
-      '.hrms-rbac-body .table-wrap{max-height:calc(100vh - 260px);overflow:auto;}' +
+      '.hrms-rbac-tab:hover:not(.active){color:var(--text2);}' +
+      /* Content body */
+      '.hrms-rbac-body{padding:20px 28px 32px;flex:1;overflow:auto;}' +
+      '.hrms-rbac-body .table-wrap{overflow:auto;}' +
       '.hrms-rbac-body .table-wrap thead th{position:sticky;top:0;background:var(--bg2);z-index:1;}' +
-      '.hrms-rbac-loading,.hrms-rbac-empty{text-align:center;color:var(--text3);padding:34px 0;font-size:13px;}' +
-      '.hrms-rbac-bar{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;gap:10px;flex-wrap:wrap;}' +
+      '.hrms-rbac-loading,.hrms-rbac-empty{text-align:center;color:var(--text3);padding:48px 0;font-size:13px;}' +
+      /* Content elements */
+      '.hrms-rbac-bar{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;gap:10px;flex-wrap:wrap;}' +
       '.hrms-rbac-h2{font-family:var(--font-d);font-size:15px;font-weight:700;}' +
-      '.hrms-rbac-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;}' +
-      '.hrms-rbac-stat{background:var(--bg3);border:1px solid var(--border2);border-left:3px solid var(--accent);border-radius:12px;padding:16px 18px;}' +
+      '.hrms-rbac-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:4px;}' +
+      '.hrms-rbac-stat{background:var(--bg3);border:1px solid var(--border2);border-left:3px solid var(--accent);border-radius:12px;padding:18px 20px;transition:transform .15s;}' +
+      '.hrms-rbac-stat:hover{transform:translateY(-2px);}' +
       '.hrms-rbac-stat.b-green{border-left-color:var(--success);}.hrms-rbac-stat.b-orange{border-left-color:var(--warn);}.hrms-rbac-stat.b-purple{border-left-color:var(--accent2,#7c5cfc);}.hrms-rbac-stat.b-blue{border-left-color:var(--accent);}' +
-      '.hrms-rbac-statv{font-family:var(--font-d);font-size:30px;font-weight:800;}' +
-      '.hrms-rbac-statl{font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin-top:2px;}' +
+      '.hrms-rbac-statv{font-family:var(--font-d);font-size:32px;font-weight:800;}' +
+      '.hrms-rbac-statl{font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin-top:4px;}' +
       '.hrms-rbac-actions{display:flex;gap:6px;flex-wrap:wrap;}' +
       '.hrms-rbac-del{color:var(--danger)!important;}' +
       '.hrms-rbac-av{width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,var(--accent2,#7c5cfc),var(--accent));color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;flex-shrink:0;}' +
@@ -755,7 +780,7 @@
       '.hrms-rbac-perm{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text2);}' +
       '.hrms-rbac-perm code,.hrms-rbac-code{font-size:10.5px;color:var(--text3);background:var(--bg3);padding:1px 6px;border-radius:5px;}' +
       '.hrms-rbac-count{font-size:12px;color:var(--text3);margin-right:8px;}' +
-      '.hrms-rbac-toast{position:absolute;bottom:16px;left:50%;transform:translateX(-50%);background:var(--text,#eef);color:var(--bg2,#111);font-size:12.5px;font-weight:600;padding:9px 18px;border-radius:10px;opacity:0;transition:opacity .25s;pointer-events:none;box-shadow:0 8px 24px rgba(0,0,0,.3);}' +
+      '.hrms-rbac-toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--text,#eef);color:var(--bg2,#111);font-size:12.5px;font-weight:600;padding:9px 18px;border-radius:10px;opacity:0;transition:opacity .25s;pointer-events:none;box-shadow:0 8px 24px rgba(0,0,0,.3);z-index:999;}' +
       '.hrms-rbac-search{background:var(--bg3)!important;border:1px solid var(--border2)!important;border-radius:8px!important;padding:7px 12px!important;color:var(--text)!important;}' +
       '.hrms-rbac-search:focus{border-color:var(--accent)!important;outline:none!important;}' +
       '.hrms-rbac-inline-sel{background:var(--bg3);border:1px solid var(--border2);border-radius:7px;padding:4px 8px;font-size:11.5px;color:var(--text);cursor:pointer;min-width:120px;}' +
@@ -765,11 +790,57 @@
       '.hrms-rbac-confirm-msg{font-size:12.5px;color:var(--text);flex:1;}' +
       '.hrms-rbac-confirm-btns{display:flex;gap:6px;flex-shrink:0;}' +
       '@keyframes rbacSlideIn{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:translateY(0)}}' +
-      '@media(max-width:720px){.hrms-rbac-stats{grid-template-columns:1fr 1fr;}.hrms-rbac-grid,.hrms-rbac-grid3,.hrms-rbac-perms{grid-template-columns:1fr;}.hrms-rbac-bar{flex-direction:column;align-items:stretch;}.hrms-rbac-search{width:100%!important;}.hrms-rbac-confirm{flex-direction:column;align-items:stretch;}}';
+      '@media(max-width:900px){.hrms-rbac-stats{grid-template-columns:1fr 1fr;}.hrms-rbac-topbar{flex-direction:column;gap:10px;align-items:stretch;}}' +
+      '@media(max-width:720px){.hrms-rbac-stats{grid-template-columns:1fr;}.hrms-rbac-grid,.hrms-rbac-grid3,.hrms-rbac-perms{grid-template-columns:1fr;}.hrms-rbac-bar{flex-direction:column;align-items:stretch;}.hrms-rbac-search{width:100%!important;}.hrms-rbac-confirm{flex-direction:column;align-items:stretch;}}';
     var st = document.createElement('style');
     st.id = 'hrms-rbac-style';
     st.textContent = css;
     document.head.appendChild(st);
+  }
+
+  /* ── settings card entry ─────────────────────────────────────────────── */
+  function ensureSettingsCard() {
+    if (!isAdmin()) return;
+    if (window.location.pathname !== '/settings') return;
+    // If the RBAC page is open, don't inject the card
+    if (document.getElementById(PAGE_ID)) return;
+    var container = document.querySelector('.content');
+    if (!container) return;
+    if (document.getElementById('hrms-rbac-settings-card')) return;
+
+    var card = document.createElement('div');
+    card.id = 'hrms-rbac-settings-card';
+    card.className = 'card';
+    card.style.cssText = 'margin-top:20px;border:1px solid var(--border2);border-radius:14px;padding:22px 24px;background:linear-gradient(135deg,var(--bg3) 0%,var(--bg2) 100%);';
+    card.innerHTML =
+      '<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">' +
+        '<span style="width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,#7c5cfc,#5b8af0);display:inline-flex;align-items:center;justify-content:center;color:#fff">' + SHIELD + '</span>' +
+        '<div>' +
+          '<div class="card-title" style="margin:0">Access Control (RBAC)</div>' +
+          '<div style="font-size:11.5px;color:var(--text3)">Role-Based Access Control management</div>' +
+        '</div>' +
+      '</div>' +
+      '<div style="font-size:12.5px;color:var(--text2);margin-bottom:16px;line-height:1.7">' +
+        'Manage roles, permission groups, and assign user access dynamically across the entire system.' +
+      '</div>' +
+      '<div style="display:flex;gap:10px;flex-wrap:wrap">' +
+        '<button class="btn-primary" id="open-rbac-btn" style="display:inline-flex;align-items:center;gap:6px">' +
+          SHIELD + ' Open Access Control' +
+        '</button>' +
+        '<button class="btn-sm" id="open-rbac-users-btn" style="display:inline-flex;align-items:center;gap:6px;font-size:12px">Manage Users</button>' +
+        '<button class="btn-sm" id="open-rbac-roles-btn" style="display:inline-flex;align-items:center;gap:6px;font-size:12px">Manage Roles</button>' +
+      '</div>';
+
+    container.appendChild(card);
+    card.querySelector('#open-rbac-btn').addEventListener('click', function (ev) {
+      ev.preventDefault(); state.tab = 'dashboard'; state.sub = null; open();
+    });
+    card.querySelector('#open-rbac-users-btn').addEventListener('click', function (ev) {
+      ev.preventDefault(); state.tab = 'users'; state.sub = null; open();
+    });
+    card.querySelector('#open-rbac-roles-btn').addEventListener('click', function (ev) {
+      ev.preventDefault(); state.tab = 'roles'; state.sub = null; open();
+    });
   }
 
   /* ── boot ────────────────────────────────────────────────────────────── */
@@ -780,7 +851,10 @@
   var _rbacObs = null, _rbacPending = false;
   function _rbacRun() {
     if (_rbacObs) _rbacObs.disconnect();
-    try { ensureNav(); }
+    try {
+      ensureNav();
+      ensureSettingsCard();
+    }
     finally { if (_rbacObs) _rbacObs.observe(document.body, { childList: true, subtree: true }); }
   }
   function _rbacSchedule() {
@@ -790,6 +864,7 @@
   }
   function boot() {
     ensureNav();
+    ensureSettingsCard();
     _rbacObs = new MutationObserver(_rbacSchedule);
     _rbacObs.observe(document.body, { childList: true, subtree: true });
     setInterval(_rbacRun, 5000);   // long safety net only, not a driver
