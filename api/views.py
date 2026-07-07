@@ -238,7 +238,27 @@ def resolve_color(type_value):
 @require_perm({'GET': 'recruitment.view', 'POST': 'recruitment.create'})
 def jobs(request):
     if request.method == 'GET':
-        return Response(JobPostSerializer(JobPost.objects.all(), many=True).data)
+        qs = JobPost.objects.all()
+        # Optional query-param filters
+        status = request.query_params.get('status')
+        priority = request.query_params.get('priority')
+        dept = request.query_params.get('dept')
+        job_type = request.query_params.get('type')
+        remote = request.query_params.get('remote')
+        search = request.query_params.get('search')
+        if status:
+            qs = qs.filter(status=status)
+        if priority:
+            qs = qs.filter(priority=priority)
+        if dept:
+            qs = qs.filter(dept__icontains=dept)
+        if job_type:
+            qs = qs.filter(type=job_type)
+        if remote and remote.lower() in ('true', '1'):
+            qs = qs.filter(is_remote=True)
+        if search:
+            qs = qs.filter(Q(title__icontains=search) | Q(dept__icontains=search))
+        return Response(JobPostSerializer(qs, many=True).data)
 
     body = request.data
     if not body.get('title') or not body.get('dept'):
@@ -333,7 +353,7 @@ def interviews(request):
     return Response(serializer.data, status=201)
 
 
-@api_view(['PUT'])
+@api_view(['PUT', 'PATCH'])
 @require_perm('recruitment.edit')
 def interview_detail(request, pk):
     obj = InterviewLink.objects.filter(pk=pk).first()

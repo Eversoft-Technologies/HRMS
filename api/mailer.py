@@ -69,6 +69,12 @@ def _get_resend_settings(sender_email=None):
     }
 
 
+def _normalize_smtp_password(password):
+    if password is None:
+        return ''
+    return ''.join(str(password).split())
+
+
 def get_smtp_settings(sender_email=None):
     """Resolve which SMTP account to send from.
 
@@ -108,7 +114,7 @@ def get_smtp_settings(sender_email=None):
             'host': host,
             'port': port,
             'user': user,
-            'password': _env('SMTP_PASSWORD'),
+            'password': _normalize_smtp_password(_env('SMTP_PASSWORD')),
             'secure': _env_bool('SMTP_SECURE', port == 465),
             'from_name': _env('SMTP_FROM_NAME', 'HRMS').strip() or 'HRMS',
             'from_email': (_env('SMTP_FROM_EMAIL') or user).strip(),
@@ -182,14 +188,18 @@ def send_email(to, subject, html=None, text=None, sender_email=None):
             'error': 'No email configuration found. Set RESEND_API_KEY/RESEND_FROM_EMAIL in the server .env, or configure SMTP settings.',
         }
 
-    # If send config prefers Resend, try it first and fall back to SMTP on
-    # Resend validation errors (unverified domain / From address).
+    # Prefer SMTP when it is configured, because the server-side OTP flow in
+    # this project uses a Gmail/App Password setup that is more reliable for
+    # local development than the Resend API fallback.
+    smtp_settings = get_smtp_settings(sender_email)
+    if smtp_settings:
+        return _send_via_smtp(smtp_settings, to, subject, html=html, text=text)
+
     if s.get('type') == 'resend':
         resp = _send_via_resend(s, to, subject, html=html, text=text)
         if resp.get('ok'):
             return resp
         if resp.get('resend_validation_error'):
-            # Try SMTP fallback if available
             smtp_settings = get_smtp_settings(sender_email)
             if smtp_settings:
                 return _send_via_smtp(smtp_settings, to, subject, html=html, text=text)
