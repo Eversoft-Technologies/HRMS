@@ -3,7 +3,7 @@ name: Deploy to GoDaddy cPanel
 on:
   push:
     branches:
-      - main  # Trigger deployment on push to the main branch
+      - master  # Trigger deployment on push to the master branch
 
 jobs:
   deploy:

@@ -147,9 +147,9 @@ APPEND_SLASH = False                         # API paths have no trailing slash
 STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 
-# Built React app (Vite output). Default: ../dist relative to this project.
+# Built React app (Vite output). Default: dist/dist relative to this project.
 REACT_BUILD_DIR = Path(
-    os.environ.get('REACT_BUILD_DIR', BASE_DIR.parent / 'dist')
+    os.environ.get('REACT_BUILD_DIR', BASE_DIR / 'dist' / 'dist')
 ).resolve()
 
 # WhiteNoise serves the dist/ folder at the site root so that the absolute
