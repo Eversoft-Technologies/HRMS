@@ -188,13 +188,6 @@ def send_email(to, subject, html=None, text=None, sender_email=None):
             'error': 'No email configuration found. Set RESEND_API_KEY/RESEND_FROM_EMAIL in the server .env, or configure SMTP settings.',
         }
 
-    # Prefer SMTP when it is configured, because the server-side OTP flow in
-    # this project uses a Gmail/App Password setup that is more reliable for
-    # local development than the Resend API fallback.
-    smtp_settings = get_smtp_settings(sender_email)
-    if smtp_settings:
-        return _send_via_smtp(smtp_settings, to, subject, html=html, text=text)
-
     if s.get('type') == 'resend':
         resp = _send_via_resend(s, to, subject, html=html, text=text)
         if resp.get('ok'):
