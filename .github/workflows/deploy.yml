@@ -1,0 +1,67 @@
+name: Deploy to GoDaddy cPanel
+
+on:
+  push:
+    branches:
+      - main  # Trigger deployment on push to the main branch
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # (Optional) If you make changes to the React frontend under `src/` and do not want to commit the build `dist/` directory,
+      # you can uncomment this step to build the frontend dynamically in CI.
+      # Since `dist/` is currently checked into the repository, this step is disabled by default.
+      # - name: Setup Node.js
+      #   uses: actions/setup-node@v4
+      #   with:
+      #     node-version: 18
+      # - name: Build React Frontend
+      #   run: |
+      #     npm install
+      #     npm run build
+
+      - name: Deploy Files to GoDaddy Server via SSH/rsync
+        uses: easingthemes/ssh-deploy@main
+        with:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          REMOTE_HOST: ${{ secrets.REMOTE_HOST }}
+          REMOTE_USER: ${{ secrets.REMOTE_USER }}
+          REMOTE_PORT: ${{ secrets.REMOTE_PORT || '22' }}
+          TARGET: /home/${{ secrets.REMOTE_USER }}/${{ secrets.REMOTE_TARGET_DIR }}
+          SOURCE: "./"
+          EXCLUDE: "/.git/, /.github/, /.venv/, /node_modules/, /db.sqlite3, /smoke_test.sqlite3, /.env, /keypair, /keypair.pub"
+
+      - name: Run Database Migrations and Post-Deploy Scripts on Server
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.REMOTE_HOST }}
+          username: ${{ secrets.REMOTE_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.REMOTE_PORT || '22' }}
+          script: |
+            # 1. Navigate to the application root directory
+            cd /home/${{ secrets.REMOTE_USER }}/${{ secrets.REMOTE_TARGET_DIR }}
+
+            # 2. Activate the Python virtual environment created by cPanel (adjust python version as configured in cPanel)
+            # Replace 'hrms' with your app root folder name if different
+            source /home/${{ secrets.REMOTE_USER }}/virtualenv/${{ secrets.REMOTE_TARGET_DIR }}/3.10/bin/activate
+
+            # 3. Install/upgrade pip and dependencies
+            pip install --upgrade pip
+            pip install -r requirements.txt
+
+            # 4. Run Django migrations and seed data if needed
+            python manage.py migrate --noinput
+            # python manage.py seed_rbac # Uncomment if setting up permissions for the first time
+
+            # 5. Collect static files
+            python manage.py collectstatic --noinput
+
+            # 6. Restart Phusion Passenger to apply changes
+            mkdir -p tmp
+            touch tmp/restart.txt

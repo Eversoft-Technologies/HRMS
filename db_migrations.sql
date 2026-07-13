@@ -52,6 +52,11 @@ ALTER TABLE `interview_links`
   ADD COLUMN IF NOT EXISTS `link_expires_at` DATETIME NULL DEFAULT NULL
   AFTER `recruiter_token`;
 
+-- Set when the candidate finishes; makes the candidate link single-use
+ALTER TABLE `interview_links`
+  ADD COLUMN IF NOT EXISTS `completed_at` DATETIME NULL DEFAULT NULL
+  AFTER `link_expires_at`;
+
 -- Store resume text for AI-enhanced question generation
 ALTER TABLE `interview_links`
   ADD COLUMN IF NOT EXISTS `resume_text` LONGTEXT NULL DEFAULT NULL
@@ -97,6 +102,8 @@ WHERE `candidate_token` IS NULL;
 
 show tables;
 
+SELECT * from job_posts;
+
 
 select * from app_users;
 
@@ -116,7 +123,7 @@ show tables;
 
 select * from companies;
 
-select * from roles;
+select * from interview_links;
 
 
 select * from audit_logs;

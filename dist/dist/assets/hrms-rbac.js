@@ -14,6 +14,7 @@
 
   var PAGE_ID = 'hrms-rbac-page';
   var NAV_ID = 'hrms-rbac-nav';
+  var ACTIVE_CLS = 'hrms-rbac-active';   // set on .content while RBAC owns it
 
   /* ── icons ───────────────────────────────────────────────────────────── */
   var SHIELD =
@@ -23,9 +24,11 @@
 
   /* ── helpers ─────────────────────────────────────────────────────────── */
   function isAdmin() {
+    // Only true admins may see the Administration → Access Control nav and open
+    // the RBAC console. HR / Recruitment / Managers are intentionally excluded.
     try {
       var r = (JSON.parse(localStorage.getItem('hrms_session') || '{}').role || '').toLowerCase();
-      return r === 'admin' || r === 'hr' || r === 'recruitment' || r === 'hr manager' || r === 'hr executive' || r === 'super admin';
+      return r === 'admin' || r === 'super admin';
     } catch (_) { return false; }
   }
   function esc(s) {
@@ -74,15 +77,18 @@
     ['Dashboard',   [['dashboard.view', 'View Dashboard']]],
     ['Employee',    [['employee.view', 'View Employee'], ['employee.create', 'Create Employee'],
                      ['employee.edit', 'Update Employee'], ['employee.delete', 'Delete Employee'],
-                     ['submission.approve', 'Approve Work Submission'], ['submission.reject', 'Reject Work Submission']]],
+                     ['submission.action', 'Action (Approve / Reject)']]],
     ['Attendance',  [['attendance.view', 'View Attendance'], ['attendance.create', 'Create Attendance Log'],
                      ['attendance.edit', 'Edit Attendance'], ['attendance.delete', 'Delete Attendance Log'],
-                     ['attendance.checkinout', 'Check-in / Check-out']]],
+                     ['attendance.checkinout', 'Check-in / Check-out'],
+                     ['attendance.remote', 'Work Remotely (no approval needed)']]],
     ['Leave',       [['leave.view', 'View Leave'], ['leave.create', 'Create Leave Request'],
-                     ['leave.approve', 'Approve Leave'], ['leave.reject', 'Reject Leave'],
+                     ['leave.action', 'Action (Approve / Reject)'],
                      ['leave.delete', 'Delete Leave Request']]],
     ['Recruitment', [['recruitment.view', 'View Recruitment'], ['recruitment.create', 'Create Recruitment'],
-                     ['recruitment.edit', 'Edit Recruitment'], ['recruitment.delete', 'Delete Recruitment']]],
+                     ['recruitment.edit', 'Edit Recruitment'], ['recruitment.delete', 'Delete Recruitment'],
+                     ['recruitment.kpi.view_own', 'KPI Dashboard — My View'],
+                     ['recruitment.kpi.view_org', 'KPI Dashboard — Org View']]],
     ['Payroll',     [['payroll.view', 'View Payroll'], ['payroll.generate', 'Generate Payroll'],
                      ['payroll.approve', 'Approve Payroll'], ['payroll.manage', 'Manage Payroll']]],
     ['Reports',     [['reports.view', 'View Reports'], ['reports.export', 'Export Reports']]],
@@ -90,19 +96,30 @@
     ['RBAC',        [['rbac.view', 'View Access Control'], ['rbac.manage', 'Manage Access Control']]],
   ];
 
-  /* Build a code <select> (grouped) + a hidden "custom" text input revealed when
-     "Custom code…" is chosen. `nameId` is the NAME field to auto-fill on pick. */
-  function codeSelect(selectId, customId, nameId) {
+  /* Build a code <select> (grouped) + a "custom" text input revealed when
+     "Custom code…" is chosen. `nameId` is the NAME field to auto-fill on pick.
+     `current` preselects an existing code; a code that isn't in the catalog
+     (any code created via the custom box) drops straight into custom mode with
+     its value filled in — otherwise editing such a permission would silently
+     blank its code. */
+  function codeSelect(selectId, customId, nameId, current) {
+    current = (current || '').trim();
+    var known = CODE_CATALOG.some(function (m) {
+      return m[1].some(function (c) { return c[0] === current; });
+    });
+    var isCustom = !!current && !known;
     var opts = CODE_CATALOG.map(function (m) {
       return '<optgroup label="' + esc(m[0]) + '">' + m[1].map(function (c) {
-        return '<option value="' + esc(c[0]) + '" data-name="' + esc(c[1]) + '">' + esc(c[0]) + ' — ' + esc(c[1]) + '</option>';
+        return '<option value="' + esc(c[0]) + '" data-name="' + esc(c[1]) + '"' +
+          (c[0] === current ? ' selected' : '') + '>' + esc(c[0]) + ' — ' + esc(c[1]) + '</option>';
       }).join('') + '</optgroup>';
     }).join('');
     return '<select class="input-field rbac-codesel" id="' + selectId + '" data-custom="' + customId + '" data-name="' + nameId + '">' +
         '<option value="">— select code —</option>' + opts +
-        '<option value="__custom__">✎ Custom code…</option>' +
+        '<option value="__custom__"' + (isCustom ? ' selected' : '') + '>✎ Custom code…</option>' +
       '</select>' +
-      '<input class="input-field" id="' + customId + '" placeholder="module.action" style="display:none;margin-top:6px">';
+      '<input class="input-field" id="' + customId + '" placeholder="module.action" value="' + esc(isCustom ? current : '') + '"' +
+        ' style="margin-top:6px' + (isCustom ? '' : ';display:none') + '">';
   }
   /* Read the chosen code: the select value, or the custom input when custom. */
   function readCode(selectId, customId) {
@@ -112,16 +129,33 @@
     return (sel.value || '').trim();
   }
 
+  function statusBadge(active) {
+    return active === false
+      ? '<span class="badge" style="opacity:.7">Inactive</span>'
+      : '<span class="badge green">Active</span>';
+  }
+  /* Every field the Edit form needs, carried on the button. */
+  function permAttrs(p) {
+    return ' data-id="' + p.id + '"' +
+      ' data-name="' + esc(p.name) + '"' +
+      ' data-code="' + esc(p.code) + '"' +
+      ' data-desc="' + esc(p.description || '') + '"' +
+      ' data-group="' + (p.groupId || '') + '"' +
+      ' data-active="' + (p.isActive ? 1 : 0) + '"';
+  }
+
   /* ── page shell (full-page, replaces .content area) ─────────────────── */
+  /* Siblings are hidden with a class on .content (see injectStyle) rather than
+     by stamping display:none on each child. React owns .content and re-renders
+     it on its own schedule, so any snapshot we take goes stale — new nodes
+     would appear alongside the panel, and restoring a stale list left the real
+     page blank. A class covers whatever .content holds, whenever it holds it. */
   function open() {
     if (document.getElementById(PAGE_ID)) return;
     injectStyle();
-    // Save the current .content children so we can restore on close
     var content = document.querySelector('.content');
     if (!content) return;
-    // Hide existing children
-    Array.prototype.forEach.call(content.children, function (el) { el.style.display = 'none'; });
-    content._rbacPrevChildren = content.children;
+    content.classList.add(ACTIVE_CLS);
 
     var page = document.createElement('div');
     page.id = PAGE_ID;
@@ -133,17 +167,70 @@
   }
   function close() {
     var page = document.getElementById(PAGE_ID);
-    if (page && page.parentNode) {
-      // Restore hidden sibling children
-      Array.prototype.forEach.call(page.parentNode.children, function (el) {
-        if (el !== page) el.style.display = '';
-      });
-      page.parentNode.removeChild(page);
-    }
+    if (page && page.parentNode) page.parentNode.removeChild(page);
+    // Clear the flag wherever it landed — .content may have been swapped out.
+    Array.prototype.forEach.call(
+      document.querySelectorAll('.' + ACTIVE_CLS),
+      function (el) { el.classList.remove(ACTIVE_CLS); }
+    );
     document.removeEventListener('keydown', onKey);
     state.sub = null;
   }
   function onKey(e) { if (e.key === 'Escape') close(); }
+
+  /* Open RBAC on its own route. The sidebar entry used to call open() directly
+     with preventDefault(), so the panel appeared while the URL still pointed at
+     whatever page you were on (Attendance, Job Board, …) — that is how it ended
+     up rendering over unrelated modules. Navigate first, then open. */
+  function openAt(tab) {
+    state.tab = tab || 'dashboard';
+    state.sub = null;
+    if (isSettingsRoute()) { open(); return; }
+    history.pushState({}, '', '/settings');
+    // React Router listens on popstate; pushState alone fires nothing.
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    // Let React commit the Settings route before we take over .content.
+    setTimeout(open, 0);
+  }
+
+  /* ── route guard ─────────────────────────────────────────────────────────
+     RBAC is a /settings-only surface, but it is injected into .content rather
+     than owned by the React router — so nothing tore it down when the user
+     navigated away. The page (and the settings card) then rode along on top of
+     Job Board, Attendance, etc., and because open() display:none's the .content
+     siblings it also swallowed clicks, which is why module links appeared dead.
+     Tear both down as soon as the path is no longer /settings. */
+  function isSettingsRoute() {
+    return window.location.pathname.replace(/\/+$/, '') === '/settings';
+  }
+
+  function syncRoute() {
+    if (isSettingsRoute()) return;
+    if (document.getElementById(PAGE_ID)) {
+      close();
+      state.tab = 'dashboard';   // don't reopen mid-flow on the next visit
+    }
+    var card = document.getElementById('hrms-rbac-settings-card');
+    if (card && card.parentNode) card.parentNode.removeChild(card);
+  }
+
+  /* The SPA navigates with pushState/replaceState, which fire no event — wrap
+     them so we learn about every route change, and cover Back/Forward too. */
+  function watchRoute() {
+    ['pushState', 'replaceState'].forEach(function (fn) {
+      var orig = history[fn];
+      if (!orig || orig.__rbacWrapped) return;
+      var wrapped = function () {
+        var out = orig.apply(this, arguments);
+        syncRoute();
+        return out;
+      };
+      wrapped.__rbacWrapped = true;
+      history[fn] = wrapped;
+    });
+    window.addEventListener('popstate', syncRoute);
+    window.addEventListener('hashchange', syncRoute);
+  }
 
   /* Build the page chrome once. Tab switches only swap the body, so the page
      never re-renders the header/tabs when switching. */
@@ -407,101 +494,244 @@
   }
 
   /* ── permission groups ───────────────────────────────────────────────── */
-  function renderGroups(showForm) {
+  /* `form` is falsy (no form), {} (create) or a populated group (edit). */
+  function renderGroups(form) {
     loading();
     Promise.all([api('/permission-groups'), api('/modules')]).then(function (res) {
       var mods = res[1].data || [];
       var rows = (res[0].data || []).map(function (g) {
+        var attrs =
+          ' data-id="' + g.id + '"' +
+          ' data-name="' + esc(g.name) + '"' +
+          ' data-desc="' + esc(g.description || '') + '"' +
+          ' data-module="' + (g.moduleId || '') + '"' +
+          ' data-active="' + (g.isActive ? 1 : 0) + '"';
         return '<tr>' +
           '<td><div style="font-weight:600;font-size:12.5px">' + esc(g.name) + '</div>' +
             '<div style="font-size:11px;color:var(--text3)">' + esc(g.description || '—') + '</div></td>' +
           '<td>' + (g.module ? '<span class="badge blue">' + esc(g.module) + '</span>' : '<span style="color:var(--text3)">—</span>') + '</td>' +
           '<td><span class="badge purple">' + (g.permissionCount || 0) + '</span></td>' +
+          '<td>' + statusBadge(g.isActive) + '</td>' +
           '<td><div class="hrms-rbac-actions">' +
-            '<button class="btn-sm" data-act="manage-group" data-id="' + g.id + '" data-name="' + esc(g.name) + '">Manage</button>' +
-            '<button class="btn-sm hrms-rbac-del" data-act="del-group" data-id="' + g.id + '" data-name="' + esc(g.name) + '">Delete</button>' +
+            '<button class="btn-sm" data-act="manage-group"' + attrs + '>Manage</button>' +
+            '<button class="btn-sm" data-act="edit-group"' + attrs + '>Edit</button>' +
+            '<button class="btn-sm hrms-rbac-del" data-act="del-group"' + attrs + '>Delete</button>' +
           '</div></td></tr>';
       }).join('');
       shell(
         '<div class="hrms-rbac-bar"><div class="hrms-rbac-h2">Permission Groups</div>' +
           '<button class="btn-primary" data-act="new-group">+ Create Group</button></div>' +
-        (showForm ? groupForm(mods) : '') +
-        '<div class="table-wrap"><table><thead><tr><th>Group</th><th>Module</th><th>Permissions</th><th>Actions</th></tr></thead>' +
-        '<tbody>' + (rows || '<tr><td colspan="4" class="hrms-rbac-empty">No groups yet.</td></tr>') + '</tbody></table></div>');
+        (form ? groupForm(mods, form) : '') +
+        '<div class="table-wrap"><table><thead><tr><th>Group</th><th>Module</th><th>Permissions</th><th>Status</th><th>Actions</th></tr></thead>' +
+        '<tbody>' + (rows || '<tr><td colspan="5" class="hrms-rbac-empty">No groups yet.</td></tr>') + '</tbody></table></div>');
     });
   }
-  function groupForm(mods) {
-    return '<div class="card hrms-rbac-form"><div class="card-title">Create Permission Group</div>' +
+  function groupForm(mods, f) {
+    f = f || {};
+    var editing = !!f.id;
+    return '<div class="card hrms-rbac-form">' +
+      '<div class="card-title">' + (editing ? 'Edit Permission Group' : 'Create Permission Group') + '</div>' +
+      '<input type="hidden" id="rbac-grp-id" value="' + (f.id || '') + '">' +
       '<div class="hrms-rbac-grid">' +
-        '<div><div class="hrms-rbac-lbl">GROUP NAME</div><input class="input-field" id="rbac-grp-name" placeholder="e.g. Employee Group"></div>' +
+        '<div><div class="hrms-rbac-lbl">GROUP NAME</div>' +
+          '<input class="input-field" id="rbac-grp-name" placeholder="e.g. Employee Group" value="' + esc(f.name || '') + '"></div>' +
         '<div><div class="hrms-rbac-lbl">MODULE</div><select class="input-field" id="rbac-grp-module">' +
           '<option value="">— none —</option>' +
-          mods.map(function (m) { return '<option value="' + m.id + '">' + esc(m.name) + '</option>'; }).join('') +
+          mods.map(function (m) {
+            return '<option value="' + m.id + '"' + (+f.moduleId === m.id ? ' selected' : '') + '>' + esc(m.name) + '</option>';
+          }).join('') +
         '</select></div>' +
       '</div>' +
-      '<div style="margin-top:10px"><div class="hrms-rbac-lbl">DESCRIPTION</div>' +
-        '<input class="input-field" id="rbac-grp-desc" placeholder="Optional"></div>' +
-      '<div class="hrms-rbac-formbtns"><button class="btn-primary" data-act="save-group">Save Group</button>' +
+      '<div class="hrms-rbac-grid" style="margin-top:10px">' +
+        '<div><div class="hrms-rbac-lbl">DESCRIPTION</div>' +
+          '<input class="input-field" id="rbac-grp-desc" placeholder="Optional" value="' + esc(f.description || '') + '"></div>' +
+        '<div><div class="hrms-rbac-lbl">STATUS</div><select class="input-field" id="rbac-grp-active">' +
+          '<option value="1"' + (f.isActive === false ? '' : ' selected') + '>Active</option>' +
+          '<option value="0"' + (f.isActive === false ? ' selected' : '') + '>Inactive</option>' +
+        '</select></div>' +
+      '</div>' +
+      '<div class="hrms-rbac-formbtns"><button class="btn-primary" data-act="save-group">' +
+        (editing ? 'Save Changes' : 'Save Group') + '</button>' +
         '<button class="btn-sm" data-act="cancel-group-form">Cancel</button></div></div>';
   }
 
   /* ── group editor (permissions inside a group) ───────────────────────── */
   function renderGroupEditor(group) {
     loading();
-    api('/permission-groups/' + group.id).then(function (r) {
-      var g = r.data || {};
+    Promise.all([
+      api('/permission-groups/' + group.id),
+      api('/permissions'),
+      api('/permission-groups'),
+    ]).then(function (res) {
+      var g = res[0].data || {};
       var perms = g.permissions || [];
+      var allPerms = res[1].data || [];
+      var allGroups = res[2].data || [];
+
+      // Permissions that live somewhere else (or nowhere) can be pulled in here.
+      var attachable = allPerms.filter(function (p) { return +p.groupId !== +g.id; });
+
+      var moveOpts = function (p) {
+        return '<option value="">— move to… —</option>' +
+          '<option value="0">— no group —</option>' +
+          allGroups.filter(function (x) { return +x.id !== +g.id; })
+            .map(function (x) { return '<option value="' + x.id + '">' + esc(x.name) + '</option>'; })
+            .join('');
+      };
+
       var rows = perms.map(function (p) {
-        return '<tr><td style="font-size:12.5px;font-weight:500">' + esc(p.name) + '</td>' +
+        return '<tr><td style="font-size:12.5px;font-weight:500">' + esc(p.name) +
+            (p.description ? '<div style="font-size:11px;color:var(--text3)">' + esc(p.description) + '</div>' : '') + '</td>' +
           '<td><code class="hrms-rbac-code">' + esc(p.code) + '</code></td>' +
-          '<td><button class="btn-sm hrms-rbac-del" data-act="del-perm" data-id="' + p.id + '">Remove</button></td></tr>';
+          '<td>' + statusBadge(p.isActive) + '</td>' +
+          '<td><select class="hrms-rbac-inline-sel" data-kact="move-perm" data-id="' + p.id + '">' + moveOpts(p) + '</select></td>' +
+          '<td><div class="hrms-rbac-actions">' +
+            '<button class="btn-sm" data-act="edit-perm"' + permAttrs(p) + '>Edit</button>' +
+            '<button class="btn-sm hrms-rbac-del" data-act="del-perm-row" data-id="' + p.id + '" data-name="' + esc(p.name) + '">Delete</button>' +
+          '</div></td></tr>';
       }).join('');
+
       shell(
         '<div class="hrms-rbac-bar"><div><button class="btn-sm" data-act="back-groups">&lsaquo; Back</button>' +
           '<span class="hrms-rbac-h2" style="margin-left:10px">' + esc(g.name) + '</span>' +
-          (g.module ? ' <span class="badge blue">' + esc(g.module) + '</span>' : '') + '</div></div>' +
-        '<div class="card hrms-rbac-form"><div class="card-title">Add Permission</div>' +
-          '<div class="hrms-rbac-grid">' +
+          (g.module ? ' <span class="badge blue">' + esc(g.module) + '</span>' : '') +
+          ' ' + statusBadge(g.isActive) + '</div>' +
+          '<button class="btn-sm" data-act="edit-group"' +
+            ' data-id="' + g.id + '" data-name="' + esc(g.name) + '"' +
+            ' data-desc="' + esc(g.description || '') + '"' +
+            ' data-module="' + (g.moduleId || '') + '"' +
+            ' data-active="' + (g.isActive ? 1 : 0) + '">Rename / Edit Group</button></div>' +
+
+        '<div class="card hrms-rbac-form"><div class="card-title">Create Permission in this Group</div>' +
+          '<div class="hrms-rbac-grid3">' +
             '<div><div class="hrms-rbac-lbl">NAME</div><input class="input-field" id="rbac-p-name" placeholder="e.g. Create Employee"></div>' +
             '<div><div class="hrms-rbac-lbl">CODE</div>' + codeSelect('rbac-p-code-sel', 'rbac-p-code', 'rbac-p-name') + '</div>' +
+            '<div><div class="hrms-rbac-lbl">DESCRIPTION</div><input class="input-field" id="rbac-p-desc" placeholder="Optional"></div>' +
           '</div>' +
-          '<div class="hrms-rbac-formbtns"><button class="btn-primary" data-act="add-perm" data-id="' + group.id + '">Add Permission</button></div></div>' +
-        '<div class="table-wrap"><table><thead><tr><th>Permission</th><th>Code</th><th></th></tr></thead>' +
-        '<tbody>' + (rows || '<tr><td colspan="3" class="hrms-rbac-empty">No permissions in this group yet.</td></tr>') + '</tbody></table></div>');
+          '<div class="hrms-rbac-formbtns"><button class="btn-primary" data-act="add-perm" data-id="' + g.id + '">Add Permission</button></div></div>' +
+
+        '<div class="card hrms-rbac-form"><div class="card-title">Attach an Existing Permission</div>' +
+          '<div class="hrms-rbac-lbl">Moves a permission out of its current group and into this one.</div>' +
+          '<div class="hrms-rbac-grid" style="margin-top:8px">' +
+            '<select class="input-field" id="rbac-attach-perm">' +
+              '<option value="">— select a permission —</option>' +
+              attachable.map(function (p) {
+                return '<option value="' + p.id + '">' + esc(p.code) + ' — ' + esc(p.name) +
+                  (p.group ? ' (in ' + esc(p.group) + ')' : ' (ungrouped)') + '</option>';
+              }).join('') +
+            '</select>' +
+            '<button class="btn-primary" data-act="attach-perm" data-id="' + g.id + '">Attach</button>' +
+          '</div></div>' +
+
+        '<div class="table-wrap"><table><thead><tr><th>Permission</th><th>Code</th><th>Status</th><th>Move</th><th>Actions</th></tr></thead>' +
+        '<tbody>' + (rows || '<tr><td colspan="5" class="hrms-rbac-empty">No permissions in this group yet.</td></tr>') + '</tbody></table></div>');
     });
   }
 
   /* ── all permissions ─────────────────────────────────────────────────── */
-  function renderPermissions(showForm) {
+  /* `form` is falsy / {} (create) / a populated permission (edit). Inactive
+     permissions are included here so they can be reactivated or cleaned up —
+     the plain list hides them, which otherwise makes them unrecoverable. */
+  function renderPermissions(form) {
     loading();
-    Promise.all([api('/permissions'), api('/permission-groups')]).then(function (res) {
+    Promise.all([
+      api('/permissions?includeInactive=1'),
+      api('/permission-groups'),
+    ]).then(function (res) {
+      var all = res[0].data || [];
       var groups = res[1].data || [];
-      var rows = (res[0].data || []).map(function (p) {
-        return '<tr><td style="font-size:12.5px;font-weight:500">' + esc(p.name) + '</td>' +
+
+      var q = (state.permQuery || '').toLowerCase();
+      var gf = state.permGroup || '';
+      var list = all.filter(function (p) {
+        if (gf === '__none__' && p.groupId) return false;
+        if (gf && gf !== '__none__' && String(p.groupId) !== String(gf)) return false;
+        if (!q) return true;
+        return (p.name + ' ' + p.code + ' ' + (p.group || '') + ' ' + (p.description || ''))
+          .toLowerCase().indexOf(q) !== -1;
+      });
+
+      var rows = list.map(function (p) {
+        return '<tr><td style="font-size:12.5px;font-weight:500">' + esc(p.name) +
+            (p.description ? '<div style="font-size:11px;color:var(--text3)">' + esc(p.description) + '</div>' : '') + '</td>' +
           '<td><code class="hrms-rbac-code">' + esc(p.code) + '</code></td>' +
-          '<td>' + (p.group ? '<span class="badge purple">' + esc(p.group) + '</span>' : '<span style="color:var(--text3)">—</span>') + '</td>' +
+          '<td>' + (p.group ? '<span class="badge purple">' + esc(p.group) + '</span>' : '<span style="color:var(--text3)">— ungrouped —</span>') + '</td>' +
           '<td style="font-size:11px;color:var(--text3)">' + esc(p.module || '—') + '</td>' +
-          '<td><button class="btn-sm hrms-rbac-del" data-act="del-perm-row" data-id="' + p.id + '">Delete</button></td></tr>';
+          '<td>' + statusBadge(p.isActive) + '</td>' +
+          '<td><div class="hrms-rbac-actions">' +
+            '<button class="btn-sm" data-act="edit-perm"' + permAttrs(p) + '>Edit</button>' +
+            '<button class="btn-sm" data-act="toggle-perm" data-id="' + p.id + '" data-active="' + (p.isActive ? 1 : 0) + '">' +
+              (p.isActive ? 'Disable' : 'Enable') + '</button>' +
+            '<button class="btn-sm hrms-rbac-del" data-act="del-perm-row" data-id="' + p.id + '" data-name="' + esc(p.name) + '">Delete</button>' +
+          '</div></td></tr>';
       }).join('');
+
       shell(
         '<div class="hrms-rbac-bar"><div class="hrms-rbac-h2">Permissions</div>' +
           '<button class="btn-primary" data-act="new-perm">+ Create Permission</button></div>' +
-        (showForm ? permForm(groups) : '') +
-        '<div class="table-wrap"><table><thead><tr><th>Permission</th><th>Code</th><th>Group</th><th>Module</th><th></th></tr></thead>' +
-        '<tbody>' + (rows || '<tr><td colspan="5" class="hrms-rbac-empty">No permissions yet.</td></tr>') + '</tbody></table></div>');
+
+        '<div class="hrms-rbac-bar">' +
+          '<input class="input-field hrms-rbac-search" id="rbac-perm-q" placeholder="Search name, code, group…" ' +
+            'value="' + esc(state.permQuery || '') + '" style="max-width:280px">' +
+          '<select class="hrms-rbac-inline-sel" id="rbac-perm-gf" data-kact="perm-filter">' +
+            '<option value="">All groups</option>' +
+            '<option value="__none__"' + (gf === '__none__' ? ' selected' : '') + '>— ungrouped —</option>' +
+            groups.map(function (g) {
+              return '<option value="' + g.id + '"' + (String(gf) === String(g.id) ? ' selected' : '') + '>' + esc(g.name) + '</option>';
+            }).join('') +
+          '</select>' +
+          '<span class="hrms-rbac-count">' + list.length + ' of ' + all.length + '</span>' +
+        '</div>' +
+
+        (form ? permForm(groups, form) : '') +
+        '<div class="table-wrap"><table><thead><tr><th>Permission</th><th>Code</th><th>Group</th><th>Module</th><th>Status</th><th>Actions</th></tr></thead>' +
+        '<tbody>' + (rows || '<tr><td colspan="6" class="hrms-rbac-empty">No permissions match.</td></tr>') + '</tbody></table></div>');
+
+      var qEl = document.getElementById('rbac-perm-q');
+      if (qEl) {
+        qEl.oninput = function () {
+          state.permQuery = qEl.value;
+          clearTimeout(qEl._t);
+          qEl._t = setTimeout(function () {
+            renderPermissions(form);
+            var again = document.getElementById('rbac-perm-q');
+            if (again) { again.focus(); again.setSelectionRange(again.value.length, again.value.length); }
+          }, 220);
+        };
+      }
     });
   }
-  function permForm(groups) {
-    return '<div class="card hrms-rbac-form"><div class="card-title">Create Permission</div>' +
+  function permForm(groups, f) {
+    f = f || {};
+    var editing = !!f.id;
+    return '<div class="card hrms-rbac-form">' +
+      '<div class="card-title">' + (editing ? 'Edit Permission' : 'Create Permission') + '</div>' +
+      '<input type="hidden" id="rbac-np-id" value="' + (f.id || '') + '">' +
       '<div class="hrms-rbac-grid3">' +
-        '<div><div class="hrms-rbac-lbl">NAME</div><input class="input-field" id="rbac-np-name" placeholder="View Employee"></div>' +
-        '<div><div class="hrms-rbac-lbl">CODE</div>' + codeSelect('rbac-np-code-sel', 'rbac-np-code', 'rbac-np-name') + '</div>' +
+        '<div><div class="hrms-rbac-lbl">NAME</div>' +
+          '<input class="input-field" id="rbac-np-name" placeholder="View Employee" value="' + esc(f.name || '') + '"></div>' +
+        '<div><div class="hrms-rbac-lbl">CODE</div>' +
+          codeSelect('rbac-np-code-sel', 'rbac-np-code', 'rbac-np-name', f.code) + '</div>' +
         '<div><div class="hrms-rbac-lbl">GROUP</div><select class="input-field" id="rbac-np-group">' +
           '<option value="">— none —</option>' +
-          groups.map(function (g) { return '<option value="' + g.id + '">' + esc(g.name) + '</option>'; }).join('') +
+          groups.map(function (g) {
+            return '<option value="' + g.id + '"' + (+f.groupId === g.id ? ' selected' : '') + '>' + esc(g.name) + '</option>';
+          }).join('') +
         '</select></div>' +
       '</div>' +
-      '<div class="hrms-rbac-formbtns"><button class="btn-primary" data-act="save-perm">Save Permission</button>' +
+      '<div class="hrms-rbac-grid" style="margin-top:10px">' +
+        '<div><div class="hrms-rbac-lbl">DESCRIPTION</div>' +
+          '<input class="input-field" id="rbac-np-desc" placeholder="Optional — what this permission allows" value="' + esc(f.description || '') + '"></div>' +
+        '<div><div class="hrms-rbac-lbl">STATUS</div><select class="input-field" id="rbac-np-active">' +
+          '<option value="1"' + (f.isActive === false ? '' : ' selected') + '>Active</option>' +
+          '<option value="0"' + (f.isActive === false ? ' selected' : '') + '>Inactive</option>' +
+        '</select></div>' +
+      '</div>' +
+      (editing
+        ? '<div class="hrms-rbac-lbl" style="margin-top:10px">Renaming the CODE only takes effect if the server checks that new code.</div>'
+        : '') +
+      '<div class="hrms-rbac-formbtns"><button class="btn-primary" data-act="save-perm">' +
+        (editing ? 'Save Changes' : 'Save Permission') + '</button>' +
         '<button class="btn-sm" data-act="cancel-perm">Cancel</button></div></div>';
   }
 
@@ -521,6 +751,16 @@
     /* property assignment (not addEventListener) so it replaces, not stacks,
        across re-renders; `change` bubbles from the checkboxes to the page */
     o.onchange = function (e) {
+      var kact = e.target.getAttribute ? e.target.getAttribute('data-kact') : null;
+      if (kact === 'move-perm') {
+        var to = e.target.value;
+        if (to === '') return;                       // placeholder — nothing chosen
+        return movePerm(e.target.getAttribute('data-id'), to === '0' ? null : +to);
+      }
+      if (kact === 'perm-filter') {
+        state.permGroup = e.target.value;
+        return renderPermissions();
+      }
       if (e.target.classList && e.target.classList.contains('rbac-grpall')) {
         var g = e.target.getAttribute('data-group');
         o.querySelectorAll('.rbac-perm[data-group="' + g + '"]').forEach(function (c) { c.checked = e.target.checked; });
@@ -579,34 +819,43 @@
       case 'save-role-perms': return saveRolePerms(id);
 
       /* groups */
-      case 'new-group': return renderGroups(true);
+      case 'new-group': return renderGroups({});
       case 'cancel-group-form': return renderGroups();
       case 'save-group': return saveGroup();
+      case 'edit-group': return renderGroups({
+        id: id,
+        name: b.getAttribute('data-name'),
+        description: b.getAttribute('data-desc'),
+        moduleId: b.getAttribute('data-module'),
+        isActive: b.getAttribute('data-active') === '1',
+      });
       case 'manage-group': state.sub = { type: 'group', group: { id: id, name: b.getAttribute('data-name') } }; return render();
-      case 'del-group': return confirmAction('Delete group "' + b.getAttribute('data-name') + '"?', function () {
-        api('/permission-groups/' + id, { method: 'DELETE' }).then(function (r) {
-          if (!r.ok) { toast('Could not delete'); return; }
-          toast('Group deleted'); renderGroups();
+      case 'del-group': return confirmAction(
+        'Delete group "' + b.getAttribute('data-name') + '"? Its permissions are kept but become ungrouped.',
+        function () {
+          api('/permission-groups/' + id, { method: 'DELETE' }).then(function (r) {
+            if (!r.ok) { toast('Could not delete'); return; }
+            toast('Group deleted'); state.sub = null; state.tab = 'groups'; renderGroups();
+          });
         });
-      });
       case 'add-perm': return addPermToGroup(id);
-      case 'del-perm': return confirmAction('Remove this permission?', function () {
-        api('/permissions/' + id, { method: 'DELETE' }).then(function (r) {
-          if (!r.ok) { toast('Could not delete'); return; }
-          toast('Permission removed'); render();
-        });
-      });
+      case 'attach-perm': return attachPerm(id);
 
       /* permissions */
-      case 'new-perm': return renderPermissions(true);
+      case 'new-perm': return renderPermissions({});
       case 'cancel-perm': return renderPermissions();
       case 'save-perm': return savePerm();
-      case 'del-perm-row': return confirmAction('Delete this permission?', function () {
-        api('/permissions/' + id, { method: 'DELETE' }).then(function (r) {
-          if (!r.ok) { toast('Could not delete'); return; }
-          toast('Permission deleted'); renderPermissions();
+      case 'edit-perm': return editPerm(b);
+      case 'toggle-perm': return togglePerm(id, b.getAttribute('data-active') === '1');
+      case 'del-perm-row': return confirmAction(
+        'Delete permission "' + (b.getAttribute('data-name') || '') + '"? It is removed from every role that has it. ' +
+        'To keep the grant history, Disable it instead.',
+        function () {
+          api('/permissions/' + id, { method: 'DELETE' }).then(function (r) {
+            if (!r.ok) { toast('Could not delete'); return; }
+            toast('Permission deleted'); render();
+          });
         });
-      });
       case 'confirm-yes': if (window.__rbacConfirmCb) { window.__rbacConfirmCb(); window.__rbacConfirmCb = null; } dismissConfirm(); return;
       case 'confirm-no': window.__rbacConfirmCb = null; dismissConfirm(); return;
     }
@@ -649,29 +898,84 @@
   function saveGroup() {
     var name = val('rbac-grp-name');
     if (!name) { toast('Group name is required'); return; }
-    var body = { name: name, description: val('rbac-grp-desc') };
-    var m = val('rbac-grp-module'); if (m) body.moduleId = +m;
-    api('/permission-groups', { method: 'POST', body: body }).then(function (r) {
-      if (!r.ok) { toast((r.data && r.data.message) || 'Could not create group'); return; }
-      toast('Group created'); renderGroups();
+    var id = val('rbac-grp-id');
+    var body = {
+      name: name,
+      description: val('rbac-grp-desc'),
+      // null (not omitted) so clearing the module actually detaches it.
+      moduleId: val('rbac-grp-module') ? +val('rbac-grp-module') : null,
+      is_active: val('rbac-grp-active') !== '0',
+    };
+    api(id ? '/permission-groups/' + id : '/permission-groups',
+        { method: id ? 'PUT' : 'POST', body: body }).then(function (r) {
+      if (!r.ok) { toast((r.data && r.data.message) || 'Could not save group'); return; }
+      toast(id ? 'Group updated' : 'Group created');
+      renderGroups();
     });
   }
   function addPermToGroup(gid) {
     var name = val('rbac-p-name'), code = readCode('rbac-p-code-sel', 'rbac-p-code');
     if (!name || !code) { toast('Name and code are required'); return; }
-    api('/permission-groups/' + gid + '/permissions', { method: 'POST', body: { name: name, code: code } }).then(function (r) {
+    var body = { name: name, code: code, description: val('rbac-p-desc') };
+    api('/permission-groups/' + gid + '/permissions', { method: 'POST', body: body }).then(function (r) {
       if (!r.ok) { toast((r.data && r.data.message) || 'Could not add permission'); return; }
       toast('Permission added'); render();
+    });
+  }
+  function attachPerm(gid) {
+    var pid = val('rbac-attach-perm');
+    if (!pid) { toast('Pick a permission to attach'); return; }
+    api('/permission-groups/' + gid + '/permissions', { method: 'POST', body: { permissionId: +pid } })
+      .then(function (r) {
+        if (!r.ok) { toast((r.data && r.data.message) || 'Could not attach permission'); return; }
+        toast('Permission attached'); render();
+      });
+  }
+  function movePerm(pid, groupId) {
+    api('/permissions/' + pid, { method: 'PUT', body: { groupId: groupId } }).then(function (r) {
+      if (!r.ok) { toast((r.data && r.data.message) || 'Could not move permission'); return; }
+      toast(groupId ? 'Permission moved' : 'Permission ungrouped');
+      render();
+    });
+  }
+  function togglePerm(pid, isActive) {
+    api('/permissions/' + pid, { method: 'PUT', body: { is_active: !isActive } }).then(function (r) {
+      if (!r.ok) { toast((r.data && r.data.message) || 'Could not update permission'); return; }
+      toast(isActive ? 'Permission disabled' : 'Permission enabled');
+      renderPermissions();
+    });
+  }
+  /* Editing always happens on the Permissions tab, even when launched from the
+     group editor, so there is one form to maintain rather than two. */
+  function editPerm(b) {
+    state.sub = null;
+    state.tab = 'permissions';
+    buildSkeleton();
+    renderPermissions({
+      id: b.getAttribute('data-id'),
+      name: b.getAttribute('data-name'),
+      code: b.getAttribute('data-code'),
+      description: b.getAttribute('data-desc'),
+      groupId: b.getAttribute('data-group'),
+      isActive: b.getAttribute('data-active') === '1',
     });
   }
   function savePerm() {
     var name = val('rbac-np-name'), code = readCode('rbac-np-code-sel', 'rbac-np-code');
     if (!name || !code) { toast('Name and code are required'); return; }
-    var body = { name: name, code: code };
-    var g = val('rbac-np-group'); if (g) body.groupId = +g;
-    api('/permissions', { method: 'POST', body: body }).then(function (r) {
-      if (!r.ok) { toast((r.data && r.data.message) || 'Could not create permission'); return; }
-      toast('Permission created'); renderPermissions();
+    var id = val('rbac-np-id');
+    var body = {
+      name: name,
+      code: code,
+      description: val('rbac-np-desc'),
+      groupId: val('rbac-np-group') ? +val('rbac-np-group') : null,
+      is_active: val('rbac-np-active') !== '0',
+    };
+    api(id ? '/permissions/' + id : '/permissions',
+        { method: id ? 'PUT' : 'POST', body: body }).then(function (r) {
+      if (!r.ok) { toast((r.data && r.data.message) || 'Could not save permission'); return; }
+      toast(id ? 'Permission updated' : 'Permission created');
+      renderPermissions();
     });
   }
   function confirmAction(msg, cb) {
@@ -729,7 +1033,10 @@
       '<a class="nav-item" href="#" id="hrms-rbac-link"><span class="nav-icon">' + SHIELD + '</span>Access Control</a>';
     if (footer && footer.parentNode) footer.parentNode.insertBefore(sec, footer);
     else sidebar.appendChild(sec);
-    sec.querySelector('#hrms-rbac-link').addEventListener('click', function (ev) { ev.preventDefault(); open(); });
+    sec.querySelector('#hrms-rbac-link').addEventListener('click', function (ev) {
+      ev.preventDefault();
+      openAt('dashboard');
+    });
   }
 
   /* ── styles (page-level; reuses app classes for content) ────────────── */
@@ -738,6 +1045,8 @@
     var css =
       /* Full-page container — sits inside .content, no overlay */
       '#' + PAGE_ID + '{display:flex;flex-direction:column;min-height:100%;background:var(--bg2,#141a24);animation:rbacFadeIn .18s ease;}' +
+      /* Hide whatever else .content holds, including nodes React adds later. */
+      '.' + ACTIVE_CLS + ' > *:not(#' + PAGE_ID + '){display:none!important;}' +
       '@keyframes rbacFadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}' +
       /* Top bar */
       '.hrms-rbac-topbar{display:flex;align-items:flex-start;justify-content:space-between;padding:20px 28px 0;border-bottom:1px solid var(--border2);margin-bottom:0;}' +
@@ -773,12 +1082,17 @@
       '.hrms-rbac-grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;}' +
       '.hrms-rbac-lbl{font-size:11px;color:var(--text3);font-weight:600;margin-bottom:5px;}' +
       '.hrms-rbac-formbtns{display:flex;gap:8px;margin-top:14px;}' +
-      '.hrms-rbac-gcard{margin-bottom:10px;padding:12px 14px;}' +
-      '.hrms-rbac-ghead{display:flex;align-items:center;gap:9px;cursor:pointer;font-weight:600;font-size:13px;}' +
-      '.hrms-rbac-gname{margin-right:auto;}' +
-      '.hrms-rbac-perms{display:grid;grid-template-columns:1fr 1fr;gap:6px 16px;margin-top:10px;padding-left:24px;}' +
-      '.hrms-rbac-perm{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text2);}' +
-      '.hrms-rbac-perm code,.hrms-rbac-code{font-size:10.5px;color:var(--text3);background:var(--bg3);padding:1px 6px;border-radius:5px;}' +
+      /* Permission editor: compact, aligned group cards (works in both themes) */
+      '.hrms-rbac-gcard{display:block;margin-bottom:10px;padding:0;overflow:hidden;}' +
+      '.hrms-rbac-gcard input[type=checkbox]{accent-color:var(--accent);width:15px;height:15px;cursor:pointer;flex-shrink:0;margin:0;}' +
+      '.hrms-rbac-ghead{display:flex;align-items:center;gap:10px;cursor:pointer;font-weight:700;font-size:12.5px;padding:10px 14px;margin:0;background:var(--bg3);border-bottom:1px solid var(--border2);}' +
+      '.hrms-rbac-gname{flex:1;min-width:0;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}' +
+      '.hrms-rbac-ghead .badge{flex-shrink:0;}' +
+      '.hrms-rbac-perms{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:1px 8px;padding:7px 10px;align-content:start;}' +
+      '.hrms-rbac-perm{display:flex;align-items:center;gap:9px;font-size:12px;color:var(--text2);padding:6px 8px;border-radius:7px;cursor:pointer;min-width:0;}' +
+      '.hrms-rbac-perm:hover{background:rgba(125,125,125,.12);}' +
+      '.hrms-rbac-perm>span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}' +
+      '.hrms-rbac-perm code,.hrms-rbac-code{font-size:10.5px;color:var(--text3);background:var(--bg2);border:1px solid var(--border2);padding:1px 6px;border-radius:5px;flex-shrink:0;}' +
       '.hrms-rbac-count{font-size:12px;color:var(--text3);margin-right:8px;}' +
       '.hrms-rbac-toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--text,#eef);color:var(--bg2,#111);font-size:12.5px;font-weight:600;padding:9px 18px;border-radius:10px;opacity:0;transition:opacity .25s;pointer-events:none;box-shadow:0 8px 24px rgba(0,0,0,.3);z-index:999;}' +
       '.hrms-rbac-search{background:var(--bg3)!important;border:1px solid var(--border2)!important;border-radius:8px!important;padding:7px 12px!important;color:var(--text)!important;}' +
@@ -833,13 +1147,13 @@
 
     container.appendChild(card);
     card.querySelector('#open-rbac-btn').addEventListener('click', function (ev) {
-      ev.preventDefault(); state.tab = 'dashboard'; state.sub = null; open();
+      ev.preventDefault(); openAt('dashboard');
     });
     card.querySelector('#open-rbac-users-btn').addEventListener('click', function (ev) {
-      ev.preventDefault(); state.tab = 'users'; state.sub = null; open();
+      ev.preventDefault(); openAt('users');
     });
     card.querySelector('#open-rbac-roles-btn').addEventListener('click', function (ev) {
-      ev.preventDefault(); state.tab = 'roles'; state.sub = null; open();
+      ev.preventDefault(); openAt('roles');
     });
   }
 
@@ -852,6 +1166,7 @@
   function _rbacRun() {
     if (_rbacObs) _rbacObs.disconnect();
     try {
+      syncRoute();          // drop stale RBAC DOM before re-injecting anything
       ensureNav();
       ensureSettingsCard();
     }
@@ -863,13 +1178,15 @@
     setTimeout(function () { _rbacPending = false; _rbacRun(); }, 120);
   }
   function boot() {
+    watchRoute();
+    syncRoute();
     ensureNav();
     ensureSettingsCard();
     _rbacObs = new MutationObserver(_rbacSchedule);
     _rbacObs.observe(document.body, { childList: true, subtree: true });
     setInterval(_rbacRun, 5000);   // long safety net only, not a driver
   }
-  window.__hrmsOpenRBAC = open;   // programmatic entry (parity with other helpers)
+  window.__hrmsOpenRBAC = openAt;   // programmatic entry (parity with other helpers)
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
   else boot();
 

@@ -208,7 +208,20 @@ def verify_otp(request):
     user = AppUser.objects.filter(email=email).first()
     if not user:
         return err('User not found', 404)
-    return JsonResponse({'ok': True, 'user': app_user_dict(user)})
+    # Issue a JWT for the user so the frontend can authenticate requests.
+    try:
+        import jwt
+        from datetime import datetime, timedelta
+        payload = {
+            'email': user.email,
+            'name': user.full_name,
+            'exp': datetime.utcnow() + timedelta(minutes=int(os.environ.get('JWT_ACCESS_MINUTES', '60')))
+        }
+        token = jwt.encode(payload, settings.SECRET_KEY, algorithm='HS256')
+    except Exception:
+        token = ''
+
+    return JsonResponse({'ok': True, 'user': app_user_dict(user), 'token': token})
 
 
 @csrf_exempt

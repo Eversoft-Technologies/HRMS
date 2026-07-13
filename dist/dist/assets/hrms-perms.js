@@ -114,13 +114,6 @@
         { href: '/payroll/contractor-mgmt',  label: 'Contractor Mgmt' },
         { href: '/payroll/peo',              label: 'PEO' },
       ]
-    },
-    {
-      perm: 'reports.view',
-      section: 'Reports',
-      items: [
-        { href: '/reports', label: 'Reports' }
-      ]
     }
   ];
 
@@ -307,6 +300,52 @@
      the sidebar shake. */
   var _mo = null;
   function _observe() { if (_mo) _mo.observe(document.body, { childList: true, subtree: true }); }
+  /* Hide the whole "Action" column of the Leave / Work Submissions tables when
+     the user lacks leave.action / submission.action (not just the buttons). The
+     column is located by the Approve/Reject buttons it contains, so it works
+     regardless of the header text; falls back to an "Action(s)" header. */
+  function actionColIndex(table) {
+    var bodyRows = table.querySelectorAll('tbody tr');
+    for (var r = 0; r < bodyRows.length; r++) {
+      var cells = bodyRows[r].children;
+      for (var c = 0; c < cells.length; c++) {
+        var btns = cells[c].querySelectorAll('button,[role="button"],a');
+        for (var b = 0; b < btns.length; b++) {
+          var txt = (btns[b].textContent || '').trim().toLowerCase();
+          if (txt === 'approve' || txt === 'reject') return c;
+        }
+      }
+    }
+    var headRow = table.querySelector('thead tr');
+    if (headRow) {
+      for (var i = 0; i < headRow.children.length; i++) {
+        if (/^actions?$/i.test((headRow.children[i].textContent || '').trim())) return i;
+      }
+    }
+    return -1;
+  }
+  function gateActionColumns() {
+    var path = location.pathname, need = null;
+    if (path.indexOf('/employees/leave') !== -1) need = 'leave.action';
+    else if (path.indexOf('/employees/submissions') !== -1) need = 'submission.action';
+    else return;
+    var hide = known && !set.has(need);
+    var tables = document.querySelectorAll('table');
+    for (var t = 0; t < tables.length; t++) {
+      var table = tables[t];
+      var idx = actionColIndex(table);
+      if (idx === -1) continue;
+      var headRow = table.querySelector('thead tr');
+      var colCount = headRow ? headRow.children.length : 0;
+      var rows = table.querySelectorAll('tr');
+      for (var r = 0; r < rows.length; r++) {
+        var cells = rows[r].children;
+        if (colCount && cells.length !== colCount) continue; // skip colspan/empty-state rows
+        if (cells[idx]) cells[idx].style.display = hide ? 'none' : '';
+      }
+    }
+  }
+
   function applyPerms() {
     if (_mo) _mo.disconnect();
     try {
@@ -320,6 +359,7 @@
       applyNav();
       applyRouteGuard();
       applyActions();
+      gateActionColumns();
     } finally {
       _observe();
     }
@@ -341,6 +381,11 @@
       .then(function (d) {
         if (d && Array.isArray(d.permissions)) {
           set = new Set(d.permissions);
+          // The single "action" permission grants both approve & reject. The
+          // React bundle still tags its Leave buttons with the old codes, so
+          // alias them: leave.action ⇒ leave.approve/reject (same for submission).
+          if (set.has('leave.action')) { set.add('leave.approve'); set.add('leave.reject'); }
+          if (set.has('submission.action')) { set.add('submission.approve'); set.add('submission.reject'); }
           known = true;
           try {
             localStorage.setItem('hrms_permissions', JSON.stringify(d.permissions));

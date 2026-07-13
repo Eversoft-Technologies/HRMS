@@ -61,6 +61,7 @@ from .models import (
     AttendanceCorrection,
     GeoFence,
     WfhRequest,
+    WFHPolicy,
 )
 from .serializers import (
     AppUserSerializer,
@@ -275,6 +276,45 @@ def jobs(request):
     return Response(payload, status=201)
 
 
+@api_view(['GET', 'PATCH', 'PUT', 'DELETE'])
+@require_perm({'GET': 'recruitment.view', 'PATCH': 'recruitment.edit',
+               'PUT': 'recruitment.edit', 'DELETE': 'recruitment.delete'})
+def job_detail(request, pk):
+    """Read / update / delete a single job. Used by the Job Board's inline
+    status editor (PATCH {status, statusComment})."""
+    job = JobPost.objects.filter(pk=pk).first()
+    if not job:
+        return err('Job not found', 404)
+    if request.method == 'GET':
+        return Response(JobPostSerializer(job).data)
+    if request.method == 'DELETE':
+        job.delete()
+        return Response({'ok': True})
+
+    data = request.data or {}
+    text_fields = ['title', 'dept', 'location', 'type', 'salary', 'status', 'priority', 'description']
+    changed = False
+    for f in text_fields:
+        if f in data:
+            setattr(job, f, data[f] if data[f] is not None else '')
+            changed = True
+    if 'openings' in data:
+        try:
+            job.openings = max(1, int(data['openings']))
+        except (TypeError, ValueError):
+            pass
+        changed = True
+    if 'remote' in data:
+        job.is_remote = bool(data['remote'])
+        changed = True
+    if 'statusComment' in data:
+        job.status_comment = data['statusComment'] or ''
+        changed = True
+    if changed:
+        job.save()
+    return Response(JobPostSerializer(job).data)
+
+
 def _auto_post_job(job_payload, user_email=None):
     """Look up the user's saved social credentials and post the job. Returns a
     list of per-platform results (empty if nothing is configured)."""
@@ -317,6 +357,72 @@ def _generate_interview_tokens(interview_date_str, interview_time_str):
     return candidate_token, recruiter_token, expiry
 
 
+def _public_origin(request, body=None):
+    """Base URL the candidate's link must point at.
+
+    The request host is whatever the *recruiter's* browser hit — often
+    localhost — which produces a link no candidate can open. PUBLIC_BASE_URL
+    overrides it for real deployments.
+    """
+    explicit = (body or {}).get('origin')
+    if explicit:
+        return str(explicit).rstrip('/')
+    configured = os.environ.get('PUBLIC_BASE_URL', '').strip()
+    if configured:
+        return configured.rstrip('/')
+    return _request_origin_from_meta(request)
+
+
+def _send_interview_invitation(obj, origin, sender_email=None):
+    """Email the candidate their single-use, tokenized interview link.
+
+    Returns mailer's ``{'ok': bool, 'error': str}`` — callers decide whether a
+    delivery failure should fail their request.
+    """
+    if not obj.email:
+        return {'ok': False, 'error': 'Candidate has no email address'}
+
+    candidate_url = f'{origin}/interview-access?token={obj.candidate_token}'
+    html = mailer.render_branded(
+        title=f'Interview Invitation — {obj.role}',
+        intro=(
+            f'Dear {obj.name},<br><br>'
+            f'Your interview for the <strong>{obj.role}</strong> position has been scheduled.<br>'
+            f'<strong>Date:</strong> {obj.interview_date or "TBD"}&nbsp;&nbsp;'
+            f'<strong>Time:</strong> {obj.interview_time or "TBD"}<br>'
+            f'<strong>Platform:</strong> {obj.platform or "To be confirmed"}<br><br>'
+            f'Click the button below to join your interview session at the scheduled time.'
+        ),
+        highlight_html=(
+            f'<div style="text-align:center;margin:18px 0;">'
+            f'<a href="{candidate_url}" target="_blank" rel="noreferrer noopener" '
+            f'style="display:inline-block;background:linear-gradient(135deg,#4f8ef7,#a855f7);'
+            f'color:#fff;font-size:15px;font-weight:700;text-decoration:none;'
+            f'padding:14px 38px;border-radius:10px;">Join Interview</a></div>'
+            f'<div style="text-align:center;"><a href="{candidate_url}" '
+            f'style="color:#94a3b8;font-size:12px;word-break:break-all;">{candidate_url}</a></div>'
+        ),
+        footer=(
+            'This link is valid for 24 hours and can only be used once. '
+            'If you encounter any issues, contact your recruiter.'
+        ),
+    )
+    text = (
+        f'Hi {obj.name},\n\nYour interview for {obj.role} is scheduled on '
+        f'{obj.interview_date} at {obj.interview_time}.\n\n'
+        f'Join here: {candidate_url}\n\n'
+        f'This link expires in 24 hours and can only be used once. '
+        f'If you cannot join by then, contact your recruiter for a new link.'
+    )
+    return mailer.send_email(
+        to=obj.email,
+        subject=f'Interview Invitation — {obj.role}',
+        html=html,
+        text=text,
+        sender_email=sender_email,
+    )
+
+
 @api_view(['GET', 'POST'])
 @require_perm({'GET': 'recruitment.view', 'POST': 'recruitment.create'})
 def interviews(request):
@@ -342,6 +448,18 @@ def interviews(request):
         return serializer_err(serializer)
     c_token, r_token, expiry = _generate_interview_tokens(interview_date, time)
     serializer.save(candidate_token=c_token, recruiter_token=r_token, link_expires_at=expiry)
+    obj = serializer.instance
+
+    # Deliver the tokenized link server-side. A mail failure must not discard an
+    # interview the recruiter already scheduled, so this is best-effort and the
+    # outcome is reported back instead of raised.
+    mail = _send_interview_invitation(
+        obj, _public_origin(request, body), body.get('senderEmail')
+    )
+    if mail.get('ok'):
+        obj.email_sent = True
+        obj.save(update_fields=['email_sent'])
+
     if email:
         create_notification(
             email,
@@ -350,7 +468,12 @@ def interviews(request):
             'info',
             '/recruit/interview',
         )
-    return Response(serializer.data, status=201)
+
+    data = InterviewLinkSerializer(obj).data
+    data['emailSent'] = bool(mail.get('ok'))
+    if not mail.get('ok'):
+        data['emailError'] = mail.get('error', 'unknown error')
+    return Response(data, status=201)
 
 
 @api_view(['PUT', 'PATCH'])
@@ -367,6 +490,28 @@ def interview_detail(request, pk):
 
 
 @api_view(['POST'])
+def interview_note(request, pk):
+    """Set/update a candidate's note. Intentionally ungated so ANY signed-in
+    user can collaborate on the note; records who last edited it (name + email +
+    timestamp) so the editor can show "last modified by"."""
+    obj = InterviewLink.objects.filter(pk=pk).first()
+    if not obj:
+        return err('Interview not found', 404)
+    body = request.data
+    notes = body.get('notes')
+    if notes is None:
+        return err('notes is required')
+    email = norm_email(body.get('email') or request.META.get('HTTP_X_USER_EMAIL') or '')
+    name = str(body.get('name') or body.get('employee') or '').strip()
+    obj.notes = notes
+    obj.notes_updated_by = name or (email.split('@')[0] if email else '')
+    obj.notes_updated_by_email = email
+    obj.notes_updated_at = datetime.now()
+    obj.save()
+    return Response(InterviewLinkSerializer(obj).data)
+
+
+@api_view(['POST'])
 @require_perm('recruitment.edit')
 def interviews_bulk_send_emails(request):
     """Send emails to multiple candidates (mark email_sent=True for their interviews)."""
@@ -379,14 +524,30 @@ def interviews_bulk_send_emails(request):
     if not qs.exists():
         return err('No interviews found with the provided IDs', 404)
 
-    updated_count = qs.update(email_sent=True)
-    updated_interviews = InterviewLinkSerializer(qs, many=True).data
+    origin = _public_origin(request, body)
+    sender_email = body.get('senderEmail')
+    sent, failed = [], []
+    for obj in qs:
+        result = _send_interview_invitation(obj, origin, sender_email)
+        if result.get('ok'):
+            obj.email_sent = True
+            obj.save(update_fields=['email_sent'])
+            sent.append(obj.id)
+        else:
+            failed.append({'id': obj.id, 'email': obj.email,
+                           'error': result.get('error', 'unknown error')})
+
+    message = f'Emails sent to {len(sent)} candidate(s)'
+    if failed:
+        message += f'; {len(failed)} failed'
 
     return JsonResponse({
-        'ok': True,
-        'message': f'Emails sent to {updated_count} candidate(s)',
-        'count': updated_count,
-        'interviews': updated_interviews,
+        'ok': not failed,
+        'message': message,
+        'count': len(sent),
+        'failed': failed,
+        'interviews': InterviewLinkSerializer(
+            InterviewLink.objects.filter(id__in=interview_ids), many=True).data,
     }, status=200)
 
 
@@ -494,6 +655,13 @@ def interview_send_followup(request):
 # ---------------------------------------------------------------------------
 # Interview token verification & link management
 # ---------------------------------------------------------------------------
+def _interview_already_taken(obj):
+    """True once the candidate has sat the interview. ``completed_at`` is the
+    marker; ``status`` also counts so an interview a recruiter closed out by
+    hand cannot be re-entered."""
+    return obj.completed_at is not None or obj.status == 'Completed'
+
+
 @api_view(['POST'])
 def interview_verify_token(request):
     """Verify a candidate or recruiter interview access token.
@@ -520,6 +688,16 @@ def interview_verify_token(request):
 
     now = datetime.now()
 
+    # An interview may only be taken once. The recruiter link stays usable so
+    # the interview can still be reviewed after the candidate is done.
+    if token_type == 'candidate' and _interview_already_taken(obj):
+        return JsonResponse({
+            'valid': False,
+            'reason': 'You have already completed this interview',
+            'completedAt': dt(obj.completed_at),
+            'interviewId': obj.id,
+        })
+
     # Check expiry
     if obj.link_expires_at and now > obj.link_expires_at:
         # Auto-update status to Expired
@@ -545,6 +723,43 @@ def interview_verify_token(request):
 
 
 @api_view(['POST'])
+def interview_complete(request):
+    """Mark an interview as taken so the candidate link cannot be reused.
+
+    POST /api/interviews/complete
+    Body: {token: "<candidate_token>"}
+
+    Public (the candidate is not signed in) — the candidate token is the
+    credential. Idempotent: a repeat call reports the original completion.
+    """
+    token = str(request.data.get('token') or '').strip()
+    if not token:
+        return err('token is required')
+
+    obj = InterviewLink.objects.filter(candidate_token=token).first()
+    if not obj:
+        return err('Interview not found', 404)
+
+    if _interview_already_taken(obj):
+        return Response({
+            'ok': True,
+            'alreadyCompleted': True,
+            'completedAt': dt(obj.completed_at),
+            'interviewId': obj.id,
+        })
+
+    obj.completed_at = datetime.now()
+    obj.status = 'Completed'
+    obj.save(update_fields=['completed_at', 'status'])
+    return Response({
+        'ok': True,
+        'alreadyCompleted': False,
+        'completedAt': dt(obj.completed_at),
+        'interviewId': obj.id,
+    })
+
+
+@api_view(['POST'])
 @require_perm('recruitment.edit')
 def interview_regenerate_link(request, pk):
     """Regenerate candidate and recruiter tokens for an interview.
@@ -562,7 +777,7 @@ def interview_regenerate_link(request, pk):
     c_token = secrets.token_urlsafe(32)
     r_token = secrets.token_urlsafe(32)
     # Extend from interview date if available, otherwise from now
-    new_expiry, _, _ = _generate_interview_tokens(
+    *_, new_expiry = _generate_interview_tokens(
         obj.interview_date or '', obj.interview_time or ''
     )
     # Allow explicit override
@@ -572,9 +787,14 @@ def interview_regenerate_link(request, pk):
     obj.candidate_token = c_token
     obj.recruiter_token = r_token
     obj.link_expires_at = new_expiry
-    if obj.status == 'Expired':
+    # Minting a fresh candidate token is the "let them sit it again" action, so
+    # release the single-use latch or the new link would refuse on arrival.
+    obj.completed_at = None
+    if obj.status in ('Expired', 'Completed'):
         obj.status = 'Scheduled'
-    obj.save(update_fields=['candidate_token', 'recruiter_token', 'link_expires_at', 'status'])
+    obj.save(update_fields=[
+        'candidate_token', 'recruiter_token', 'link_expires_at', 'completed_at', 'status',
+    ])
 
     return Response({
         'ok': True,
@@ -598,60 +818,31 @@ def interview_resend_invitation(request, pk):
         return err('Interview not found', 404)
 
     body = request.data
-    origin = body.get('origin') or _request_origin_from_meta(request)
+    origin = _public_origin(request, body)
 
     # Regenerate tokens before resending so the new link is fresh
     c_token = secrets.token_urlsafe(32)
     r_token = secrets.token_urlsafe(32)
-    new_expiry, _, _ = _generate_interview_tokens(
+    *_, new_expiry = _generate_interview_tokens(
         obj.interview_date or '', obj.interview_time or ''
     )
     obj.candidate_token = c_token
     obj.recruiter_token = r_token
     obj.link_expires_at = new_expiry
     obj.email_sent = False
-    obj.save(update_fields=['candidate_token', 'recruiter_token', 'link_expires_at', 'email_sent'])
+    # See interview_regenerate_link: a fresh candidate token must not be
+    # refused by the single-use latch left behind by an earlier sitting.
+    obj.completed_at = None
+    if obj.status in ('Expired', 'Completed'):
+        obj.status = 'Scheduled'
+    obj.save(update_fields=[
+        'candidate_token', 'recruiter_token', 'link_expires_at', 'email_sent',
+        'completed_at', 'status',
+    ])
 
-    candidate_url = f'{origin}/interview-access?token={c_token}'
     recruiter_url = f'{origin}/interview-access?token={r_token}'
 
-    html = mailer.render_branded(
-        title=f'Interview Invitation — {obj.role}',
-        intro=(
-            f'Dear {obj.name},<br><br>'
-            f'Your interview for the <strong>{obj.role}</strong> position has been scheduled.<br>'
-            f'<strong>Date:</strong> {obj.interview_date or "TBD"}&nbsp;&nbsp;'
-            f'<strong>Time:</strong> {obj.interview_time or "TBD"}<br>'
-            f'<strong>Platform:</strong> {obj.platform or "To be confirmed"}<br><br>'
-            f'Click the button below to join your interview session at the scheduled time.'
-        ),
-        highlight_html=(
-            f'<div style="text-align:center;margin:18px 0;">'
-            f'<a href="{candidate_url}" target="_blank" rel="noreferrer noopener" '
-            f'style="display:inline-block;background:linear-gradient(135deg,#4f8ef7,#a855f7);'
-            f'color:#fff;font-size:15px;font-weight:700;text-decoration:none;'
-            f'padding:14px 38px;border-radius:10px;">Join Interview</a></div>'
-            f'<div style="text-align:center;"><a href="{candidate_url}" '
-            f'style="color:#94a3b8;font-size:12px;word-break:break-all;">{candidate_url}</a></div>'
-        ),
-        footer=(
-            f'This link is valid for 24 hours from now. '
-            f'If you encounter any issues, contact your recruiter.'
-        ),
-    )
-    text = (
-        f'Hi {obj.name},\n\nYour interview for {obj.role} is scheduled on '
-        f'{obj.interview_date} at {obj.interview_time}.\n\n'
-        f'Join here: {candidate_url}\n\n'
-        f'This link expires in 24 hours. If you cannot join by then, contact your recruiter for a new link.'
-    )
-    result = mailer.send_email(
-        to=obj.email,
-        subject=f'Interview Invitation — {obj.role}',
-        html=html,
-        text=text,
-        sender_email=body.get('senderEmail'),
-    )
+    result = _send_interview_invitation(obj, origin, body.get('senderEmail'))
     if not result.get('ok'):
         return err('Could not send invitation: ' + result.get('error', 'unknown error'), 502)
 
@@ -778,6 +969,23 @@ RECORDING_FIELD_MAP = {
 }
 
 
+def _mark_interview_taken(email, role):
+    """A saved recording means the candidate sat the interview — latch it so the
+    candidate link cannot be reused. Scoped to email + role because one
+    candidate may be interviewing for several roles at once."""
+    email = (email or '').strip()
+    if not email:
+        return
+    qs = InterviewLink.objects.filter(email__iexact=email, completed_at__isnull=True)
+    if role:
+        qs = qs.filter(role__iexact=role.strip())
+    obj = qs.order_by('-id').first()
+    if obj:
+        obj.completed_at = datetime.now()
+        obj.status = 'Completed'
+        obj.save(update_fields=['completed_at', 'status'])
+
+
 @api_view(['GET', 'POST'])
 @require_perm({'GET': 'recruitment.view', 'POST': 'recruitment.create'})
 def recordings(request):
@@ -791,6 +999,7 @@ def recordings(request):
     if not serializer.is_valid():
         return serializer_err(serializer)
     serializer.save()
+    _mark_interview_taken(body.get('candidateEmail'), body.get('role'))
     return Response(serializer.data, status=201)
 
 
@@ -912,11 +1121,17 @@ def ai_generate_questions(request):
     if not prompt and not has_structured:
         return JsonResponse({'error': {'message': 'prompt or structured params (resumeText/jdText/jobRole) are required'}}, status=400)
 
-    payload = ai.generate_questions(
-        prompt,
-        request_key=request.headers.get('x-api-key'),
-        params=params if has_structured else None,
-    )
+    try:
+        payload = ai.generate_questions(
+            prompt,
+            request_key=request.headers.get('x-api-key'),
+            params=params if has_structured else None,
+        )
+    except ai.AIUnavailable as exc:
+        # Questions are AI-only now, so a failure is a failure — never dress it
+        # up as a successful response.
+        return JsonResponse({'error': {'message': exc.message}}, status=exc.status)
+
     return Response(payload)
 
 
@@ -1314,6 +1529,19 @@ def attendance_check_out(request):
         session = max(int((now - obj.check_in).total_seconds() // 60), 0)
         obj.worked_minutes = (obj.worked_minutes or 0) + session
 
+    # Checking out mid-break → close the open break and accrue its time.
+    if _is_break_label(obj.presence):
+        last_start = AttendanceEvent.objects.filter(
+            email=email, date=now.date(), event='break-start'
+        ).order_by('-at').first()
+        if last_start:
+            brk_min = int((now - last_start.at).total_seconds() // 60)
+            obj.break_minutes = (obj.break_minutes or 0) + max(brk_min, 0)
+        AttendanceEvent.objects.create(
+            email=email, employee_name=obj.employee_name, date=now.date(),
+            event='break-end', location=loc_desc, at=now,
+        )
+
     obj.check_out = now
     obj.presence = ''
     obj.presence_at = now
@@ -1402,6 +1630,59 @@ ATTENDANCE_EVENT_TYPES = (
     'remote-switch', 'office-switch',
 )
 
+# Presence labels (chosen from the STATUS picker) that count as an active break:
+# they accrue break time and surface as "In Break" on the Team Status panel.
+BREAK_PRESENCE_LABELS = {'away', 'coffee break', 'on break', 'in break'}
+IN_BREAK_LABEL = 'In Break'
+
+
+def _is_break_label(label):
+    """True when a presence label means the employee is on a break."""
+    return str(label or '').strip().lower() in BREAK_PRESENCE_LABELS
+
+
+def _looks_remote(location):
+    """Mirrors the location test in _presence_for(): these read as "Remote"."""
+    loc = str(location or '').strip().lower()
+    return 'home' in loc or 'remote' in loc
+
+
+def remote_switch_check(email, day=None):
+    """May ``email`` work remotely on ``day``? Returns (allowed, reason).
+
+    Switching to remote used to be unguarded — anyone could POST a
+    ``remote-switch`` event and be marked Remote, which made the whole WFH
+    request/approval workflow advisory. It is allowed only when one of these
+    holds:
+
+      1. an APPROVED WfhRequest covers the day, or
+      2. the user holds ``attendance.remote`` (standing remote/hybrid staff and
+         admins who don't file a request each time), or
+      3. the active WFH policy does not require approval at all.
+    """
+    from .permissions import _user_has_perm
+
+    day = day or datetime.now().date()
+
+    approved = WfhRequest.objects.filter(
+        email=email, status='Approved', from_date__lte=day, to_date__gte=day,
+    ).exists()
+    if approved:
+        return True, 'approved WFH request'
+
+    user = AppUser.objects.select_related('role_ref').filter(email=email).first()
+    if _user_has_perm(user, 'attendance.remote'):
+        return True, 'attendance.remote permission'
+
+    policy = WFHPolicy.objects.filter(is_active=True).first()
+    if policy and not policy.requires_approval:
+        return True, 'policy does not require approval'
+
+    return False, (
+        'You need an approved work-from-home request for today before switching '
+        'to remote. Submit a WFH request, or ask an admin to grant you remote access.'
+    )
+
 
 @api_view(['GET', 'POST'])
 @require_perm({'GET': 'attendance.view', 'POST': 'attendance.create'}, or_self=True)
@@ -1423,6 +1704,15 @@ def attendance_events(request):
         return err('email is required')
     if event not in ATTENDANCE_EVENT_TYPES:
         return err('event must be one of: ' + ', '.join(ATTENDANCE_EVENT_TYPES))
+
+    # Gate anything that would land the user in a Remote presence. That is the
+    # explicit remote-switch, but also a check-in / office-switch carrying a
+    # "Home"/"Remote" location, which _presence_for() reads as Remote just the
+    # same — gating only the former would leave that loophole open.
+    if event == 'remote-switch' or _looks_remote(body.get('location')):
+        allowed, reason = remote_switch_check(email)
+        if not allowed:
+            return JsonResponse({'message': reason, 'code': 'wfh_not_approved'}, status=403)
 
     lat = body.get('latitude')
     lng = body.get('longitude')
@@ -1490,18 +1780,29 @@ def attendance_presence(request):
     if not att or not _is_checked_in(att):
         return err('Presence can only be set while checked in', 409)
     prev = att.presence or ''
+    was_break = _is_break_label(prev)
+    now_break = _is_break_label(label)
     name = att.employee_name or body.get('employee') or body.get('name') or ''
-    if label == 'Away' and prev != 'Away':
+    if now_break and not was_break:
+        # Starting a break (Away / Coffee break / …) → log the start on the timeline.
         AttendanceEvent.objects.create(
             email=email, employee_name=name, date=now.date(),
             event='break-start', location='', at=now,
         )
-    elif prev == 'Away' and label != 'Away':
+    elif was_break and not now_break:
+        # Ending a break → log the end and accrue the elapsed break time so it
+        # shows on the check-in card as "Break taken today".
         AttendanceEvent.objects.create(
             email=email, employee_name=name, date=now.date(),
             event='break-end',
             location=('Home' if att.device == 'mobile' else 'Office'), at=now,
         )
+        last_start = AttendanceEvent.objects.filter(
+            email=email, date=now.date(), event='break-start'
+        ).order_by('-at').first()
+        if last_start:
+            brk_min = int((now - last_start.at).total_seconds() // 60)
+            att.break_minutes = (att.break_minutes or 0) + max(brk_min, 0)
     att.presence = label
     att.presence_at = now
     att.save()
@@ -1516,6 +1817,10 @@ def _team_status(event, att):
     if att is None or not _is_checked_in(att):
         return 'Absent', None
     if att.presence:
+        # A break-type status (Away / Coffee break / …) shows as "In Break";
+        # every other choice shows its own label verbatim.
+        if _is_break_label(att.presence):
+            return IN_BREAK_LABEL, (att.presence_at or att.check_in)
         return att.presence, (att.presence_at or att.check_in)
     if event is not None:
         e = event.event
@@ -1526,16 +1831,19 @@ def _team_status(event, att):
         if e == 'remote-switch':
             return 'Remote', event.at
         if e == 'break-start':
-            return 'On Break', event.at
+            return IN_BREAK_LABEL, event.at
     return ('Remote' if att.device == 'mobile' else 'In Office'), att.check_in
 
 
 @api_view(['GET'])
-@require_perm('attendance.view')
 def attendance_team(request):
     """Live presence snapshot for the whole team (Team Status Now panel).
     Status per person comes from their latest activity event today, else from
-    their attendance record; everyone else is shown as Absent."""
+    their attendance record; everyone else is shown as Absent.
+
+    Intentionally ungated: every employee may see their team's presence on the
+    Check In/Out page (it exposes only name + coarse status + since-time, no
+    sensitive data), so the attendance.view permission is not required here."""
     today = datetime.now().date()
 
     # Latest event per email today (queryset is ordered by ``at`` ascending, so
@@ -1556,7 +1864,7 @@ def attendance_team(request):
             att = today_att.get(email)
             roster.append((email, event_name.get(email) or (att.employee_name if att else '')))
 
-    priority = {'In Office': 0, 'Remote': 1, 'On Break': 2, 'Absent': 3}
+    priority = {'In Office': 0, 'Remote': 1, 'In Break': 2, 'Absent': 3}
     rows = []
     for email, name in roster:
         att = today_att.get(email)
@@ -1606,7 +1914,7 @@ def leave(request):
     )
     emp_name = inst.employee_name or email
     notify_approvers(
-        'leave.approve',
+        'leave.action',
         'New leave request',
         f"{emp_name} has requested leave ({inst.type}) from {inst.from_date} to {inst.to_date}.",
         '/employees/leave',
@@ -1615,7 +1923,7 @@ def leave(request):
 
 
 @api_view(['PUT', 'DELETE'])
-@require_perm({'PUT': 'leave.approve', 'DELETE': 'leave.delete'})
+@require_perm({'PUT': 'leave.action', 'DELETE': 'leave.delete'})
 def leave_detail(request, pk):
     obj = LeaveRequest.objects.filter(pk=pk).first()
     if not obj:
@@ -1810,7 +2118,7 @@ def submissions(request):
     )
     emp_name = inst.employee_name or email
     notify_approvers(
-        'submission.approve',
+        'submission.action',
         'New work submission',
         f"{emp_name} has submitted a new work item: '{inst.title}'.",
         '/employees/submissions',
@@ -1828,15 +2136,14 @@ def submission_detail(request, pk):
         obj.delete()
         return Response({'ok': True})
 
-    # A PUT that approves/rejects the submission needs its own permission
-    # (submission.approve / submission.reject); any other edit needs
-    # employee.edit. This lets a reviewer approve/reject without granting them
-    # full edit rights, and keeps approve and reject independently assignable.
+    # A PUT that approves/rejects the submission needs the single "action"
+    # permission (submission.action); any other edit needs employee.edit. This
+    # lets a reviewer approve OR reject without granting full edit rights.
     status_val = str(request.data.get('status') or '').strip().lower()
     if status_val == 'approved':
-        need, verb = 'submission.approve', 'approve'
+        need, verb = 'submission.action', 'approve'
     elif status_val == 'rejected':
-        need, verb = 'submission.reject', 'reject'
+        need, verb = 'submission.action', 'reject'
     else:
         need, verb = 'employee.edit', 'edit'
     allowed, caller_email, user = check_perm(request, need)
@@ -2169,6 +2476,10 @@ def permission_group_permissions(request, pk):
 def permissions(request):
     if request.method == 'GET':
         qs = Permission.objects.select_related('group', 'group__module').order_by('group_id', 'id')
+        # Hide retired permissions (e.g. the old leave/submission approve+reject,
+        # replaced by a single "action" permission) unless explicitly requested.
+        if str(request.GET.get('includeInactive') or '').lower() not in ('1', 'true', 'yes'):
+            qs = qs.filter(is_active=True)
         g = request.GET.get('group')
         if g:
             qs = qs.filter(group_id=int(g)) if str(g).isdigit() else qs.filter(group__name=g)
@@ -2406,7 +2717,7 @@ def recruitment_kpis(request):
     scope=all  → admin view (requires admin role)
     range=week|month|quarter|all → time window
     """
-    from .permissions import check_perm, _is_super_admin, _resolve_role
+    from .permissions import _user_has_perm
     scope = request.GET.get('scope', 'me')
     range_param = request.GET.get('range', 'all')
     role_param = request.GET.get('role', '')
@@ -2427,13 +2738,18 @@ def recruitment_kpis(request):
     )
     caller_user = AppUser.objects.select_related('role_ref').filter(email=caller_email).first() if caller_email else None
 
-    # Admin check for scope=all
-    is_admin = caller_user and (_is_super_admin(caller_user) or (
-        caller_user.role_ref and caller_user.role_ref.name in ('HR Manager', 'Super Admin', 'HR Executive', 'Recruitment')
-    ) or (caller_user.role or '').lower() in ('admin', 'hr', 'recruitment'))
+    # Each scope is its own permission, so a custom role can be granted one
+    # without the other (previously this was a hardcoded list of role names and
+    # the RBAC editor had no say in it).
+    can_org = _user_has_perm(caller_user, 'recruitment.kpi.view_org')
+    can_own = _user_has_perm(caller_user, 'recruitment.kpi.view_own')
 
-    if scope == 'all' and not is_admin:
-        return JsonResponse({'message': 'Admin access required for org-wide KPIs'}, status=403)
+    if scope == 'all' and not can_org:
+        return JsonResponse(
+            {'message': 'You do not have permission to view org-wide KPIs.'}, status=403)
+    if scope != 'all' and not (can_own or can_org):
+        return JsonResponse(
+            {'message': 'You do not have permission to view the KPI dashboard.'}, status=403)
 
     # Collect lists of all available options for filters (BEFORE filtering base querysets)
     all_roles = sorted(list(set([x for x in InterviewLink.objects.values_list('role', flat=True) if x])))

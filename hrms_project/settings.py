@@ -6,6 +6,7 @@ the built React app (Vite `dist/`) for every other route via WhiteNoise.
 """
 from pathlib import Path
 import os
+from datetime import timedelta
 
 from dotenv import load_dotenv
 
@@ -74,11 +75,21 @@ INSTALLED_APPS = [
 # JSON-only in/out keeps the wire format identical to the original Node/Express
 # API the React frontend talks to.
 REST_FRAMEWORK = {
-    'DEFAULT_AUTHENTICATION_CLASSES': [],
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'api.authentication.JWTAppUserAuthentication',
+    ],
     'DEFAULT_PERMISSION_CLASSES': ['rest_framework.permissions.AllowAny'],
     'UNAUTHENTICATED_USER': None,
     'DEFAULT_RENDERER_CLASSES': ['rest_framework.renderers.JSONRenderer'],
     'DEFAULT_PARSER_CLASSES': ['rest_framework.parsers.JSONParser'],
+}
+
+# Simple JWT configuration — adds JWT auth support. Tokens are short-lived
+# by default; adjust lifetimes via env vars in production.
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=int(os.environ.get('JWT_ACCESS_MINUTES', '60'))),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=int(os.environ.get('JWT_REFRESH_DAYS', '7'))),
+    'AUTH_HEADER_TYPES': ('Bearer',),
 }
 
 MIDDLEWARE = [
@@ -107,11 +118,11 @@ TEMPLATES = [
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',
-        'NAME':  'hrms_system',
-        'USER':  'root',
-        'PASSWORD': '1234',
-        'HOST':  'localhost',
-        'PORT': '3306',
+        'NAME':  os.environ.get('DB_NAME', 'hrms_system'),
+        'USER':  os.environ.get('DB_USER', 'root'),
+        'PASSWORD': os.environ.get('DB_PASSWORD', '1234'),
+        'HOST':  os.environ.get('DB_HOST', 'localhost'),
+        'PORT': os.environ.get('DB_PORT', '3306'),
         'OPTIONS': {
             'charset': 'utf8mb4',
         },

@@ -685,18 +685,23 @@ html[data-theme="light"] .hrms-att-view { color-scheme: light; }
   position: fixed; inset: 0;
   background: rgba(0, 0, 0, 0.55);
   z-index: 300;
-  display: flex; align-items: center; justify-content: center;
-  padding: 20px;
+  /* Right-side drawer: push the panel to the right edge, full height. */
+  display: flex; align-items: stretch; justify-content: flex-end;
   animation: hrms-drawer-fade 0.15s ease;
 }
 .hrms-att-modal {
-  width: 860px; max-width: 96vw; max-height: 90vh;
+  width: 880px; max-width: 96vw; height: 100vh; max-height: 100vh;
   display: flex; flex-direction: column;
   background: var(--bg2);
-  border: 1px solid var(--border2);
-  border-radius: 14px;
-  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.5);
+  border: none; border-left: 1px solid var(--border2);
+  border-radius: 0;
+  box-shadow: -24px 0 70px rgba(0, 0, 0, 0.5);
   overflow: hidden;
+  animation: hrms-drawer-slide 0.28s cubic-bezier(.2, .9, .3, 1);
+}
+@keyframes hrms-drawer-slide {
+  from { transform: translateX(100%); }
+  to   { transform: translateX(0); }
 }
 .hrms-att-head {
   display: flex; align-items: center; justify-content: space-between;
@@ -709,7 +714,7 @@ html[data-theme="light"] .hrms-att-view { color-scheme: light; }
   font-size: 18px; line-height: 1; display: flex; align-items: center; justify-content: center;
 }
 .hrms-att-x:hover { background: var(--border2); color: var(--text); }
-.hrms-att-scroll { padding: 18px 22px 24px; overflow-y: auto; }
+.hrms-att-scroll { padding: 18px 22px 24px; overflow-y: auto; flex: 1; min-height: 0; }
 
 .hrms-att-banner {
   display: flex; gap: 10px; align-items: flex-start;
@@ -784,5 +789,22 @@ html[data-theme="light"] .hrms-att-view { color-scheme: light; }
     will-change: auto !important;
     transform: none !important;
   }
+}
+
+/* ================================================================
+   Transient message layer — must sit above EVERYTHING
+   ================================================================
+   The React success toast is inline-styled (fixed; bottom:80px;
+   right:28px; z-index:999) and auto-dismisses after 2.4s. It was
+   being buried by taller layers that share its corner:
+     .ai-fullscreen ....... 1000
+     #hrms-live-btn ....... (was 99999, now 998)
+     live-view overlay .... 100000  (hrms-live.js)
+   A message the user only gets 2.4 seconds to read must never be
+   the thing that loses. Inline styles beat plain rules, so the
+   toast is matched on its inline geometry and forced to the top.
+   ================================================================ */
+div[style*="position: fixed"][style*="bottom: 80px"][style*="right: 28px"] {
+  z-index: 100010 !important;
 }
 

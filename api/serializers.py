@@ -42,10 +42,19 @@ from .models import (
     AttendanceCorrection,
     GeoFence,
     WfhRequest,
+    Break,
+    BreakPolicy,
+    LateCheckInAlert,
+    LateCheckInPolicy,
+    Overtime,
+    OvertimePolicy,
+    OvertimeBalance,
+    WFHPolicy,
 )
 
 # Datetime wire format used everywhere by the original API (naive, USE_TZ=False).
 DATETIME_FMT = '%Y-%m-%d %H:%M:%S'
+DATE_FMT = '%Y-%m-%d'
 
 
 # ---------------------------------------------------------------------------
@@ -176,6 +185,7 @@ class JobPostSerializer(serializers.ModelSerializer):
     description = serializers.CharField(
         required=False, allow_blank=True, allow_null=True, default='',
     )
+    customFields = serializers.JSONField(source='custom_fields', required=False, default=dict)
     createdAt = serializers.DateTimeField(source='created_at', read_only=True)
 
     class Meta:
@@ -183,7 +193,7 @@ class JobPostSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'title', 'dept', 'location', 'type', 'salary', 'applicants',
             'color', 'description', 'openings', 'remote', 'status', 'priority',
-            'createdAt',
+            'customFields', 'createdAt',
         ]
         read_only_fields = ['id', 'applicants', 'color']
         extra_kwargs = {
@@ -209,7 +219,9 @@ class JobPostSerializer(serializers.ModelSerializer):
             'openings': instance.openings,
             'remote': bool(instance.is_remote),
             'status': instance.status or 'Active',
+            'statusComment': getattr(instance, 'status_comment', '') or '',
             'priority': instance.priority or 'Normal',
+            'customFields': instance.custom_fields or {},
             'createdAt': instance.created_at.strftime(DATETIME_FMT) if instance.created_at else None,
         }
 
@@ -232,6 +244,10 @@ class InterviewLinkSerializer(serializers.ModelSerializer):
     interviewQuestions = JSONStringField(source='interview_questions', required=False)
     resumeText = serializers.CharField(source='resume_text', required=False, allow_blank=True, allow_null=True)
     jdText = serializers.CharField(source='jd_text', required=False, allow_blank=True, allow_null=True)
+    techQuestionCount = serializers.IntegerField(source='tech_question_count', required=False)
+    hrQuestionCount = serializers.IntegerField(source='hr_question_count', required=False)
+    finalQuestionCount = serializers.IntegerField(source='final_question_count', required=False)
+    codingDifficulty = serializers.JSONField(source='coding_difficulty', required=False, allow_null=True)
 
     class Meta:
         model = InterviewLink
@@ -240,6 +256,8 @@ class InterviewLinkSerializer(serializers.ModelSerializer):
             'interviewDate', 'time', 'platform', 'link', 'outcome', 'emailSent',
             'interviewType', 'interviewer', 'duration', 'notes',
             'interviewQuestions', 'resumeText', 'jdText',
+            'techQuestionCount', 'hrQuestionCount', 'finalQuestionCount',
+            'codingDifficulty',
         ]
         read_only_fields = ['id']
         extra_kwargs = {
@@ -275,10 +293,18 @@ class InterviewLinkSerializer(serializers.ModelSerializer):
             'interviewer': instance.interviewer,
             'duration': instance.duration,
             'notes': instance.notes,
+            'notesUpdatedBy': instance.notes_updated_by or '',
+            'notesUpdatedByEmail': instance.notes_updated_by_email or '',
+            'notesUpdatedAt': instance.notes_updated_at.strftime(DATETIME_FMT) if instance.notes_updated_at else None,
             'interviewQuestions': safe_json(instance.interview_questions),
+            'techQuestionCount': instance.tech_question_count,
+            'hrQuestionCount': instance.hr_question_count,
+            'finalQuestionCount': instance.final_question_count,
+            'codingDifficulty': instance.coding_difficulty,
             'candidateToken': instance.candidate_token or '',
             'recruiterToken': instance.recruiter_token or '',
             'linkExpiresAt': instance.link_expires_at.strftime(DATETIME_FMT) if instance.link_expires_at else None,
+            'completedAt': instance.completed_at.strftime(DATETIME_FMT) if instance.completed_at else None,
             'resumeText': instance.resume_text or '',
             'jdText': instance.jd_text or '',
             'createdAt': instance.created_at.strftime(DATETIME_FMT) if instance.created_at else None,
@@ -627,6 +653,10 @@ class LeaveRequestSerializer(serializers.ModelSerializer):
     employee = serializers.CharField(source='employee_name', required=False, allow_blank=True, default='')
     fromDate = serializers.DateField(source='from_date')
     toDate = serializers.DateField(source='to_date')
+    # Always derived from the date range — never taken from the client. The UI
+    # was posting a hardcoded days:1, which won over the old "only if missing"
+    # derivation and also skewed the leave balance (used = sum of days).
+    days = serializers.IntegerField(read_only=True)
 
     class Meta:
         model = LeaveRequest
@@ -634,14 +664,28 @@ class LeaveRequestSerializer(serializers.ModelSerializer):
             'id', 'email', 'employee', 'type', 'fromDate', 'toDate',
             'days', 'reason', 'status', 'approver',
         ]
-        read_only_fields = ['id']
+        read_only_fields = ['id', 'days']
         extra_kwargs = {
             'type': {'required': False, 'default': 'Casual Leave'},
-            'days': {'required': False, 'default': 1},
             'reason': {'required': False, 'allow_blank': True, 'allow_null': True, 'default': ''},
             'status': {'required': False, 'default': 'Pending'},
             'approver': {'required': False, 'allow_blank': True, 'default': ''},
         }
+
+    def validate(self, attrs):
+        """Recompute ``days`` on every write, inclusive of both endpoints
+        (2026-08-10 → 2026-08-12 is 3 days). On a partial update (e.g. an
+        approval that only sends ``status``) fall back to the stored dates so
+        the count stays consistent with whatever the range actually is."""
+        from_date = attrs.get('from_date') or getattr(self.instance, 'from_date', None)
+        to_date = attrs.get('to_date') or getattr(self.instance, 'to_date', None)
+
+        if from_date and to_date:
+            if to_date < from_date:
+                raise serializers.ValidationError(
+                    {'toDate': 'To date cannot be earlier than from date.'})
+            attrs['days'] = (to_date - from_date).days + 1
+        return attrs
 
     def to_representation(self, instance):
         return {
@@ -657,13 +701,6 @@ class LeaveRequestSerializer(serializers.ModelSerializer):
             'approver': instance.approver or '',
             'createdAt': instance.created_at.strftime(DATETIME_FMT) if instance.created_at else None,
         }
-
-    def create(self, validated_data):
-        # Derive the day count from the date range when the client didn't send it.
-        if not validated_data.get('days'):
-            fd, td = validated_data.get('from_date'), validated_data.get('to_date')
-            validated_data['days'] = max((td - fd).days + 1, 1) if fd and td else 1
-        return super().create(validated_data)
 
 
 class EmployeeTaskSerializer(serializers.ModelSerializer):
@@ -1050,6 +1087,224 @@ class WfhRequestSerializer(serializers.ModelSerializer):
             'reason': instance.reason or '',
             'status': instance.status,
             'approver': instance.approver or '',
+            'createdAt': instance.created_at.strftime(DATETIME_FMT) if instance.created_at else None,
+        }
+
+
+# ===========================================================================
+# Break Management Serializers
+# ===========================================================================
+
+class BreakPolicySerializer(serializers.ModelSerializer):
+    maxBreakMinutesPerDay = serializers.IntegerField(source='max_break_minutes_per_day')
+    minBreakMinutes = serializers.IntegerField(source='min_break_minutes')
+    maxBreakMinutes = serializers.IntegerField(source='max_break_minutes')
+    isPaid = serializers.BooleanField(source='is_paid')
+    isActive = serializers.BooleanField(source='is_active')
+
+    class Meta:
+        model = BreakPolicy
+        fields = ['id', 'name', 'maxBreakMinutesPerDay', 'minBreakMinutes', 'maxBreakMinutes', 'isPaid', 'isActive']
+
+    def to_representation(self, instance):
+        return {
+            'id': instance.id,
+            'name': instance.name,
+            'maxBreakMinutesPerDay': instance.max_break_minutes_per_day,
+            'minBreakMinutes': instance.min_break_minutes,
+            'maxBreakMinutes': instance.max_break_minutes,
+            'isPaid': instance.is_paid,
+            'isActive': instance.is_active,
+            'createdAt': instance.created_at.strftime(DATETIME_FMT) if instance.created_at else None,
+        }
+
+
+class BreakSerializer(serializers.ModelSerializer):
+    breakStart = serializers.DateTimeField(source='break_start')
+    breakEnd = serializers.DateTimeField(source='break_end', required=False, allow_null=True)
+    breakType = serializers.CharField(source='break_type')
+    isPaid = serializers.BooleanField(source='is_paid')
+    breakMinutes = serializers.IntegerField(source='break_minutes', required=False, default=0)
+
+    class Meta:
+        model = Break
+        fields = ['id', 'email', 'employee', 'date', 'breakStart', 'breakEnd', 'breakType', 'reason', 'isPaid', 'breakMinutes', 'status']
+
+    def to_representation(self, instance):
+        return {
+            'id': instance.id,
+            'email': instance.email,
+            'employee': instance.employee_name or '',
+            'date': instance.date.strftime('%Y-%m-%d') if instance.date else None,
+            'breakStart': instance.break_start.strftime(DATETIME_FMT) if instance.break_start else None,
+            'breakEnd': instance.break_end.strftime(DATETIME_FMT) if instance.break_end else None,
+            'breakType': instance.break_type,
+            'reason': instance.reason or '',
+            'isPaid': instance.is_paid,
+            'breakMinutes': instance.break_minutes,
+            'status': instance.status,
+            'createdAt': instance.created_at.strftime(DATETIME_FMT) if instance.created_at else None,
+        }
+
+
+# ===========================================================================
+# Late Check-In Alert Serializers
+# ===========================================================================
+
+class LateCheckInPolicySerializer(serializers.ModelSerializer):
+    lateThresholdMinutes = serializers.IntegerField(source='late_threshold_minutes')
+    escalationCount = serializers.IntegerField(source='escalation_count')
+    isActive = serializers.BooleanField(source='is_active')
+
+    class Meta:
+        model = LateCheckInPolicy
+        fields = ['id', 'name', 'lateThresholdMinutes', 'escalationCount', 'isActive']
+
+    def to_representation(self, instance):
+        return {
+            'id': instance.id,
+            'name': instance.name,
+            'lateThresholdMinutes': instance.late_threshold_minutes,
+            'escalationCount': instance.escalation_count,
+            'isActive': instance.is_active,
+            'createdAt': instance.created_at.strftime(DATETIME_FMT) if instance.created_at else None,
+        }
+
+
+class LateCheckInAlertSerializer(serializers.ModelSerializer):
+    lateMinutes = serializers.IntegerField(source='late_minutes')
+    checkInTime = serializers.DateTimeField(source='check_in_time')
+    shiftStartTime = serializers.DateTimeField(source='shift_start_time')
+    isExcused = serializers.BooleanField(source='is_excused')
+    excusedBy = serializers.CharField(source='excused_by')
+    excusedAt = serializers.DateTimeField(source='excused_at', required=False, allow_null=True)
+
+    class Meta:
+        model = LateCheckInAlert
+        fields = ['id', 'email', 'employee', 'date', 'lateMinutes', 'checkInTime', 'shiftStartTime', 'reason', 'isExcused', 'excusedBy', 'excusedAt', 'escalated']
+
+    def to_representation(self, instance):
+        return {
+            'id': instance.id,
+            'email': instance.email,
+            'employee': instance.employee_name or '',
+            'date': instance.date.strftime('%Y-%m-%d') if instance.date else None,
+            'lateMinutes': instance.late_minutes,
+            'checkInTime': instance.check_in_time.strftime(DATETIME_FMT) if instance.check_in_time else None,
+            'shiftStartTime': instance.shift_start_time.strftime(DATETIME_FMT) if instance.shift_start_time else None,
+            'reason': instance.reason or '',
+            'isExcused': instance.is_excused,
+            'excusedBy': instance.excused_by or '',
+            'excusedAt': instance.excused_at.strftime(DATETIME_FMT) if instance.excused_at else None,
+            'escalated': instance.escalated,
+            'createdAt': instance.created_at.strftime(DATETIME_FMT) if instance.created_at else None,
+        }
+
+
+# ===========================================================================
+# Overtime Management Serializers
+# ===========================================================================
+
+class OvertimePolicySerializer(serializers.ModelSerializer):
+    overtimeThresholdMinutes = serializers.IntegerField(source='overtime_threshold_minutes')
+    dailyMaxOvertimeMinutes = serializers.IntegerField(source='daily_max_overtime_minutes')
+    weeklyMaxOvertimeMinutes = serializers.IntegerField(source='weekly_max_overtime_minutes')
+    isActive = serializers.BooleanField(source='is_active')
+    requiresApproval = serializers.BooleanField(source='requires_approval')
+
+    class Meta:
+        model = OvertimePolicy
+        fields = ['id', 'name', 'overtimeThresholdMinutes', 'dailyMaxOvertimeMinutes', 'weeklyMaxOvertimeMinutes', 'isActive', 'requiresApproval']
+
+    def to_representation(self, instance):
+        return {
+            'id': instance.id,
+            'name': instance.name,
+            'overtimeThresholdMinutes': instance.overtime_threshold_minutes,
+            'dailyMaxOvertimeMinutes': instance.daily_max_overtime_minutes,
+            'weeklyMaxOvertimeMinutes': instance.weekly_max_overtime_minutes,
+            'isActive': instance.is_active,
+            'requiresApproval': instance.requires_approval,
+            'createdAt': instance.created_at.strftime(DATETIME_FMT) if instance.created_at else None,
+        }
+
+
+class OvertimeSerializer(serializers.ModelSerializer):
+    shiftHours = serializers.FloatField(source='shift_hours')
+    workedHours = serializers.FloatField(source='worked_hours')
+    overtimeHours = serializers.FloatField(source='overtime_hours')
+    overtimeType = serializers.CharField(source='overtime_type')
+    approvalNote = serializers.CharField(source='approval_note', required=False, allow_blank=True)
+    approvedAt = serializers.DateTimeField(source='approved_at', required=False, allow_null=True)
+
+    class Meta:
+        model = Overtime
+        fields = ['id', 'email', 'employee', 'date', 'shiftHours', 'workedHours', 'overtimeHours', 'overtimeType', 'status', 'approver', 'approvalNote', 'approvedAt']
+
+    def to_representation(self, instance):
+        return {
+            'id': instance.id,
+            'email': instance.email,
+            'employee': instance.employee_name or '',
+            'date': instance.date.strftime('%Y-%m-%d') if instance.date else None,
+            'shiftHours': instance.shift_hours,
+            'workedHours': instance.worked_hours,
+            'overtimeHours': instance.overtime_hours,
+            'overtimeType': instance.overtime_type,
+            'status': instance.status,
+            'approver': instance.approver or '',
+            'approvalNote': instance.approval_note or '',
+            'approvedAt': instance.approved_at.strftime(DATETIME_FMT) if instance.approved_at else None,
+            'createdAt': instance.created_at.strftime(DATETIME_FMT) if instance.created_at else None,
+        }
+
+
+class OvertimeBalanceSerializer(serializers.ModelSerializer):
+    totalOvertimeHours = serializers.FloatField(source='total_overtime_hours')
+    compOffHours = serializers.FloatField(source='comp_off_hours')
+    cashPayoutHours = serializers.FloatField(source='cash_payout_hours')
+
+    class Meta:
+        model = OvertimeBalance
+        fields = ['id', 'email', 'employee', 'period', 'totalOvertimeHours', 'compOffHours', 'cashPayoutHours']
+
+    def to_representation(self, instance):
+        return {
+            'id': instance.id,
+            'email': instance.email,
+            'employee': instance.employee_name or '',
+            'period': instance.period,
+            'totalOvertimeHours': instance.total_overtime_hours,
+            'compOffHours': instance.comp_off_hours,
+            'cashPayoutHours': instance.cash_payout_hours,
+            'updatedAt': instance.updated_at.strftime(DATETIME_FMT) if instance.updated_at else None,
+        }
+
+
+# ===========================================================================
+# WFH Policy Serializer
+# ===========================================================================
+
+class WFHPolicySerializer(serializers.ModelSerializer):
+    maxWfhDaysPerWeek = serializers.IntegerField(source='max_wfh_days_per_week')
+    maxWfhDaysPerMonth = serializers.IntegerField(source='max_wfh_days_per_month')
+    requiresApproval = serializers.BooleanField(source='requires_approval')
+    minAdvanceNoticeDays = serializers.IntegerField(source='min_advance_notice_days')
+    isActive = serializers.BooleanField(source='is_active')
+
+    class Meta:
+        model = WFHPolicy
+        fields = ['id', 'name', 'maxWfhDaysPerWeek', 'maxWfhDaysPerMonth', 'requiresApproval', 'minAdvanceNoticeDays', 'isActive']
+
+    def to_representation(self, instance):
+        return {
+            'id': instance.id,
+            'name': instance.name,
+            'maxWfhDaysPerWeek': instance.max_wfh_days_per_week,
+            'maxWfhDaysPerMonth': instance.max_wfh_days_per_month,
+            'requiresApproval': instance.requires_approval,
+            'minAdvanceNoticeDays': instance.min_advance_notice_days,
+            'isActive': instance.is_active,
             'createdAt': instance.created_at.strftime(DATETIME_FMT) if instance.created_at else None,
         }
 

@@ -60,6 +60,10 @@ class Command(BaseCommand):
                 {'name': 'Create Jobs/Interviews', 'code': 'recruitment.create', 'group': 'Recruitment Group'},
                 {'name': 'Edit Jobs/Interviews', 'code': 'recruitment.edit', 'group': 'Recruitment Group'},
                 {'name': 'Delete Jobs/Interviews', 'code': 'recruitment.delete', 'group': 'Recruitment Group'},
+                # KPI dashboard scopes — "My View" is the recruiter's own numbers,
+                # "Org View" exposes every recruiter's, so they are granted separately.
+                {'name': 'KPI Dashboard — My View', 'code': 'recruitment.kpi.view_own', 'group': 'Recruitment Group'},
+                {'name': 'KPI Dashboard — Org View', 'code': 'recruitment.kpi.view_org', 'group': 'Recruitment Group'},
                 # Employees
                 {'name': 'View Employee Data', 'code': 'employee.view', 'group': 'Employee Group'},
                 {'name': 'Create Employee/Tasks', 'code': 'employee.create', 'group': 'Employee Group'},
@@ -70,10 +74,13 @@ class Command(BaseCommand):
                 {'name': 'Create Attendance Log', 'code': 'attendance.create', 'group': 'Attendance Group'},
                 {'name': 'Edit Attendance Log', 'code': 'attendance.edit', 'group': 'Attendance Group'},
                 {'name': 'Delete Attendance Log', 'code': 'attendance.delete', 'group': 'Attendance Group'},
+                # Standing remote access: switch to Remote without filing a WFH
+                # request each time. Without it, an approved WfhRequest is required.
+                {'name': 'Work Remotely (no approval needed)', 'code': 'attendance.remote', 'group': 'Attendance Group'},
                 # Leave
                 {'name': 'View Leave Requests', 'code': 'leave.view', 'group': 'Leave Group'},
                 {'name': 'Create Leave Request', 'code': 'leave.create', 'group': 'Leave Group'},
-                {'name': 'Approve Leave Request', 'code': 'leave.approve', 'group': 'Leave Group'},
+                {'name': 'Action (Approve / Reject)', 'code': 'leave.action', 'group': 'Leave Group'},
                 {'name': 'Delete Leave Request', 'code': 'leave.delete', 'group': 'Leave Group'},
                 # Payroll
                 {'name': 'View Payroll', 'code': 'payroll.view', 'group': 'Payroll Group'},
@@ -124,6 +131,7 @@ class Command(BaseCommand):
                 ],
                 'HR Executive': [
                     'recruitment.view', 'recruitment.create', 'recruitment.edit',
+                    'recruitment.kpi.view_own',
                     'employee.view', 'attendance.view', 'leave.view', 'settings.view'
                 ],
                 'Employee': [

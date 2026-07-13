@@ -17,14 +17,48 @@ class JobPost(models.Model):
     description = models.TextField(null=True, blank=True)
     openings = models.IntegerField(default=1)
     is_remote = models.BooleanField(default=False)
-    status = models.CharField(max_length=20, default='Active')
+    status = models.CharField(max_length=40, default='Active')
+    status_comment = models.TextField(default='', blank=True)
     priority = models.CharField(max_length=20, default='Normal')
+    # Values for any admin-defined custom fields from the Job Form Builder,
+    # keyed by field `key`. Lets new fields be added with no schema change.
+    custom_fields = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         db_table = 'job_posts'
         ordering = ['id']
+
+
+class JobFormTemplate(models.Model):
+    """A reusable job-posting form definition produced by the Form Builder.
+    `schema` is the ordered list of field descriptors; exactly one row is the
+    active form used to render "Post a Job"."""
+    name = models.CharField(max_length=120, unique=True)
+    is_active = models.BooleanField(default=False)
+    schema = models.JSONField(default=list, blank=True)
+    created_by = models.CharField(max_length=255, default='', blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'job_form_templates'
+        ordering = ['name']
+
+
+class MasterDataSet(models.Model):
+    """Global, reusable dropdown option lists (departments, locations, job
+    types, …) referenced by Form Builder select fields via `masterKey`, so the
+    same options can be managed in one place and reused across forms."""
+    key = models.CharField(max_length=80, unique=True)
+    label = models.CharField(max_length=120)
+    options = models.JSONField(default=list, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'master_data_sets'
+        ordering = ['label']
 
 
 class InterviewLink(models.Model):
@@ -45,12 +79,30 @@ class InterviewLink(models.Model):
     interviewer = models.CharField(max_length=255, default='', blank=True)
     duration = models.CharField(max_length=50, default='45 min')
     notes = models.TextField(null=True, blank=True)
+    # Who last edited the candidate note (any user may edit) + when — shown in
+    # the note editor as "last modified by".
+    notes_updated_by = models.CharField(max_length=255, default='', blank=True)
+    notes_updated_by_email = models.CharField(max_length=255, default='', blank=True)
+    notes_updated_at = models.DateTimeField(null=True, blank=True)
     # Stored as a JSON string (matches the original server's JSON.stringify).
     interview_questions = models.TextField(null=True, blank=True)
+    # Per-round question counts and coding difficulties chosen when the
+    # interview is scheduled. The AI interviewer reads these back to decide how
+    # many questions of each type to ask, so they must round-trip through the
+    # API. They exist in the legacy schema as NOT NULL columns.
+    tech_question_count = models.IntegerField(default=3)
+    hr_question_count = models.IntegerField(default=3)
+    final_question_count = models.IntegerField(default=3)
+    coding_difficulty = models.JSONField(null=True, blank=True)
+    followup_sent = models.BooleanField(default=False)
+    invited_at = models.DateTimeField(null=True, blank=True)
     # Separate access tokens for candidate and recruiter (with configurable expiry)
     candidate_token = models.CharField(max_length=128, null=True, blank=True, db_index=True)
     recruiter_token = models.CharField(max_length=128, null=True, blank=True, db_index=True)
     link_expires_at = models.DateTimeField(null=True, blank=True)
+    # Set the first time the candidate finishes the session. Once set, the
+    # candidate link is single-use: re-opening it is refused.
+    completed_at = models.DateTimeField(null=True, blank=True)
     # Resume and JD text stored for AI-enhanced question generation
     resume_text = models.TextField(null=True, blank=True)
     jd_text = models.TextField(null=True, blank=True)
@@ -494,6 +546,155 @@ class WfhRequest(models.Model):
     class Meta:
         db_table = 'wfh_requests'
         ordering = ['-id']
+
+
+# ===========================================================================
+# Break Management
+# ===========================================================================
+class BreakPolicy(models.Model):
+    """Company break policy configuration."""
+    name = models.CharField(max_length=100, default='Default')
+    max_break_minutes_per_day = models.IntegerField(default=60)
+    min_break_minutes = models.IntegerField(default=15)
+    max_break_minutes = models.IntegerField(default=60)
+    is_paid = models.BooleanField(default=False)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'break_policies'
+        ordering = ['name']
+
+
+class Break(models.Model):
+    """Employee break record during work hours."""
+    email = models.CharField(max_length=255, db_index=True)
+    employee_name = models.CharField(max_length=255, default='', blank=True)
+    date = models.DateField(db_index=True)
+    break_start = models.DateTimeField()
+    break_end = models.DateTimeField(null=True, blank=True)
+    break_type = models.CharField(max_length=20, default='meal')  # meal|rest|personal|medical
+    reason = models.CharField(max_length=255, default='', blank=True)
+    is_paid = models.BooleanField(default=False)
+    break_minutes = models.IntegerField(default=0)
+    status = models.CharField(max_length=20, default='active')  # active|completed|cancelled
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'employee_breaks'
+        ordering = ['-date', '-break_start']
+
+
+# ===========================================================================
+# Late Check-In Management
+# ===========================================================================
+class LateCheckInPolicy(models.Model):
+    """Policy for late check-in thresholds and actions."""
+    name = models.CharField(max_length=100, default='Default')
+    late_threshold_minutes = models.IntegerField(default=5)
+    escalation_count = models.IntegerField(default=3)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'late_checkin_policies'
+        ordering = ['name']
+
+
+class LateCheckInAlert(models.Model):
+    """Alert for late check-ins."""
+    email = models.CharField(max_length=255, db_index=True)
+    employee_name = models.CharField(max_length=255, default='', blank=True)
+    date = models.DateField(db_index=True)
+    late_minutes = models.IntegerField(default=0)
+    check_in_time = models.DateTimeField()
+    shift_start_time = models.DateTimeField()
+    reason = models.CharField(max_length=255, default='', blank=True)
+    is_excused = models.BooleanField(default=False)
+    excused_by = models.CharField(max_length=255, default='', blank=True)
+    excused_at = models.DateTimeField(null=True, blank=True)
+    escalated = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'late_checkin_alerts'
+        ordering = ['-date', '-id']
+
+
+# ===========================================================================
+# Overtime Management
+# ===========================================================================
+class OvertimePolicy(models.Model):
+    """Configuration for overtime calculations and approval."""
+    name = models.CharField(max_length=100, default='Default')
+    overtime_threshold_minutes = models.IntegerField(default=540)  # 9 hours
+    daily_max_overtime_minutes = models.IntegerField(default=180)  # 3 hours
+    weekly_max_overtime_minutes = models.IntegerField(default=600)  # 10 hours
+    is_active = models.BooleanField(default=True)
+    requires_approval = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'overtime_policies'
+        ordering = ['name']
+
+
+class Overtime(models.Model):
+    """Tracked overtime for an employee on a specific date."""
+    email = models.CharField(max_length=255, db_index=True)
+    employee_name = models.CharField(max_length=255, default='', blank=True)
+    date = models.DateField(db_index=True)
+    shift_hours = models.FloatField(default=8.0)
+    worked_hours = models.FloatField(default=0.0)
+    overtime_hours = models.FloatField(default=0.0)
+    overtime_type = models.CharField(max_length=30, default='regular')  # regular|weekend|holiday
+    status = models.CharField(max_length=20, default='calculated')  # calculated|pending_approval|approved|rejected
+    approver = models.CharField(max_length=255, default='', blank=True)
+    approval_note = models.TextField(null=True, blank=True)
+    approved_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'overtimes'
+        ordering = ['-date', '-id']
+        unique_together = (('email', 'date'),)
+
+
+class OvertimeBalance(models.Model):
+    """Tracks cumulative overtime balance per employee per period."""
+    email = models.CharField(max_length=255, db_index=True)
+    employee_name = models.CharField(max_length=255, default='', blank=True)
+    period = models.CharField(max_length=20, db_index=True)  # YYYY-MM
+    total_overtime_hours = models.FloatField(default=0.0)
+    comp_off_hours = models.FloatField(default=0.0)  # Compensatory off balance
+    cash_payout_hours = models.FloatField(default=0.0)  # Cash payout balance
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'overtime_balances'
+        ordering = ['-period', 'email']
+        unique_together = (('email', 'period'),)
+
+
+class WFHPolicy(models.Model):
+    """Company policy for work-from-home arrangements."""
+    name = models.CharField(max_length=100, default='Default')
+    max_wfh_days_per_week = models.IntegerField(default=2)
+    max_wfh_days_per_month = models.IntegerField(default=10)
+    requires_approval = models.BooleanField(default=True)
+    min_advance_notice_days = models.IntegerField(default=1)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'wfh_policies'
+        ordering = ['name']
 
 
 # ===========================================================================

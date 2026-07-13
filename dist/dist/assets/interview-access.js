@@ -104,19 +104,33 @@
           }
 
         } else {
-          // Invalid or expired
-          var isExpired = (data.reason || '').toLowerCase().includes('expir');
-          titleEl.textContent = isExpired ? 'Interview Link Expired' : 'Invalid Link';
-          msgEl.innerHTML = isExpired
-            ? 'This interview link has expired. Interview links remain active until ' +
-              '<strong>24 hours after the scheduled start time</strong>.<br><br>' +
-              'Please contact your recruiter to receive a fresh invitation link.'
-            : 'This interview link is not valid or has already been used. ' +
-              'Please check your email for the correct link.';
+          // Already taken, expired, or invalid
+          var reason = (data.reason || '').toLowerCase();
+          var isExpired = reason.includes('expir');
+          var isTaken = reason.includes('already completed');
+
+          if (isTaken) {
+            titleEl.textContent = 'Interview Already Completed';
+            msgEl.innerHTML =
+              'You have already completed this interview' +
+              (data.completedAt ? ' on <strong>' + data.completedAt + '</strong>' : '') +
+              '.<br><br>An interview can only be taken once. Your recruiter will be ' +
+              'in touch with the outcome.';
+          } else {
+            titleEl.textContent = isExpired ? 'Interview Link Expired' : 'Invalid Link';
+            msgEl.innerHTML = isExpired
+              ? 'This interview link has expired. Interview links remain active until ' +
+                '<strong>24 hours after the scheduled start time</strong>.<br><br>' +
+                'Please contact your recruiter to receive a fresh invitation link.'
+              : 'This interview link is not valid or has already been used. ' +
+                'Please check your email for the correct link.';
+          }
 
           if (iconEl) {
-            iconEl.style.background = '#ef4444';
-            iconEl.innerHTML = '<svg width="26" height="26" fill="none" stroke="#fff" stroke-width="2.5" viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+            iconEl.style.background = isTaken ? '#f59e0b' : '#ef4444';
+            iconEl.innerHTML = isTaken
+              ? '<svg width="26" height="26" fill="none" stroke="#fff" stroke-width="2.5" viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+              : '<svg width="26" height="26" fill="none" stroke="#fff" stroke-width="2.5" viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12" stroke-linecap="round" stroke-linejoin="round"/></svg>';
           }
 
           if (actionsEl) {

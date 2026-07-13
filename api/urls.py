@@ -1,6 +1,6 @@
 from django.urls import path
 
-from . import auth_views, live_views, views
+from . import auth_views, live_views, views, attendance_views, job_form_views
 
 # All paths are relative to the "/api/" prefix from the project urlconf.
 urlpatterns = [
@@ -14,12 +14,23 @@ urlpatterns = [
     path('auth/google', auth_views.google_auth),
 
     path('jobs', views.jobs),
+    path('jobs/<int:pk>', views.job_detail),
+
+    # Job Form Builder: dynamic schema, templates, master data, currencies
+    path('job-form/config', job_form_views.job_form_config),
+    path('job-form/templates', job_form_views.job_form_templates),
+    path('job-form/templates/<int:pk>', job_form_views.job_form_template_detail),
+    path('master-data', job_form_views.master_data),
+    path('master-data/<str:key>', job_form_views.master_data_detail),
+    path('currencies', job_form_views.currencies),
 
     path('interviews', views.interviews),
     path('interviews/bulk/send-emails', views.interviews_bulk_send_emails),
     path('interviews/send-followup', views.interview_send_followup),
     path('interviews/verify-token', views.interview_verify_token),
+    path('interviews/complete', views.interview_complete),
     path('interviews/<int:pk>', views.interview_detail),
+    path('interviews/<int:pk>/note', views.interview_note),
     path('interviews/<int:pk>/regenerate-link', views.interview_regenerate_link),
     path('interviews/<int:pk>/resend-invitation', views.interview_resend_invitation),
 
@@ -119,4 +130,43 @@ urlpatterns = [
 
     # Recruitment KPI Dashboard
     path('recruitment/kpis', views.recruitment_kpis),
+
+    # === Advanced Attendance Management API Endpoints ===
+    # Shifts
+    path('shifts/', attendance_views.ShiftViewSet.as_view({'get': 'list', 'post': 'create'})),
+    path('shifts/active/', attendance_views.ShiftViewSet.as_view({'get': 'active'})),
+    path('shifts/<int:pk>/', attendance_views.ShiftViewSet.as_view({'get': 'retrieve', 'put': 'update', 'delete': 'destroy'})),
+    path('shifts/<int:pk>/assignments/', attendance_views.ShiftViewSet.as_view({'get': 'assignments'})),
+
+    # Check-In/Check-Out
+    path('attendance/check-in/', attendance_views.AttendanceCheckInOutViewSet.as_view({'post': 'check_in'})),
+    path('attendance/check-out/', attendance_views.AttendanceCheckInOutViewSet.as_view({'post': 'check_out'})),
+    path('attendance/today/', attendance_views.AttendanceCheckInOutViewSet.as_view({'get': 'today'})),
+    path('attendance/summary/', attendance_views.AttendanceCheckInOutViewSet.as_view({'get': 'summary'})),
+
+    # Breaks
+    path('attendance/break/start/', attendance_views.BreakViewSet.as_view({'post': 'start'})),
+    path('attendance/break/end/', attendance_views.BreakViewSet.as_view({'post': 'end'})),
+    path('attendance/breaks/today/', attendance_views.BreakViewSet.as_view({'get': 'today'})),
+
+    # Late Check-In Alerts
+    path('attendance/late-alerts/', attendance_views.LateCheckInAlertViewSet.as_view({'get': 'list_alerts'})),
+    path('attendance/late-alerts/excuse/', attendance_views.LateCheckInAlertViewSet.as_view({'post': 'excuse'})),
+
+    # Overtime
+    path('attendance/overtime/daily/', attendance_views.OvertimeViewSet.as_view({'get': 'daily'})),
+    path('attendance/overtime/monthly/', attendance_views.OvertimeViewSet.as_view({'get': 'monthly'})),
+    path('attendance/overtime/balance/', attendance_views.OvertimeViewSet.as_view({'get': 'balance'})),
+    path('attendance/overtime/approve/', attendance_views.OvertimeViewSet.as_view({'post': 'approve'})),
+
+    # Attendance Corrections
+    path('attendance/correction/', attendance_views.AttendanceCorrectionViewSet.as_view({'post': 'request_correction'})),
+    path('attendance/correction/approve/', attendance_views.AttendanceCorrectionViewSet.as_view({'post': 'approve_correction'})),
+    path('attendance/correction/reject/', attendance_views.AttendanceCorrectionViewSet.as_view({'post': 'reject_correction'})),
+    path('attendance/correction/pending/', attendance_views.AttendanceCorrectionViewSet.as_view({'get': 'pending'})),
+
+    # WFH Requests
+    path('attendance/wfh/submit/', attendance_views.WFHRequestViewSet.as_view({'post': 'submit_request'})),
+    path('attendance/wfh/approve/', attendance_views.WFHRequestViewSet.as_view({'post': 'approve_request'})),
+    path('attendance/wfh/reject/', attendance_views.WFHRequestViewSet.as_view({'post': 'reject_request'})),
 ]

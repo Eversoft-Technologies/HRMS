@@ -332,7 +332,10 @@
     var btn = document.createElement("button");
     btn.id = "hrms-live-btn";
     css(btn, {
-      position: "fixed", right: "20px", bottom: "84px", zIndex: "99999",
+      // Must stay below the app's message layer (z-index 999: toasts, modal
+      // backdrops, drawers). The success toast lands at bottom:80/right:28 —
+      // right under this button — so anything higher hides the message.
+      position: "fixed", right: "20px", bottom: "84px", zIndex: "998",
       background: "linear-gradient(135deg,#f43f5e,#a855f7)", color: "#fff",
       border: "none", borderRadius: "30px", padding: "12px 18px", cursor: "pointer",
       fontFamily: "'Segoe UI',Arial,sans-serif", fontWeight: "700", fontSize: "13px",

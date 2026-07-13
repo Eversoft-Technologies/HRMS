@@ -43,11 +43,16 @@
     catch (_) { return {}; }
   }
   function actorEmail() { return (session().email || '').trim(); }
-  function isAdmin() {
-    var s = session();
-    var r = (s.role || s.userRole || '').toLowerCase();
-    return r === 'admin' || r === 'hr' || r === 'hr manager' || r === 'super admin' || r === 'recruitment' || r === 'hr executive';
+
+  /* Scope access is permission-driven, not role-name-driven. __hrmsCan (from
+     hrms-perms.js) fails OPEN until /api/me/permissions has answered, so the
+     toggle never flickers off for someone who does have the grant; the server
+     is the real gate either way. */
+  function can(code) {
+    return window.__hrmsCan ? window.__hrmsCan(code) : true;
   }
+  function canOrg() { return can('recruitment.kpi.view_org'); }
+  function canOwn() { return can('recruitment.kpi.view_own') || canOrg(); }
 
   /* ── API helper ───────────────────────────────────────────────────────── */
   function api(path, opts) {
@@ -66,7 +71,7 @@
   }
 
   function fetchKpis() {
-    var scope = isAdmin() ? state.scope : 'me';
+    var scope = canOrg() ? state.scope : 'me';
     var url = '/recruitment/kpis?scope=' + scope + '&range=' + state.range;
     if (state.role) url += '&role=' + encodeURIComponent(state.role);
     if (scope === 'all') {
@@ -136,9 +141,45 @@
     s.id = 'hrms-kpi-style';
     s.textContent = [
       /* overlay backdrop */
-      '#hrms-kpi-overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9900;display:flex;align-items:center;justify-content:center;padding:16px;backdrop-filter:blur(4px)}',
-      /* modal */
-      '.kpi-modal{background:var(--card,#fff);border-radius:16px;width:100%;max-width:1000px;max-height:92vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 24px 64px rgba(0,0,0,.25);border:1px solid var(--border,#e5e7eb)}',
+      /* overlay backdrop + full-page. Map the app's theme vars onto the ones this
+         dashboard uses (--card/--text1/--hover were undefined → light-mode fallbacks,
+         which made the panel white in dark mode). */
+      '#hrms-kpi-overlay{position:fixed;inset:0;background:rgba(10,14,26,0.6);z-index:9900;display:flex;align-items:stretch;justify-content:stretch;padding:0;backdrop-filter:blur(4px);--card:var(--bg2,#fff);--text1:var(--text,#111);--hover:var(--bg3,#f3f4f6)}',
+      /* modal — full page */
+      '.kpi-modal{background:var(--card,#fff);border-radius:0;width:100%;height:100%;max-width:none;max-height:none;display:flex;flex-direction:column;overflow:hidden;box-shadow:none;border:none}',
+      '#hrms-kpi-overlay .kpi-card{background:var(--bg,#f8fafc)}',
+      /* per-chart filter */
+      '#hrms-kpi-overlay .chart-wrapper{position:relative}',
+      '.kpi-cf-btn{position:absolute;top:0;right:0;display:inline-flex;align-items:center;gap:5px;background:var(--bg3,#f3f4f6);border:1px solid var(--border,#e5e7eb);border-radius:8px;padding:4px 9px;font-size:11px;font-weight:600;color:var(--text2,#666);cursor:pointer}',
+      '.kpi-cf-btn:hover{border-color:var(--accent,#6366f1);color:var(--text1,#111)}',
+      '.kpi-cf-btn.on{color:var(--accent,#6366f1);border-color:var(--accent,#6366f1)}',
+      '.kpi-cf-pop{position:fixed;z-index:9950;background:var(--card,#fff);border:1px solid var(--border,#e5e7eb);border-radius:10px;box-shadow:0 14px 38px rgba(0,0,0,.35);padding:6px;min-width:170px;max-height:260px;overflow-y:auto}',
+      '.kpi-cf-pop label{display:flex;align-items:center;gap:8px;padding:6px 8px;font-size:12.5px;color:var(--text1,#111);cursor:pointer;border-radius:6px}',
+      '.kpi-cf-pop label:hover{background:var(--hover,#f3f4f6)}',
+      '.kpi-cf-pop input{accent-color:var(--accent,#6366f1)}',
+      /* Overall "Edit Filters" — Job Board–style right drawer */
+      '.kpi-editfilters{display:inline-flex;align-items:center;gap:7px;background:var(--bg3,#f3f4f6);border:1px solid var(--border,#e5e7eb);border-radius:9px;padding:8px 14px;font-size:12.5px;font-weight:600;color:var(--text1,#111);cursor:pointer}',
+      '.kpi-editfilters:hover{border-color:var(--accent,#6366f1);color:var(--accent,#6366f1)}',
+      '.kpi-filter-summary{font-size:12px;color:var(--text3,#888);font-weight:500}',
+      '.kpi-fd-overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9960;display:flex;justify-content:flex-end;animation:kpi-fd-fade .15s ease;--card:var(--bg2,#fff);--text1:var(--text,#111);--hover:var(--bg3,#f3f4f6)}',
+      '.kpi-fd{width:380px;max-width:94vw;height:100vh;background:var(--card,#fff);border-left:1px solid var(--border,#e5e7eb);box-shadow:-24px 0 70px rgba(0,0,0,.5);display:flex;flex-direction:column;animation:kpi-fd-slide .28s cubic-bezier(.2,.9,.3,1)}',
+      '.kpi-fd-h{display:flex;align-items:center;justify-content:space-between;padding:18px 22px;border-bottom:1px solid var(--border,#e5e7eb)}',
+      '.kpi-fd-h h3{margin:0;font-size:17px;font-weight:700;color:var(--text1,#111)}',
+      '.kpi-fd-x{width:30px;height:30px;border:none;border-radius:50%;background:var(--bg3,#f3f4f6);color:var(--text3,#888);font-size:17px;cursor:pointer}',
+      '.kpi-fd-body{flex:1;overflow-y:auto;padding:14px 22px 16px}',
+      '.kpi-fd-sec{font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--text3,#888);margin:16px 0 8px}',
+      '.kpi-fd-pd{display:grid;gap:8px}',
+      '.kpi-fd-pd label{display:flex;align-items:center;gap:10px;background:var(--bg2,#f8fafc);border:1px solid var(--border,#e5e7eb);border-radius:8px;padding:9px 12px;font-size:13px;color:var(--text1,#111);cursor:pointer}',
+      '.kpi-fd-pd label:hover{border-color:var(--accent,#6366f1)}',
+      '.kpi-fd-pd input{accent-color:var(--accent,#6366f1);width:15px;height:15px}',
+      '.kpi-fd-fl{font-size:12px;font-weight:600;color:var(--text2,#666);margin:10px 0 5px}',
+      '.kpi-fd-sel{width:100%;background:var(--bg2,#f8fafc);border:1px solid var(--border,#e5e7eb);border-radius:8px;color:var(--text1,#111);font:inherit;font-size:13px;padding:9px 11px}',
+      '.kpi-fd-f{display:flex;gap:10px;padding:16px 22px;border-top:1px solid var(--border,#e5e7eb)}',
+      '.kpi-fd-btn{flex:1;text-align:center;border-radius:9px;padding:11px;font-size:13px;font-weight:700;cursor:pointer;border:1px solid var(--border,#e5e7eb);background:var(--bg2,#f8fafc);color:var(--text1,#111)}',
+      '.kpi-fd-btn.primary{background:var(--accent,#6366f1);color:#fff;border-color:var(--accent,#6366f1)}',
+      '.kpi-fd-btn.ghost{background:transparent;color:var(--text2,#666)}',
+      '@keyframes kpi-fd-fade{from{opacity:0}to{opacity:1}}',
+      '@keyframes kpi-fd-slide{from{transform:translateX(100%)}to{transform:translateX(0)}}',
       /* header */
       '.kpi-head{display:flex;align-items:center;justify-content:space-between;padding:20px 24px 0;flex-shrink:0}',
       '.kpi-title{font-size:18px;font-weight:700;color:var(--text1,#111)}',
@@ -165,7 +206,7 @@
       /* cards grid */
       '.kpi-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:16px;margin-bottom:24px}',
       '.kpi-card{background:var(--bg2,#f8fafc);border:1.5px solid var(--border,#e5e7eb);border-radius:12px;padding:16px;position:relative;overflow:hidden;transition:transform .2s, box-shadow .2s;box-sizing:border-box}',
-      '.kpi-card:hover{transform:translateY(-2px);box-shadow:0 6px 16px rgba(0,0,0,.04)}',
+      '.kpi-card:hover{transform:translateY(-2px);box-shadow:0 6px 16px rgba(14, 13, 13, 0.92)}',
       '.kpi-card::before{content:"";position:absolute;top:0;left:0;right:0;height:4px}',
       '.kpi-card.c-green::before{background:linear-gradient(90deg,#10b981,#34d399)}',
       '.kpi-card.c-blue::before{background:linear-gradient(90deg,#6366f1,#818cf8)}',
@@ -250,21 +291,84 @@
       ['recordings','🎥 Recordings'],
       ['trends',    '📈 Trends'],
     ];
-    if (isAdmin() && state.scope === 'all') {
+    if (canOrg() && state.scope === 'all') {
       t.push(['jobs',    '💼 Jobs']);
       t.push(['team',    '👥 Team Performance']);
     }
     return t;
   }
 
+  /* ── overall "Edit Filters" drawer (matches the Job Board's) ──────────── */
+  var RANGE_LABELS = { all: 'All Time', week: 'This Week', month: 'This Month', quarter: 'Last 90 Days' };
+  var FILTER_KEYS = ['scope', 'range', 'role', 'dept', 'interviewer', 'interview_type', 'status', 'outcome', 'source', 'verdict', 'job_type'];
+  function filterSummary() {
+    var parts = [];
+    if (canOrg()) parts.push(state.scope === 'all' ? 'Org View' : 'My View');
+    parts.push(RANGE_LABELS[state.range] || 'All Time');
+    var extra = ['role', 'dept', 'interviewer', 'interview_type', 'status', 'outcome', 'source', 'verdict', 'job_type'].filter(function (k) { return state[k]; }).length;
+    if (extra) parts.push(extra + ' filter' + (extra > 1 ? 's' : ''));
+    return parts.join('  ·  ');
+  }
+  function activeFilterDefs() {
+    var f = (state.data && state.data.filters) || {};
+    var defs = [];
+    if (state.tab !== 'jobs') defs.push({ key: 'role', label: 'Role', all: 'All Roles', opts: f.roles || [] });
+    if (canOrg() && state.scope === 'all') {
+      defs.push({ key: 'dept', label: 'Department', all: 'All Departments', opts: f.departments || [] });
+      if (state.tab !== 'jobs') defs.push({ key: 'interviewer', label: 'Recruiter', all: 'All Recruiters', opts: f.interviewers || [] });
+    }
+    if (state.tab === 'pipeline') {
+      defs.push({ key: 'interview_type', label: 'Interview Type', all: 'All Interview Types', opts: f.interview_types || [] });
+      defs.push({ key: 'status', label: 'Status', all: 'All Statuses', opts: f.statuses || [] });
+      defs.push({ key: 'outcome', label: 'Outcome', all: 'All Outcomes', opts: f.outcomes || [] });
+    } else if (state.tab === 'resumes') defs.push({ key: 'source', label: 'Source', all: 'All Sources', opts: f.sources || [] });
+    else if (state.tab === 'recordings') defs.push({ key: 'verdict', label: 'Verdict', all: 'All Verdicts', opts: f.verdicts || [] });
+    else if (state.tab === 'jobs') defs.push({ key: 'job_type', label: 'Job Type', all: 'All Job Types', opts: f.job_types || [] });
+    return defs;
+  }
+  function closeKpiFilters() { var o = document.getElementById('kpi-fd-overlay'); if (o) o.remove(); }
+  function openKpiFilters() {
+    closeKpiFilters();
+    var work = {}; FILTER_KEYS.forEach(function (k) { work[k] = state[k] || ''; });
+    var ranges = [['all', 'All Time'], ['week', 'This Week'], ['month', 'This Month'], ['quarter', 'Last 90 Days']];
+    var scopeSec = canOrg()
+      ? '<div class="kpi-fd-sec" style="margin-top:0">View</div><div class="kpi-fd-pd">' +
+          '<label><input type="radio" name="kpi-fd-scope" value="me"' + (work.scope === 'me' ? ' checked' : '') + '>My View</label>' +
+          '<label><input type="radio" name="kpi-fd-scope" value="all"' + (work.scope === 'all' ? ' checked' : '') + '>Org View</label></div>'
+      : '';
+    var rangeSec = '<div class="kpi-fd-sec"' + (canOrg() ? '' : ' style="margin-top:0"') + '>Time Range</div><div class="kpi-fd-pd">' +
+      ranges.map(function (r) { return '<label><input type="radio" name="kpi-fd-range" value="' + r[0] + '"' + (work.range === r[0] ? ' checked' : '') + '>' + r[1] + '</label>'; }).join('') + '</div>';
+    var defs = activeFilterDefs();
+    var filtSec = defs.length ? ('<div class="kpi-fd-sec">Filters</div>' + defs.map(function (d) {
+      return '<div class="kpi-fd-fl">' + d.label + '</div><select class="kpi-fd-sel" data-fk="' + d.key + '"><option value="">' + d.all + '</option>' +
+        d.opts.map(function (o) { return '<option value="' + esc(o) + '"' + (work[d.key] === o ? ' selected' : '') + '>' + esc(o) + '</option>'; }).join('') + '</select>';
+    }).join('')) : '';
+    var ov = document.createElement('div'); ov.id = 'kpi-fd-overlay'; ov.className = 'kpi-fd-overlay';
+    var dr = document.createElement('div'); dr.className = 'kpi-fd';
+    dr.innerHTML =
+      '<div class="kpi-fd-h"><h3>Edit Filters</h3><button class="kpi-fd-x" id="kpi-fd-x">&times;</button></div>' +
+      '<div class="kpi-fd-body">' + scopeSec + rangeSec + filtSec + '</div>' +
+      '<div class="kpi-fd-f"><button class="kpi-fd-btn primary" id="kpi-fd-apply">Apply</button><button class="kpi-fd-btn ghost" id="kpi-fd-cancel">Cancel</button></div>';
+    ov.appendChild(dr); document.body.appendChild(ov);
+    dr.querySelectorAll('input[name="kpi-fd-scope"]').forEach(function (r) { r.addEventListener('change', function () { work.scope = r.value; }); });
+    dr.querySelectorAll('input[name="kpi-fd-range"]').forEach(function (r) { r.addEventListener('change', function () { work.range = r.value; }); });
+    dr.querySelectorAll('select[data-fk]').forEach(function (s) { s.addEventListener('change', function () { work[s.getAttribute('data-fk')] = s.value; }); });
+    ov.addEventListener('click', function (e) { if (e.target === ov) closeKpiFilters(); });
+    dr.querySelector('#kpi-fd-x').addEventListener('click', closeKpiFilters);
+    dr.querySelector('#kpi-fd-cancel').addEventListener('click', closeKpiFilters);
+    dr.querySelector('#kpi-fd-apply').addEventListener('click', function () {
+      FILTER_KEYS.forEach(function (k) { state[k] = work[k]; });
+      if (state.scope === 'me') { state.interviewer = ''; state.dept = ''; }
+      if (state.scope === 'me' && (state.tab === 'jobs' || state.tab === 'team')) state.tab = 'overview';
+      closeKpiFilters(); buildShell(); loadAndRender();
+    });
+  }
+
   /* ── shell ────────────────────────────────────────────────────────────── */
   function buildShell() {
     var o = document.getElementById(OVERLAY_ID);
     if (!o) return;
-    var scopeBtns = isAdmin()
-      ? '<button class="kpi-scope-btn' + (state.scope === 'me' ? ' active' : '') + '" data-kact="scope" data-val="me">My View</button>' +
-        '<button class="kpi-scope-btn' + (state.scope === 'all' ? ' active' : '') + '" data-kact="scope" data-val="all">Org View</button>'
-      : '';
+    var ICON_SLIDERS = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="vertical-align:-3px"><line x1="4" y1="7" x2="20" y2="7"/><circle cx="9" cy="7" r="2.4" fill="var(--card,#fff)"/><line x1="4" y1="17" x2="20" y2="17"/><circle cx="15" cy="17" r="2.4" fill="var(--card,#fff)"/></svg>';
     o.innerHTML =
       '<div class="kpi-modal">' +
         '<div class="kpi-head">' +
@@ -275,14 +379,8 @@
           '<button class="kpi-x" data-kact="close">&times;</button>' +
         '</div>' +
         '<div class="kpi-toolbar">' +
-          scopeBtns +
-          '<select class="kpi-filter-select" data-kact="range" id="kpi-range-sel">' +
-            '<option value="all"' + (state.range === 'all'     ? ' selected' : '') + '>All Time</option>' +
-            '<option value="week"' + (state.range === 'week'   ? ' selected' : '') + '>This Week</option>' +
-            '<option value="month"' + (state.range === 'month' ? ' selected' : '') + '>This Month</option>' +
-            '<option value="quarter"' + (state.range === 'quarter' ? ' selected' : '') + '>Last 90 Days</option>' +
-          '</select>' +
-          '<span id="kpi-dynamic-filters" style="display:inline-flex;gap:10px;align-items:center;flex-wrap:wrap"></span>' +
+          '<button class="kpi-editfilters" data-kact="editfilters">' + ICON_SLIDERS + ' Edit Filters</button>' +
+          '<span class="kpi-filter-summary" id="kpi-filter-summary">' + esc(filterSummary()) + '</span>' +
           '<span class="kpi-refresh" id="kpi-refresh-lbl"></span>' +
         '</div>' +
         '<div class="kpi-tabs" id="kpi-tabs-bar">' +
@@ -304,6 +402,7 @@
       if (!el) return;
       var act = el.getAttribute('data-kact');
       if (act === 'close') { close(); return; }
+      if (act === 'editfilters') { openKpiFilters(); return; }
       if (act === 'tab') {
         state.tab = el.getAttribute('data-tab');
         
@@ -398,7 +497,7 @@
     }
 
     // 2. Department & Recruiter filters
-    if (isAdmin() && state.scope === 'all') {
+    if (canOrg() && state.scope === 'all') {
       html += '<select class="kpi-filter-select" data-kact="filter-dept" id="kpi-dept-sel">';
       html += '<option value="">All Departments</option>';
       (filters.departments || []).forEach(function (dept) {
@@ -524,6 +623,54 @@
       if (needsRebuild) setBody(renderTeam(d));
       initTeamCharts(d);
     }
+    addChartFilters();
+  }
+
+  /* ── per-chart filters: each chart gets its own show/hide-categories control ── */
+  function addChartFilters() {
+    var wraps = document.querySelectorAll('#hrms-kpi-overlay .chart-wrapper');
+    for (var w = 0; w < wraps.length; w++) {
+      (function (wrap) {
+        var canvas = wrap.querySelector('canvas');
+        var title = wrap.querySelector('.kpi-section-title');
+        if (!canvas || !title || wrap.querySelector('.kpi-cf-btn')) return;
+        var chart = state.charts.find(function (c) { return c.canvas && c.canvas.id === canvas.id; });
+        if (!chart || !chart.data || !(chart.data.labels || []).length) return;
+        var btn = document.createElement('button');
+        btn.type = 'button'; btn.className = 'kpi-cf-btn'; btn.innerHTML = '&#9662; Filter';
+        wrap.appendChild(btn);
+        btn.addEventListener('click', function (e) { e.stopPropagation(); openChartFilter(btn, chart); });
+      })(wraps[w]);
+    }
+  }
+  function closeChartFilter() { var p = document.getElementById('kpi-cf-pop'); if (p) p.remove(); }
+  function toggleChartLabel(chart, i, show) {
+    if (!chart._origData) chart._origData = chart.data.datasets.map(function (ds) { return ds.data.slice(); });
+    if (!chart._hidden) chart._hidden = {};
+    chart._hidden[i] = !show;
+    chart.data.datasets.forEach(function (ds, di) { ds.data = chart._origData[di].map(function (v, idx) { return chart._hidden[idx] ? null : v; }); });
+    chart.update();
+  }
+  function openChartFilter(btn, chart) {
+    if (document.getElementById('kpi-cf-pop')) { closeChartFilter(); return; }
+    var labels = (chart.data && chart.data.labels) || [];
+    var pop = document.createElement('div'); pop.id = 'kpi-cf-pop'; pop.className = 'kpi-cf-pop';
+    pop.innerHTML = labels.map(function (lb, i) {
+      var vis = !(chart._hidden && chart._hidden[i]);
+      return '<label><input type="checkbox" data-i="' + i + '"' + (vis ? ' checked' : '') + '> ' + esc(String(lb)) + '</label>';
+    }).join('');
+    document.body.appendChild(pop);
+    var r = btn.getBoundingClientRect();
+    pop.style.top = Math.min(r.bottom + 4, window.innerHeight - 270) + 'px';
+    pop.style.left = Math.min(r.left, window.innerWidth - 190) + 'px';
+    pop.querySelectorAll('input').forEach(function (cb) {
+      cb.addEventListener('change', function () {
+        toggleChartLabel(chart, +cb.getAttribute('data-i'), cb.checked);
+        var anyHidden = chart._hidden && Object.keys(chart._hidden).some(function (k) { return chart._hidden[k]; });
+        btn.classList.toggle('on', !!anyHidden);
+      });
+    });
+    setTimeout(function () { document.addEventListener('mousedown', function h(e) { var p = document.getElementById('kpi-cf-pop'); if (p && !p.contains(e.target) && e.target !== btn) { p.remove(); document.removeEventListener('mousedown', h); } }); }, 0);
   }
 
   /* ── helper: update values without destroying canvas elements ───────── */
@@ -1419,7 +1566,15 @@
 
   /* ── inject trigger button ─────────────────────────────────────────────── */
   function injectButton() {
-    if (document.getElementById(BTN_ID)) return;
+    var existing = document.getElementById(BTN_ID);
+    // Neither KPI scope granted → no dashboard at all. Re-checked on every pass
+    // because permissions arrive asynchronously (and can change on re-login).
+    if (!canOwn()) {
+      if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
+      if (document.getElementById(OVERLAY_ID)) close();
+      return;
+    }
+    if (existing) return;
     var selectors = [
       '[data-route*="recruit"] .page-header',
       '[class*="recruit"] .page-actions',
@@ -1461,6 +1616,23 @@
 
   function boot() {
     tryMount();
+    // __hrmsCan fails open until /api/me/permissions answers, so re-evaluate the
+    // moment the real grants land — otherwise the button lingers for a user who
+    // turns out to have neither KPI scope.
+    window.addEventListener('hrmsPermsLoaded', function () {
+      tryMount();
+      if (!document.getElementById(OVERLAY_ID)) return;
+      // Overlay is open: if Org View turns out not to be granted, drop back to
+      // My View and redraw rather than leaving a scope the server will 403.
+      if (!canOrg() && state.scope === 'all') {
+        state.scope = 'me';
+        state.interviewer = '';
+        state.dept = '';
+        if (state.tab === 'jobs' || state.tab === 'team') state.tab = 'overview';
+      }
+      buildShell();
+      loadAndRender();
+    });
     var lastPath = window.location.pathname + window.location.hash;
     setInterval(function () {
       var current = window.location.pathname + window.location.hash;

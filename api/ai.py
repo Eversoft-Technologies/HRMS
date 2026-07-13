@@ -1,22 +1,26 @@
 """
 AI interview-question generation.
 
-Mirrors the original Node proxy: if an Anthropic API key is available the
-prompt is forwarded to Claude; otherwise a deterministic local generator
-produces sensible questions so the feature keeps working offline.
+Every question comes from Claude. There is no local generator: a canned
+fallback returned the same questions on every "Regenerate" and, because it was
+substituted silently, nobody could tell the AI had stopped working. Transient
+failures are retried; anything else is raised as AIUnavailable for the caller
+to surface.
 """
+import logging
 import os
-import re
+import time
 
 import requests
+
+logger = logging.getLogger(__name__)
 
 ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages'
 ANTHROPIC_VERSION = '2023-06-01'
 
-# The legacy Claude 3/3.5 snapshot names now return 404 not_found_error for
-# this account, which silently forced the canned local-question fallback (the
-# AI appeared to "not generate"). Use current-generation models the key can
-# access; override via env if the available models change.
+# The legacy Claude 3/3.5 snapshot names return 404 not_found_error for this
+# account. Use current-generation models the key can access; override via env
+# if the available models change.
 GENERATION_MODEL = os.environ.get('ANTHROPIC_MODEL') or 'claude-sonnet-4-5'
 VALIDATION_MODEL = os.environ.get('ANTHROPIC_VALIDATION_MODEL') or 'claude-haiku-4-5'
 
@@ -109,11 +113,40 @@ Example format:
     return prompt
 
 
+class AIUnavailable(Exception):
+    """Claude could not produce questions. Callers must surface this — there is
+    no canned fallback, so a silent swallow would serve the same stale questions
+    on every regenerate without anyone noticing."""
+
+    def __init__(self, message, status=502):
+        super().__init__(message)
+        self.message = message
+        self.status = status
+
+
+# 429 and 5xx (notably 529 overloaded_error) are transient — retry before giving up.
+RETRY_STATUSES = frozenset({408, 409, 429, 500, 502, 503, 504, 529})
+MAX_ATTEMPTS = 3
+
+
+def _retry_delay(response, attempt):
+    """Honour Retry-After when the API sends it, else exponential backoff."""
+    header = (response.headers or {}).get('retry-after') if response is not None else None
+    if header:
+        try:
+            return min(float(header), 20.0)
+        except (TypeError, ValueError):
+            pass
+    return 2.0 ** attempt
+
+
 def generate_questions(prompt, request_key=None, params=None):
-    """Return the raw Anthropic-style payload (content[0].text holds JSON).
+    """Return the raw Anthropic payload (content[0].text holds the JSON array).
 
     If params dict is provided with structured data (resumeText, jdText, etc.)
     a rich prompt is built server-side and used instead of the raw prompt string.
+
+    Raises AIUnavailable when Claude cannot be reached or refuses the request.
     """
     # Use structured params to build a richer prompt when available
     if params and (params.get('resumeText') or params.get('jdText') or params.get('jobRole')):
@@ -121,144 +154,59 @@ def generate_questions(prompt, request_key=None, params=None):
 
     api_key = _api_key(request_key)
     if not api_key:
-        return {'content': [{'text': _json_dumps(generate_local_questions(prompt))}]}
-
-    try:
-        upstream = requests.post(
-            ANTHROPIC_URL,
-            headers={
-                'Content-Type': 'application/json',
-                'x-api-key': api_key,
-                'anthropic-version': ANTHROPIC_VERSION,
-            },
-            json={
-                'model': GENERATION_MODEL,
-                'max_tokens': 3000,
-                'messages': [{'role': 'user', 'content': prompt}],
-            },
-            timeout=90,
+        raise AIUnavailable(
+            'No Anthropic API key configured. Set ANTHROPIC_API_KEY in the server .env.',
+            status=503,
         )
-        if not upstream.ok:
-            return {'content': [{'text': _json_dumps(generate_local_questions(prompt))}]}
-        return upstream.json()
-    except requests.RequestException:
-        return {'content': [{'text': _json_dumps(generate_local_questions(prompt))}]}
 
-
-def _json_dumps(value):
-    import json
-    return json.dumps(value)
-
-
-def generate_local_questions(prompt):
-    job_title = 'Software Engineer'
-    tech_keywords = ['JavaScript', 'React', 'Node.js']
-
-    jd_index = prompt.find('JOB DESCRIPTION:')
-    resume_index = prompt.find('CANDIDATE RESUME:')
-    jd_section = ''
-    resume_section = ''
-    if jd_index != -1:
-        jd_section = (
-            prompt[jd_index + 16:resume_index]
-            if resume_index != -1
-            else prompt[jd_index + 16:]
-        )
-    if resume_index != -1:
-        resume_section = prompt[resume_index + 17:]
-
-    combined_text = (jd_section + ' ' + resume_section).lower()
-
-    titles = [
-        'frontend', 'backend', 'fullstack', 'full-stack', 'devops',
-        'data scientist', 'product manager', 'ux designer', 'sales',
-        'engineering manager', 'hr manager',
-    ]
-    for t in titles:
-        if t in combined_text:
-            job_title = ' '.join(
-                w[:1].upper() + w[1:] for w in re.split(r'[- ]+', t)
+    last_error = 'unknown error'
+    for attempt in range(MAX_ATTEMPTS):
+        try:
+            upstream = requests.post(
+                ANTHROPIC_URL,
+                headers={
+                    'Content-Type': 'application/json',
+                    'x-api-key': api_key,
+                    'anthropic-version': ANTHROPIC_VERSION,
+                },
+                json={
+                    'model': GENERATION_MODEL,
+                    'max_tokens': 3000,
+                    'messages': [{'role': 'user', 'content': prompt}],
+                },
+                timeout=90,
             )
-            break
+        except requests.RequestException as exc:
+            last_error = f'Could not reach the Anthropic API: {exc}'
+            if attempt < MAX_ATTEMPTS - 1:
+                time.sleep(_retry_delay(None, attempt))
+                continue
+            raise AIUnavailable(last_error)
 
-    techs = [
-        'react', 'vue', 'angular', 'node', 'express', 'python', 'java', 'go',
-        'golang', 'rust', 'c++', 'aws', 'docker', 'kubernetes', 'sql', 'mysql',
-        'postgresql', 'mongodb', 'typescript', 'javascript', 'css', 'html',
-        'next.js', 'django', 'fastapi',
-    ]
-    display = {
-        'javascript': 'JavaScript', 'typescript': 'TypeScript', 'react': 'React',
-        'node': 'Node.js', 'golang': 'Go', 'go': 'Go', 'aws': 'AWS',
-        'docker': 'Docker', 'kubernetes': 'Kubernetes', 'postgresql': 'PostgreSQL',
-        'mongodb': 'MongoDB',
-    }
-    found = []
-    for tech in techs:
-        if tech in combined_text:
-            name = display.get(tech, tech.upper())
-            if name not in found:
-                found.append(name)
-    if found:
-        tech_keywords = found[:4]
+        if upstream.ok:
+            return upstream.json()
 
-    primary = tech_keywords[0] if tech_keywords else 'software engineering'
-    list_str = ', '.join(tech_keywords) if tech_keywords else 'relevant technologies'
+        last_error = _upstream_error(upstream)
+        logger.warning(
+            'Anthropic %s on attempt %d/%d: %s',
+            upstream.status_code, attempt + 1, MAX_ATTEMPTS, last_error,
+        )
+        if upstream.status_code in RETRY_STATUSES and attempt < MAX_ATTEMPTS - 1:
+            time.sleep(_retry_delay(upstream, attempt))
+            continue
+        if upstream.status_code == 401:
+            raise AIUnavailable('Anthropic API key is invalid.', status=401)
+        raise AIUnavailable(last_error)
 
-    total = 8
-    count_match = re.search(r'generate exactly (\d+) targeted interview questions', prompt)
-    if count_match:
-        total = int(count_match.group(1))
+    raise AIUnavailable(last_error)
 
-    difficulties = []
-    diff_list_match = re.search(r'one of each difficulty:\s*([A-Za-z,\s]+)\)', prompt)
-    if diff_list_match:
-        listed = diff_list_match.group(1).lower()
-        if 'easy' in listed:
-            difficulties.append('Easy')
-        if 'medium' in listed:
-            difficulties.append('Medium')
-        if 'hard' in listed:
-            difficulties.append('Hard')
-    if not difficulties:
-        single = re.search(r'coding challenge of (Easy|Medium|Hard) difficulty', prompt)
-        difficulties.append(single.group(1) if single else 'Medium')
 
-    questions = []
-    # Only emit coding challenges when the prompt actually asks for them; the
-    # Technical round no longer includes a coding challenge by default.
-    if 'Technical' in prompt and 'coding challenge' in prompt.lower():
-        for diff in difficulties:
-            if diff == 'Easy':
-                questions.append('Coding Challenge (Easy): Write a function reverseString(str) that takes a string and returns it reversed in-place.')
-            elif diff == 'Hard':
-                questions.append('Coding Challenge (Hard): Implement a Least Recently Used (LRU) Cache with get(key) and put(key, value) operations running in O(1) time complexity.')
-            else:
-                questions.append('Coding Challenge (Medium): Write a function flattenObject(obj, delimiter) that flattens a nested object into a single level, joining key paths using the delimiter.')
-
-    tech_pool = [
-        f'Can you describe your experience working as a {job_title}? Specifically, how have you utilized {primary} in your recent projects to solve complex problems?',
-        f'When building applications with {list_str}, what architectural trade-offs do you usually consider regarding performance, maintainability, and scalability?',
-        f'Explain the concept of state management or data consistency in modern systems. How would you design a robust system using {primary} to prevent data loss?',
-        f'Suppose we need to optimize a slow API endpoint in a production environment using {primary}. What steps and diagnostic tools would you use to profile and speed up the response time?',
-        f'How do you handle asynchronous operations and concurrent requests in {primary} to prevent race conditions or memory leaks?',
-    ]
-    hr_pool = [
-        'Tell me about a time when you had to collaborate with cross-functional team members (like designers or product managers) who had different priorities. How did you align on a solution?',
-        'How do you handle a situation where a technical deadline is fast approaching, but you identify a significant flaw in the system architecture? Walk me through your decision-making process.',
-        f'What aspect of working as a {job_title} excites you the most, and how do you keep yourself updated with the fast-evolving landscape of {list_str}?',
-        'Describe a challenging technical obstacle you encountered in a previous project. What debugging strategies and tools did you employ to identify and resolve the root cause?',
-    ]
-
-    tech_idx = 0
-    hr_idx = 0
-    while len(questions) < total:
-        if tech_idx < len(tech_pool) and (len(questions) % 2 == 1 or hr_idx >= len(hr_pool)):
-            questions.append(tech_pool[tech_idx])
-            tech_idx += 1
-        elif hr_idx < len(hr_pool):
-            questions.append(hr_pool[hr_idx])
-            hr_idx += 1
-        else:
-            questions.append(f'Question {len(questions) + 1}: Describe your design pattern preferences when building scalable microservices or front-end components.')
-    return questions
+def _upstream_error(response):
+    """Pull Anthropic's own error message out of the response body."""
+    try:
+        err = response.json().get('error') or {}
+        detail = err.get('message') or err.get('type')
+    except ValueError:
+        detail = None
+    detail = detail or (response.text or '')[:200]
+    return f'Anthropic API error {response.status_code}: {detail}'
