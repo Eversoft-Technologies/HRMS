@@ -14,6 +14,7 @@ A few helpers and endpoints are intentionally NOT DRF:
     JSON parser cannot consume, so it stays a plain ``csrf_exempt`` view.
   * ``spa_index`` serves the built React app for non-API routes.
 """
+import hashlib
 import json
 import os
 import re
@@ -880,6 +881,57 @@ def _request_origin_from_meta(request):
 RESUME_SCORE_MIN = 75
 
 
+def resume_content_hash(resume_text, file_data=''):
+    """A stable fingerprint of a resume's content, for de-duplication.
+
+    Prefers the normalised extracted text (whitespace-collapsed, lower-cased) so
+    the same resume uploaded twice — or re-scored against a new JD — fingerprints
+    identically. Falls back to the file bytes when there is no text, and returns
+    '' when there is nothing to fingerprint (so blank rows never collide).
+    """
+    text = (resume_text or '').strip()
+    if text:
+        norm = re.sub(r'\s+', ' ', text).lower()
+        return hashlib.sha256(norm.encode('utf-8')).hexdigest()
+    if file_data:
+        return hashlib.sha256(file_data.encode('utf-8')).hexdigest()
+    return ''
+
+
+def _below_threshold_response(score_val):
+    # A non-2xx status so the frontend treats it as "not saved" (it only appends
+    # a row on a 2xx record response).
+    return Response(
+        {
+            'stored': False,
+            'score': score_val,
+            'threshold': RESUME_SCORE_MIN,
+            'message': f'Score {score_val} is below the minimum of {RESUME_SCORE_MIN}; not stored.',
+        },
+        status=422,
+    )
+
+
+def _save_resume(serializer):
+    """Persist one validated resume, de-duplicating by content fingerprint.
+
+    Returns ``(data, created)``. If a resume with the same fingerprint already
+    exists, its single row is updated in place (latest score/JD/file win) rather
+    than inserting a duplicate.
+    """
+    vd = serializer.validated_data
+    h = resume_content_hash(vd.get('resume_text'), vd.get('file_data'))
+    existing = ResumeScore.objects.filter(content_hash=h).first() if h else None
+    if existing:
+        for field, val in vd.items():
+            setattr(existing, field, val)
+        existing.content_hash = h
+        existing.save()
+        return ResumeScoreSerializer(existing).data, False
+    obj = serializer.save(content_hash=h)
+    return ResumeScoreSerializer(obj).data, True
+
+
 @api_view(['GET', 'POST'])
 @require_perm({'GET': 'recruitment.view', 'POST': 'recruitment.create'})
 def resume_scores(request):
@@ -890,7 +942,7 @@ def resume_scores(request):
     if isinstance(body, list):
         if len(body) == 0:
             return err('resume upload array is required')
-        created = []
+        results = []
         for item in body:
             if not item.get('name') and item.get('fileName'):
                 item['name'] = os.path.splitext(item.get('fileName'))[0]
@@ -899,18 +951,10 @@ def resume_scores(request):
                 return serializer_err(serializer)
             score_val = int(serializer.validated_data.get('score') or 0)
             if score_val < RESUME_SCORE_MIN:
-                return Response(
-                    {
-                        'stored': False,
-                        'score': score_val,
-                        'threshold': RESUME_SCORE_MIN,
-                        'message': f'Score {score_val} is below the minimum of {RESUME_SCORE_MIN}; not stored.',
-                    },
-                    status=422,
-                )
-            serializer.save()
-            created.append(serializer.data)
-        return Response(created, status=201)
+                return _below_threshold_response(score_val)
+            data, _created = _save_resume(serializer)
+            results.append(data)
+        return Response(results, status=201)
 
     if not body.get('name') and body.get('fileName'):
         body['name'] = os.path.splitext(body.get('fileName'))[0]
@@ -926,21 +970,70 @@ def resume_scores(request):
     except (TypeError, ValueError):
         score_val = 0
     if score_val < RESUME_SCORE_MIN:
-        # Return a non-2xx status so the frontend's fetch helper treats this as
-        # "not saved" (it only appends a row on a 2xx record response). A 2xx
-        # here would push a non-record object into the UI list and crash render.
-        return Response(
-            {
-                'stored': False,
-                'score': score_val,
-                'threshold': RESUME_SCORE_MIN,
-                'message': f'Score {score_val} is below the minimum of {RESUME_SCORE_MIN}; not stored.',
-            },
-            status=422,
-        )
+        return _below_threshold_response(score_val)
 
-    serializer.save()
-    return Response(serializer.data, status=201)
+    data, created = _save_resume(serializer)
+    # 200 when we updated an existing (deduped) row, 201 when newly created; both
+    # return the record, so the frontend appends/replaces it by id either way.
+    return Response(data, status=201 if created else 200)
+
+
+@api_view(['GET'])
+@require_perm('recruitment.view')
+def resume_score_detail(request, pk):
+    """A single resume including its stored file — kept out of the list endpoint
+    so the base64 blob is fetched only when actually viewing/downloading."""
+    rs = ResumeScore.objects.filter(pk=pk).first()
+    if not rs:
+        return err('Resume not found', 404)
+    return Response({
+        'id': rs.id,
+        'name': rs.name,
+        'fileName': rs.file_name or '',
+        'fileMime': rs.file_mime or '',
+        'fileData': rs.file_data or '',
+        'resumeText': rs.resume_text or '',
+    })
+
+
+@api_view(['GET'])
+@require_perm('recruitment.view')
+def resume_score_file(request, pk):
+    """Serve the stored resume file (PDF/DOCX) as a download/inline view.
+
+    Returns the raw decoded bytes with proper Content-Type so the browser can
+    render a PDF inline or download a DOCX file directly.
+    """
+    import base64
+    from django.http import HttpResponse
+
+    rs = ResumeScore.objects.filter(pk=pk).first()
+    if not rs:
+        return HttpResponse('Resume not found', status=404)
+    if not rs.file_data:
+        return HttpResponse('No file stored for this resume', status=404)
+
+    try:
+        raw = base64.b64decode(rs.file_data)
+    except Exception:
+        return HttpResponse('Stored file data is corrupted', status=500)
+
+    mime = rs.file_mime or 'application/octet-stream'
+    file_name = rs.file_name or f'resume_{pk}'
+
+    # Serve PDFs inline so the browser can display them; download DOCX files.
+    if 'pdf' in mime.lower():
+        disposition = f'inline; filename="{file_name}"'
+    else:
+        disposition = f'attachment; filename="{file_name}"'
+
+    response = HttpResponse(raw, content_type=mime)
+    response['Content-Disposition'] = disposition
+    response['Content-Length'] = len(raw)
+    # Allow cross-origin access if the frontend is served from a different port
+    response['Access-Control-Allow-Origin'] = '*'
+    response['Access-Control-Expose-Headers'] = 'Content-Disposition'
+    return response
 
 
 # ---------------------------------------------------------------------------
@@ -2217,7 +2310,17 @@ def spa_index(request):
         )
     if _INDEX_BYTES is None or settings.DEBUG:
         _INDEX_BYTES = index_path.read_bytes()
+
+    # If it is the candidate portal route, strip the React app script tag so React router doesn't boot and redirect to /login
+    path = request.path.rstrip('/')
+    if path == '/onboarding/fill':
+        html_str = _INDEX_BYTES.decode('utf-8')
+        import re
+        html_str = re.sub(r'<script type="module" crossorigin src="/assets/index-[^"]+"></script>', '', html_str)
+        return HttpResponse(html_str.encode('utf-8'), content_type='text/html')
+
     return HttpResponse(_INDEX_BYTES, content_type='text/html')
+
 
 
 # ===========================================================================

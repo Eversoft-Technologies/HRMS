@@ -50,6 +50,17 @@ from .models import (
     OvertimePolicy,
     OvertimeBalance,
     WFHPolicy,
+    OnboardingCandidate,
+    WorkAuthorization,
+    CandidateDocument,
+    OnboardingActivityLog,
+    OnboardingStatus,
+    HrVerification,
+    ManagerApproval,
+    ItAssetAllocation,
+    PayrollInformation,
+    PayrollForm,
+    CandidateFormSubmission,
 )
 
 # Datetime wire format used everywhere by the original API (naive, USE_TZ=False).
@@ -322,8 +333,11 @@ class InterviewLinkSerializer(serializers.ModelSerializer):
 # ---------------------------------------------------------------------------
 class ResumeScoreSerializer(serializers.ModelSerializer):
     fileName = serializers.CharField(source='file_name', required=False, allow_null=True, allow_blank=True)
-    fileMime = serializers.CharField(write_only=True, required=False, allow_null=True, allow_blank=True)
-    fileData = serializers.CharField(write_only=True, required=False, allow_null=True, allow_blank=True)
+    # write_only + a real source: accepted on save and stored, but never echoed
+    # in the list (the base64 blob would bloat every row). Retrieve via the
+    # single-resume detail endpoint instead.
+    fileMime = serializers.CharField(source='file_mime', write_only=True, required=False, allow_null=True, allow_blank=True)
+    fileData = serializers.CharField(source='file_data', write_only=True, required=False, allow_null=True, allow_blank=True)
     resumeText = serializers.CharField(source='resume_text', required=False, allow_blank=True, allow_null=True)
     jdText = serializers.CharField(source='jd_text', required=False, allow_blank=True, allow_null=True)
 
@@ -374,12 +388,9 @@ class ResumeScoreSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         # Accept file uploads in resume scoring payloads without requiring a
         # separate document model for the same request shape.
-        validated_data.pop('fileMime', None)
-        file_data = validated_data.pop('fileData', None)
+        # Keep file_mime and file_data so they are stored in the DB row.
         if not validated_data.get('name') and validated_data.get('file_name'):
             validated_data['name'] = os.path.splitext(validated_data['file_name'])[0]
-        if file_data and not validated_data.get('resume_text'):
-            validated_data['resume_text'] = ''
         if not validated_data.get('initials'):
             validated_data['initials'] = make_initials(validated_data.get('name'))
         skills = validated_data.get('skills')
@@ -387,6 +398,22 @@ class ResumeScoreSerializer(serializers.ModelSerializer):
         validated_data['skills'] = skills if isinstance(skills, list) else []
         validated_data['missing'] = missing if isinstance(missing, list) else []
         return super().create(validated_data)
+
+    def update(self, instance, validated_data):
+        # Preserve file data on updates — only overwrite if new data supplied.
+        if not validated_data.get('file_data'):
+            validated_data.pop('file_data', None)
+        if not validated_data.get('file_mime'):
+            validated_data.pop('file_mime', None)
+        if not validated_data.get('file_name'):
+            validated_data.pop('file_name', None)
+        skills = validated_data.get('skills')
+        missing = validated_data.get('missing')
+        if skills is not None:
+            validated_data['skills'] = skills if isinstance(skills, list) else []
+        if missing is not None:
+            validated_data['missing'] = missing if isinstance(missing, list) else []
+        return super().update(instance, validated_data)
 
 
 # ---------------------------------------------------------------------------
@@ -1307,4 +1334,369 @@ class WFHPolicySerializer(serializers.ModelSerializer):
             'isActive': instance.is_active,
             'createdAt': instance.created_at.strftime(DATETIME_FMT) if instance.created_at else None,
         }
+
+
+# ---------------------------------------------------------------------------
+# Onboarding module
+#
+# Same contract as the rest of the API: camelCase out, snake_case columns, and a
+# full ``to_representation`` so nullable columns coerce to '' rather than
+# leaking None into the UI.
+# ---------------------------------------------------------------------------
+class OnboardingCandidateSerializer(serializers.ModelSerializer):
+    firstName = serializers.CharField(source='first_name', required=False, allow_blank=True, default='')
+    lastName = serializers.CharField(source='last_name', required=False, allow_blank=True, default='')
+    jobTitle = serializers.CharField(source='job_title', required=False, allow_blank=True, default='')
+    joiningDate = serializers.DateField(source='joining_date', required=False, allow_null=True)
+    interviewId = serializers.PrimaryKeyRelatedField(
+        source='interview', queryset=InterviewLink.objects.all(),
+        required=False, allow_null=True,
+    )
+    portalToken = serializers.CharField(source='portal_token', read_only=True)
+    requestedDocs = serializers.JSONField(source='requested_docs', required=False)
+
+    class Meta:
+        model = OnboardingCandidate
+        fields = [
+            'id', 'firstName', 'lastName', 'email', 'phone', 'client', 'vendor',
+            'recruiter', 'jobTitle', 'department', 'joiningDate', 'status', 'interviewId',
+            'portalToken', 'requestedDocs',
+        ]
+
+
+        read_only_fields = ['id']
+        extra_kwargs = {
+            'phone': {'required': False, 'allow_blank': True, 'default': ''},
+            'client': {'required': False, 'allow_blank': True, 'default': ''},
+            'vendor': {'required': False, 'allow_blank': True, 'default': ''},
+            'recruiter': {'required': False, 'allow_blank': True, 'default': ''},
+            'department': {'required': False, 'allow_blank': True, 'default': ''},
+            'status': {'required': False, 'default': 'Draft'},
+        }
+
+    def to_representation(self, instance):
+        auth = getattr(instance, 'work_authorization', None)
+        verification = getattr(instance, 'hr_verification', None)
+        payroll = getattr(instance, 'payroll', None)
+        full_name = ' '.join(
+            p for p in [instance.first_name or '', instance.last_name or ''] if p
+        ).strip()
+        return {
+            'id': instance.id,
+            'firstName': instance.first_name or '',
+            'lastName': instance.last_name or '',
+            'name': full_name,
+            'email': instance.email or '',
+            'phone': instance.phone or '',
+            'client': instance.client or '',
+            'vendor': instance.vendor or '',
+            'recruiter': instance.recruiter or '',
+            'jobTitle': instance.job_title or '',
+            'department': instance.department or '',
+            'joiningDate': instance.joining_date.strftime(DATE_FMT) if instance.joining_date else None,
+            'status': instance.status or 'Draft',
+            'interviewId': instance.interview_id,
+            'customFields': instance.custom_fields or {},
+            'requestedDocs': instance.requested_docs or [],
+            # The portal link's expiry, so the Paper Forms tab can show how long
+            # the candidate has left without a second call.
+            'portalToken': instance.portal_token or None,
+            'portalTokenExpiresAt': (
+                instance.portal_token_expires_at.strftime(DATETIME_FMT)
+                if instance.portal_token_expires_at else None
+            ),
+            # Denormalised summaries so the candidates table renders from one
+            # call instead of an extra fetch per row.
+            'authType': (auth.auth_type or '') if auth else '',
+            'authStatus': (auth.status or '') if auth else '',
+            'authExpiryDate': auth.expiry_date.strftime(DATE_FMT) if (auth and auth.expiry_date) else None,
+            'verificationStatus': (verification.status or 'Pending') if verification else 'Pending',
+            'payrollStatus': (payroll.status or 'Pending') if payroll else 'Pending',
+            'stages': [
+                {
+                    'stage': s.stage,
+                    'status': s.status or 'Pending',
+                    'completedAt': s.completed_at.strftime(DATETIME_FMT) if s.completed_at else None,
+                }
+                for s in instance.stages.all()
+            ],
+            'createdBy': instance.created_by or '',
+            'createdAt': instance.created_at.strftime(DATETIME_FMT) if instance.created_at else None,
+            'updatedAt': instance.updated_at.strftime(DATETIME_FMT) if instance.updated_at else None,
+        }
+
+
+class WorkAuthorizationSerializer(serializers.ModelSerializer):
+    """The authorization plus its type-specific ``details`` blob, flattened into
+    one object. The split across two tables is a storage concern, not an API one."""
+    authType = serializers.CharField(source='auth_type', required=False, allow_blank=True, default='')
+    expiryDate = serializers.DateField(source='expiry_date', required=False, allow_null=True)
+    receiptNumber = serializers.CharField(source='receipt_number', required=False, allow_blank=True, default='')
+    sponsorshipRequired = serializers.BooleanField(source='sponsorship_required', required=False, default=False)
+
+    class Meta:
+        model = WorkAuthorization
+        fields = ['id', 'authType', 'status', 'expiryDate', 'receiptNumber', 'sponsorshipRequired']
+        read_only_fields = ['id']
+        extra_kwargs = {'status': {'required': False, 'default': 'Pending'}}
+
+    def to_representation(self, instance):
+        detail = getattr(instance, 'detail', None)
+        return {
+            'id': instance.id,
+            'candidateId': instance.candidate_id,
+            'authType': instance.auth_type or '',
+            'status': instance.status or 'Pending',
+            'expiryDate': instance.expiry_date.strftime(DATE_FMT) if instance.expiry_date else None,
+            'receiptNumber': instance.receipt_number or '',
+            'sponsorshipRequired': bool(instance.sponsorship_required),
+            'details': (detail.details or {}) if detail else {},
+            'customFields': instance.custom_fields or {},
+            'createdAt': instance.created_at.strftime(DATETIME_FMT) if instance.created_at else None,
+            'updatedAt': instance.updated_at.strftime(DATETIME_FMT) if instance.updated_at else None,
+        }
+
+
+class CandidateDocumentSerializer(serializers.ModelSerializer):
+    """Mirrors UserDocumentSerializer: the heavy base64 blob is withheld from list
+    output and only included when ``include_data=True`` is passed."""
+    docType = serializers.CharField(source='doc_type')
+    fileName = serializers.CharField(source='file_name', required=False, allow_blank=True, default='')
+    fileMime = serializers.CharField(source='file_mime', required=False, allow_blank=True, default='')
+    fileData = serializers.CharField(source='file_data', required=False, allow_blank=True, write_only=True)
+
+    class Meta:
+        model = CandidateDocument
+        fields = ['id', 'docType', 'fileName', 'fileMime', 'fileData']
+        read_only_fields = ['id']
+
+    def __init__(self, *args, **kwargs):
+        self._include_data = kwargs.pop('include_data', False)
+        super().__init__(*args, **kwargs)
+
+    def to_representation(self, instance):
+        base = {
+            'id': instance.id,
+            'candidateId': instance.candidate_id,
+            'docType': instance.doc_type,
+            # Custom documents carry their own name; the fixed types are
+            # labelled by the frontend from its DOC_TYPES list.
+            'label': instance.label or '',
+            'isCustom': bool(instance.is_custom),
+            'fileName': instance.file_name or '',
+            'fileMime': instance.file_mime or '',
+            'fileSize': instance.file_size or 0,
+            'version': instance.version or 1,
+            'isActive': bool(instance.is_active),
+            'uploadedBy': instance.uploaded_by or '',
+            'uploadedAt': instance.uploaded_at.strftime(DATETIME_FMT) if instance.uploaded_at else None,
+        }
+        if self._include_data:
+            base['fileData'] = instance.file_data or ''
+        return base
+
+
+class OnboardingActivityLogSerializer(serializers.ModelSerializer):
+    """One audit row = one timeline entry; the UI renders these directly."""
+    class Meta:
+        model = OnboardingActivityLog
+        fields = ['id', 'event', 'comments']
+        read_only_fields = ['id']
+
+    def to_representation(self, instance):
+        return {
+            'id': instance.id,
+            'candidateId': instance.candidate_id,
+            'event': instance.event or '',
+            'actorEmail': instance.actor_email or '',
+            'actorName': instance.actor_name or '',
+            'comments': instance.comments or '',
+            'oldValue': instance.old_value or {},
+            'newValue': instance.new_value or {},
+            'createdAt': instance.created_at.strftime(DATETIME_FMT) if instance.created_at else None,
+        }
+
+
+class OnboardingStatusSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = OnboardingStatus
+        fields = ['id', 'stage', 'status']
+        read_only_fields = ['id']
+
+    def to_representation(self, instance):
+        return {
+            'id': instance.id,
+            'candidateId': instance.candidate_id,
+            'stage': instance.stage,
+            'status': instance.status or 'Pending',
+            'startedAt': instance.started_at.strftime(DATETIME_FMT) if instance.started_at else None,
+            'completedAt': instance.completed_at.strftime(DATETIME_FMT) if instance.completed_at else None,
+            'updatedBy': instance.updated_by or '',
+            'updatedAt': instance.updated_at.strftime(DATETIME_FMT) if instance.updated_at else None,
+        }
+
+
+class HrVerificationSerializer(serializers.ModelSerializer):
+    ssnVerified = serializers.BooleanField(source='ssn_verified', required=False, default=False)
+    driverLicenseVerified = serializers.BooleanField(source='driver_license_verified', required=False, default=False)
+    stateIdVerified = serializers.BooleanField(source='state_id_verified', required=False, default=False)
+    visaVerified = serializers.BooleanField(source='visa_verified', required=False, default=False)
+    i94Verified = serializers.BooleanField(source='i94_verified', required=False, default=False)
+
+    class Meta:
+        model = HrVerification
+        fields = [
+            'id', 'ssnVerified', 'driverLicenseVerified', 'stateIdVerified',
+            'visaVerified', 'i94Verified', 'status', 'remarks',
+        ]
+        read_only_fields = ['id']
+        extra_kwargs = {
+            'status': {'required': False, 'default': 'Pending'},
+            'remarks': {'required': False, 'allow_blank': True, 'default': ''},
+        }
+
+    def to_representation(self, instance):
+        return {
+            'id': instance.id,
+            'candidateId': instance.candidate_id,
+            'ssnVerified': bool(instance.ssn_verified),
+            'driverLicenseVerified': bool(instance.driver_license_verified),
+            'stateIdVerified': bool(instance.state_id_verified),
+            'visaVerified': bool(instance.visa_verified),
+            'i94Verified': bool(instance.i94_verified),
+            'customVerified': instance.custom_verified or {},
+            'status': instance.status or 'Pending',
+            'remarks': instance.remarks or '',
+            'verifiedBy': instance.verified_by or '',
+            'verifiedAt': instance.verified_at.strftime(DATETIME_FMT) if instance.verified_at else None,
+            'updatedAt': instance.updated_at.strftime(DATETIME_FMT) if instance.updated_at else None,
+        }
+
+
+class ManagerApprovalSerializer(serializers.ModelSerializer):
+    """Append-only: an approval history, not a single mutable verdict."""
+    class Meta:
+        model = ManagerApproval
+        fields = ['id', 'action', 'comments']
+        read_only_fields = ['id']
+
+    def to_representation(self, instance):
+        return {
+            'id': instance.id,
+            'candidateId': instance.candidate_id,
+            'action': instance.action or '',
+            'comments': instance.comments or '',
+            'approver': instance.approver or '',
+            'actedAt': instance.acted_at.strftime(DATETIME_FMT) if instance.acted_at else None,
+        }
+
+
+class ItAssetAllocationSerializer(serializers.ModelSerializer):
+    assetSource = serializers.CharField(source='asset_source', required=False, default='Eversoft')
+    clientName = serializers.CharField(source='client_name', required=False, allow_blank=True, default='')
+    assetId = serializers.CharField(source='asset_id', required=False, allow_blank=True, default='')
+    issuedDate = serializers.DateField(source='issued_date', required=False, allow_null=True)
+    assets = serializers.JSONField(required=False, default=list)
+
+    class Meta:
+        model = ItAssetAllocation
+        fields = ['id', 'assetSource', 'clientName', 'assets', 'assetId', 'issuedDate', 'status']
+        read_only_fields = ['id']
+        extra_kwargs = {'status': {'required': False, 'default': 'Assigned'}}
+
+    def to_representation(self, instance):
+        return {
+            'id': instance.id,
+            'candidateId': instance.candidate_id,
+            'assetSource': instance.asset_source or 'Eversoft',
+            'clientName': instance.client_name or '',
+            'assets': instance.assets or [],
+            'assetId': instance.asset_id or '',
+            'issuedDate': instance.issued_date.strftime(DATE_FMT) if instance.issued_date else None,
+            'status': instance.status or 'Assigned',
+            'allocatedBy': instance.allocated_by or '',
+            'createdAt': instance.created_at.strftime(DATETIME_FMT) if instance.created_at else None,
+        }
+
+
+class PayrollInformationSerializer(serializers.ModelSerializer):
+    """Bank details.
+
+    ``accountNumber`` is **masked to its last 4 digits on read**. The full value
+    is writeable but never round-trips back out, so an account number cannot leak
+    through a screenshot, a browser cache, or the audit log. Callers that need to
+    change it send a new one; there is no reason to ever read it back in full.
+    """
+    bankName = serializers.CharField(source='bank_name', required=False, allow_blank=True, default='')
+    accountNumber = serializers.CharField(source='account_number', required=False, allow_blank=True, default='', write_only=True)
+    routingNumber = serializers.CharField(source='routing_number', required=False, allow_blank=True, default='')
+    taxState = serializers.CharField(source='tax_state', required=False, allow_blank=True, default='')
+    directDeposit = serializers.BooleanField(source='direct_deposit', required=False, default=False)
+
+    class Meta:
+        model = PayrollInformation
+        fields = [
+            'id', 'bankName', 'accountNumber', 'routingNumber', 'taxState',
+            'directDeposit', 'status',
+        ]
+        read_only_fields = ['id']
+        extra_kwargs = {'status': {'required': False, 'default': 'Pending'}}
+
+    def to_representation(self, instance):
+        acct = (instance.account_number or '').strip()
+        masked = ('*' * max(0, len(acct) - 4)) + acct[-4:] if acct else ''
+        return {
+            'id': instance.id,
+            'candidateId': instance.candidate_id,
+            'bankName': instance.bank_name or '',
+            'accountNumberMasked': masked,
+            'hasAccountNumber': bool(acct),
+            'routingNumber': instance.routing_number or '',
+            'taxState': instance.tax_state or '',
+            'directDeposit': bool(instance.direct_deposit),
+            'status': instance.status or 'Pending',
+            'completedBy': instance.completed_by or '',
+            'updatedAt': instance.updated_at.strftime(DATETIME_FMT) if instance.updated_at else None,
+        }
+
+
+class PayrollFormSerializer(serializers.ModelSerializer):
+    fileName = serializers.CharField(source='file_name', required=False, allow_blank=True, default='')
+    fileMime = serializers.CharField(source='file_mime', required=False, allow_blank=True, default='')
+    fileData = serializers.CharField(source='file_data', required=False, allow_blank=True, default='', write_only=True)
+    isActive = serializers.BooleanField(source='is_active', required=False, default=True)
+    createdBy = serializers.CharField(source='created_by', read_only=True)
+    createdAt = serializers.DateTimeField(source='created_at', read_only=True, format=DATETIME_FMT)
+
+    class Meta:
+        model = PayrollForm
+        fields = ['id', 'name', 'fileName', 'fileMime', 'fileData', 'schema', 'isActive', 'createdBy', 'createdAt']
+
+
+class CandidateFormSubmissionSerializer(serializers.ModelSerializer):
+    candidateId = serializers.PrimaryKeyRelatedField(source='candidate', queryset=OnboardingCandidate.objects.all())
+    formId = serializers.PrimaryKeyRelatedField(source='form', queryset=PayrollForm.objects.all())
+    filledData = serializers.JSONField(source='filled_data', required=False, default=dict)
+    signatureData = serializers.CharField(source='signature_data', required=False, allow_blank=True, default='')
+    signedAt = serializers.DateTimeField(source='signed_at', required=False, allow_null=True, format=DATETIME_FMT)
+    fileName = serializers.CharField(source='file_name', required=False, allow_blank=True, default='')
+    fileMime = serializers.CharField(source='file_mime', required=False, allow_blank=True, default='application/pdf')
+    fileSize = serializers.IntegerField(source='file_size', read_only=True)
+    fileData = serializers.CharField(source='file_data', required=False, allow_blank=True, default='', write_only=True)
+    createdAt = serializers.DateTimeField(source='created_at', read_only=True, format=DATETIME_FMT)
+
+    class Meta:
+        model = CandidateFormSubmission
+        fields = [
+            'id', 'candidateId', 'formId', 'filledData', 'signatureData', 'signedAt',
+            'fileName', 'fileMime', 'fileSize', 'fileData', 'mode', 'createdAt'
+        ]
+
+    def to_representation(self, instance):
+        ret = super().to_representation(instance)
+        # Convert foreign keys to simple ints in camelCase output
+        ret['candidateId'] = instance.candidate_id
+        ret['formId'] = instance.form_id
+        return ret
+
 

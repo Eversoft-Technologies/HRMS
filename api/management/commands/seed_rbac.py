@@ -18,6 +18,7 @@ class Command(BaseCommand):
                 {'name': 'Payroll', 'icon': 'credit-card', 'order': 6},
                 {'name': 'Settings', 'icon': 'settings', 'order': 7},
                 {'name': 'RBAC', 'icon': 'shield', 'order': 8},
+                {'name': 'Onboarding', 'icon': 'user-check', 'order': 9},
             ]
             modules = {}
             for m_info in modules_data:
@@ -38,6 +39,7 @@ class Command(BaseCommand):
                 {'name': 'Payroll Group', 'module': 'Payroll', 'desc': 'Manage employee salaries and payslips'},
                 {'name': 'Settings Group', 'module': 'Settings', 'desc': 'Manage general settings and credentials'},
                 {'name': 'RBAC Group', 'module': 'RBAC', 'desc': 'Manage roles, permissions, and user access'},
+                {'name': 'Onboarding Group', 'module': 'Onboarding', 'desc': 'Work authorization, documents, verification, and employee onboarding'},
             ]
             groups = {}
             for g_info in groups_data:
@@ -91,6 +93,18 @@ class Command(BaseCommand):
                 # RBAC
                 {'name': 'View Access Control', 'code': 'rbac.view', 'group': 'RBAC Group'},
                 {'name': 'Manage Access Control', 'code': 'rbac.manage', 'group': 'RBAC Group'},
+                # Onboarding — the workflow stages are granted separately so a
+                # Manager can approve without being able to edit bank details,
+                # and IT can allocate assets without seeing payroll.
+                {'name': 'View Onboarding', 'code': 'onboarding.view', 'group': 'Onboarding Group'},
+                {'name': 'Create Candidate', 'code': 'onboarding.create', 'group': 'Onboarding Group'},
+                {'name': 'Edit Candidate / Work Authorization', 'code': 'onboarding.edit', 'group': 'Onboarding Group'},
+                {'name': 'Delete Candidate', 'code': 'onboarding.delete', 'group': 'Onboarding Group'},
+                {'name': 'Verify Documents (HR)', 'code': 'onboarding.verify', 'group': 'Onboarding Group'},
+                {'name': 'Approve Onboarding (Manager)', 'code': 'onboarding.approve', 'group': 'Onboarding Group'},
+                {'name': 'Allocate IT Assets', 'code': 'onboarding.assets', 'group': 'Onboarding Group'},
+                {'name': 'Complete Payroll Information', 'code': 'onboarding.payroll', 'group': 'Onboarding Group'},
+                {'name': 'Manage Onboarding Settings', 'code': 'onboarding.settings', 'group': 'Onboarding Group'},
             ]
             permissions = {}
             for p_info in perms_data:
@@ -112,6 +126,12 @@ class Command(BaseCommand):
                 {'name': 'HR Manager', 'desc': 'Manage recruitment, employees, leaves, payroll, and settings'},
                 {'name': 'HR Executive', 'desc': 'Manage candidates, interviews, and view employee records'},
                 {'name': 'Employee', 'desc': 'View dashboard, check in/out, apply leave, and track own tasks'},
+                # Onboarding workflow roles. Each owns exactly one stage, so no
+                # single role can drive a candidate end-to-end unaided.
+                {'name': 'Manager', 'desc': 'Approve, reject, or return onboarding candidates'},
+                {'name': 'IT Admin', 'desc': 'Allocate and track IT assets for onboarding candidates'},
+                {'name': 'Payroll Admin', 'desc': 'Complete payroll information for onboarding candidates'},
+                {'name': 'Recruiter', 'desc': 'Create and edit onboarding candidates'},
             ]
             roles = {}
             for r_info in roles_data:
@@ -126,18 +146,45 @@ class Command(BaseCommand):
             # 5. Grant permissions to Roles
             grants = {
                 'Super Admin': list(permissions.keys()),  # gets all
+                # Everything except RBAC management and manager approval.
+                # Onboarding splits those two duties on purpose: HR verifies the
+                # documents and a Manager approves them, so an HR Manager
+                # holding both could clear their own verification. Mirrors the
+                # grants in migration 0027, which withholds .approve here too.
                 'HR Manager': [
-                    code for code in permissions.keys() if code != 'rbac.manage'
+                    code for code in permissions.keys()
+                    if code not in ('rbac.manage', 'onboarding.approve')
                 ],
                 'HR Executive': [
                     'recruitment.view', 'recruitment.create', 'recruitment.edit',
                     'recruitment.kpi.view_own',
-                    'employee.view', 'attendance.view', 'leave.view', 'settings.view'
+                    'employee.view', 'attendance.view', 'leave.view', 'settings.view',
+                    # HR Executive is the recruiter today: creates and edits the
+                    # candidate, but cannot verify, approve, or touch payroll.
+                    'onboarding.view', 'onboarding.create', 'onboarding.edit',
                 ],
                 'Employee': [
                     'employee.view', 'attendance.view', 'attendance.create',
                     'leave.view', 'leave.create', 'settings.view'
-                ]
+                ],
+                'Recruiter': [
+                    'recruitment.view', 'recruitment.create', 'recruitment.edit',
+                    'recruitment.kpi.view_own', 'settings.view',
+                    'onboarding.view', 'onboarding.create', 'onboarding.edit',
+                ],
+                'Manager': [
+                    'employee.view', 'attendance.view', 'leave.view', 'leave.action',
+                    'settings.view',
+                    'onboarding.view', 'onboarding.approve',
+                ],
+                'IT Admin': [
+                    'settings.view',
+                    'onboarding.view', 'onboarding.assets',
+                ],
+                'Payroll Admin': [
+                    'payroll.view', 'payroll.manage', 'settings.view',
+                    'onboarding.view', 'onboarding.payroll',
+                ],
             }
 
             for role_name, perm_codes in grants.items():

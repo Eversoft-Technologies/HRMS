@@ -32,6 +32,12 @@
   /* public API (parity with the other helpers) */
   window.__hrmsCan = can;
   window.__hrmsPerms = function () { return known ? Array.from(set) : null; };
+  /* Let a sidecar re-run the access guard after it changes the URL itself.
+     Sidecars that own routes the React bundle does not know about (see
+     hrms-onboarding.js) navigate with history.pushState rather than React
+     Router, so no popstate fires and the guard would otherwise not re-evaluate
+     until the next 10s poll — leaving a forbidden page visible in between. */
+  window.__hrmsApplyGuard = function () { try { applyRouteGuard(); } catch (_) {} };
 
   /* ── route → required permission (most-specific prefix first) ──────────────
      Single source of truth: drives BOTH sidebar nav hiding (applyNav) AND the
@@ -42,6 +48,14 @@
      when the path is identical (needed for '/', which otherwise prefix-matches
      every route). Listed most-specific first so the first match wins. */
   var ROUTE_PERMS = [
+    // Onboarding. The stage pages need their own permission, not onboarding.view,
+    // or a Manager would see an IT Assets page they cannot use — and Payroll,
+    // which holds bank details, must stay closed to everyone but Payroll Admin.
+    ['/onboarding/verification', 'onboarding.verify'],
+    ['/onboarding/assets',       'onboarding.assets'],
+    ['/onboarding/payroll',      'onboarding.payroll'],
+    ['/onboarding/settings',     'onboarding.settings'],
+    ['/onboarding',              'onboarding.view'],
     ['/employees/attendance',  'attendance.view'],
     ['/employees/checkin',     'attendance.view'],
     ['/employees/tasks',       'employee.view'],
@@ -86,8 +100,12 @@
     // own Approve/Reject (which already carry data-perm).
     { route: '/employees/submissions', perm: 'submission.approve', labels: ['approve'] },
     { route: '/employees/submissions', perm: 'submission.reject', labels: ['reject'] },
-    // Leave (approve/reject already carry data-perm in the bundle)
-    { route: null, perm: 'leave.create', labels: ['apply leave'] },
+    // Leave: "Apply Leave" is self-service — every employee may submit their OWN
+    // leave request regardless of role (the API allows it via or_self), so the
+    // button is intentionally NOT gated here. Gating it behind leave.create hid
+    // it from HR Executive / Manager / Recruiter / IT / Payroll roles, who lack
+    // that management permission but still need to request their own leave.
+    // Approve/Reject already carry data-perm in the bundle and stay gated.
     // Attendance
     { route: null, perm: 'attendance.checkinout', labels: [
         'check in', 'check out', 'check in out'] },
@@ -100,6 +118,32 @@
     return (s || '').replace(/[^a-zA-Z ]+/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
   }
 
+  /* 16x16 line icons for injected nav items, matching the bundle's own markup:
+       <a class="nav-item"><span class="nav-icon"><svg …/></span>Label</a>
+     `currentColor` makes them inherit the active/hover colours for free, so they
+     behave exactly like React's icons in both themes. */
+  function svg(body) {
+    return '<svg viewBox="0 0 16 16" fill="none" width="16" stroke="currentColor" ' +
+           'stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">' + body + '</svg>';
+  }
+  var ICON = {
+    // Onboarding
+    gauge:   svg('<path d="M2.5 12a5.5 5.5 0 1111 0"/><path d="M8 12l3-3.5"/><circle cx="8" cy="12" r="1" fill="currentColor" stroke="none"/>'),
+    user:    svg('<circle cx="8" cy="5" r="2.6"/><path d="M2.8 13.5a5.2 5.2 0 0110.4 0"/>'),
+    badge:   svg('<rect x="1.8" y="3" width="12.4" height="10" rx="1.6"/><circle cx="5.6" cy="7.4" r="1.5"/><path d="M3.4 11.2a2.6 2.6 0 014.4 0M9.6 6.8h3.1M9.6 9.4h3.1"/>'),
+    file:    svg('<path d="M4 1.8h4.6L12 5.2v9H4z"/><path d="M8.4 1.9v3.4H12M5.9 8.6h4.2M5.9 11h4.2"/>'),
+    check:   svg('<path d="M8 1.6l5.2 2v4.1c0 3-2.2 5.3-5.2 6.7-3-1.4-5.2-3.7-5.2-6.7V3.6z"/><path d="M5.9 7.9l1.5 1.5 2.8-3"/>'),
+    laptop:  svg('<rect x="3" y="3.2" width="10" height="7" rx="1"/><path d="M1.4 12.8h13.2"/>'),
+    card:    svg('<rect x="1.6" y="3.6" width="12.8" height="8.8" rx="1.5"/><path d="M1.6 6.6h12.8M4.2 9.9h2.6"/>'),
+    gear:    svg('<circle cx="8" cy="8" r="2.1"/><path d="M8 1.6v1.6M8 12.8v1.6M14.4 8h-1.6M3.2 8H1.6M12.5 3.5l-1.1 1.1M4.6 11.4l-1.1 1.1M12.5 12.5l-1.1-1.1M4.6 4.6L3.5 3.5"/>'),
+    // Payroll (these were injected as bare text too)
+    dollar:  svg('<path d="M8 1.9v12.2M10.6 4.6H6.7a1.9 1.9 0 000 3.8h2.6a1.9 1.9 0 010 3.8H5.2"/>'),
+    building:svg('<path d="M2.6 14V3.1l6-1.5V14"/><path d="M8.6 5.6h4.8V14M1.4 14h13.2M4.6 5.4h1.4M4.6 8h1.4M4.6 10.6h1.4M10.4 8.2h1.2M10.4 10.8h1.2"/>'),
+    fileuser:svg('<path d="M4 1.8h4.6L12 5.2v9H4z"/><path d="M8.4 1.9v3.4H12"/><circle cx="8" cy="8.6" r="1.3"/><path d="M6 12.2a2.2 2.2 0 014 0"/>'),
+    users:   svg('<circle cx="6.2" cy="5.4" r="2.2"/><path d="M1.9 13a4.4 4.4 0 018.6 0"/><path d="M10.6 3.6a2.2 2.2 0 010 3.7M11.8 9.2a4.4 4.4 0 012.4 3.1"/>'),
+    handshake: svg('<path d="M1.6 6.4l2.6-2.2 3.8.9 3.8-.9 2.6 2.2"/><path d="M4.2 6.4l2.6 2.6 1.2-1.2 2.4 2.4M8 12.6l-2-2"/>'),
+  };
+
   /* Nav items that the React bundle may NOT render for certain legacy roles.
      When the user holds the corresponding permission, we inject them so they
      appear in the sidebar dynamically (fixes payroll.view for Recruiter role). */
@@ -108,11 +152,31 @@
       perm: 'payroll.view',
       section: 'Payroll',
       items: [
-        { href: '/payroll/run',              label: 'Payroll Run' },
-        { href: '/payroll/employer-record',  label: 'Employer of Record' },
-        { href: '/payroll/contractor-record',label: 'Contractor of Record' },
-        { href: '/payroll/contractor-mgmt',  label: 'Contractor Mgmt' },
-        { href: '/payroll/peo',              label: 'PEO' },
+        { href: '/payroll/run',              label: 'Payroll Run',           icon: ICON.dollar },
+        { href: '/payroll/employer-record',  label: 'Employer of Record',    icon: ICON.building },
+        { href: '/payroll/contractor-record',label: 'Contractor of Record',  icon: ICON.fileuser },
+        { href: '/payroll/contractor-mgmt',  label: 'Contractor Mgmt',       icon: ICON.users },
+        { href: '/payroll/peo',              label: 'PEO',                   icon: ICON.handshake },
+      ]
+    },
+    {
+      // The React bundle knows nothing about Onboarding — these routes exist
+      // only in hrms-onboarding.js — so the whole section is injected here.
+      // Individual items are then hidden per-role by applyNav() using the
+      // ROUTE_PERMS entries above; a Manager sees only Dashboard, Candidates
+      // and Work Authorization, never Payroll.
+      perm: 'onboarding.view',
+      section: 'Onboarding',
+      after: 'Employees',   // onboarding feeds the Employees module — sit under it
+      items: [
+        { href: '/onboarding',              label: 'Dashboard',           icon: ICON.gauge },
+        { href: '/onboarding/candidates',   label: 'Candidates',          icon: ICON.user },
+        { href: '/onboarding/work-auth',    label: 'Work Authorization',  icon: ICON.badge },
+        { href: '/onboarding/documents',    label: 'Documents',           icon: ICON.file },
+        { href: '/onboarding/verification', label: 'Verification',        icon: ICON.check },
+        { href: '/onboarding/assets',       label: 'IT Asset Allocation', icon: ICON.laptop },
+        { href: '/onboarding/payroll',      label: 'Payroll Information', icon: ICON.card },
+        { href: '/onboarding/settings',     label: 'Settings',            icon: ICON.gear },
       ]
     }
   ];
@@ -132,10 +196,15 @@
         if (existing) existing.parentNode.removeChild(existing);
         continue;
       }
-      // Check if the React bundle has already rendered items for this section
+      // Check if the React bundle has already rendered items for this section.
+      // Anchors WE injected must not count: they live in the sidebar too, so a
+      // naive href lookup finds our own section, concludes React rendered it,
+      // and deletes it — then re-injects on the next observer tick, forever.
+      // The section would flicker or vanish outright depending on timing.
       var alreadyInDom = false;
       for (var ii = 0; ii < def.items.length; ii++) {
-        if (sidebar.querySelector('a.nav-item[href="' + def.items[ii].href + '"]')) { alreadyInDom = true; break; }
+        var hit = sidebar.querySelector('a.nav-item[href="' + def.items[ii].href + '"]');
+        if (hit && !(existing && existing.contains(hit))) { alreadyInDom = true; break; }
       }
       if (alreadyInDom) {
         // React rendered them — remove our injected section (if any) and let React own them
@@ -156,7 +225,17 @@
         var a = document.createElement('a');
         a.className = 'nav-item';
         a.href = item.href;
-        a.textContent = item.label;
+        if (item.icon) {
+          // Same markup React emits, so the icon picks up .nav-item's active and
+          // hover colours (via currentColor) with no extra CSS.
+          var ic = document.createElement('span');
+          ic.className = 'nav-icon';
+          ic.innerHTML = item.icon;
+          a.appendChild(ic);
+          a.appendChild(document.createTextNode(item.label));
+        } else {
+          a.textContent = item.label;
+        }
         a.addEventListener('click', function (ev) {
           ev.preventDefault();
           // Use React Router's history if available, otherwise fallback
@@ -165,10 +244,28 @@
         });
         sec.appendChild(a);
       }
-      // Insert before the sidebar footer
-      var footer = sidebar.querySelector('.sidebar-footer');
-      if (footer && footer.parentNode) footer.parentNode.insertBefore(sec, footer);
-      else sidebar.appendChild(sec);
+      // Place the section where it belongs in the menu, not just at the bottom.
+      // `after` names the section it should follow (e.g. Onboarding sits under
+      // Employees, since it feeds that module); without it we fall back to the
+      // end of the sidebar, above the footer.
+      var placed = false;
+      if (def.after) {
+        var secs = sidebar.querySelectorAll('.nav-section');
+        for (var si = 0; si < secs.length; si++) {
+          var lbl = secs[si].querySelector('.nav-label');
+          var txt = ((lbl && lbl.textContent) || '').trim().toLowerCase();
+          if (txt === def.after.toLowerCase()) {
+            secs[si].parentNode.insertBefore(sec, secs[si].nextSibling);
+            placed = true;
+            break;
+          }
+        }
+      }
+      if (!placed) {
+        var footer = sidebar.querySelector('.sidebar-footer');
+        if (footer && footer.parentNode) footer.parentNode.insertBefore(sec, footer);
+        else sidebar.appendChild(sec);
+      }
     }
   }
 

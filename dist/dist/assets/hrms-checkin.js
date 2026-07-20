@@ -219,6 +219,11 @@
     document.addEventListener('click', function (e) {
       var target = e.target;
       if (!target || !target.closest) return;
+      // Never hijack clicks inside a form-builder or dialog overlay. A per-field
+      // "Settings" (⚙) button there opens the field editor — it is NOT the app's
+      // Settings navigation. Without this guard the greedy title-match below
+      // swallowed the ⚙ click in BOTH the job and onboarding form builders.
+      if (target.closest('.obf-ovl, .ocf-ovl, .obf-ed-ovl, .jfb-ovl, .pjf-ovl, .jfb-ed-ovl, [role="dialog"]')) return;
       var el = target.closest('a, button, div');
       if (!el) return;
       var text = (el.textContent || '').trim().toLowerCase();

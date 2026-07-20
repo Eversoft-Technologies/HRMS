@@ -129,8 +129,17 @@ class ResumeScore(models.Model):
     formatted = models.BooleanField(default=False)
     uploaded = models.BooleanField(default=True)
     file_name = models.CharField(max_length=255, null=True, blank=True)
+    # The original uploaded resume, stored base64-in-row (house style — no file
+    # storage backend is configured). resume_text is the extracted plain text;
+    # file_data/file_mime keep the actual PDF/DOCX so it can be viewed as sent.
+    file_mime = models.CharField(max_length=100, null=True, blank=True)
+    file_data = models.TextField(null=True, blank=True)
     resume_text = models.TextField(null=True, blank=True)
     jd_text = models.TextField(null=True, blank=True)
+    # Fingerprint of the resume content (normalised text, else the file bytes),
+    # used to dedupe: re-uploading/re-scoring the same resume updates its one row
+    # instead of creating another. Empty when there is nothing to fingerprint.
+    content_hash = models.CharField(max_length=64, default='', blank=True, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -788,3 +797,380 @@ class RolePermission(models.Model):
         db_table = 'role_permissions'
         ordering = ['id']
         unique_together = (('role', 'permission'),)
+
+
+# ---------------------------------------------------------------------------
+# Onboarding — work authorization & employee onboarding
+#
+# The lifecycle between "candidate accepted an offer" and "employee exists in
+# the system". A candidate walks a fixed set of stages (see ONBOARDING_STAGES);
+# every stage transition writes an OnboardingActivityLog row, which serves as
+# both the audit trail and the UI timeline.
+#
+# Candidates are NOT stored in interview_links: that table is the *recruiting*
+# record (tokens, scores, transcripts) and has a different lifecycle. A hired
+# interviewee links through via OnboardingCandidate.interview (nullable FK).
+# ---------------------------------------------------------------------------
+
+# Stage keys, in workflow order. Kept as plain strings (house style: no
+# TextChoices) but centralised because the API seeds one OnboardingStatus row
+# per stage and the UI renders one badge per stage.
+ONBOARDING_STAGES = [
+    'candidate_created',
+    'work_authorization',
+    'documents',
+    'hr_verification',
+    'manager_approval',
+    'it_assets',
+    'payroll',
+    'activated',
+]
+
+
+class OnboardingCandidate(models.Model):
+    """A person being onboarded. Soft-deleted so the audit trail survives."""
+    first_name = models.CharField(max_length=120, default='', blank=True)
+    last_name = models.CharField(max_length=120, default='', blank=True)
+    email = models.CharField(max_length=255, db_index=True)
+    phone = models.CharField(max_length=40, default='', blank=True)
+    client = models.CharField(max_length=255, default='', blank=True)
+    vendor = models.CharField(max_length=255, default='', blank=True)
+    recruiter = models.CharField(max_length=255, default='', blank=True)
+    job_title = models.CharField(max_length=255, default='', blank=True)
+    department = models.CharField(max_length=255, default='', blank=True)
+    joining_date = models.DateField(null=True, blank=True)
+    # Draft | Pending Verification | Pending Approval | Approved | Rejected | Onboarded
+    status = models.CharField(max_length=32, default='Draft', db_index=True)
+    # Link back to the recruiting record, when this candidate came from an interview.
+    interview = models.ForeignKey(
+        InterviewLink, null=True, blank=True, on_delete=models.SET_NULL,
+        related_name='onboarding_candidates', db_column='interview_id',
+    )
+    # Admin-defined extra fields (see OnboardingSetting 'candidate_fields').
+    # Values keyed by the field's ``key``; the schema lives in config, not here,
+    # so adding a field never needs a migration.
+    custom_fields = models.JSONField(default=dict, blank=True)
+    portal_token = models.CharField(max_length=64, unique=True, null=True, blank=True, db_index=True)
+    portal_token_expires_at = models.DateTimeField(null=True, blank=True)
+    requested_docs = models.JSONField(default=list, blank=True)
+    is_deleted = models.BooleanField(default=False, db_index=True)
+    deleted_at = models.DateTimeField(null=True, blank=True)
+    deleted_by = models.CharField(max_length=255, default='', blank=True)
+    created_by = models.CharField(max_length=255, default='', blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+
+    class Meta:
+        db_table = 'onboarding_candidates'
+        ordering = ['-created_at']
+
+
+
+class WorkAuthorization(models.Model):
+    """The candidate's right to work. One row per candidate.
+
+    ``expiry_date`` is deliberately a real indexed column rather than living in
+    WorkAuthorizationDetail.details: the "expiring soon" dashboard card and the
+    expiry alerts query it on every load, and JSON lookups cannot be indexed
+    portably across MySQL/SQLite.
+    """
+    candidate = models.OneToOneField(
+        OnboardingCandidate, on_delete=models.CASCADE,
+        related_name='work_authorization', db_column='candidate_id',
+    )
+    # F1 | H1B | GC EAD | US Citizen | H4 EAD | Other
+    auth_type = models.CharField(max_length=32, default='', blank=True, db_index=True)
+    # Active | Pending | Expired | Extension Filed | Transferred | Rejected
+    status = models.CharField(max_length=32, default='Pending', db_index=True)
+    expiry_date = models.DateField(null=True, blank=True, db_index=True)
+    receipt_number = models.CharField(max_length=120, default='', blank=True)
+    sponsorship_required = models.BooleanField(default=False)
+    # Values for the admin-built extra fields, keyed by field key. The schema
+    # lives in OnboardingSetting['work_auth_form'] and applies to every
+    # candidate, so it is kept apart from ``detail.details`` — that blob is
+    # whitelisted per visa type and would reject these keys.
+    custom_fields = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'work_authorizations'
+        ordering = ['-created_at']
+
+
+class WorkAuthorizationDetail(models.Model):
+    """Type-specific fields for a work authorization.
+
+    These vary per visa type (H1B: petition/LCA; F1: SEVIS/OPT/CPT; GC EAD: EAD
+    number...) and would otherwise be ~20 mostly-null columns, so they live in a
+    JSON blob. Anything the system *queries on* is normalised onto
+    WorkAuthorization instead.
+    """
+    work_authorization = models.OneToOneField(
+        WorkAuthorization, on_delete=models.CASCADE,
+        related_name='detail', db_column='work_authorization_id',
+    )
+    details = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'work_authorization_details'
+        ordering = ['-created_at']
+
+
+class CandidateDocument(models.Model):
+    """An uploaded document, stored base64 in the row (house style — there is no
+    file storage backend configured; see UserDocument).
+
+    Replacing a document inserts a NEW row with version+1 and flips the previous
+    row's is_active to False, so version history is free and nothing is lost.
+    """
+    candidate = models.ForeignKey(
+        OnboardingCandidate, on_delete=models.CASCADE,
+        related_name='documents', db_column='candidate_id',
+    )
+    # ssn | driver_license | state_id | visa | i94, or ``custom_<slug>`` for a
+    # document the uploader named themselves.
+    doc_type = models.CharField(max_length=40, db_index=True)
+    # Display name for a custom document. Empty for the fixed types, whose
+    # labels are a frontend concern.
+    label = models.CharField(max_length=120, default='', blank=True)
+    is_custom = models.BooleanField(default=False)
+    file_name = models.CharField(max_length=255, default='', blank=True)
+    file_mime = models.CharField(max_length=100, default='', blank=True)
+    file_size = models.IntegerField(default=0)  # decoded bytes
+    file_data = models.TextField(default='', blank=True)  # base64
+    version = models.IntegerField(default=1)
+    is_active = models.BooleanField(default=True, db_index=True)
+    uploaded_by = models.CharField(max_length=255, default='', blank=True)
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'candidate_documents'
+        ordering = ['-uploaded_at']
+
+
+class HrVerification(models.Model):
+    """HR's document checklist. One row per candidate."""
+    candidate = models.OneToOneField(
+        OnboardingCandidate, on_delete=models.CASCADE,
+        related_name='hr_verification', db_column='candidate_id',
+    )
+    ssn_verified = models.BooleanField(default=False)
+    driver_license_verified = models.BooleanField(default=False)
+    state_id_verified = models.BooleanField(default=False)
+    visa_verified = models.BooleanField(default=False)
+    i94_verified = models.BooleanField(default=False)
+    # Tick-box state for custom documents, keyed by their ``custom_<slug>``
+    # doc_type. The fixed types above get a column each; a custom document is
+    # named at upload time, so there is no column to add and this JSON map
+    # stands in for one.
+    custom_verified = models.JSONField(default=dict, blank=True)
+    # Pending | Approved | Rejected
+    status = models.CharField(max_length=20, default='Pending', db_index=True)
+    remarks = models.TextField(default='', blank=True)
+    verified_by = models.CharField(max_length=255, default='', blank=True)
+    verified_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'hr_verifications'
+        ordering = ['-created_at']
+
+
+class ManagerApproval(models.Model):
+    """A manager's decision. Append-only: "return for correction" then re-approve
+    produces two rows, so the timeline shows the full history."""
+    candidate = models.ForeignKey(
+        OnboardingCandidate, on_delete=models.CASCADE,
+        related_name='approvals', db_column='candidate_id',
+    )
+    # Approved | Rejected | Returned
+    action = models.CharField(max_length=20, default='', blank=True, db_index=True)
+    comments = models.TextField(default='', blank=True)
+    approver = models.CharField(max_length=255, default='', blank=True)
+    acted_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'manager_approvals'
+        ordering = ['-acted_at']
+
+
+class ItAssetAllocation(models.Model):
+    """Hardware handed to the candidate. One row per allocation, so a client
+    laptop and an Eversoft laptop can coexist."""
+    candidate = models.ForeignKey(
+        OnboardingCandidate, on_delete=models.CASCADE,
+        related_name='asset_allocations', db_column='candidate_id',
+    )
+    # Client | Eversoft
+    asset_source = models.CharField(max_length=20, default='Eversoft', db_index=True)
+    client_name = models.CharField(max_length=255, default='', blank=True)
+    # ['Laptop', 'Monitor', 'Mouse', ...]
+    assets = models.JSONField(default=list, blank=True)
+    asset_id = models.CharField(max_length=120, default='', blank=True)
+    issued_date = models.DateField(null=True, blank=True)
+    # Assigned | Returned | Lost | Damaged
+    status = models.CharField(max_length=20, default='Assigned', db_index=True)
+    allocated_by = models.CharField(max_length=255, default='', blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'it_asset_allocations'
+        ordering = ['-created_at']
+
+
+class PayrollInformation(models.Model):
+    """Bank / tax details. One row per candidate."""
+    candidate = models.OneToOneField(
+        OnboardingCandidate, on_delete=models.CASCADE,
+        related_name='payroll', db_column='candidate_id',
+    )
+    bank_name = models.CharField(max_length=255, default='', blank=True)
+    account_number = models.CharField(max_length=64, default='', blank=True)
+    routing_number = models.CharField(max_length=64, default='', blank=True)
+    tax_state = models.CharField(max_length=64, default='', blank=True)
+    direct_deposit = models.BooleanField(default=False)
+    # Pending | Completed
+    status = models.CharField(max_length=20, default='Pending', db_index=True)
+    completed_by = models.CharField(max_length=255, default='', blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'payroll_information'
+        ordering = ['-created_at']
+
+
+class OnboardingStatus(models.Model):
+    """One row per (candidate, stage) — drives the coloured stage badges and the
+    progress bar. Seeded for every stage when the candidate is created."""
+    candidate = models.ForeignKey(
+        OnboardingCandidate, on_delete=models.CASCADE,
+        related_name='stages', db_column='candidate_id',
+    )
+    # see ONBOARDING_STAGES
+    stage = models.CharField(max_length=40, db_index=True)
+    # Pending | In Progress | Completed | Rejected
+    status = models.CharField(max_length=20, default='Pending', db_index=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    updated_by = models.CharField(max_length=255, default='', blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'onboarding_status'
+        ordering = ['id']
+        unique_together = (('candidate', 'stage'),)
+
+
+class OnboardingActivityLog(models.Model):
+    """Append-only audit trail. Every mutating onboarding endpoint writes one row.
+    Doubles as the candidate timeline in the UI, so it carries human-readable
+    ``event``/``comments`` alongside the machine-readable old/new values."""
+    candidate = models.ForeignKey(
+        OnboardingCandidate, on_delete=models.CASCADE,
+        related_name='activity_logs', db_column='candidate_id',
+    )
+    event = models.CharField(max_length=120, default='', blank=True)
+    actor_email = models.CharField(max_length=255, default='', blank=True, db_index=True)
+    actor_name = models.CharField(max_length=255, default='', blank=True)
+    comments = models.TextField(default='', blank=True)
+    old_value = models.JSONField(default=dict, blank=True)
+    new_value = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'onboarding_activity_logs'
+        ordering = ['-created_at']
+
+
+class OnboardingSetting(models.Model):
+    """Generic key/value store for onboarding module configuration.
+
+    Currently holds ``candidate_fields`` — the admin-defined schema of extra
+    fields shown on the New Candidate form (an ordered list of field
+    descriptors: {key, label, type, required, options, width}). Kept as a
+    key/value row rather than dedicated columns so new settings never need a
+    migration.
+    """
+    key = models.CharField(max_length=80, primary_key=True)
+    value = models.JSONField(default=dict, blank=True)
+    updated_by = models.CharField(max_length=255, default='', blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'onboarding_settings'
+        ordering = ['key']
+
+
+class OnboardingFormTemplate(models.Model):
+    """A reusable New-Candidate form definition produced by the form builder —
+    the onboarding twin of JobFormTemplate. ``schema`` is the ordered list of
+    sections; the currently active row's schema is what the builder loads and
+    publishes to OnboardingSetting['candidate_form']."""
+    name = models.CharField(max_length=120, unique=True)
+    is_active = models.BooleanField(default=False)
+    schema = models.JSONField(default=list, blank=True)
+    created_by = models.CharField(max_length=255, default='', blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'onboarding_form_templates'
+        ordering = ['name']
+
+
+class PayrollForm(models.Model):
+    """A blank template uploaded by the admin for the candidate to fill/sign.
+    Includes the PDF data and field definitions."""
+    name = models.CharField(max_length=120, unique=True)
+    file_name = models.CharField(max_length=255, default='', blank=True)
+    file_mime = models.CharField(max_length=100, default='', blank=True)
+    file_data = models.TextField(default='', blank=True)  # base64
+    # Optional field positions schema for overlaid fields (docu-sign style)
+    # schema: [{'key': 'bankName', 'label': 'Bank Name', 'x': 100, 'y': 200, 'page': 1}, ...]
+    schema = models.JSONField(default=list, blank=True)
+    is_active = models.BooleanField(default=True, db_index=True)
+    created_by = models.CharField(max_length=255, default='', blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'payroll_forms'
+        ordering = ['name']
+
+
+class CandidateFormSubmission(models.Model):
+    """Submission from the candidate for a specific PayrollForm.
+    Stores JSON responses, signature base64, and the completed PDF."""
+    candidate = models.ForeignKey(
+        OnboardingCandidate, on_delete=models.CASCADE,
+        related_name='form_submissions', db_column='candidate_id',
+    )
+    form = models.ForeignKey(
+        PayrollForm, on_delete=models.CASCADE,
+        related_name='submissions', db_column='form_id',
+    )
+    # Filled fields data, e.g., {'bankName': 'Chase', 'accountNumber': '1234'}
+    filled_data = models.JSONField(default=dict, blank=True)
+    signature_data = models.TextField(default='', blank=True)  # base64 signature image
+    signed_at = models.DateTimeField(null=True, blank=True)
+    # The generated/uploaded completed PDF document
+    file_name = models.CharField(max_length=255, default='', blank=True)
+    file_mime = models.CharField(max_length=100, default='application/pdf', blank=True)
+    file_size = models.IntegerField(default=0)
+    file_data = models.TextField(default='', blank=True)  # base64
+    # digital | offline
+    mode = models.CharField(max_length=20, default='digital', db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'candidate_form_submissions'
+        ordering = ['-created_at']
+
