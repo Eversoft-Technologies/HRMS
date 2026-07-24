@@ -16,6 +16,7 @@ A few helpers and endpoints are intentionally NOT DRF:
 """
 import hashlib
 import json
+import logging
 import os
 import re
 import secrets
@@ -91,6 +92,8 @@ from .serializers import (
     GeoFenceSerializer,
     WfhRequestSerializer,
 )
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -273,7 +276,12 @@ def jobs(request):
     # Auto-post to the creator's linked social accounts (LinkedIn / X).
     # Non-fatal: a job is still created even if posting fails or isn't set up.
     if body.get('autoPost') is not False:
-        payload['socialResults'] = _auto_post_job(payload, body.get('userEmail'))
+        # customFields aren't on the serializer output but the draft builder
+        # uses them (skills, experience), so carry them through.
+        draft_source = dict(payload)
+        draft_source.setdefault('customFields', body.get('customFields') or {})
+        payload['socialResults'] = _auto_post_job(
+            draft_source, body.get('userEmail'), body.get('linkedinMessage'))
     return Response(payload, status=201)
 
 
@@ -316,22 +324,53 @@ def job_detail(request, pk):
     return Response(JobPostSerializer(job).data)
 
 
-def _auto_post_job(job_payload, user_email=None):
-    """Look up the user's saved social credentials and post the job. Returns a
-    list of per-platform results (empty if nothing is configured)."""
-    cfg = None
-    if user_email:
-        cfg = UserEmailConfig.objects.filter(pk=norm_email(user_email)).first()
-    if not cfg:
-        cfg = UserEmailConfig.objects.exclude(social__isnull=True).order_by('user_email').first()
-    if not cfg:
-        return []
-    social = safe_json(cfg.social) or (cfg.social if isinstance(cfg.social, dict) else {})
+def poster_contact(email):
+    """Contact details for the closing block of a job announcement: the
+    recruiter's own email plus the phone from their HRMS profile."""
+    email = norm_email(email)
+    if not email:
+        return {}
+    profile = UserProfile.objects.filter(email=email).first()
+    user = AppUser.objects.filter(email=email).first()
+    name = ''
+    if profile:
+        name = ' '.join(x for x in [profile.first_name, profile.last_name] if x).strip()
+    if not name and user:
+        name = user.full_name or ''
+    return {
+        'email': email,
+        'phone': (profile.phone if profile else '') or '',
+        'name': name,
+    }
+
+
+def _auto_post_job(job_payload, user_email=None, message=None):
+    """Post the job to the creator's OWN linked social accounts.
+
+    Never falls back to another user's credentials: a job must only ever appear
+    on the profile of the person who created it. When the creator has nothing
+    linked we return an explanatory skip result rather than an empty list, so
+    the UI can tell them why nothing was posted.
+
+    `message` is the text approved in the preview dialog; without it a fresh
+    draft is built.
+    """
+    email = norm_email(user_email)
+    if not email:
+        return [{'platform': 'linkedin', 'ok': False, 'skipped': True,
+                 'error': 'Could not identify the job creator, so nothing was posted.'}]
+
+    cfg = UserEmailConfig.objects.filter(pk=email).first()
+    social = safe_json(cfg.social) if cfg else None
     if not isinstance(social, dict) or not social:
-        return []
+        return [{'platform': 'linkedin', 'ok': False, 'skipped': True,
+                 'error': 'No LinkedIn account connected. Connect yours in '
+                          'Settings → Email Configuration.'}]
     try:
-        return social_poster.post_job(job_payload, social)
+        return social_poster.post_job(job_payload, social, message=message,
+                                      contact=poster_contact(email))
     except Exception as e:  # noqa: BLE001 - never break job creation on a posting error
+        logger.warning('Social auto-post failed for %s: %s', email, e)
         return [{'platform': 'all', 'ok': False, 'error': str(e)}]
 
 
@@ -1271,6 +1310,28 @@ def user_profile(request, email):
     return Response(UserProfileSerializer(obj).data)
 
 
+def _merge_social(email, incoming):
+    """Overlay the Settings form's social values on the stored ones.
+
+    The form owns ``social['<platform>']`` — a plain profile-URL string. OAuth
+    credentials live beside it under ``social['<platform>Auth']``, a key the
+    form never sends. Without this merge, saving Settings would silently wipe a
+    user's LinkedIn connection (see api/linkedin_oauth.py).
+    """
+    if not isinstance(incoming, dict):
+        incoming = {}
+    cfg = UserEmailConfig.objects.filter(pk=email).first()
+    stored = safe_json(cfg.social) if cfg else None
+    if not isinstance(stored, dict):
+        return incoming
+
+    merged = dict(incoming)
+    for key, value in stored.items():
+        if key.endswith('Auth') and key not in merged:
+            merged[key] = value
+    return merged
+
+
 @api_view(['PUT'])
 @require_perm('settings.manage', or_self=True)
 def user_email_config(request, email):
@@ -1278,7 +1339,7 @@ def user_email_config(request, email):
     if not email:
         return err('email is required')
     body = request.data
-    social = body.get('social', {})
+    social = _merge_social(email, body.get('social', {}))
     obj, _ = UserEmailConfig.objects.update_or_create(
         user_email=email,
         defaults={
@@ -2274,6 +2335,12 @@ def client_config(request):
     import os
     return Response({
         'googleClientId': os.environ.get('GOOGLE_CLIENT_ID', ''),
+        # Whether per-user LinkedIn linking is available at all. Only the
+        # boolean is published — never the client id or secret.
+        'linkedinConfigured': bool(
+            getattr(settings, 'LINKEDIN_CLIENT_ID', '')
+            and getattr(settings, 'LINKEDIN_CLIENT_SECRET', '')
+        ),
     })
 
 
