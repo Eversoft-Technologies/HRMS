@@ -1,6 +1,6 @@
 from django.urls import path
 
-from . import auth_views, live_views, views, attendance_views, job_form_views
+from . import auth_views, live_views, views, attendance_views, job_form_views, onboarding_views
 
 # All paths are relative to the "/api/" prefix from the project urlconf.
 urlpatterns = [
@@ -169,4 +169,28 @@ urlpatterns = [
     path('attendance/wfh/submit/', attendance_views.WFHRequestViewSet.as_view({'post': 'submit_request'})),
     path('attendance/wfh/approve/', attendance_views.WFHRequestViewSet.as_view({'post': 'approve_request'})),
     path('attendance/wfh/reject/', attendance_views.WFHRequestViewSet.as_view({'post': 'reject_request'})),
+
+    # Onboarding — work authorization, documents, and the candidate lifecycle.
+    # Static segments precede <int:pk> so they are not swallowed by it.
+    path('onboarding/dashboard', onboarding_views.onboarding_dashboard),
+    path('onboarding/alerts', onboarding_views.onboarding_alerts),
+    # One list per sidebar page — each returns what that page is about.
+    path('onboarding/work-authorizations', onboarding_views.work_authorization_list),
+    path('onboarding/documents', onboarding_views.documents_list),
+    path('onboarding/verifications', onboarding_views.verifications_list),
+    path('onboarding/asset-allocations', onboarding_views.asset_allocations_list),
+    path('onboarding/payroll', onboarding_views.payroll_list),
+    path('onboarding/candidates', onboarding_views.candidates),
+    path('onboarding/candidates/<int:pk>', onboarding_views.candidate_detail),
+    path('onboarding/candidates/<int:pk>/timeline', onboarding_views.candidate_timeline),
+    path('onboarding/candidates/<int:pk>/work-authorization', onboarding_views.candidate_work_authorization),
+    path('onboarding/candidates/<int:pk>/documents', onboarding_views.candidate_documents),
+    path('onboarding/candidates/<int:pk>/documents/<int:doc_id>', onboarding_views.candidate_document_detail),
+    path('onboarding/candidates/<int:pk>/document-versions/<str:doc_type>', onboarding_views.candidate_document_versions),
+    path('onboarding/candidates/<int:pk>/verify', onboarding_views.candidate_verification),
+    path('onboarding/candidates/<int:pk>/approve', onboarding_views.candidate_approval),
+    path('onboarding/candidates/<int:pk>/assets', onboarding_views.candidate_assets),
+    path('onboarding/candidates/<int:pk>/assets/<int:asset_id>', onboarding_views.candidate_asset_detail),
+    path('onboarding/candidates/<int:pk>/payroll', onboarding_views.candidate_payroll),
+    path('onboarding/candidates/<int:pk>/activate', onboarding_views.candidate_activate),
 ]

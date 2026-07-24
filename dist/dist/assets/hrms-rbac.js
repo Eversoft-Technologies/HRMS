@@ -94,6 +94,14 @@
     ['Reports',     [['reports.view', 'View Reports'], ['reports.export', 'Export Reports']]],
     ['Settings',    [['settings.view', 'View Settings'], ['settings.manage', 'Manage Settings']]],
     ['RBAC',        [['rbac.view', 'View Access Control'], ['rbac.manage', 'Manage Access Control']]],
+    ['Onboarding',  [['onboarding.view', 'View Onboarding'], ['onboarding.create', 'Create Candidate'],
+                     ['onboarding.edit', 'Edit Candidate / Work Authorization'],
+                     ['onboarding.delete', 'Delete Candidate'],
+                     ['onboarding.verify', 'Verify Documents (HR)'],
+                     ['onboarding.approve', 'Approve Onboarding (Manager)'],
+                     ['onboarding.assets', 'Allocate IT Assets'],
+                     ['onboarding.payroll', 'Complete Payroll Information'],
+                     ['onboarding.settings', 'Manage Onboarding Settings']]],
   ];
 
   /* Build a code <select> (grouped) + a "custom" text input revealed when
