@@ -150,6 +150,22 @@ HRMS_PUBLIC_URL = os.environ.get('HRMS_PUBLIC_URL', '').rstrip('/')
 
 
 # ---------------------------------------------------------------------------
+# LinkedIn OAuth — lets each recruiter link their OWN LinkedIn account so new
+# jobs are auto-posted to their profile (see api/linkedin_oauth.py).
+#
+# Create an app at https://www.linkedin.com/developers/apps and request both
+# the "Sign In with LinkedIn using OpenID Connect" and "Share on LinkedIn"
+# products, then add the redirect URL below under the app's Auth tab.
+# When these are blank the feature stays dormant and the UI says so.
+# ---------------------------------------------------------------------------
+LINKEDIN_CLIENT_ID = os.environ.get('LINKEDIN_CLIENT_ID', '')
+LINKEDIN_CLIENT_SECRET = os.environ.get('LINKEDIN_CLIENT_SECRET', '')
+LINKEDIN_REDIRECT_URI = os.environ.get('LINKEDIN_REDIRECT_URI', '') or (
+    HRMS_PUBLIC_URL + '/api/auth/linkedin/callback' if HRMS_PUBLIC_URL else ''
+)
+
+
+# ---------------------------------------------------------------------------
 # Static files + React build
 # ---------------------------------------------------------------------------
 STATIC_URL = '/static/'

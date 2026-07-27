@@ -26,11 +26,19 @@
   // -------------------------------------------------------------------------
   // helpers
   // -------------------------------------------------------------------------
+  // The signed-in user's email. `hrms_session` is the app's primary session key
+  // (the one hrms-actor.js reads to attach X-User-Email); `hrms_user` is an
+  // extra stash google-auth.js writes on Google sign-in. Check both.
   function currentEmail() {
-    try {
-      var u = JSON.parse(localStorage.getItem('hrms_user') || 'null');
-      return (u && (u.email || u.userEmail || u.mail)) || '';
-    } catch (e) { return ''; }
+    var keys = ['hrms_session', 'hrms_user'];
+    for (var i = 0; i < keys.length; i++) {
+      try {
+        var o = JSON.parse(localStorage.getItem(keys[i]) || 'null');
+        var em = o && (o.email || o.userEmail || o.mail);
+        if (em) return em;
+      } catch (e) {}
+    }
+    return '';
   }
 
   function apiGet(path) {
@@ -119,45 +127,56 @@
       return;
     }
 
+    // Connections are per-user, so every state names the account it describes —
+    // otherwise "Connect LinkedIn" looks broken to someone who linked a
+    // different login.
     if (state && state.connected && !state.expired) {
-      var ok = document.createElement('span');
-      ok.style.cssText = 'display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:600;color:#16a34a';
-      ok.innerHTML = '<span style="color:#0a66c2">' + LI_ICON + '</span> Connected' +
-        (state.name ? ' as ' + escapeHtml(state.name) : '');
+      row.appendChild(statusChip('Connected as ' + (state.name || email), '#16a34a'));
       var dis = document.createElement('button');
       dis.type = 'button';
       dis.textContent = 'Disconnect';
-      dis.style.cssText = 'background:none;border:none;color:#ef4444;font-size:12.5px;font-weight:600;cursor:pointer;text-decoration:underline;font-family:inherit';
+      dis.style.cssText = 'background:none;border:none;color:#ef4444;font-size:12.5px;font-weight:600;cursor:pointer;text-decoration:underline;font-family:inherit;padding:0';
       dis.onclick = function () { doDisconnect(row); };
-      row.appendChild(ok);
       row.appendChild(dis);
+      row.appendChild(subNote('New jobs you create will be posted to this profile.'));
       return;
     }
 
     if (state && state.expired) {
-      var warn = document.createElement('span');
-      warn.style.cssText = 'font-size:12.5px;color:#d97706;font-weight:600';
-      warn.textContent = 'Connection expired';
       var re = makeButton(LI_ICON + ' Reconnect LinkedIn', '#0a66c2');
       re.onclick = function () { doConnect(row); };
-      row.appendChild(warn);
       row.appendChild(re);
+      row.appendChild(statusChip('Connection expired', '#d97706'));
+      row.appendChild(subNote('Signed in as ' + email + '. Reconnect to keep auto-posting.'));
       return;
     }
 
     var btn = makeButton(LI_ICON + ' Connect LinkedIn', '#0a66c2');
     btn.onclick = function () { doConnect(row); };
     row.appendChild(btn);
-    var hint = document.createElement('span');
-    hint.style.cssText = 'font-size:12px;color:var(--text-muted,#94a3b8)';
-    hint.textContent = 'Required to auto-post new jobs to your profile.';
-    row.appendChild(hint);
+    row.appendChild(statusChip('Not connected', '#94a3b8'));
+    row.appendChild(subNote('Signed in as ' + email + '. Required to auto-post new jobs to your profile.'));
   }
 
-  function escapeHtml(s) {
-    return String(s).replace(/[&<>"']/g, function (c) {
-      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
-    });
+  // A coloured dot + label, shown beside the button so the state is readable
+  // at a glance rather than inferred from which button is present.
+  function statusChip(text, color) {
+    var el = document.createElement('span');
+    el.style.cssText = 'display:inline-flex;align-items:center;gap:6px;font-size:12.5px;' +
+      'font-weight:600;color:' + color;
+    var dot = document.createElement('span');
+    dot.style.cssText = 'width:8px;height:8px;border-radius:50%;flex:none;background:' + color;
+    el.appendChild(dot);
+    el.appendChild(document.createTextNode(text));
+    return el;
+  }
+
+  // Full-width line under the button/chip pair (the row is flex-wrap).
+  function subNote(text) {
+    var el = document.createElement('span');
+    el.style.cssText = 'flex-basis:100%;font-size:12px;color:var(--text-muted,#94a3b8)';
+    el.textContent = text;
+    return el;
   }
 
   // -------------------------------------------------------------------------
@@ -291,6 +310,137 @@
     };
     XMLHttpRequest.prototype.open.__hrmsLiWrapped = true;
   }
+
+  // -------------------------------------------------------------------------
+  // shared API — hrms-jobs-table.js uses this for the "post to my LinkedIn"
+  // checkbox so the status call lives in exactly one place.
+  // -------------------------------------------------------------------------
+  // Insert-only toolbar for the post box. Deliberately has no bold/italic/font
+  // controls: LinkedIn renders posts as plain text, so those would silently be
+  // lost. Emoji and symbols survive verbatim, so those are what we offer.
+  function buildPlainToolbar(bar, ta) {
+    if (!bar || !window.HRMSEditor) return;
+    var ED = window.HRMSEditor;
+    function mk(label, title, onClick) {
+      var b = document.createElement('button');
+      b.type = 'button'; b.title = title; b.textContent = label;
+      b.style.cssText = 'background:var(--bg3,#0b1220);border:1px solid var(--border2,#1e293b);' +
+        'color:inherit;border-radius:6px;min-width:30px;height:28px;padding:0 8px;' +
+        'font:14px/1 inherit;cursor:pointer';
+      b.addEventListener('mousedown', function (e) { e.preventDefault(); onClick(b); });
+      bar.appendChild(b);
+      return b;
+    }
+    mk('😊', 'Insert emoji', function (b) { ED.emoji(b, function (ch) { ED.insertAtCursor(ta, ch); }); });
+    ['✔', '◆', '•', '📍', '💼', '🎓', '💰', '📧', '📞'].forEach(function (ch) {
+      mk(ch, 'Insert ' + ch, function () { ED.insertAtCursor(ta, ch + ' '); });
+    });
+    mk('—', 'Insert divider line', function () { ED.insertAtCursor(ta, '\n————————————\n'); });
+    var hint = document.createElement('span');
+    hint.style.cssText = 'font-size:11.5px;color:var(--text3,#94a3b8);margin-left:4px';
+    hint.textContent = 'Plain text only — LinkedIn ignores bold, colour and fonts.';
+    bar.appendChild(hint);
+  }
+
+  // Review-before-post dialog. Resolves with the approved text, or null if the
+  // user backed out. Self-styled so both job forms can share it regardless of
+  // which stylesheet they own.
+  function review(job, email) {
+    return new Promise(function (resolve) {
+      var ov = document.createElement('div');
+      ov.id = 'hrms-li-review';
+      ov.style.cssText = 'position:fixed;inset:0;z-index:100000;background:rgba(2,6,23,.62);' +
+        'display:flex;align-items:center;justify-content:center;padding:20px';
+      ov.innerHTML =
+        '<div style="background:var(--bg2,#0f172a);color:var(--text,#e2e8f0);border:1px solid var(--border2,#1e293b);' +
+          'border-radius:14px;width:min(680px,100%);max-height:92vh;display:flex;flex-direction:column;' +
+          'box-shadow:0 20px 60px rgba(0,0,0,.45);font-family:inherit">' +
+          '<div style="display:flex;align-items:center;gap:10px;padding:16px 20px;border-bottom:1px solid var(--border2,#1e293b)">' +
+            '<span style="color:#0a66c2">' + LI_ICON + '</span>' +
+            '<h3 style="margin:0;font-size:15px;font-weight:700;flex:1">Review your LinkedIn post</h3>' +
+            '<button type="button" id="lir-x" style="background:none;border:none;color:inherit;font-size:22px;line-height:1;cursor:pointer;opacity:.6">×</button>' +
+          '</div>' +
+          '<div style="padding:14px 20px;overflow:auto;flex:1">' +
+            '<p style="margin:0 0 10px;font-size:12.5px;color:var(--text3,#94a3b8)">' +
+              'This is what will appear on your profile. Edit it freely — the job is only created once you confirm.<br>' +
+              'LinkedIn posts are plain text, so emoji and symbols carry over exactly as you see them here.</p>' +
+            '<div id="lir-tb" style="display:flex;flex-wrap:wrap;align-items:center;gap:4px;margin-bottom:6px"></div>' +
+            '<textarea id="lir-text" spellcheck="true" style="width:100%;min-height:320px;resize:vertical;box-sizing:border-box;' +
+              'background:var(--bg3,#0b1220);border:1px solid var(--border2,#1e293b);border-radius:8px;color:inherit;' +
+              'font:13px/1.6 inherit;padding:12px"></textarea>' +
+            '<div style="display:flex;justify-content:space-between;gap:12px;margin-top:6px;font-size:12px;color:var(--text3,#94a3b8)">' +
+              '<span id="lir-count"></span>' +
+              '<button type="button" id="lir-reset" style="background:none;border:none;color:#0a66c2;font:inherit;font-weight:600;cursor:pointer;padding:0">Reset to suggested text</button>' +
+            '</div>' +
+          '</div>' +
+          '<div style="display:flex;align-items:center;gap:10px;padding:14px 20px;border-top:1px solid var(--border2,#1e293b)">' +
+            '<span id="lir-msg" style="font-size:12px;font-weight:600;color:#ef4444;margin-right:auto"></span>' +
+            '<button type="button" id="lir-back" style="padding:9px 16px;border-radius:8px;border:1px solid var(--border2,#1e293b);background:none;color:inherit;font:600 13px inherit;cursor:pointer">Back</button>' +
+            '<button type="button" id="lir-post" style="padding:9px 16px;border-radius:8px;border:none;background:#0a66c2;color:#fff;font:600 13px inherit;cursor:pointer">Post job &amp; share</button>' +
+          '</div>' +
+        '</div>';
+      document.body.appendChild(ov);
+
+      var ta = ov.querySelector('#lir-text');
+      var msg = ov.querySelector('#lir-msg');
+      var suggested = '';
+      function count() {
+        var n = ta.value.length;
+        // LinkedIn hides anything past ~3,000 chars behind "…see more".
+        ov.querySelector('#lir-count').textContent = n + ' characters' +
+          (n > 3000 ? ' — over LinkedIn’s ~3,000 limit, it may be cut off' : '');
+      }
+      ta.addEventListener('input', count);
+      ta.value = 'Building preview…';
+      ta.disabled = true;
+      buildPlainToolbar(ov.querySelector('#lir-tb'), ta);
+
+      apiPost('/auth/linkedin/preview', { job: job, userEmail: email || currentEmail() })
+        .then(function (r) {
+          suggested = (r && r.text) || '';
+          ta.disabled = false; ta.value = suggested; count(); ta.focus();
+        })
+        .catch(function () {
+          // Let them write it by hand rather than blocking the post entirely.
+          ta.disabled = false; ta.value = '';
+          msg.textContent = 'Could not build a draft — write your post below.';
+          count();
+        });
+
+      var done = false;
+      function finish(val) { if (done) return; done = true; ov.remove(); resolve(val); }
+      ov.querySelector('#lir-x').onclick = function () { finish(null); };
+      ov.querySelector('#lir-back').onclick = function () { finish(null); };
+      ov.addEventListener('mousedown', function (e) { if (e.target === ov) finish(null); });
+      ov.querySelector('#lir-reset').onclick = function () { ta.value = suggested; count(); };
+      ov.querySelector('#lir-post').onclick = function () {
+        var text = ta.value.trim();
+        if (!text) { msg.textContent = 'Write something to post, or go Back and untick the option.'; return; }
+        finish(text);
+      };
+    });
+  }
+
+  window.HRMSLinkedIn = {
+    currentEmail: currentEmail,
+    review: review,
+    // -> Promise<{configured, connected, expired, name}>; never rejects, so
+    // callers can treat an unreachable backend as simply "not connected".
+    status: function () {
+      var email = currentEmail();
+      if (!email) {
+        return Promise.resolve({ configured: configured !== false, connected: false, expired: false, name: '' });
+      }
+      return apiGet('/auth/linkedin/status?userEmail=' + encodeURIComponent(email))
+        .then(function (s) {
+          if (s && typeof s.configured === 'boolean') configured = s.configured;
+          return s || {};
+        })
+        .catch(function () {
+          return { configured: false, connected: false, expired: false, name: '' };
+        });
+    },
+  };
 
   // -------------------------------------------------------------------------
   // boot
