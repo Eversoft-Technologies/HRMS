@@ -10,13 +10,15 @@ import sys
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'hrms_project.settings')
 
 import django
-from django.test import TestCase, Client
+from django.db import connection, reset_queries
+from django.test import TestCase, Client, override_settings
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 django.setup()
 
 from api import mailer
 from api.models import AppUser, InterviewLink, InterviewRecording
+from api.serializers import InterviewRecordingSerializer
 
 
 class InterviewScoreTests(TestCase):
@@ -164,3 +166,59 @@ class BrandedEmailTests(TestCase):
         # twice as href (button + fallback) and once as the visible link text
         self.assertEqual(cta.count('https://example.com/x'), 3)
         self.assertEqual(mailer.render_cta('', 'Join'), '')
+
+
+class RecordingListDoesNotLoadBlobsTests(TestCase):
+    """GET /api/interview-recordings must never touch the video columns.
+
+    to_representation used getattr(instance, '_has_video', instance.video_buffer).
+    Python evaluates a getattr default eagerly, so the deferred LONGBLOB was read
+    on every row even though the annotation was present — one extra SELECT per
+    row per column, each pulling a whole video. That is what made this endpoint
+    502 in production.
+    """
+
+    def setUp(self):
+        for i in range(3):
+            InterviewRecording.objects.create(
+                candidate_name=f'c{i}', candidate_email=f'c{i}@example.com',
+                role='data analyst', verdict='HOLD', total_score=50,
+                video_buffer=b'\x00' * 2048, video_mime='video/webm',
+                transcript='Q1', responses=[],
+            )
+
+    def test_serializing_the_list_issues_no_extra_queries(self):
+        from api.views import _recording_list_qs
+
+        with override_settings(DEBUG=True):
+            reset_queries()
+            rows = list(_recording_list_qs())
+            after_fetch = len(connection.queries)
+            InterviewRecordingSerializer(rows, many=True).data
+            extra = len(connection.queries) - after_fetch
+
+        self.assertEqual(len(rows), 3)
+        self.assertEqual(extra, 0, f'{extra} extra queries — the blob columns are being loaded again')
+
+    def test_has_video_is_still_correct_in_both_paths(self):
+        from api.views import _recording_list_qs
+
+        listed = InterviewRecordingSerializer(_recording_list_qs(), many=True).data
+        self.assertTrue(all(r['hasVideo'] for r in listed))
+        self.assertTrue(all(not r['hasRecording'] for r in listed))
+
+        # Detail path is unannotated, so it exercises the lazy fallback.
+        one = InterviewRecording.objects.first()
+        detail = InterviewRecordingSerializer(one).data
+        self.assertTrue(detail['hasVideo'])
+        self.assertFalse(detail['hasRecording'])
+
+    def test_a_recording_with_no_video_reports_false(self):
+        InterviewRecording.objects.create(
+            candidate_name='novideo', candidate_email='nv@example.com',
+            role='data analyst', verdict='HOLD', transcript='', responses=[],
+        )
+        from api.views import _recording_list_qs
+        row = next(r for r in InterviewRecordingSerializer(_recording_list_qs(), many=True).data
+                   if r['candidateName'] == 'novideo')
+        self.assertFalse(row['hasVideo'])

@@ -449,6 +449,20 @@ class InterviewRecordingSerializer(serializers.ModelSerializer):
     def to_representation(self, instance):
         # ``_has_video`` / ``_has_recording`` are annotated by the list queryset
         # (which defers the heavy columns); fall back to the columns otherwise.
+        #
+        # The fallback MUST stay lazy. getattr(obj, name, default) evaluates its
+        # default eagerly, so `getattr(instance, '_has_video', instance.video_buffer)`
+        # read the deferred LONGBLOB on every row even when the annotation was
+        # present — one extra SELECT per row per column, pulling the whole video.
+        # Six recordings meant twelve blob queries and ~74 MB over the wire, which
+        # is what made GET /api/interview-recordings time out and 502 in production.
+        has_video = getattr(instance, '_has_video', None)
+        if has_video is None:                       # unannotated (detail view)
+            has_video = instance.video_buffer is not None
+        has_recording = getattr(instance, '_has_recording', None)
+        if has_recording is None:
+            has_recording = instance.recording_data is not None
+
         return {
             'id': instance.id,
             'candidateName': instance.candidate_name,
@@ -460,8 +474,8 @@ class InterviewRecordingSerializer(serializers.ModelSerializer):
             'techScore': instance.tech_score,
             'commScore': instance.comm_score,
             'integrityScore': instance.integrity_score,
-            'hasVideo': bool(getattr(instance, '_has_video', instance.video_buffer)),
-            'hasRecording': bool(getattr(instance, '_has_recording', instance.recording_data)),
+            'hasVideo': bool(has_video),
+            'hasRecording': bool(has_recording),
             'transcript': instance.transcript,
             'responses': safe_list(instance.responses),
             'createdAt': instance.created_at.strftime(DATETIME_FMT) if instance.created_at else None,
