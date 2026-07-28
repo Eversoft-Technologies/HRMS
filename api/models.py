@@ -1174,3 +1174,26 @@ class CandidateFormSubmission(models.Model):
         db_table = 'candidate_form_submissions'
         ordering = ['-created_at']
 
+
+
+class EmailTemplate(models.Model):
+    """A reusable candidate follow-up email, editable from the Email Preview
+    drawer. `outcome` ties a template to Selected / Waitlisted / Rejected so the
+    right ones surface first; blank means it suits any outcome.
+
+    `subject` and `body` may contain {{name}}, {{role}}, {{company}} and
+    {{outcome}} placeholders, filled in per candidate when the template loads.
+    """
+    name = models.CharField(max_length=140, unique=True)
+    outcome = models.CharField(max_length=40, default='', blank=True, db_index=True)
+    subject = models.CharField(max_length=300, default='', blank=True)
+    body = models.TextField(default='', blank=True)          # HTML
+    # True for the three shipped defaults, so they can be reset but not lost.
+    is_builtin = models.BooleanField(default=False)
+    created_by = models.CharField(max_length=255, default='', blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'email_templates'
+        ordering = ['outcome', 'name']

@@ -468,12 +468,18 @@
   }
 
   /* ── load the effective permissions for the signed-in user ─────────────── */
-  function refresh() {
+  function refresh(opts) {
     var em = sessionEmail();
     if (!em) { known = false; applyPerms(); return; }
+    // Skip the poll entirely while offline or backing off: a request we know
+    // will fail only costs a console error, and the catch below would drop us
+    // to the unenforced state for no reason. Keeping the last known permission
+    // set through a connection blip is both quieter and safer.
+    if (window.HRMSNet && !window.HRMSNet.ready('perms', opts)) return;
     var hdrs = {};
     try { hdrs['X-User-Email'] = em; } catch (_) {}
-    fetch('/api/me/permissions?email=' + encodeURIComponent(em), { headers: hdrs })
+    (window.HRMSNet ? window.HRMSNet.fetch('perms', '/api/me/permissions?email=' + encodeURIComponent(em), { headers: hdrs })
+                    : fetch('/api/me/permissions?email=' + encodeURIComponent(em), { headers: hdrs }))
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (d) {
         if (d && Array.isArray(d.permissions)) {
@@ -514,28 +520,33 @@
     if (em !== curEmail) {
       curEmail = em;
       set = new Set(); known = false;
-      if (em) refresh(); else { try { localStorage.removeItem('hrms_permissions'); } catch (_) {} applyPerms(); }
+      if (em) refresh({ background: false }); else { try { localStorage.removeItem('hrms_permissions'); } catch (_) {} applyPerms(); }
     }
   }, 2000);
   /* pick up permission changes made by an admin without a full re-login */
   setInterval(refresh, 10000);
+  /* a hidden tab stops polling, so re-sync the moment it is looked at again */
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden) refresh({ background: false });
+  });
+  window.addEventListener('hrmsNetOnline', function () { refresh({ background: false }); });
   /* cross-tab: another tab logged in/out or perms changed */
   window.addEventListener('storage', function (e) {
     if (e.key === 'hrms_session' || e.key === 'hrms_permissions') {
-      set = new Set(); known = false; curEmail = sessionEmail(); applyPerms(); refresh();
+      set = new Set(); known = false; curEmail = sessionEmail(); applyPerms(); refresh({ background: false });
     }
   });
   /* SPA route change → re-apply gating/guard immediately, and re-pull the live
      permission set so an admin's edits take effect on the very next navigation
      (not just on the 10s poll). */
-  function onRouteChange() { scheduleApply(); applyRouteGuard(); refresh(); }
+  function onRouteChange() { scheduleApply(); applyRouteGuard(); refresh({ background: false }); }
   var _push = history.pushState;
   history.pushState = function () { _push.apply(history, arguments); onRouteChange(); };
   window.addEventListener('popstate', onRouteChange);
   /* allow other scripts to force a reload of permissions */
-  window.__hrmsRefreshPerms = refresh;
+  window.__hrmsRefreshPerms = function () { refresh({ background: false }); };
 
-  refresh();
+  refresh({ background: false });
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', watch);
   else watch();
 
