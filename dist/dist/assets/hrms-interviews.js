@@ -253,12 +253,29 @@
   }
 
   /* ── data ─────────────────────────────────────────────────────────────── */
+  /*
+   * `retryAt` breaks a feedback loop that used to hammer /api/interviews:
+   * a failed load left `loaded` false, then renderAll() mutated the DOM, which
+   * woke the MutationObserver below, which called tick(), which saw `!loaded`
+   * and fired load() again — one request per animation frame, forever, for as
+   * long as the endpoint was failing. The cooldown makes a failure quiet.
+   */
+  var retryAt = 0;
   function load(force) {
     if (loading || (loaded && !force)) return;
+    if (Date.now() < retryAt) return;
+    if (window.HRMSNet && !window.HRMSNet.ready('interviews', { background: !force })) return;
     loading = true;
     api('/api/interviews')
-      .then(function (rows) { DATA = Array.isArray(rows) ? rows : []; loaded = true; })
-      .catch(function () {})
+      .then(function (rows) {
+        DATA = Array.isArray(rows) ? rows : [];
+        loaded = true; retryAt = 0;
+        if (window.HRMSNet) window.HRMSNet.succeeded('interviews');
+      })
+      .catch(function () {
+        retryAt = Date.now() + 15000;
+        if (window.HRMSNet) window.HRMSNet.failed('interviews');
+      })
       .then(function () { loading = false; renderAll(); });
   }
 
@@ -992,6 +1009,7 @@
     window.addEventListener('popstate', function () { loaded = false; tick(); });
     window.addEventListener('hrmsNavigate', function () { loaded = false; tick(); });
     document.addEventListener('visibilitychange', function () { if (!document.hidden && onPage()) load(true); });
+    window.addEventListener('hrmsNetOnline', function () { retryAt = 0; if (onPage()) load(true); });
     setInterval(function () { if (onPage() && (document.getElementById('hrms-iv-up') || document.getElementById('hrms-iv-done'))) load(true); }, 60000);
   }
 
