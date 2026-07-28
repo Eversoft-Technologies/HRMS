@@ -1,7 +1,7 @@
 from django.urls import path
 
-from . import (auth_views, email_template_views, linkedin_oauth, live_views, views,
-               attendance_views, job_form_views, onboarding_views)
+from . import (auth_views, linkedin_oauth, live_views, views, attendance_views,
+               job_form_views, onboarding_views)
 
 # All paths are relative to the "/api/" prefix from the project urlconf.
 urlpatterns = [
