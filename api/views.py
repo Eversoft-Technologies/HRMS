@@ -423,29 +423,38 @@ def _send_interview_invitation(obj, origin, sender_email=None):
         return {'ok': False, 'error': 'Candidate has no email address'}
 
     candidate_url = f'{origin}/interview-access?token={obj.candidate_token}'
+
+    when = ' at '.join(p for p in (obj.interview_date, obj.interview_time) if p) or 'To be confirmed'
+    types = obj.interview_type
+    if isinstance(types, (list, tuple)):
+        types = ', '.join(str(t) for t in types)
+
     html = mailer.render_branded(
-        title=f'Interview Invitation — {obj.role}',
+        greeting=obj.name,
+        title='',
         intro=(
-            f'Dear {obj.name},<br><br>'
-            f'Your interview for the <strong>{obj.role}</strong> position has been scheduled.<br>'
-            f'<strong>Date:</strong> {obj.interview_date or "TBD"}&nbsp;&nbsp;'
-            f'<strong>Time:</strong> {obj.interview_time or "TBD"}<br>'
-            f'<strong>Platform:</strong> {obj.platform or "To be confirmed"}<br><br>'
-            f'Click the button below to join your interview session at the scheduled time.'
+            f'We are pleased to inform you that your interview for the position of '
+            f'<strong>{obj.role}</strong> at <strong>{mailer.BRAND_SHORT}</strong> has been '
+            f'successfully scheduled. Please review the details below and make a note of the '
+            f'date, time, and platform.'
         ),
         highlight_html=(
-            f'<div style="text-align:center;margin:18px 0;">'
-            f'<a href="{candidate_url}" target="_blank" rel="noreferrer noopener" '
-            f'style="display:inline-block;background:linear-gradient(135deg,#4f8ef7,#a855f7);'
-            f'color:#fff;font-size:15px;font-weight:700;text-decoration:none;'
-            f'padding:14px 38px;border-radius:10px;">Join Interview</a></div>'
-            f'<div style="text-align:center;"><a href="{candidate_url}" '
-            f'style="color:#94a3b8;font-size:12px;word-break:break-all;">{candidate_url}</a></div>'
+            mailer.render_details_card('Interview Details', [
+                ('Position', obj.role),
+                ('Interview Type', types),
+                ('Interviewer', obj.interviewer or '—'),
+                ('Date &amp; Time', when),
+                ('Duration', obj.duration),
+                ('Platform', obj.platform or 'To be confirmed'),
+            ])
+            + mailer.render_cta(candidate_url, 'Join Interview')
         ),
         footer=(
-            'This link is valid for 24 hours and can only be used once. '
-            'If you encounter any issues, contact your recruiter.'
+            'Please ensure you join the meeting at least <strong>5 minutes early</strong>. '
+            'This link is valid for 24 hours and can only be used once. Should you need to '
+            'reschedule or have any questions, please contact your recruiter.'
         ),
+        logo_url=f'{origin}/logo.jpg',
     )
     text = (
         f'Hi {obj.name},\n\nYour interview for {obj.role} is scheduled on '
@@ -594,6 +603,40 @@ def interviews_bulk_send_emails(request):
 # ---------------------------------------------------------------------------
 # Follow-up emails (Selected / Waitlisted / Rejected) — sent server-side
 # ---------------------------------------------------------------------------
+def render_placeholders(text, ctx):
+    """Replace {{key}} (any inner spacing) with values from ctx.
+
+    Applied on both the preview and the send path so a placeholder typed by
+    hand resolves the same way in each.
+    """
+    if not text:
+        return ''
+    return re.sub(r'\{\{\s*([a-zA-Z_]+)\s*\}\}',
+                  lambda m: str(ctx.get(m.group(1).strip().lower(), m.group(0))),
+                  text)
+
+
+def build_followup_html(subject, inner):
+    """The exact HTML a candidate receives for a follow-up email.
+
+    Both the preview endpoint and the send path call this, so what a recruiter
+    sees in the preview is byte-for-byte what goes out.
+
+    A body that is already a complete HTML document is sent verbatim — that is
+    how a hand-written HTML template stays intact instead of being nested
+    inside the branded wrapper.
+    """
+    inner = inner or ''
+    head = inner.lstrip()[:200].lower()
+    if head.startswith('<!doctype') or head.startswith('<html'):
+        return inner
+    return mailer.render_branded(
+        title=subject,
+        intro='',
+        highlight_html=f'<div style="font-size:15px;line-height:1.7;color:#334155;">{inner}</div>',
+    )
+
+
 def _followup_template(outcome, name, role, start_phrase='the first week of next month'):
     role = role or 'the role'
     name = name or 'there'
@@ -664,14 +707,18 @@ def interview_send_followup(request):
     if not subject or not inner:
         subject, inner = _followup_template(outcome, to_name, role)
 
-    html = mailer.render_branded(
-        title=subject,
-        intro='',
-        highlight_html=f'<div style="font-size:15px;line-height:1.7;color:#334155;">{inner}</div>',
-    )
+    # Resolve any {{name}} / {{role}} still present, exactly as the preview
+    # endpoint does — otherwise a hand-typed placeholder would preview
+    # correctly but reach the candidate literally.
+    ctx = {'name': to_name or 'there', 'role': role or 'the role',
+           'company': 'Eversoft', 'outcome': outcome or ''}
+    subject = render_placeholders(subject, ctx)
+    inner = render_placeholders(inner, ctx)
+
+    html = build_followup_html(subject, inner)
     result = mailer.send_email(
         to=to_email, subject=subject, html=html,
-        text=re.sub(r'<[^>]+>', '', inner.replace('<br>', '\n')),
+        text=html_to_text(inner),
         sender_email=body.get('senderEmail'),
     )
     if not result.get('ok'):
@@ -696,10 +743,15 @@ def interview_send_followup(request):
 # Interview token verification & link management
 # ---------------------------------------------------------------------------
 def _interview_already_taken(obj):
-    """True once the candidate has sat the interview. ``completed_at`` is the
-    marker; ``status`` also counts so an interview a recruiter closed out by
-    hand cannot be re-entered."""
-    return obj.completed_at is not None or obj.status == 'Completed'
+    """True once the candidate has actually sat the interview.
+
+    ``completed_at`` is the only marker, because it is written in exactly one
+    place — when a recording is saved. ``status`` used to count too, but it is a
+    workflow label a recruiter can set by hand or in bulk, and doing so locked
+    real candidates out of interviews they had never taken: they saw "Interview
+    Already Completed" with no date, because ``completed_at`` was null.
+    """
+    return obj.completed_at is not None
 
 
 @api_view(['POST'])
@@ -1101,10 +1153,15 @@ RECORDING_FIELD_MAP = {
 }
 
 
-def _mark_interview_taken(email, role):
+def _mark_interview_taken(email, role, total_score=None):
     """A saved recording means the candidate sat the interview — latch it so the
     candidate link cannot be reused. Scoped to email + role because one
-    candidate may be interviewing for several roles at once."""
+    candidate may be interviewing for several roles at once.
+
+    ``total_score`` carries the assessment result across from the recording.
+    Without it the link keeps ``score`` at its 0 default, and the recruiter's
+    Candidate Follow-up list renders a real interview as "Score: 0/100".
+    """
     email = (email or '').strip()
     if not email:
         return
@@ -1115,11 +1172,22 @@ def _mark_interview_taken(email, role):
     if obj:
         obj.completed_at = datetime.now()
         obj.status = 'Completed'
-        obj.save(update_fields=['completed_at', 'status'])
+        fields = ['completed_at', 'status']
+        try:
+            if total_score is not None:
+                obj.score = int(total_score)
+                fields.append('score')
+        except (TypeError, ValueError):
+            pass
+        obj.save(update_fields=fields)
 
 
 @api_view(['GET', 'POST'])
-@require_perm({'GET': 'recruitment.view', 'POST': 'recruitment.create'})
+# POST stays open: the candidate sitting the AI interview is not a signed-in
+# user and has no AppUser row, so their end-of-session upload cannot carry an
+# identity. Listing recordings still requires recruitment.view.
+@require_perm({'GET': 'recruitment.view', 'POST': 'recruitment.create'},
+              anonymous_methods=('POST',))
 def recordings(request):
     if request.method == 'GET':
         return Response(InterviewRecordingSerializer(_recording_list_qs(), many=True).data)
@@ -1131,7 +1199,7 @@ def recordings(request):
     if not serializer.is_valid():
         return serializer_err(serializer)
     serializer.save()
-    _mark_interview_taken(body.get('candidateEmail'), body.get('role'))
+    _mark_interview_taken(body.get('candidateEmail'), body.get('role'), body.get('totalScore'))
     return Response(serializer.data, status=201)
 
 
@@ -2365,6 +2433,23 @@ def health(request):
 _INDEX_BYTES = None
 
 
+def _no_store(response):
+    """Stop browsers caching index.html.
+
+    index.html is the version manifest: it is what points at
+    /assets/<file>.js?v=N. Cached, the browser keeps requesting the previous
+    ?v= URLs and serves those from cache too, so a deploy appears to do nothing
+    — every asset silently stays on the old version until a hard refresh. The
+    <meta http-equiv="Cache-Control"> tags in the document do not control HTTP
+    caching; only these headers do. The assets themselves stay cacheable, which
+    is the point of the ?v= query string.
+    """
+    response['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    response['Pragma'] = 'no-cache'
+    response['Expires'] = '0'
+    return response
+
+
 def spa_index(request):
     global _INDEX_BYTES
     index_path = settings.REACT_BUILD_DIR / 'index.html'
@@ -2384,9 +2469,9 @@ def spa_index(request):
         html_str = _INDEX_BYTES.decode('utf-8')
         import re
         html_str = re.sub(r'<script type="module" crossorigin src="/assets/index-[^"]+"></script>', '', html_str)
-        return HttpResponse(html_str.encode('utf-8'), content_type='text/html')
+        return _no_store(HttpResponse(html_str.encode('utf-8'), content_type='text/html'))
 
-    return HttpResponse(_INDEX_BYTES, content_type='text/html')
+    return _no_store(HttpResponse(_INDEX_BYTES, content_type='text/html'))
 
 
 

@@ -277,8 +277,13 @@
       if (cc.t) cc.t.textContent = "Waiting for the candidate to speak…";
     };
 
-    async function renderList() {
+    async function renderList(opts) {
+      // The overlay is on screen, so this is foreground work — but it still
+      // respects offline/backoff rather than repainting "none live" from a
+      // request that never left the machine.
+      if (window.HRMSNet && !window.HRMSNet.ready("live", opts || { background: false })) return;
       var r = await get("/api/live");
+      if (window.HRMSNet) { if (r.status === 0) { window.HRMSNet.failed("live"); return; } window.HRMSNet.succeeded("live"); }
       var rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
       if (!rows.length) {
         listEl.innerHTML = '<div style="text-align:center;color:#64748b;padding:34px 0;font-size:14px;">' +
@@ -325,6 +330,16 @@
   // ====================================================================
   // Floating launcher button (recruiters / admins)
   // ====================================================================
+  /* Pages a candidate sees. The recruiter launcher must stay hidden on all of
+     them — including /interview-access, which a recruiter's own browser would
+     otherwise decorate with the button while the candidate is sitting there. */
+  function onCandidatePage() {
+    var path = location.pathname;
+    return !!new URLSearchParams(location.search).get("candidateEmail") ||
+      path === "/onboarding/fill" ||
+      path === "/interview-access";
+  }
+
   function mountButton() {
     if (document.getElementById("hrms-live-btn")) return;
     // Mount unconditionally and toggle visibility on the login state — the app
@@ -340,23 +355,32 @@
       border: "none", borderRadius: "30px", padding: "12px 18px", cursor: "pointer",
       fontFamily: "'Segoe UI',Arial,sans-serif", fontWeight: "700", fontSize: "13px",
       boxShadow: "0 8px 24px rgba(244,63,94,0.45)", alignItems: "center", gap: "8px",
-      display: (session() && !new URLSearchParams(location.search).get("candidateEmail") && location.pathname !== "/onboarding/fill") ? "flex" : "none"
+      display: (session() && !onCandidatePage()) ? "flex" : "none"
     });
     btn.innerHTML = '🔴 Live Interviews <span id="hrms-live-count" style="background:rgba(255,255,255,0.25);' +
       'border-radius:10px;padding:1px 8px;font-size:11px;display:none;">0</span>';
     btn.onclick = openMonitor;
     document.body.appendChild(btn);
 
-    async function tick() {
-      if (!session() || new URLSearchParams(location.search).get("candidateEmail") || location.pathname === "/onboarding/fill") { btn.style.display = "none"; return; }
+    async function tick(opts) {
+      if (!session() || onCandidatePage()) { btn.style.display = "none"; return; }
       btn.style.display = "flex";
+      // Only the idle badge count is gated. Signaling for a call that is
+      // already up (below) is never suppressed — dropping ICE/answer polls
+      // mid-call would kill the session instead of just delaying a counter.
+      if (window.HRMSNet && !window.HRMSNet.ready("live", opts)) return;
       var r = await get("/api/live");
+      if (window.HRMSNet) { if (r.status === 0) window.HRMSNet.failed("live"); else window.HRMSNet.succeeded("live"); }
       var n = (r.ok && Array.isArray(r.data)) ? r.data.length : 0;
       var c = document.getElementById("hrms-live-count");
       if (c) { c.textContent = n; c.style.display = n ? "inline-block" : "none"; }
     }
-    tick();
+    tick({ background: false });
     setInterval(tick, 8000);
+    document.addEventListener("visibilitychange", function () {
+      if (!document.hidden) tick({ background: false });
+    });
+    window.addEventListener("hrmsNetOnline", function () { tick({ background: false }); });
   }
 
   window.HRMSLive = { publish: publish, stop: stop, update: update, openMonitor: openMonitor };

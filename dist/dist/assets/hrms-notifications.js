@@ -321,14 +321,20 @@
     updateSelectAllControl();
   }
 
-  function fetchNotifications() {
+  function fetchNotifications(opts) {
     var email = actorEmail();
     if (!email) {
       setBadge(0);
       return;
     }
+    // Don't poll into a dead network — the request can only fail, and zeroing
+    // the badge on that failure would hide unread counts we already know about.
+    if (window.HRMSNet && !window.HRMSNet.ready('notifications', opts)) return;
     var headers = { 'X-User-Email': email };
-    fetch('/api/notifications?unreadOnly=true', { headers: headers })
+    var req = window.HRMSNet
+      ? window.HRMSNet.fetch('notifications', '/api/notifications?unreadOnly=true', { headers: headers })
+      : fetch('/api/notifications?unreadOnly=true', { headers: headers });
+    req
       .then(function (res) { return res.ok ? res.json() : []; })
       .then(function (items) {
         var count = Array.isArray(items) ? items.length : 0;
@@ -586,8 +592,13 @@
       }
     });
 
-    fetchNotifications();
+    fetchNotifications({ background: false });
     setInterval(fetchNotifications, REFRESH_MS);
+    /* the interval is suppressed while hidden/offline — catch up on return */
+    document.addEventListener('visibilitychange', function () {
+      if (!document.hidden) fetchNotifications({ background: false });
+    });
+    window.addEventListener('hrmsNetOnline', function () { fetchNotifications({ background: false }); });
 
     setInterval(function () {
       var btn = document.getElementById(BUTTON_ID);

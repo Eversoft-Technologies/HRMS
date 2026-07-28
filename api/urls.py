@@ -24,6 +24,11 @@ urlpatterns = [
     path('jobs', views.jobs),
     path('jobs/<int:pk>', views.job_detail),
 
+    # Reusable candidate follow-up email templates
+    path('email-templates', email_template_views.email_templates),
+    path('email-templates/preview', email_template_views.email_template_preview),
+    path('email-templates/<int:pk>', email_template_views.email_template_detail),
+
     # Job Form Builder: dynamic schema, templates, master data, currencies
     path('job-form/config', job_form_views.job_form_config),
     path('job-form/templates', job_form_views.job_form_templates),
