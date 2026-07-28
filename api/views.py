@@ -324,6 +324,25 @@ def job_detail(request, pk):
     return Response(JobPostSerializer(job).data)
 
 
+def html_to_text(html):
+    """Readable plain-text alternative for an HTML email body.
+
+    The rich-text editor emits block tags (<div>, <p>, <li>), so stripping tags
+    alone would run every line together in clients that show the text part.
+    """
+    if not html:
+        return ''
+    text = re.sub(r'(?i)<br\s*/?>', '\n', html)
+    text = re.sub(r'(?i)</(div|p|li|tr|h[1-6])>', '\n', text)
+    text = re.sub(r'(?i)<li[^>]*>', '• ', text)
+    text = re.sub(r'<[^>]+>', '', text)
+    for entity, char in (('&nbsp;', ' '), ('&amp;', '&'), ('&lt;', '<'),
+                         ('&gt;', '>'), ('&quot;', '"'), ('&#39;', "'")):
+        text = text.replace(entity, char)
+    text = re.sub(r'[ \t]+\n', '\n', text)
+    return re.sub(r'\n{3,}', '\n\n', text).strip()
+
+
 def poster_contact(email):
     """Contact details for the closing block of a job announcement: the
     recruiter's own email plus the phone from their HRMS profile."""
