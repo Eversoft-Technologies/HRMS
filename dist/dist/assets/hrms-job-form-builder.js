@@ -735,9 +735,19 @@
     ovl.innerHTML = '<div class="pjf-modal">' +
       '<div class="pjf-head"><h2>' + esc(o.formTitle || 'Post a Job') + '</h2><button class="pjf-gear" id="pjf-gear" title="Edit this form (Form Builder)">⚙</button><button class="jfb-x" id="pjf-close">×</button></div>' +
       '<div class="jfb-scroll" style="flex:1" id="pjf-bodywrap"></div>' +
+      // Hidden until setupLinkedInRow confirms LinkedIn is set up server-side
+      // and this user has linked their own account.
+      '<div id="pjf-li-row" style="display:none;padding:12px 20px 0;border-top:1px solid var(--border2)">' +
+        '<label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;font-weight:600;color:var(--text)">' +
+          '<input type="checkbox" id="pjf-li" style="width:auto;margin:0;flex:none">' +
+          '<span>Also post to my LinkedIn</span>' +
+        '</label>' +
+        '<div id="pjf-li-hint" style="font-size:12px;color:var(--text3,#94a3b8);margin-top:4px"></div>' +
+      '</div>' +
       '<div class="pjf-foot"><span class="pjf-msg" id="pjf-msg"></span><button class="jfb-btn ghost" id="pjf-cancel">Cancel</button><button class="jfb-btn" id="pjf-submit">' + esc(o.submitLabel || 'Post Job') + '</button></div></div>';
     document.body.appendChild(ovl);
     document.getElementById('pjf-bodywrap').innerHTML = formHtml();
+    setupLinkedInRow(ovl);
     wireMultiselects(ovl.querySelector('.pjf-form'));
     wireConditional(ovl.querySelector('.pjf-form'));
     ovl.addEventListener('mousedown', function (e) { if (e.target === ovl) closePostJob(); });
@@ -768,7 +778,9 @@
       if (f.required && visible && (val === '' || (Array.isArray(val) && !val.length))) { ok = false; var eEl = grp && grp.querySelector('[data-err]'); if (eEl) eEl.classList.add('on'); if (!firstErr) firstErr = grp; }
     });
     if (!ok) { pjfMsg('Please fill the required fields.', 'err'); if (firstErr) firstErr.scrollIntoView({ behavior: 'smooth', block: 'center' }); return; }
-    var payload = { customFields: {}, autoPost: false, userEmail: actorEmail() };
+    var liBox = document.getElementById('pjf-li');
+    var shareToLinkedIn = !!(liBox && liBox.checked && !liBox.disabled);
+    var payload = { customFields: {}, autoPost: shareToLinkedIn, userEmail: actorEmail() };
     allFields().forEach(function (f) {
       if (f.type === 'heading') return; var v = vals[f.key];
       if (CORE_KEYS[f.key]) { if (f.key === 'remote') payload.remote = (v === 'Yes' || v === 'true' || v === true); else if (f.key === 'openings') payload.openings = parseInt(v, 10) || 1; else payload[f.key] = v; }
@@ -777,10 +789,91 @@
       else if (!(v === '' || v == null || (Array.isArray(v) && v.length === 0))) payload.customFields[f.key] = v;
     });
     if (!payload.title || !payload.dept) { pjfMsg('Title and Department are required.', 'err'); return; }
-    var btn = document.getElementById('pjf-submit'); btn.disabled = true; btn.textContent = 'Posting…';
-    api('/api/jobs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
-      .then(function () { pjfMsg(opts().successMsg || 'Job posted ✓', 'ok'); window.dispatchEvent(new CustomEvent('hrmsJobPosted', { detail: {} })); setTimeout(closePostJob, 700); })
-      .catch(function (e) { pjfMsg(e.message || 'Could not post the job.', 'err'); btn.disabled = false; btn.textContent = opts().submitLabel || 'Post Job'; });
+
+    // Sharing to a public profile gets a review step; plain saves do not.
+    if (shareToLinkedIn) { openLinkedInPreview(payload); return; }
+    savePostJob(payload, false);
+  }
+
+  // Creates the job. `msg` is the approved LinkedIn text, or null when not sharing.
+  function savePostJob(payload, share, msg) {
+    var btn = document.getElementById('pjf-submit');
+    if (btn) { btn.disabled = true; btn.textContent = 'Posting…'; }
+    var body = JSON.parse(JSON.stringify(payload));
+    body.autoPost = !!share;
+    if (share && msg) body.linkedinMessage = msg;
+    return api('/api/jobs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      .then(function (job) {
+        pjfMsg(opts().successMsg || 'Job posted ✓', 'ok');
+        window.dispatchEvent(new CustomEvent('hrmsJobPosted', { detail: {} }));
+        // The job is saved either way — a failed share is reported, not fatal.
+        if (share) reportShareResult(job && job.socialResults);
+        setTimeout(closePostJob, 700);
+      })
+      .catch(function (e) {
+        pjfMsg(e.message || 'Could not post the job.', 'err');
+        if (btn) { btn.disabled = false; btn.textContent = opts().submitLabel || 'Post Job'; }
+        throw e;
+      });
+  }
+
+  /* ── LinkedIn review-before-post (shared dialog in hrms-linkedin.js) ───── */
+  function openLinkedInPreview(payload) {
+    if (!window.HRMSLinkedIn || !window.HRMSLinkedIn.review) {
+      savePostJob(payload, true);   // no dialog available — don't block posting
+      return;
+    }
+    window.HRMSLinkedIn.review(payload, payload.userEmail).then(function (text) {
+      if (!text) return;            // backed out — nothing saved, form intact
+      savePostJob(payload, true, text).catch(function () {});
+    });
+  }
+
+  /* ── "Also post to my LinkedIn" ───────────────────────────────────────── */
+  function setupLinkedInRow(ovl) {
+    var row = ovl.querySelector('#pjf-li-row');
+    var box = ovl.querySelector('#pjf-li');
+    var hint = ovl.querySelector('#pjf-li-hint');
+    if (!row || !box || !window.HRMSLinkedIn) return;
+    window.HRMSLinkedIn.status().then(function (s) {
+      if (!s || !s.configured) return;   // not set up server-side — stay hidden
+      row.style.display = '';
+      if (s.connected && !s.expired) {
+        box.checked = true;
+        hint.textContent = s.name ? 'Posting as ' + s.name + '.' : 'Posting to your LinkedIn profile.';
+        return;
+      }
+      box.checked = false;
+      box.disabled = true;
+      hint.textContent = (s.expired
+        ? 'Your LinkedIn connection expired — reconnect it in '
+        : 'Connect your LinkedIn account in ') +
+        'Settings → Email Configuration → Social Media Accounts.';
+    });
+  }
+
+  function reportShareResult(results) {
+    var li = null;
+    for (var i = 0; i < (results || []).length; i++) {
+      if (results[i] && results[i].platform === 'linkedin') { li = results[i]; break; }
+    }
+    if (!li) return;
+    liToast(li.ok ? 'Job posted to your LinkedIn.'
+                  : 'Job created, but LinkedIn sharing failed: ' + (li.error || 'unknown error'),
+            li.ok ? '' : 'error');
+  }
+
+  function liToast(text, type) {
+    var t = document.createElement('div');
+    t.style.cssText = 'position:fixed;top:20px;left:50%;transform:translateX(-50%);z-index:100000;' +
+      'padding:12px 22px;border-radius:10px;font:600 14px/1.4 inherit;max-width:min(560px,90vw);' +
+      'text-align:center;box-shadow:0 4px 20px rgba(0,0,0,.18);color:#fff;transition:opacity .4s;' +
+      'background:' + (type === 'error' ? '#ef4444' : '#0a66c2');
+    t.textContent = text;
+    document.body.appendChild(t);
+    var ms = type === 'error' ? 6000 : 3000;
+    setTimeout(function () { t.style.opacity = '0'; }, ms);
+    setTimeout(function () { t.remove(); }, ms + 500);
   }
 
   /* ══════════════════════════ INJECTION / BOOT ══════════════════════════ */
