@@ -340,7 +340,7 @@
       border: "none", borderRadius: "30px", padding: "12px 18px", cursor: "pointer",
       fontFamily: "'Segoe UI',Arial,sans-serif", fontWeight: "700", fontSize: "13px",
       boxShadow: "0 8px 24px rgba(244,63,94,0.45)", alignItems: "center", gap: "8px",
-      display: (session() && !new URLSearchParams(location.search).get("candidateEmail")) ? "flex" : "none"
+      display: (session() && !new URLSearchParams(location.search).get("candidateEmail") && location.pathname !== "/onboarding/fill") ? "flex" : "none"
     });
     btn.innerHTML = '🔴 Live Interviews <span id="hrms-live-count" style="background:rgba(255,255,255,0.25);' +
       'border-radius:10px;padding:1px 8px;font-size:11px;display:none;">0</span>';
@@ -348,7 +348,7 @@
     document.body.appendChild(btn);
 
     async function tick() {
-      if (!session() || new URLSearchParams(location.search).get("candidateEmail")) { btn.style.display = "none"; return; }
+      if (!session() || new URLSearchParams(location.search).get("candidateEmail") || location.pathname === "/onboarding/fill") { btn.style.display = "none"; return; }
       btn.style.display = "flex";
       var r = await get("/api/live");
       var n = (r.ok && Array.isArray(r.data)) ? r.data.length : 0;

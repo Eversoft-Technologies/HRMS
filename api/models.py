@@ -129,8 +129,17 @@ class ResumeScore(models.Model):
     formatted = models.BooleanField(default=False)
     uploaded = models.BooleanField(default=True)
     file_name = models.CharField(max_length=255, null=True, blank=True)
+    # The original uploaded resume, stored base64-in-row (house style — no file
+    # storage backend is configured). resume_text is the extracted plain text;
+    # file_data/file_mime keep the actual PDF/DOCX so it can be viewed as sent.
+    file_mime = models.CharField(max_length=100, null=True, blank=True)
+    file_data = models.TextField(null=True, blank=True)
     resume_text = models.TextField(null=True, blank=True)
     jd_text = models.TextField(null=True, blank=True)
+    # Fingerprint of the resume content (normalised text, else the file bytes),
+    # used to dedupe: re-uploading/re-scoring the same resume updates its one row
+    # instead of creating another. Empty when there is nothing to fingerprint.
+    content_hash = models.CharField(max_length=64, default='', blank=True, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -844,14 +853,20 @@ class OnboardingCandidate(models.Model):
     manager = models.CharField(max_length=255, default='', blank=True)
     work_location = models.CharField(max_length=255, default='', blank=True)
     joining_date = models.DateField(null=True, blank=True)
-    # New | Offer Released | Accepted | Documents Pending | Work Authorization Pending
-    # | Verification Pending | Payroll Pending | IT Asset Pending | Onboarding Completed | Rejected
-    status = models.CharField(max_length=32, default='New', db_index=True)
+    # Draft | Pending Verification | Pending Approval | Approved | Rejected | Onboarded
+    status = models.CharField(max_length=32, default='Draft', db_index=True)
     # Link back to the recruiting record, when this candidate came from an interview.
     interview = models.ForeignKey(
         InterviewLink, null=True, blank=True, on_delete=models.SET_NULL,
         related_name='onboarding_candidates', db_column='interview_id',
     )
+    # Admin-defined extra fields (see OnboardingSetting 'candidate_fields').
+    # Values keyed by the field's ``key``; the schema lives in config, not here,
+    # so adding a field never needs a migration.
+    custom_fields = models.JSONField(default=dict, blank=True)
+    portal_token = models.CharField(max_length=64, unique=True, null=True, blank=True, db_index=True)
+    portal_token_expires_at = models.DateTimeField(null=True, blank=True)
+    requested_docs = models.JSONField(default=list, blank=True)
     is_deleted = models.BooleanField(default=False, db_index=True)
     deleted_at = models.DateTimeField(null=True, blank=True)
     deleted_by = models.CharField(max_length=255, default='', blank=True)
@@ -883,6 +898,11 @@ class WorkAuthorization(models.Model):
     expiry_date = models.DateField(null=True, blank=True, db_index=True)
     receipt_number = models.CharField(max_length=120, default='', blank=True)
     sponsorship_required = models.BooleanField(default=False)
+    # Values for the admin-built extra fields, keyed by field key. The schema
+    # lives in OnboardingSetting['work_auth_form'] and applies to every
+    # candidate, so it is kept apart from ``detail.details`` — that blob is
+    # whitelisted per visa type and would reject these keys.
+    custom_fields = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -923,8 +943,13 @@ class CandidateDocument(models.Model):
         OnboardingCandidate, on_delete=models.CASCADE,
         related_name='documents', db_column='candidate_id',
     )
-    # ssn | driver_license | state_id | visa | i94
+    # ssn | driver_license | state_id | visa | i94, or ``custom_<slug>`` for a
+    # document the uploader named themselves.
     doc_type = models.CharField(max_length=40, db_index=True)
+    # Display name for a custom document. Empty for the fixed types, whose
+    # labels are a frontend concern.
+    label = models.CharField(max_length=120, default='', blank=True)
+    is_custom = models.BooleanField(default=False)
     file_name = models.CharField(max_length=255, default='', blank=True)
     file_mime = models.CharField(max_length=100, default='', blank=True)
     file_size = models.IntegerField(default=0)  # decoded bytes
@@ -950,6 +975,11 @@ class HrVerification(models.Model):
     state_id_verified = models.BooleanField(default=False)
     visa_verified = models.BooleanField(default=False)
     i94_verified = models.BooleanField(default=False)
+    # Tick-box state for custom documents, keyed by their ``custom_<slug>``
+    # doc_type. The fixed types above get a column each; a custom document is
+    # named at upload time, so there is no column to add and this JSON map
+    # stands in for one.
+    custom_verified = models.JSONField(default=dict, blank=True)
     # Pending | Approved | Rejected
     status = models.CharField(max_length=20, default='Pending', db_index=True)
     remarks = models.TextField(default='', blank=True)
@@ -1070,4 +1100,88 @@ class OnboardingActivityLog(models.Model):
         db_table = 'onboarding_activity_logs'
         ordering = ['-created_at']
 
-   
+
+class OnboardingSetting(models.Model):
+    """Generic key/value store for onboarding module configuration.
+
+    Currently holds ``candidate_fields`` — the admin-defined schema of extra
+    fields shown on the New Candidate form (an ordered list of field
+    descriptors: {key, label, type, required, options, width}). Kept as a
+    key/value row rather than dedicated columns so new settings never need a
+    migration.
+    """
+    key = models.CharField(max_length=80, primary_key=True)
+    value = models.JSONField(default=dict, blank=True)
+    updated_by = models.CharField(max_length=255, default='', blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'onboarding_settings'
+        ordering = ['key']
+
+
+class OnboardingFormTemplate(models.Model):
+    """A reusable New-Candidate form definition produced by the form builder —
+    the onboarding twin of JobFormTemplate. ``schema`` is the ordered list of
+    sections; the currently active row's schema is what the builder loads and
+    publishes to OnboardingSetting['candidate_form']."""
+    name = models.CharField(max_length=120, unique=True)
+    is_active = models.BooleanField(default=False)
+    schema = models.JSONField(default=list, blank=True)
+    created_by = models.CharField(max_length=255, default='', blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'onboarding_form_templates'
+        ordering = ['name']
+
+
+class PayrollForm(models.Model):
+    """A blank template uploaded by the admin for the candidate to fill/sign.
+    Includes the PDF data and field definitions."""
+    name = models.CharField(max_length=120, unique=True)
+    file_name = models.CharField(max_length=255, default='', blank=True)
+    file_mime = models.CharField(max_length=100, default='', blank=True)
+    file_data = models.TextField(default='', blank=True)  # base64
+    # Optional field positions schema for overlaid fields (docu-sign style)
+    # schema: [{'key': 'bankName', 'label': 'Bank Name', 'x': 100, 'y': 200, 'page': 1}, ...]
+    schema = models.JSONField(default=list, blank=True)
+    is_active = models.BooleanField(default=True, db_index=True)
+    created_by = models.CharField(max_length=255, default='', blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'payroll_forms'
+        ordering = ['name']
+
+
+class CandidateFormSubmission(models.Model):
+    """Submission from the candidate for a specific PayrollForm.
+    Stores JSON responses, signature base64, and the completed PDF."""
+    candidate = models.ForeignKey(
+        OnboardingCandidate, on_delete=models.CASCADE,
+        related_name='form_submissions', db_column='candidate_id',
+    )
+    form = models.ForeignKey(
+        PayrollForm, on_delete=models.CASCADE,
+        related_name='submissions', db_column='form_id',
+    )
+    # Filled fields data, e.g., {'bankName': 'Chase', 'accountNumber': '1234'}
+    filled_data = models.JSONField(default=dict, blank=True)
+    signature_data = models.TextField(default='', blank=True)  # base64 signature image
+    signed_at = models.DateTimeField(null=True, blank=True)
+    # The generated/uploaded completed PDF document
+    file_name = models.CharField(max_length=255, default='', blank=True)
+    file_mime = models.CharField(max_length=100, default='application/pdf', blank=True)
+    file_size = models.IntegerField(default=0)
+    file_data = models.TextField(default='', blank=True)  # base64
+    # digital | offline
+    mode = models.CharField(max_length=20, default='digital', db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'candidate_form_submissions'
+        ordering = ['-created_at']

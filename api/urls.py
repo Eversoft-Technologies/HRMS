@@ -44,6 +44,8 @@ urlpatterns = [
     path('live/<str:sid>/end', live_views.live_end),
 
     path('resume-scores', views.resume_scores),
+    path('resume-scores/<int:pk>', views.resume_score_detail),
+    path('resume-scores/<int:pk>/file', views.resume_score_file),
 
     path('interview-recordings', views.recordings),
     path('interview-recordings/<int:pk>', views.recording_detail),
@@ -180,6 +182,11 @@ urlpatterns = [
     path('onboarding/verifications', onboarding_views.verifications_list),
     path('onboarding/asset-allocations', onboarding_views.asset_allocations_list),
     path('onboarding/payroll', onboarding_views.payroll_list),
+    path('onboarding/field-config', onboarding_views.candidate_field_config),
+    path('onboarding/work-auth-field-config', onboarding_views.work_auth_field_config),
+    path('onboarding/work-auth-type-field-config', onboarding_views.work_auth_type_field_config),
+    path('onboarding/form-templates', onboarding_views.candidate_form_templates),
+    path('onboarding/form-templates/<int:pk>', onboarding_views.candidate_form_template_detail),
     path('onboarding/candidates', onboarding_views.candidates),
     path('onboarding/candidates/<int:pk>', onboarding_views.candidate_detail),
     path('onboarding/candidates/<int:pk>/timeline', onboarding_views.candidate_timeline),
@@ -193,4 +200,22 @@ urlpatterns = [
     path('onboarding/candidates/<int:pk>/assets/<int:asset_id>', onboarding_views.candidate_asset_detail),
     path('onboarding/candidates/<int:pk>/payroll', onboarding_views.candidate_payroll),
     path('onboarding/candidates/<int:pk>/activate', onboarding_views.candidate_activate),
+
+    # Payroll form templates (admin)
+    path('onboarding/forms', onboarding_views.payroll_templates),
+    path('onboarding/forms/<int:pk>', onboarding_views.payroll_template_detail),
+
+    # Candidate submissions (admin)
+    path('onboarding/candidates/<int:pk>/submissions', onboarding_views.candidate_form_submissions),
+    path('onboarding/candidates/<int:pk>/submissions/<int:sub_id>/pdf', onboarding_views.candidate_submission_pdf),
+    path('onboarding/candidates/<int:pk>/send-portal-link', onboarding_views.send_portal_link),
+
+    # Public portal endpoints (candidate)
+    path('public/onboarding/forms', onboarding_views.public_candidate_forms),
+    path('public/onboarding/forms/<int:form_id>', onboarding_views.public_form_template_detail),
+    path('public/onboarding/submit-form', onboarding_views.public_submit_form),
+    path('public/onboarding/upload-document', onboarding_views.public_upload_document),
+    path('public/onboarding/complete', onboarding_views.public_complete_portal),
 ]
+
+

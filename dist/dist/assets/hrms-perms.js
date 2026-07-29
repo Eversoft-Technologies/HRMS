@@ -100,8 +100,12 @@
     // own Approve/Reject (which already carry data-perm).
     { route: '/employees/submissions', perm: 'submission.approve', labels: ['approve'] },
     { route: '/employees/submissions', perm: 'submission.reject', labels: ['reject'] },
-    // Leave (approve/reject already carry data-perm in the bundle)
-    { route: null, perm: 'leave.create', labels: ['apply leave'] },
+    // Leave: "Apply Leave" is self-service — every employee may submit their OWN
+    // leave request regardless of role (the API allows it via or_self), so the
+    // button is intentionally NOT gated here. Gating it behind leave.create hid
+    // it from HR Executive / Manager / Recruiter / IT / Payroll roles, who lack
+    // that management permission but still need to request their own leave.
+    // Approve/Reject already carry data-perm in the bundle and stay gated.
     // Attendance
     { route: null, perm: 'attendance.checkinout', labels: [
         'check in', 'check out', 'check in out'] },

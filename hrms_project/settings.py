@@ -141,6 +141,14 @@ FILE_UPLOAD_MAX_MEMORY_SIZE = 500 * 1024 * 1024
 DATA_UPLOAD_MAX_NUMBER_FIELDS = None
 APPEND_SLASH = False                         # API paths have no trailing slash
 
+# Public-facing base URL used to build candidate portal links in emails.
+# Set this in .env to your real domain (e.g. https://hrms.eversoftit.com) so
+# that candidates receive a clickable link even when the server runs locally.
+# If left blank the link falls back to the request's own host (works locally
+# only if the candidate is on the same machine).
+HRMS_PUBLIC_URL = os.environ.get('HRMS_PUBLIC_URL', '').rstrip('/')
+
+
 # ---------------------------------------------------------------------------
 # Static files + React build
 # ---------------------------------------------------------------------------

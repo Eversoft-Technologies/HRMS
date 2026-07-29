@@ -7,6 +7,7 @@
 env/
 venv/
 .venv/
+.venv*/
 
 # Python bytecode / caches
 __pycache__/
@@ -17,3 +18,15 @@ __pycache__/
 *.log
 db.sqlite3
 db.sqlite3-journal
+*.sqlite3
+*.sqlite3-journal
+
+# Editor / bundle backups
+*.bak
+
+# SSH keys / credentials — never commit
+keypair
+keypair.pub
+*.pem
+id_rsa
+id_rsa.pub

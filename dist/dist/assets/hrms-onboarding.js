@@ -36,9 +36,10 @@
     modal: 'hrms-ob-modal', menu: 'hrms-ob-exportmenu',
   };
 
-  /* Mirrors the server's ONBOARDING_STAGES / WORK_AUTH_FIELDS. Kept in sync by
-     hand: the server rejects anything it does not recognise, so a drift here
-     surfaces as a 400 rather than as bad data. */
+  /* Mirrors the server's ONBOARDING_STAGES / AUTH_TYPES / AUTH_STATUSES. Kept
+     in sync by hand: the server rejects anything it does not recognise, so a
+     drift here surfaces as a 400 rather than as bad data. (The work-auth FIELDS
+     used to be mirrored too; they are admin-built and fetched now.) */
   var STAGES = [
     ['candidate_created', 'Candidate Created'],
     ['work_authorization', 'Work Authorization'],
@@ -50,30 +51,30 @@
     ['activated', 'Employee Activated'],
   ];
 
-  var WORK_AUTH_FIELDS = {
-    'H1B': [['petitionNumber', 'Petition Number'], ['uscisReceipt', 'USCIS Receipt'],
-            ['lcaNumber', 'LCA Number'], ['visaExpiry', 'Visa Expiry', 'date']],
-    'F1': [['university', 'University'], ['sevisNumber', 'SEVIS Number'],
-           ['optStart', 'OPT Start', 'date'], ['optEnd', 'OPT End', 'date'],
-           ['cptDetails', 'CPT Details']],
-    'GC EAD': [['eadNumber', 'EAD Number'], ['issueDate', 'Issue Date', 'date'],
-               ['expiryDate', 'Expiry Date', 'date']],
-    'H4 EAD': [['h4ReceiptNumber', 'H4 Receipt Number'], ['eadNumber', 'EAD Number'],
-               ['expiry', 'Expiry', 'date']],
-    'US Citizen': [],
-    'Other': [['visaType', 'Visa Type'], ['visaNumber', 'Visa Number'],
-              ['issueDate', 'Issue Date', 'date'], ['expiryDate', 'Expiry Date', 'date'],
-              ['notes', 'Notes']],
-  };
+  /* The per-visa-type fields used to live here as a constant mirroring the
+     server's. They are now admin-built and served by
+     /onboarding/work-auth-type-field-config, so there is nothing to keep in
+     sync — the tab renders whatever the schema says.
+
+     WA_CORE_FALLBACK is only used if the schema call fails: the tab still needs
+     a type dropdown to be usable at all. It mirrors WORK_AUTH_CORE_FIELDS. */
+  var WA_CORE_FALLBACK = [
+    { key: 'authType', label: 'Work Authorization Type', type: 'select', required: true, width: 'half', core: true },
+    { key: 'status', label: 'Status', type: 'select', width: 'half', core: true },
+    { key: 'expiryDate', label: 'Expiry Date', type: 'date', width: 'half', core: true },
+    { key: 'receiptNumber', label: 'Receipt / Case Number', type: 'text', width: 'half', core: true },
+    { key: 'sponsorshipRequired', label: 'Sponsorship required', type: 'checkbox', width: 'full', core: true },
+  ];
   var AUTH_TYPES = ['F1', 'H1B', 'GC EAD', 'US Citizen', 'H4 EAD', 'Other'];
   var AUTH_STATUSES = ['Active', 'Pending', 'Expired', 'Extension Filed', 'Transferred', 'Rejected'];
-  var CAND_STATUSES = [
-    'New', 'Offer Released', 'Accepted', 'Documents Pending', 'Work Authorization Pending',
-    'Verification Pending', 'Payroll Pending', 'IT Asset Pending', 'Onboarding Completed', 'Rejected',
-  ];
+  var CAND_STATUSES = ['Draft', 'Pending Verification', 'Pending Approval', 'Approved', 'Rejected', 'Onboarded'];
   var DOC_TYPES = [['ssn', 'SSN', 1], ['driver_license', 'Driver License', 0],
                    ['state_id', 'State ID', 0], ['visa', 'Visa (Work Authorization)', 0],
                    ['i94', 'I-94', 0]];
+  /* Sentinel for the doc-type dropdown: not a real docType, it tells the upload
+     handler to send {isCustom, label} and let the server derive the type. */
+  var CUSTOM_DOC_VALUE = '__custom__';
+  var MAX_DOC_LABEL = 120;   // mirrors MAX_CUSTOM_DOC_LABEL server-side
   var EVERSOFT_ASSETS = ['Laptop', 'Monitor', 'Mouse', 'Keyboard', 'Dock', 'Bag', 'Headset'];
   var ASSET_STATUSES = ['Assigned', 'Returned', 'Lost', 'Damaged'];
   var MAX_MB = 10;
@@ -93,9 +94,10 @@
     list: [], stageErr: '',   // stage pages (work-auth, documents, …)
     cols: null,               // candidate-grid column config; see loadColPrefs()
     loaded: false,            // candidate roster fully loaded (client-side model)
-    buFilter: null,           // Edit Filters → Business Unit (department) selection
-    predef: 'all',            // Edit Filters → pre-defined quick filter
-    customFilters: [],        // Edit Filters → custom "contains" rules: [{key,val}]
+    buFilter: null,           // Edit Filters -> Business Unit (department) selection
+    predef: 'all',            // Edit Filters -> pre-defined quick filter
+    customFilters: [],        // Edit Filters -> custom "contains" rules: [{key,val}]
+    fieldDefs: null,          // cached custom-field schema (labels for display)
   };
 
   /* ── helpers ──────────────────────────────────────────────────────────── */
@@ -503,12 +505,10 @@
 
   /* ── page: dashboard ──────────────────────────────────────────────────── */
   var CARDS = [
-    // The four headline cards from the spec.
     ['totalCandidates', 'Total Candidates', ''],
-    ['pendingCandidates', 'Pending Candidates', 'alert'],
-    ['completedCandidates', 'Completed Candidates', ''],
-    ['rejectedCandidates', 'Rejected Candidates', 'bad'],
-    // Supplementary operational counters.
+    ['pendingVerification', 'Pending Verification', 'alert'],
+    ['pendingApproval', 'Pending Approval', 'alert'],
+    ['completedOnboarding', 'Completed Onboarding', ''],
     ['missingDocuments', 'Missing Documents', 'bad'],
     ['expiringWorkAuth', 'Expiring Work Auth', 'bad'],
     ['itAssetsPending', 'IT Assets Pending', 'alert'],
@@ -775,8 +775,43 @@
      the returned rows.
   */
   function chip(on, label) {
-    return on ? badge(label, 'ok') : badge('—', 'neutral');
+    if (on) {
+      return badge('✔ ' + label, 'ok');
+    }
+    return badge('⚠ —', 'err');
   }
+
+  function getDocCell(row, type) {
+    var doc = row.docs[type] || row.docs['custom_' + type];
+    if (!doc) {
+      // Find in row.docs by matching label case-insensitively
+      var reqs = row.requestedDocs || [];
+      var item = reqs.find(function (it) { return it.type === type; });
+      if (item) {
+        var labelLower = (item.label || '').toLowerCase();
+        for (var k in row.docs) {
+          if (row.docs[k] && row.docs[k].label && row.docs[k].label.toLowerCase() === labelLower) {
+            doc = row.docs[k];
+            break;
+          }
+        }
+      }
+    }
+    if (doc) {
+      var label = (type === 'ssn') ? 'v' + doc.version : 'Uploaded';
+      return chip(doc, label);
+    }
+    var reqs = row.requestedDocs || [];
+    var found = reqs.find(function(item) { return item.type === type; });
+    if (found) {
+      if (!found.sendToCandidate) {
+        return badge('—', 'neutral');
+      }
+      return badge('⚠ —', 'err');
+    }
+    return badge('—', 'neutral');
+  }
+
 
   var STAGE_PAGES = {
     '/work-auth': {
@@ -811,14 +846,14 @@
       empty: 'No candidates yet.',
       cols: [
         ['candidate', 'Candidate'],
-        ['ssn', 'SSN', function (r) { return chip(r.docs.ssn, 'v' + (r.docs.ssn ? r.docs.ssn.version : '')); }],
-        ['driver_license', 'Driver License', function (r) { return chip(r.docs.driver_license, 'Uploaded'); }],
-        ['state_id', 'State ID', function (r) { return chip(r.docs.state_id, 'Uploaded'); }],
-        ['visa', 'Visa', function (r) { return chip(r.docs.visa, 'Uploaded'); }],
-        ['i94', 'I-94', function (r) { return chip(r.docs.i94, 'Uploaded'); }],
-        ['uploaded', 'Uploaded', function (r) { return r.uploaded + ' / 5'; }],
+        ['ssn', 'SSN', function (r) { return getDocCell(r, 'ssn'); }],
+        ['driver_license', 'Driver License', function (r) { return getDocCell(r, 'driver_license'); }],
+        ['state_id', 'State ID', function (r) { return getDocCell(r, 'state_id'); }],
+        ['visa', 'Visa', function (r) { return getDocCell(r, 'visa'); }],
+        ['i94', 'I-94', function (r) { return getDocCell(r, 'i94'); }],
+        ['uploaded', 'Uploaded', function (r) { return (r.uploaded || 0) + ' / ' + (r.totalRequested || 5); }],
         ['missing', 'Missing', function (r) {
-          return r.missing.length ? badge(r.missing.join(', '), 'err') : badge('Complete', 'ok');
+          return r.missing.length ? badge('⚠ ' + r.missing.join(', '), 'err') : badge('✔ Complete', 'ok');
         }],
       ],
     },
@@ -885,6 +920,48 @@
     api(spec.url).then(function (rows) {
       state.list = rows || [];
       state.loading = false;
+
+      if (state.page === '/documents') {
+        var cols = [
+          ['candidate', 'Candidate']
+        ];
+        var seenTypes = {};
+        
+        // Define standard columns
+        var standard = [
+          { type: 'ssn', label: 'SSN' },
+          { type: 'driver_license', label: 'Driver License' },
+          { type: 'state_id', label: 'State ID' },
+          { type: 'visa', label: 'Visa' },
+          { type: 'i94', label: 'I-94' }
+        ];
+        standard.forEach(function (std) {
+          seenTypes[std.type] = true;
+          cols.push([std.type, std.label, function (r) { return getDocCell(r, std.type); }]);
+        });
+
+        // Scan candidate rows for any custom/other document slots that were configured
+        state.list.forEach(function (r) {
+          var reqs = r.requestedDocs || [];
+          reqs.forEach(function (item) {
+            if (!seenTypes[item.type]) {
+              seenTypes[item.type] = true;
+              cols.push([item.type, item.label, function (row) { return getDocCell(row, item.type); }]);
+            }
+          });
+        });
+
+        // Append final aggregate columns
+        cols.push(['uploaded', 'Uploaded', function (r) {
+          return (r.uploaded || 0) + ' / ' + (r.totalRequested || 5);
+        }]);
+        cols.push(['missing', 'Missing', function (r) {
+          return r.missing.length ? badge('⚠ ' + r.missing.join(', '), 'err') : badge('✔ Complete', 'ok');
+        }]);
+
+        spec.cols = cols;
+      }
+
       render();
     }).catch(function (e) {
       state.list = [];
@@ -952,14 +1029,90 @@
       '<div class="ob-pg"><span>' + rows.length + ' row(s)</span></div>';
   }
 
-  /* ── page: settings (read-only module config) ─────────────────────────── */
+  /* ── page: settings ───────────────────────────────────────────────────── */
   function viewSettings() {
     function rows(list) {
       return list.map(function (r) {
         return '<div class="ob-row"><span class="k">' + r[0] + '</span><span class="v">' + r[1] + '</span></div>';
       }).join('');
     }
-    return '<div class="ob-grid2">' +
+
+    // Candidate-form panel — its own async load, rendered into a placeholder.
+    if (can('onboarding.settings')) {
+      api('/onboarding/field-config').then(function (cfg) {
+        var box = document.getElementById('ob-cf-panel');
+        if (!box) return;
+        var sections = (cfg && cfg.sections) || [];
+        var count = flattenSections(sections).length;
+        box.innerHTML =
+          '<h3>New Candidate Form <button class="ob-btn" id="ob-cf-edit" style="float:right;padding:4px 10px">⚙ Open Builder</button></h3>' +
+          (count
+            ? sections.map(function (s) {
+                return '<div class="ob-row"><span class="k" style="font-weight:600">' + esc(s.title || 'Section') + '</span>' +
+                  '<span class="v">' + (s.fields || []).length + ' field(s)</span></div>' +
+                  (s.fields || []).map(function (f) {
+                    return '<div class="ob-row" style="padding-left:12px"><span class="k">' + esc(f.label) +
+                      (f.required ? ' <span style="color:#ef4444">*</span>' : '') + '</span>' +
+                      '<span class="v">' + badge(f.type, 'neutral') + '</span></div>';
+                  }).join('');
+              }).join('')
+            : '<div class="ob-sub" style="margin:6px 0 0">No custom fields yet. Build the sections shown on the New Candidate form.</div>');
+        var eb = document.getElementById('ob-cf-edit');
+        if (eb) eb.addEventListener('click', onbOpenBuilder);
+      }).catch(function () {});
+
+      // Work-auth extra fields — same shape, its own schema. The full builder
+      // engine only knows the candidate form, so this always uses the local one.
+      api('/onboarding/work-auth-field-config').then(function (cfg) {
+        var box = document.getElementById('ob-wa-panel');
+        if (!box) return;
+        var sections = (cfg && cfg.sections) || [];
+        box.innerHTML =
+          '<h3>Work Authorization Fields <button class="ob-btn" id="ob-wa-edit" style="float:right;padding:4px 10px">⚙ Open Builder</button></h3>' +
+          (flattenSections(sections).length
+            ? sections.map(function (s) {
+                return '<div class="ob-row"><span class="k" style="font-weight:600">' + esc(s.title || 'Section') + '</span>' +
+                  '<span class="v">' + (s.fields || []).length + ' field(s)</span></div>' +
+                  (s.fields || []).map(function (f) {
+                    return '<div class="ob-row" style="padding-left:12px"><span class="k">' + esc(f.label) +
+                      (f.required ? ' <span style="color:#ef4444">*</span>' : '') + '</span>' +
+                      '<span class="v">' + badge(f.type, 'neutral') + '</span></div>';
+                  }).join('');
+              }).join('')
+            : '<div class="ob-sub" style="margin:6px 0 0">No extra fields yet. These are added to the ' +
+              'Work Authorization tab for every candidate, on top of the per-visa-type fields below.</div>');
+        var wb = document.getElementById('ob-wa-edit');
+        if (wb) wb.addEventListener('click', function () { openFormBuilder('workAuth'); });
+      }).catch(function () {});
+    }
+
+    // The per-visa-type field counts. Readable by anyone who can view
+    // onboarding — only the builder button is settings-gated.
+    api('/onboarding/work-auth-type-field-config').then(function (cfg) {
+      var box = document.getElementById('ob-wat-panel');
+      if (!box) return;
+      var sections = (cfg && cfg.sections) || [];
+      box.innerHTML =
+        '<h3>Work Authorization Types' +
+          (can('onboarding.settings')
+            ? ' <button class="ob-btn" id="ob-wat-edit" style="float:right;padding:4px 10px">⚙ Open Builder</button>'
+            : '') +
+        '</h3>' +
+        rows(sections.map(function (s) {
+          var n = (s.fields || []).length;
+          return [esc(s.id), n ? n + ' field(s)' : 'no extra fields'];
+        }));
+      var tb = document.getElementById('ob-wat-edit');
+      if (tb) tb.addEventListener('click', function () { openFormBuilder('workAuthTypes'); });
+    }).catch(function () {});
+
+    var cfPanel = can('onboarding.settings')
+      ? '<div class="ob-panel" id="ob-cf-panel"><h3>New Candidate Form</h3><div class="ob-skel" style="height:40px"></div></div>' +
+        '<div class="ob-panel" id="ob-wa-panel"><h3>Work Authorization Fields</h3><div class="ob-skel" style="height:40px"></div></div>'
+      : '';
+
+    return '<div class="ob-grid2">' + cfPanel + '</div>' +
+      '<div class="ob-grid2">' +
       '<div class="ob-panel"><h3>Workflow Stages</h3>' + rows(STAGES.map(function (s, i) {
         return [(i + 1) + '. ' + s[1], badge(s[0], 'neutral')];
       })) + '</div>' +
@@ -970,10 +1123,8 @@
         ['Maximum size', MAX_MB + ' MB'],
         ['Versioning', 'Re-upload supersedes; history kept'],
       ]) + '</div>' +
-      '<div class="ob-panel"><h3>Work Authorization Types</h3>' + rows(AUTH_TYPES.map(function (t) {
-        var f = WORK_AUTH_FIELDS[t];
-        return [t, f.length ? f.length + ' field(s)' : 'no extra fields'];
-      })) + '</div>' +
+      '<div class="ob-panel" id="ob-wat-panel"><h3>Work Authorization Types</h3>' +
+        '<div class="ob-skel" style="height:40px"></div></div>' +
       '<div class="ob-panel"><h3>Your Permissions</h3>' + rows([
         ['View', can('onboarding.view') ? badge('Yes', 'ok') : badge('No', 'err')],
         ['Create / Edit', can('onboarding.create') ? badge('Yes', 'ok') : badge('No', 'err')],
@@ -991,8 +1142,9 @@
   var TABS = [
     ['overview', 'Overview'], ['workauth', 'Work Auth'], ['documents', 'Documents'],
     ['verification', 'Verification'], ['approval', 'Approval'], ['assets', 'IT Assets'],
-    ['payroll', 'Payroll'], ['timeline', 'Timeline'],
+    ['payroll', 'Payroll'], ['forms', 'Paper Forms'], ['timeline', 'Timeline'],
   ];
+
 
   function openDetail(id, tab) {
     state.tab = tab || 'overview';
@@ -1030,7 +1182,7 @@
           badge(c.status, statusKind(c.status)) +
           '<button class="ob-x" id="ob-close">×</button></div>' +
         '<div class="ob-tabs">' + TABS.map(function (t) {
-          return '<button class="ob-tab' + (state.tab === t[0] ? ' on' : '') + '" data-tab="' + t[0] + '">' + t[1] + '</button>';
+        return '<button class="ob-tab' + (state.tab === t[0] ? ' on' : '') + '" data-tab="' + t[0] + '" id="ob-tab-' + t[0] + '">' + t[1] + '</button>';
         }).join('') + '</div>' +
         '<div class="ob-dw-b"><div class="ob-rail">' + rail + '</div><div id="ob-tabbody"></div></div>' +
       '</div>';
@@ -1055,8 +1207,10 @@
     if (t === 'approval') return tabApproval(el, c);
     if (t === 'assets') return tabAssets(el, c);
     if (t === 'payroll') return tabPayroll(el, c);
+    if (t === 'forms') return tabForms(el, c);
     if (t === 'timeline') return tabTimeline(el, c);
   }
+
 
   function refreshDetail() {
     api('/onboarding/candidates/' + state.detail.id).then(function (c) {
@@ -1077,6 +1231,30 @@
     function heading(t) {
       return '<div class="ob-lb" style="font-size:13px;margin:18px 0 4px;color:var(--text,#e6edf7)">' + t + '</div>';
     }
+
+    // Custom fields, labelled from the cached schema (fetched lazily once).
+    var cf = c.customFields || {};
+    var customRows = '';
+    if (Object.keys(cf).length) {
+      var defs = state.fieldDefs || [];
+      var byKey = {};
+      defs.forEach(function (f) { byKey[f.key] = f; });
+      customRows = Object.keys(cf).map(function (k) {
+        var f = byKey[k] || { label: k, type: 'text' };
+        var raw = cf[k];
+        var val = Array.isArray(raw) ? raw.join(', ')
+          : f.type === 'checkbox' ? (raw ? 'Yes' : 'No') : raw;
+        return '<div class="ob-row"><span class="k">' + esc(f.label) + '</span><span class="v">' + esc(val) + '</span></div>';
+      }).join('');
+      if (!state.fieldDefs) {
+        // First time: fetch labels, then re-render this tab.
+        api('/onboarding/field-config').then(function (r) {
+          state.fieldDefs = (r && r.fields) || [];
+          if (state.tab === 'overview') renderTab();
+        }).catch(function () { state.fieldDefs = []; });
+      }
+    }
+
     el.innerHTML =
       heading('Personal Information').replace('margin:18px', 'margin:2px') +
       row('Candidate Code', esc(c.candidateCode || '—')) +
@@ -1095,6 +1273,7 @@
       row('Vendor', esc(c.vendor || '—')) +
       row('Recruiter', esc(c.recruiter || '—')) +
       row('Joining Date', fmtDate(c.joiningDate)) +
+      (customRows ? heading('Additional Information') + customRows : '') +
       heading('Onboarding') +
       row('Current Status', badge(c.status, statusKind(c.status))) +
       row('Progress', done + ' / ' + STAGES.length + ' stages') +
@@ -1149,78 +1328,233 @@
     });
   }
 
-  /* -- work authorization (the dynamic form) -- */
+  /* One core work-auth field. These map to WorkAuthorization columns and need
+     bespoke inputs — the type dropdown drives the rest of the form — so they
+     are rendered here rather than by customFieldInput. Everything cosmetic
+     (label, order, width, required) still comes from the admin's schema. */
+  function waCoreInput(f, a, ro) {
+    var dis = ro ? ' disabled' : '';
+    var lab = '<label class="ob-lb">' + esc(f.label) + (f.required ? ' <span class="req">*</span>' : '') + '</label>';
+    var wrap = f.width === 'half' ? '<div>' : '<div class="full">';
+    if (f.key === 'authType') {
+      return wrap + lab + '<select class="ob-sel" id="wa-type"' + dis + '><option value="">Select…</option>' +
+        AUTH_TYPES.map(function (t) {
+          return '<option' + (a.authType === t ? ' selected' : '') + '>' + t + '</option>';
+        }).join('') + '</select></div>';
+    }
+    if (f.key === 'status') {
+      return wrap + lab + '<select class="ob-sel" id="wa-status"' + dis + '>' +
+        AUTH_STATUSES.map(function (t) {
+          return '<option' + (a.status === t ? ' selected' : '') + '>' + t + '</option>';
+        }).join('') + '</select></div>';
+    }
+    if (f.key === 'expiryDate') {
+      return wrap + lab + '<input type="date" class="ob-in" id="wa-expiry" value="' +
+        esc(a.expiryDate || '') + '"' + dis + '></div>';
+    }
+    if (f.key === 'receiptNumber') {
+      return wrap + lab + '<input class="ob-in" id="wa-receipt" value="' +
+        esc(a.receiptNumber || '') + '"' + dis + '></div>';
+    }
+    if (f.key === 'sponsorshipRequired') {
+      return '<div class="full"><label class="ob-chk"><input type="checkbox" id="wa-spons"' +
+        (a.sponsorshipRequired ? ' checked' : '') + dis + '> ' + esc(f.label) + '</label></div>';
+    }
+    return '';
+  }
+
+  /* -- work authorization (the dynamic form) --
+     Three sets of fields land here, all admin-configurable:
+       core       — the five built-in fields, rendered from the schema's ``core``
+                    entries by waCoreInput; they map to columns.
+       #wa-dyn    — the fields the selected visa type asks for, swapped whenever
+                    the type dropdown changes.
+       #wa-custom — extra fields that apply to every candidate and every type.
+     Core renders first, then per-type, then extras — the schema orders within
+     each group, not across them. */
   function tabWorkAuth(el, c) {
-    api('/onboarding/candidates/' + c.id + '/work-authorization').then(function (a) {
-      a = a || {};
+    Promise.all([
+      api('/onboarding/candidates/' + c.id + '/work-authorization'),
+      // Falling back to the built-in core fields keeps the tab usable if the
+      // config call fails, rather than rendering an empty form.
+      api('/onboarding/work-auth-field-config').catch(function () { return null; }),
+      api('/onboarding/work-auth-type-field-config').catch(function () { return null; }),
+    ]).then(function (res) {
+      var a = res[0] || {};
+      var cfgSections = (res[1] && res[1].sections) || [{ fields: WA_CORE_FALLBACK }];
+      var typeSections = (res[2] && res[2].sections) || [];
+      var typeFields = {};
+      typeSections.forEach(function (s) { typeFields[s.id] = s.fields || []; });
+
+      var coreFields = [];
+      cfgSections.forEach(function (s) {
+        (s.fields || []).forEach(function (f) { if (f.core) coreFields.push(f); });
+      });
+
       var ro = !can('onboarding.edit');
+      // Adding a field edits the shared schema for every candidate, so the
+      // button is a settings action even though it lives on this tab.
+      var canFields = can('onboarding.settings');
       el.innerHTML =
         '<div class="ob-f">' +
-          '<div><label class="ob-lb">Work Authorization Type <span class="req">*</span></label>' +
-            '<select class="ob-sel" id="wa-type"' + (ro ? ' disabled' : '') + '>' +
-              '<option value="">Select…</option>' +
-              AUTH_TYPES.map(function (t) {
-                return '<option' + (a.authType === t ? ' selected' : '') + '>' + t + '</option>';
-              }).join('') + '</select></div>' +
-          '<div><label class="ob-lb">Status</label><select class="ob-sel" id="wa-status"' + (ro ? ' disabled' : '') + '>' +
-            AUTH_STATUSES.map(function (t) {
-              return '<option' + (a.status === t ? ' selected' : '') + '>' + t + '</option>';
-            }).join('') + '</select></div>' +
-          '<div><label class="ob-lb">Expiry Date</label><input type="date" class="ob-in" id="wa-expiry" value="' +
-            esc(a.expiryDate || '') + '"' + (ro ? ' disabled' : '') + '></div>' +
-          '<div><label class="ob-lb">Receipt / Case Number</label><input class="ob-in" id="wa-receipt" value="' +
-            esc(a.receiptNumber || '') + '"' + (ro ? ' disabled' : '') + '></div>' +
-          '<div class="full"><label class="ob-chk"><input type="checkbox" id="wa-spons"' +
-            (a.sponsorshipRequired ? ' checked' : '') + (ro ? ' disabled' : '') + '> Sponsorship required</label></div>' +
+          coreFields.map(function (f) { return waCoreInput(f, a, ro); }).join('') +
           '<div class="full" id="wa-dyn"></div>' +
+          '<div class="full" id="wa-custom">' +
+            '<div class="ob-f">' + renderCustomSections(cfgSections, a.customFields) + '</div>' +
+          '</div>' +
         '</div>' +
-        (ro ? '' : '<div class="ob-act"><button class="ob-btn primary" id="wa-save">Save Work Authorization</button></div>') +
+        (ro && !canFields ? '' :
+          '<div class="ob-act">' +
+            (ro ? '' : '<button class="ob-btn primary" id="wa-save">Save Work Authorization</button>') +
+            (canFields
+              ? '<button class="ob-btn" id="wa-fields" style="margin-left:auto" ' +
+                'title="Add fields to this tab for every candidate">⚙ Add / Edit Fields</button>'
+              : '') +
+          '</div>') +
         '<div class="ob-err" id="wa-e"></div>';
+
+      // renderCustomSections() has no read-only mode — it is shared with the
+      // New Candidate modal, which is always editable. Radio groups carry
+      // data-ck on a wrapping div, so disable the controls themselves.
+      if (ro) {
+        el.querySelectorAll('#wa-custom input, #wa-custom select, #wa-custom textarea')
+          .forEach(function (i) { i.disabled = true; });
+      }
 
       function renderDyn() {
         var type = el.querySelector('#wa-type').value;
         var box = el.querySelector('#wa-dyn');
-        var fields = WORK_AUTH_FIELDS[type] || [];
+        var fields = typeFields[type] || [];
         if (!type) { box.innerHTML = '<div class="ob-sub">Select a type to see its fields.</div>'; return; }
         if (!fields.length) {
           box.innerHTML = '<div class="ob-sub">A ' + esc(type) + ' needs no additional work-authorization fields.</div>';
           return;
         }
-        var d = a.details || {};
-        box.innerHTML = '<div class="ob-f">' + fields.map(function (f) {
-          return '<div><label class="ob-lb">' + f[1] + '</label>' +
-                 '<input class="ob-in" data-k="' + f[0] + '" type="' + (f[2] === 'date' ? 'date' : 'text') + '" value="' +
-                 esc(d[f[0]] || '') + '"' + (ro ? ' disabled' : '') + '></div>';
-        }).join('') + '</div>';
+        // Rendered by the shared field renderer, so a per-type field supports
+        // the whole palette (select, date, textarea…) rather than text/date.
+        box.innerHTML = '<div class="ob-f">' +
+          renderCustomSections([{ fields: fields }], a.details) + '</div>';
+        if (ro) {
+          box.querySelectorAll('input, select, textarea').forEach(function (i) { i.disabled = true; });
+        }
       }
       el.querySelector('#wa-type').addEventListener('change', renderDyn);
       renderDyn();
+
+      var fieldsBtn = el.querySelector('#wa-fields');
+      if (fieldsBtn) fieldsBtn.addEventListener('click', function () { openFormBuilder('workAuth'); });
 
       var save = el.querySelector('#wa-save');
       if (save) save.addEventListener('click', function () {
         var e = el.querySelector('#wa-e');
         var type = el.querySelector('#wa-type').value;
         if (!type) { e.textContent = 'Select a work authorization type.'; return; }
-        var details = {};
-        el.querySelectorAll('#wa-dyn [data-k]').forEach(function (i) {
-          if (i.value) details[i.dataset.k] = i.value;
-        });
         save.disabled = true;
         e.textContent = '';
-        api('/onboarding/candidates/' + c.id + '/work-authorization', {
-          method: 'PUT',
-          body: {
-            authType: type,
-            status: el.querySelector('#wa-status').value,
-            expiryDate: el.querySelector('#wa-expiry').value || null,
-            receiptNumber: el.querySelector('#wa-receipt').value,
-            sponsorshipRequired: el.querySelector('#wa-spons').checked,
-            details: details,
-          },
-        }).then(function () { toast('Work authorization saved'); refreshDetail(); })
+        var body = {
+          authType: type,
+          details: collectCustom(el.querySelector('#wa-dyn')),
+          customFields: collectCustom(el.querySelector('#wa-custom')),
+        };
+        // Each core field is only sent if the schema actually rendered it, so a
+        // reordered or relabelled form never posts a null over a live column.
+        var st = el.querySelector('#wa-status'); if (st) body.status = st.value;
+        var ex = el.querySelector('#wa-expiry'); if (ex) body.expiryDate = ex.value || null;
+        var rc = el.querySelector('#wa-receipt'); if (rc) body.receiptNumber = rc.value;
+        var sp = el.querySelector('#wa-spons'); if (sp) body.sponsorshipRequired = sp.checked;
+        api('/onboarding/candidates/' + c.id + '/work-authorization', { method: 'PUT', body: body })
+          .then(function () { toast('Work authorization saved'); refreshDetail(); })
           .catch(function (err) { save.disabled = false; e.textContent = err.message; });
       });
     }).catch(function (e) { el.innerHTML = '<div class="ob-err">' + esc(e.message) + '</div>'; });
+  }
+
+  /* -- custom modal for adding document requirement slots -- */
+  function openAddDocumentModal(c, requestedDocsList, onSaved) {
+    var ov = document.createElement('div');
+    ov.id = 'ob-add-doc-modal';
+    ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.65);z-index:99999;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(3px);';
+    
+    var modal = document.createElement('div');
+    modal.style.cssText = 'background:var(--bg2,#111827);border:1px solid var(--border,#2a3446);border-radius:14px;width:min(460px,92vw);padding:24px;box-shadow:0 20px 40px rgba(0,0,0,0.5);display:flex;flex-direction:column;gap:16px;color:var(--text,#e6edf7);font-family:inherit;';
+    
+    modal.innerHTML = 
+      '<h3 style="margin:0;font-size:16px;font-weight:700;font-family:var(--font-d);">Add Document Requirement</h3>' +
+      '<div style="display:flex;flex-direction:column;gap:6px;">' +
+        '<label class="ob-lb" style="margin:0">Document Name / Label</label>' +
+        '<input type="text" class="ob-in" id="adm-name" placeholder="e.g. NDA, Degree Certificate" autofocus>' +
+      '</div>' +
+      '<div style="display:flex;flex-direction:column;gap:6px;margin-top:4px;">' +
+        '<label class="ob-chk" style="padding:0;margin:0"><input type="checkbox" id="adm-send" checked> Send to Candidate</label>' +
+        '<label class="ob-chk" style="padding:0;margin:0;margin-top:8px"><input type="checkbox" id="adm-req"> Required (Mandatory)</label>' +
+      '</div>' +
+      '<div class="ob-err" id="adm-err" style="margin:0;min-height:0;font-size:12px;color:#ef4444;"></div>' +
+      '<div style="display:flex;justify-content:flex-end;gap:10px;margin-top:8px;">' +
+        '<button class="ob-btn" id="adm-cancel" style="padding:6px 14px;">Cancel</button>' +
+        '<button class="ob-btn primary" id="adm-save" style="padding:6px 16px;">Add Slot</button>' +
+      '</div>';
+      
+    ov.appendChild(modal);
+    document.body.appendChild(ov);
+    
+    var nameInp = modal.querySelector('#adm-name');
+    var sendChk = modal.querySelector('#adm-send');
+    var reqChk = modal.querySelector('#adm-req');
+    var errDiv = modal.querySelector('#adm-err');
+    var cancelBtn = modal.querySelector('#adm-cancel');
+    var saveBtn = modal.querySelector('#adm-save');
+    
+    function close() {
+      ov.remove();
+    }
+    
+    cancelBtn.addEventListener('click', close);
+    ov.addEventListener('click', function(e) { if (e.target === ov) close(); });
+    
+    nameInp.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        saveBtn.click();
+      } else if (e.key === 'Escape') {
+        close();
+      }
+    });
+    
+    saveBtn.addEventListener('click', function() {
+      var name = (nameInp.value || '').trim();
+      if (!name) {
+        errDiv.textContent = 'Document name is required.';
+        return;
+      }
+      var typeKey = 'custom_' + name.toLowerCase().replace(/[^a-z0-9_]/g, '_');
+      if (requestedDocsList.some(function (item) { return item.type === typeKey || item.label.toLowerCase() === name.toLowerCase(); })) {
+        errDiv.textContent = 'A document slot with this name already exists.';
+        return;
+      }
+      
+      var newDocSlot = {
+        type: typeKey,
+        label: name,
+        required: reqChk.checked,
+        sendToCandidate: sendChk.checked
+      };
+      
+      saveBtn.disabled = true;
+      saveBtn.textContent = 'Adding...';
+      
+      api('/onboarding/candidates/' + c.id, {
+        method: 'PATCH',
+        body: { requestedDocs: requestedDocsList.concat(newDocSlot) }
+      }).then(function (updatedCandidate) {
+        toast('Document slot "' + name + '" added to checklist');
+        onSaved(updatedCandidate.requestedDocs, newDocSlot);
+        close();
+      }).catch(function(err) {
+        saveBtn.disabled = false;
+        saveBtn.textContent = 'Add Slot';
+        errDiv.textContent = err.message || 'Failed to add document slot.';
+      });
+    });
   }
 
   /* -- documents (drag & drop, multi-upload, versions) -- */
@@ -1231,38 +1565,259 @@
       var have = {};
       docs.forEach(function (d) { have[d.docType] = d; });
 
-      var list = DOC_TYPES.map(function (t) {
-        var d = have[t[0]];
-        return '<div class="ob-row">' +
-          '<span class="k">' + t[1] + (t[2] ? ' <span class="req" style="color:#ef4444">*</span>' : '') + '</span>' +
-          '<span class="v">' + (d
-            ? badge('v' + d.version + ' · ' + (d.fileName || 'file'), 'ok') +
-              ' <button class="ob-btn" style="padding:3px 9px" data-dl="' + d.id + '">View</button>' +
-              ' <button class="ob-btn" style="padding:3px 9px" data-hist="' + d.docType + '">History</button>' +
-              (ro ? '' : ' <button class="ob-btn danger" style="padding:3px 9px" data-rm="' + d.id + '">Delete</button>')
-            : badge('Not uploaded', t[2] ? 'err' : 'neutral')) +
-          '</span></div>';
+      var circleCheck = '<span style="display:inline-block;width:14px;height:14px;border-radius:50%;background:#22c55e;color:#fff;text-align:center;line-height:14px;font-size:9px;margin-right:6px;font-weight:bold">✓</span>';
+      var circleWarning = '<span style="display:inline-block;width:14px;height:14px;border-radius:50%;background:#ef4444;color:#fff;text-align:center;line-height:14px;font-size:9px;margin-right:6px;font-weight:bold">!</span>';
+      var circleInfo = '<span style="display:inline-block;width:14px;height:14px;border-radius:50%;background:#64748b;color:#fff;text-align:center;line-height:14px;font-size:9px;margin-right:6px;font-weight:bold">-</span>';
+
+
+      // Update the Documents tab badge with current upload count
+      function updateTabBadge(count) {
+        var tabBtn = document.getElementById('ob-tab-documents');
+        if (tabBtn) {
+          tabBtn.innerHTML = 'Documents' +
+            (count > 0
+              ? ' <span style="font-size:10px;background:#22c55e33;color:#4ade80;border:1px solid #22c55e66;border-radius:10px;padding:1px 6px;margin-left:3px;font-weight:600">' + count + '</span>'
+              : '');
+        }
+      }
+      updateTabBadge(docs.length);
+
+      // Ensure requestedDocs array is initialized in candidate object
+      var requestedDocsList = (c.requestedDocs && Array.isArray(c.requestedDocs) && c.requestedDocs.length > 0) ? c.requestedDocs : [
+        {type: 'ssn', label: 'SSN', required: true, sendToCandidate: true},
+        {type: 'driver_license', label: 'Driver License', required: false, sendToCandidate: true},
+        {type: 'state_id', label: 'State ID', required: false, sendToCandidate: false},
+        {type: 'visa', label: 'Visa (Work Authorization)', required: false, sendToCandidate: true},
+        {type: 'i94', label: 'I-94', required: false, sendToCandidate: true}
+      ];
+
+      /* The action buttons are identical for fixed and custom documents. */
+      function docActions(d) {
+        var label = d.label || d.docType;
+        if (label === 'ssn') label = 'SSN';
+        else if (label === 'driver_license') label = 'Driver License';
+        else if (label === 'state_id') label = 'State ID';
+        else if (label === 'visa') label = 'Visa (Work Authorization)';
+        else if (label === 'i94') label = 'I-94';
+        return badge('v' + d.version + ' · ' + label, 'ok') +
+          ' <button class="ob-btn" style="padding:3px 9px" data-dl="' + d.id + '">View</button>' +
+          ' <button class="ob-btn" style="padding:3px 9px" data-hist="' + esc(d.docType) + '">History</button>' +
+          (ro ? '' : ' <button class="ob-btn danger" style="padding:3px 9px" data-rm="' + d.id + '">Delete</button>');
+      }
+
+      // Render the checklist table
+      var checklistRows = requestedDocsList.map(function (item, index) {
+        var d = have[item.type] || have['custom_' + item.type] || have[item.type.toLowerCase().replace(/\s+/g, '_')];
+        // If not found, check by label matching (case insensitive)
+        if (!d) {
+          d = docs.find(function (x) {
+            return (x.label || '').toLowerCase() === (item.label || '').toLowerCase() ||
+                   (x.docType || '').toLowerCase() === (item.type || '').toLowerCase();
+          });
+        }
+
+        var chkRequired = '<input type="checkbox" class="chk-required" data-index="' + index + '"' + (item.required ? ' checked' : '') + (ro ? ' disabled' : '') + '>';
+        var chkSend = '<input type="checkbox" class="chk-send" data-index="' + index + '"' + (item.sendToCandidate ? ' checked' : '') + (ro ? ' disabled' : '') + '>';
+
+        var isSystem = ['ssn', 'driver_license', 'state_id', 'visa', 'i94'].indexOf(item.type) !== -1;
+        var delBtn = (isSystem || ro) ? '' : ' <button class="ob-btn danger" style="padding:2px 6px;margin-left:4px" data-del-checklist-idx="' + index + '">×</button>';
+
+        // STATUS column — show circular tick symbol on upload, circular warning symbol when not uploaded
+        var statusCell;
+        if (d) {
+          statusCell = circleCheck + badge('v' + d.version + ' · ' + esc(item.label), 'ok');
+        } else if (!item.sendToCandidate) {
+          statusCell = circleInfo + badge('Not requested', 'neutral');
+        } else if (item.required) {
+          statusCell = circleWarning + badge('Mandatory — not uploaded', 'err');
+        } else {
+          statusCell = circleWarning + badge('Optional — not uploaded', 'neutral');
+        }
+
+        // ACTION column — view/history/delete when uploaded, else nothing
+        var actionCell = d
+          ? ('<button class="ob-btn" style="padding:3px 9px" data-dl="' + d.id + '">View</button>' +
+             ' <button class="ob-btn" style="padding:3px 9px" data-hist="' + esc(d.docType) + '">History</button>' +
+             (ro ? '' : ' <button class="ob-btn danger" style="padding:3px 9px" data-rm="' + d.id + '">Delete</button>'))
+          : '—';
+
+        return '<tr>' +
+          '<td style="vertical-align:middle">' +
+            '<strong>' + esc(item.label) + '</strong>' +
+            (item.required ? ' <span style="color:#ef4444;font-weight:700">*</span>' : '') +
+            delBtn +
+          '</td>' +
+          '<td style="text-align:center;vertical-align:middle">' + chkSend + '</td>' +
+          '<td style="text-align:center;vertical-align:middle">' + chkRequired + '</td>' +
+          '<td style="vertical-align:middle;white-space:nowrap">' + statusCell + '</td>' +
+          '<td style="vertical-align:middle;white-space:nowrap">' + actionCell + '</td>' +
+          '</tr>';
       }).join('');
 
+      var checklistTable = [
+        '<div style="margin-bottom:20px;padding:16px;background:var(--bg3,#1c2433);border:1px solid var(--border,#2a3446);border-radius:12px">',
+        '  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">',
+        '    <h4 style="margin:0;font-size:15px">Onboarding Checklist &amp; Candidate Portal Uploads</h4>',
+        (ro ? '' : '    <button class="ob-btn primary" id="btn-add-doc-name" style="padding:4px 12px">+ Add Document Name</button>'),
+        '  </div>',
+        '  <div style="overflow-x:auto;max-height:280px;overflow-y:auto;width:100%;max-width:100%;box-sizing:border-box">',
+        '  <table class="ob-table" style="width:100%;margin-top:10px;border-collapse:collapse">',
+        '    <thead>',
+        '      <tr>',
+        '        <th style="text-align:left;padding:8px 10px;width:auto">Document Type / Label</th>',
+        '        <th style="text-align:center;width:110px;padding:8px 10px">Send to Candidate</th>',
+        '        <th style="text-align:center;width:70px;padding:8px 10px">Required</th>',
+        '        <th style="text-align:left;width:160px;padding:8px 10px">Status</th>',
+        '        <th style="text-align:left;width:120px;padding:8px 10px">Action</th>',
+        '      </tr>',
+        '    </thead>',
+        '    <tbody>',
+        '       ' + (checklistRows || '<tr><td colspan="5" class="ob-empty">No documents configured.</td></tr>'),
+        '    </tbody>',
+        '  </table>',
+        '  </div>',
+        '</div>'
+      ].join('\n');
+
       el.innerHTML =
+        checklistTable +
         (ro ? '' :
           '<div class="ob-dz" id="ob-dz"><div class="big">⬆</div>' +
           '<div><b>Drag &amp; drop</b> files here, or click to choose</div>' +
           '<div class="ob-sub" style="margin:6px 0 0">PDF, PNG or JPG · max ' + MAX_MB + ' MB each</div></div>' +
-          '<select class="ob-sel" id="ob-dtype" style="margin-bottom:10px">' +
-            DOC_TYPES.map(function (t) {
-              return '<option value="' + t[0] + '">Upload as: ' + t[1] + (t[2] ? ' (required)' : '') + '</option>';
-            }).join('') + '</select>' +
+          '<div style="display:flex;gap:8px;margin-bottom:10px">' +
+            '<select class="ob-sel" id="ob-dtype" style="flex:1;margin:0">' +
+              requestedDocsList.filter(function(t){ return t.sendToCandidate; }).map(function (t) {
+                return '<option value="' + t.type + '">Upload as: ' + t.label + (t.required ? ' (required)' : ' (optional)') + '</option>';
+              }).join('') +
+              '<option value="' + CUSTOM_DOC_VALUE + '">Upload as: Custom document…</option>' +
+            '</select>' +
+          '</div>' +
+          '<input class="ob-in" id="ob-dlabel" style="margin-bottom:10px;display:none" maxlength="' +
+            MAX_DOC_LABEL + '" placeholder="Name this document (e.g. Work Permit), then choose the file above">' +
           '<input type="file" id="ob-file" accept=".pdf,.png,.jpg,.jpeg" multiple hidden>' +
           '<div class="ob-bar" id="ob-bar" style="display:none"><i></i></div>') +
-        '<div style="margin-top:16px">' + list + '</div>' +
         '<div class="ob-err" id="ob-de"></div>';
+
+      // Event listener for adding custom doc type
+      var addBtn = el.querySelector('#btn-add-doc-name');
+      if (addBtn) {
+        addBtn.addEventListener('click', function () {
+          openAddDocumentModal(c, requestedDocsList, function(updatedDocs, newItem) {
+            requestedDocsList = updatedDocs;
+            c.requestedDocs = updatedDocs;
+            renderTab();
+          });
+        });
+      }
+
+      // Event listener for deleting custom doc index
+      el.querySelectorAll('[data-del-checklist-idx]').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          var idx = parseInt(btn.dataset.delChecklistIdx);
+          if (!confirm('Remove this document slot from the checklist? Any already uploaded file will remain in custom uploads.')) return;
+          requestedDocsList.splice(idx, 1);
+
+          api('/onboarding/candidates/' + c.id, {
+            method: 'PATCH',
+            body: { requestedDocs: requestedDocsList }
+          }).then(function (updatedCandidate) {
+            toast('Document slot removed');
+            c.requestedDocs = updatedCandidate.requestedDocs;
+            renderTab();
+          }).catch(function (err) { alert(err.message); });
+        });
+      });
+
+      // Event listener for checkbox checklist saves
+      function saveChecklist() {
+        api('/onboarding/candidates/' + c.id, {
+          method: 'PATCH',
+          body: { requestedDocs: requestedDocsList }
+        }).then(function (updatedCandidate) {
+          c.requestedDocs = updatedCandidate.requestedDocs;
+          toast('Checklist configurations updated');
+        }).catch(function (err) { alert(err.message); });
+      }
+
+      el.querySelectorAll('.chk-send').forEach(function (chk) {
+        chk.addEventListener('change', function () {
+          var idx = parseInt(chk.dataset.index);
+          requestedDocsList[idx].sendToCandidate = chk.checked;
+          // Update status cell live
+          var row = chk.closest('tr');
+          var statusTd = row ? row.cells[3] : null;
+          if (statusTd) {
+            var item = requestedDocsList[idx];
+            var have2 = {}; docs.forEach(function(dd){ have2[dd.docType]=dd; });
+            var doc2 = have2[item.type] || have2['custom_'+item.type];
+            if (!doc2) statusTd.innerHTML = chk.checked
+              ? (item.required ? circleWarning + badge('Mandatory — not uploaded','err') : circleWarning + badge('Optional — not uploaded','neutral'))
+              : circleInfo + badge('Not requested','neutral');
+          }
+          // Rebuild upload dropdown
+          var sel = el.querySelector('#ob-dtype');
+          if (sel) {
+            var prev = sel.value;
+            sel.innerHTML = requestedDocsList.filter(function(t){ return t.sendToCandidate; }).map(function(t){
+              return '<option value="'+t.type+'">Upload as: '+t.label+(t.required?' (required)':' (optional)')+'</option>';
+            }).join('') + '<option value="'+CUSTOM_DOC_VALUE+'">Upload as: Custom document…</option>';
+            sel.value = prev;
+          }
+          saveChecklist();
+        });
+      });
+
+      el.querySelectorAll('.chk-required').forEach(function (chk) {
+        chk.addEventListener('change', function () {
+          var idx = parseInt(chk.dataset.index);
+          requestedDocsList[idx].required = chk.checked;
+          var item = requestedDocsList[idx];
+          // Update label badge live
+          var row = chk.closest('tr');
+          if (row) {
+            var labelTd = row.cells[0];
+            var strong = labelTd ? labelTd.querySelector('strong') : null;
+            if (strong) {
+              // Remove any existing span/star elements after strong
+              var next = strong.nextSibling;
+              while (next) {
+                var current = next;
+                next = next.nextSibling;
+                if (current.tagName === 'SPAN') {
+                  current.remove();
+                }
+              }
+              if (chk.checked) {
+                var star = document.createElement('span');
+                star.style.cssText = 'color:#ef4444;font-weight:700';
+                star.textContent = ' *';
+                strong.parentNode.insertBefore(star, strong.nextSibling);
+              }
+            }
+            // Update status cell
+            var statusTd = row.cells[3];
+            var have2 = {}; docs.forEach(function(dd){ have2[dd.docType]=dd; });
+            var doc2 = have2[item.type] || have2['custom_'+item.type];
+            if (statusTd && !doc2 && item.sendToCandidate) {
+              statusTd.innerHTML = chk.checked
+                ? circleWarning + badge('Mandatory — not uploaded','err')
+                : circleWarning + badge('Optional — not uploaded','neutral');
+            }
+          }
+          // Update dropdown label
+          var sel = el.querySelector('#ob-dtype');
+          if (sel) {
+            var opt = sel.querySelector('option[value="'+item.type+'"]');
+            if (opt) opt.textContent = 'Upload as: '+item.label+(chk.checked?' (required)':' (optional)');
+          }
+          saveChecklist();
+        });
+      });
 
       el.querySelectorAll('[data-dl]').forEach(function (b) {
         b.addEventListener('click', function () {
           api('/onboarding/candidates/' + c.id + '/documents/' + b.dataset.dl).then(function (d) {
-            // The API only ships the base64 blob on a single-document read, so
-            // the preview happens here rather than from the list payload.
             var w = window.open('');
             if (!w) { toast('Popup blocked — allow popups to preview', 'warn'); return; }
             var src = 'data:' + d.fileMime + ';base64,' + d.fileData;
@@ -1272,6 +1827,7 @@
           }).catch(function (e) { toast(e.message, 'error'); });
         });
       });
+
       el.querySelectorAll('[data-hist]').forEach(function (b) {
         b.addEventListener('click', function () {
           api('/onboarding/candidates/' + c.id + '/document-versions/' + b.dataset.hist).then(function (vs) {
@@ -1283,6 +1839,7 @@
           });
         });
       });
+
       el.querySelectorAll('[data-rm]').forEach(function (b) {
         b.addEventListener('click', function () {
           if (!confirm('Delete this document? The previous version is restored if there is one.')) return;
@@ -1294,6 +1851,32 @@
 
       if (ro) return;
       var dz = el.querySelector('#ob-dz'), inp = el.querySelector('#ob-file');
+      var dtype = el.querySelector('#ob-dtype'), dlabel = el.querySelector('#ob-dlabel');
+      var dcustom = el.querySelector('#ob-dcustom');
+
+      // The dropdown is the single source of truth for which mode we are in;
+      // the button is a shortcut that selects (or clears) the custom option.
+      function syncLabelBox() {
+        var custom = dtype.value === CUSTOM_DOC_VALUE;
+        dlabel.style.display = custom ? '' : 'none';
+        inp.multiple = !custom;
+        if (dcustom) {
+          dcustom.textContent = custom ? '✕ Cancel custom' : '+ Add Custom Document';
+          dcustom.classList.toggle('primary', custom);
+        }
+      }
+      dtype.addEventListener('change', syncLabelBox);
+      if (dcustom) {
+        dcustom.addEventListener('click', function () {
+          var wasCustom = dtype.value === CUSTOM_DOC_VALUE;
+          dtype.value = wasCustom ? requestedDocsList[0].type : CUSTOM_DOC_VALUE;
+          if (wasCustom) dlabel.value = '';
+          syncLabelBox();
+          if (!wasCustom) dlabel.focus();
+        });
+      }
+      syncLabelBox();
+
       dz.addEventListener('click', function () { inp.click(); });
       dz.addEventListener('dragover', function (e) { e.preventDefault(); dz.classList.add('over'); });
       dz.addEventListener('dragleave', function () { dz.classList.remove('over'); });
@@ -1307,52 +1890,70 @@
 
       function upload(files) {
         var errEl = el.querySelector('#ob-de');
-        var docType = el.querySelector('#ob-dtype').value;
+        var docType = dtype.value;
+        var isCustom = docType === CUSTOM_DOC_VALUE;
+        var label = dlabel.value.trim();
         var bar = el.querySelector('#ob-bar'), fill = bar.querySelector('i');
         errEl.textContent = '';
 
-        // Validate client-side for instant feedback; the server re-validates
-        // regardless, so this is convenience, not security.
-        for (var i = 0; i < files.length; i++) {
-          if (ALLOWED_MIME.indexOf(files[i].type) === -1) {
-            errEl.textContent = files[i].name + ': only PDF, PNG and JPG are allowed.';
-            return;
-          }
-          if (files[i].size > MAX_MB * 1024 * 1024) {
-            errEl.textContent = files[i].name + ' is ' +
-              (files[i].size / 1048576).toFixed(1) + ' MB — the maximum is ' + MAX_MB + ' MB.';
+        if (isCustom) {
+          if (!label) { errEl.textContent = 'Name the document before uploading it.'; return; }
+          if (files.length > 1) {
+            errEl.textContent = 'Upload one file at a time when naming a custom document — ' +
+              'a single drop of multiple files represents distinct categories.';
             return;
           }
         }
+        var invalid = files.filter(function (f) { return ALLOWED_MIME.indexOf(f.type) === -1; });
+        if (invalid.length) {
+          errEl.textContent = 'Only PDF, PNG or JPG files are allowed.';
+          return;
+        }
+        var big = files.filter(function (f) { return f.size > MAX_MB * 1024 * 1024; });
+        if (big.length) {
+          errEl.textContent = 'Files must be smaller than ' + MAX_MB + ' MB.';
+          return;
+        }
 
-        bar.style.display = 'block';
-        var done = 0;
-        var chain = files.reduce(function (p, f) {
-          return p.then(function () {
-            return readFile(f).then(function (b64) {
-              return api('/onboarding/candidates/' + c.id + '/documents', {
-                method: 'POST',
-                body: { docType: docType, fileName: f.name, fileMime: f.type, fileData: b64 },
-              });
+        bar.style.display = '';
+        fill.style.width = '0';
+        var idx = 0;
+
+        function nextFile() {
+          if (idx >= files.length) {
+            bar.style.display = 'none';
+            toast('Uploaded ' + files.length + ' file(s)');
+            renderTab();
+            return;
+          }
+          var f = files[idx];
+          var reader = new FileReader();
+          reader.onload = function (e) {
+            var base64 = e.target.result.split(',')[1];
+            api('/onboarding/candidates/' + c.id + '/documents', {
+              method: 'POST',
+              body: {
+                docType: docType,
+                isCustom: isCustom,
+                label: label,
+                fileName: f.name,
+                fileMime: f.type,
+                fileData: base64,
+              },
             }).then(function () {
-              done++;
-              fill.style.width = Math.round((done / files.length) * 100) + '%';
+              fill.style.width = Math.round(((idx + 1) / files.length) * 100) + '%';
+              idx++;
+              nextFile();
+            }).catch(function (err) {
+              bar.style.display = 'none';
+              errEl.textContent = 'Failed to upload ' + f.name + ': ' + err.message;
             });
-          });
-        }, Promise.resolve());
-
-        chain.then(function () {
-          toast(done + ' document(s) uploaded');
-          bar.style.display = 'none';
-          fill.style.width = '0';
-          refreshDetail();
-        }).catch(function (e) {
-          bar.style.display = 'none';
-          fill.style.width = '0';
-          errEl.textContent = e.message;
-        });
+          };
+          reader.readAsDataURL(f);
+        }
+        nextFile();
       }
-    });
+    }).catch(function (e) { el.innerHTML = '<div class="ob-err">' + esc(e.message) + '</div>'; });
   }
 
   function readFile(f) {
@@ -1389,6 +1990,16 @@
           return '<label class="ob-chk"><input type="checkbox" data-v="' + k[0] + '"' +
                  (v[k[0]] ? ' checked' : '') + '> ' + k[1] + '</label>';
         }).join('') +
+        // Custom documents get a tick-box each, keyed by docType. The list is
+        // per-candidate, so unlike CHECKS it comes from the server.
+        ((v.customDocuments || []).length
+          ? '<div class="ob-sub" style="margin:12px 0 4px">Custom documents</div>' +
+            v.customDocuments.map(function (d) {
+              return '<label class="ob-chk"><input type="checkbox" data-cv="' + esc(d.docType) + '"' +
+                     ((v.customVerified || {})[d.docType] ? ' checked' : '') + '> ' +
+                     esc(d.label) + ' Verified</label>';
+            }).join('')
+          : '') +
         '<div style="margin-top:14px"><label class="ob-lb">Remarks</label>' +
         '<textarea class="ob-ta" id="hv-remarks">' + esc(v.remarks || '') + '</textarea></div>' +
         '<div class="ob-act">' +
@@ -1403,6 +2014,9 @@
       function submit(status) {
         var body = { status: status, remarks: el.querySelector('#hv-remarks').value };
         el.querySelectorAll('[data-v]').forEach(function (i) { body[i.dataset.v] = i.checked; });
+        var cv = {};
+        el.querySelectorAll('[data-cv]').forEach(function (i) { cv[i.dataset.cv] = i.checked; });
+        body.customVerified = cv;
         api('/onboarding/candidates/' + c.id + '/verify', { method: 'POST', body: body })
           .then(function () { toast('Verification ' + status.toLowerCase()); refreshDetail(); })
           .catch(function (e) { el.querySelector('#hv-e').textContent = e.message; });
@@ -1594,8 +2208,319 @@
     });
   }
 
+  /* -- paper forms & candidate signatures (admin-side) -- */
+  function tabForms(el, c) {
+    if (!can('onboarding.edit')) {
+      el.innerHTML = '<div class="ob-empty">You do not have permission to manage onboarding forms.</div>';
+      return;
+    }
+
+    function isAdmin() {
+      try {
+        var sess = JSON.parse(localStorage.getItem('hrms_session') || '{}');
+        var role = (sess.role || '').toLowerCase();
+        return role === 'admin' || role.indexOf('admin') !== -1;
+      } catch (_) {
+        return false;
+      }
+    }
+
+    var portalLink = c.portalToken
+      ? (window.location.protocol + '//' + window.location.host + '/onboarding/fill?token=' + c.portalToken)
+      : '';
+
+    // Fetch template forms, candidate submissions, and candidate uploaded docs
+    Promise.all([
+      api('/onboarding/forms'),
+      api('/onboarding/candidates/' + c.id + '/submissions'),
+      api('/onboarding/candidates/' + c.id + '/documents')
+    ]).then(function (results) {
+      var templates = results[0] || [];
+      var submissions = results[1] || [];
+      var docs = results[2] || [];
+      
+      var subsMap = {};
+      submissions.forEach(function (s) { subsMap[s.formId] = s; });
+
+      // Which candidate-facing documents were requested (sendToCandidate), and
+      // which of them have actually arrived — one matcher reused for both the
+      // counter and the rows so the two can never disagree.
+      var activeChecklistDocs = (c.requestedDocs || []).filter(function (item) { return item.sendToCandidate; });
+      function docMatch(item) {
+        return docs.find(function (d) {
+          return d.docType === item.type ||
+                 d.docType === 'custom_' + item.type ||
+                 (d.label || '').toLowerCase() === (item.label || '').toLowerCase();
+        });
+      }
+
+      var formsDone = templates.filter(function (f) { return subsMap[f.id]; }).length;
+      var formsTotal = templates.length;
+      var docsDone = activeChecklistDocs.filter(docMatch).length;
+      var docsTotal = activeChecklistDocs.length;
+      var doneItems = formsDone + docsDone;
+      var totalItems = formsTotal + docsTotal;
+      var pct = totalItems ? Math.round(doneItems / totalItems * 100) : 0;
+
+      // A count pill for a section header — green once everything is in.
+      function countPill(done, total) {
+        if (!total) return badge('none', 'neutral');
+        return badge(done + ' / ' + total + (done >= total ? ' ✓' : ''), done >= total ? 'ok' : 'warn');
+      }
+
+      var submissionsList = templates.map(function (f) {
+        var sub = subsMap[f.id];
+        var actionBtns = '';
+        if (sub) {
+          actionBtns =
+            ' <button class="ob-btn" style="padding:3px 9px" data-view-pdf="' + sub.id + '">View Signed PDF</button>' +
+            (sub.mode === 'digital' ? ' <button class="ob-btn" style="padding:3px 9px" data-view-data="' + sub.id + '">View Data</button>' : '');
+        }
+        return '<div class="ob-row">' +
+          '<span class="k">' + esc(f.name) + '</span>' +
+          '<span class="v">' +
+            (sub ? badge('Completed (' + sub.mode + ')', 'ok') + actionBtns : badge('Pending', 'warn')) +
+          '</span></div>';
+      }).join('');
+
+      var checklistDocsHtml = activeChecklistDocs.map(function (item) {
+        var match = docMatch(item);
+        var actionBtns = match
+          ? ' <button class="ob-btn" style="padding:3px 9px" data-dl="' + match.id + '">View</button>' : '';
+        return '<div class="ob-row">' +
+          '<span class="k">' + esc(item.label) + (item.required ? ' <span style="color:#ef4444">*</span>' : '') + '</span>' +
+          '<span class="v">' +
+            (match ? badge('Uploaded', 'ok') + actionBtns : badge('Awaiting upload', 'warn')) +
+          '</span></div>';
+      }).join('');
+
+      var templatesList = templates.map(function (f) {
+        return '<div class="ob-row">' +
+          '<span class="k">' + esc(f.name) + ' (' + esc(f.fileName) + ')</span>' +
+          '<span class="v">' +
+            (f.isActive ? badge('Active', 'ok') : badge('Inactive', 'neutral')) +
+            (isAdmin() ? ' <button class="ob-btn danger" style="padding:3px 9px" data-del-tmpl="' + f.id + '">Delete</button>' : '') +
+          '</span></div>';
+      }).join('');
+
+      // Portal link state: how long the link lasts, in friendly terms.
+      function expiryLabel(s) {
+        if (!s) return '';
+        var d = new Date(s.slice(0, 10) + 'T00:00:00');
+        if (isNaN(d.getTime())) return '';
+        var days = Math.ceil((d.getTime() - Date.now()) / 86400000);
+        var nice = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+        if (days < 0) return 'link expired ' + nice;
+        if (days === 0) return 'link expires today';
+        return 'expires in ' + days + ' day' + (days === 1 ? '' : 's') + ' · ' + nice;
+      }
+      var expInfo = expiryLabel(c.portalTokenExpiresAt);
+
+      // Collapsible section — native <details> so it needs no JS. Open by
+      // default keeps operational content visible; the admin drawer ships
+      // closed so setup controls stay out of the daily flow.
+      function section(title, pill, body, opts) {
+        opts = opts || {};
+        return '<details class="ob-sec"' + (opts.closed ? '' : ' open') +
+          ' style="margin-bottom:14px;border:1px solid var(--border,#2a3446);border-radius:12px;overflow:hidden">' +
+          '<summary style="cursor:pointer;padding:12px 16px;display:flex;align-items:center;gap:10px;' +
+            'font-weight:600;background:var(--bg3,#1c2433)">' +
+            '<span style="flex:1">' + esc(title) + '</span>' + (pill || '') +
+          '</summary>' +
+          '<div style="padding:8px 16px 14px">' + body + '</div>' +
+        '</details>';
+      }
+
+      el.innerHTML =
+        // ── Header: portal link fused with live progress ──
+        '<div style="margin-bottom:16px;padding:16px 18px;background:var(--bg3,#1c2433);' +
+          'border:1px solid var(--border,#2a3446);border-radius:14px">' +
+          '<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">' +
+            '<h4 style="margin:0;flex:1">Onboarding Portal</h4>' +
+            (portalLink ? badge('Link active', 'ok') : badge('Not sent yet', 'neutral')) +
+          '</div>' +
+          '<div style="margin:12px 0 4px;display:flex;align-items:center;gap:10px">' +
+            '<div style="flex:1;height:8px;border-radius:99px;background:var(--border,#2a3446);overflow:hidden">' +
+              '<div style="height:100%;width:' + pct + '%;background:#0f9d58;transition:width .3s"></div>' +
+            '</div>' +
+            '<span class="ob-sub" style="white-space:nowrap;font-weight:600">' + doneItems + ' / ' + totalItems + ' complete</span>' +
+          '</div>' +
+          '<div class="ob-sub" style="margin-bottom:12px">' +
+            docsDone + '/' + docsTotal + ' documents uploaded · ' + formsDone + '/' + formsTotal + ' forms signed' +
+            (expInfo ? ' · ' + esc(expInfo) : '') +
+          '</div>' +
+          '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
+            '<button class="ob-btn primary" id="btn-send-portal">' +
+              (portalLink ? 'Resend invite' : 'Send portal link') + '</button>' +
+            (portalLink ? '<button class="ob-btn" id="btn-copy-link">Copy link</button>' : '') +
+          '</div>' +
+          (portalLink
+            ? '<input class="ob-in" id="portal-url" style="margin-top:10px;font-family:monospace;font-size:11px" ' +
+              'value="' + esc(portalLink) + '" readonly onClick="this.select()">'
+            : '') +
+        '</div>' +
+
+        // ── Documents requested ──
+        section('Documents requested', countPill(docsDone, docsTotal),
+          checklistDocsHtml ||
+            '<div class="ob-empty" style="padding:10px">No documents are set to be requested from the candidate. ' +
+            'Configure the checklist under Manage below.</div>') +
+
+        // ── Forms to sign ──
+        section('Forms to sign', countPill(formsDone, formsTotal),
+          submissionsList ||
+            '<div class="ob-empty" style="padding:10px">No forms assigned yet. Upload a template under Manage below.</div>') +
+
+        // ── Admin: templates & management (collapsed) ──
+        (isAdmin()
+          ? section('⚙ Manage form templates', badge('Admin', 'neutral'),
+              '<div class="ob-sub" style="margin:0 0 8px">Blank PDF templates assigned to every candidate.</div>' +
+              (templatesList || '<div class="ob-empty" style="padding:10px">No blank form templates uploaded yet.</div>') +
+              '<div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border,#2a3446)">' +
+                '<div class="ob-lb" style="margin-bottom:8px">Upload a new blank form template (PDF)</div>' +
+                '<div class="ob-f">' +
+                  '<div class="full"><label class="ob-lb">Form name (e.g. W-4, Direct Deposit)</label>' +
+                    '<input class="ob-in" id="new-tmpl-name" placeholder="Enter form name"></div>' +
+                  '<div class="full"><label class="ob-lb">Form PDF file</label>' +
+                    '<input type="file" class="ob-in" id="new-tmpl-file" accept=".pdf"></div>' +
+                '</div>' +
+                '<button class="ob-btn primary" style="margin-top:12px" id="btn-upload-tmpl">Upload template</button>' +
+                '<div class="ob-err" id="tmpl-err"></div>' +
+              '</div>',
+              { closed: true })
+          : '');
+
+      // Event handlers for templates list
+      if (isAdmin()) {
+        el.querySelectorAll('[data-del-tmpl]').forEach(function (b) {
+          b.addEventListener('click', function () {
+            if (!confirm('Delete this form template? Active candidates will no longer be assigned this form.')) return;
+            api('/onboarding/forms/' + b.dataset.delTmpl, { method: 'DELETE' })
+              .then(function () { toast('Template deleted'); renderTab(); })
+              .catch(function (err) { alert(err.message); });
+          });
+        });
+      }
+
+      // Event handlers to view uploaded checklist documents
+      el.querySelectorAll('[data-dl]').forEach(function (b) {
+        b.addEventListener('click', function () {
+          api('/onboarding/candidates/' + c.id + '/documents/' + b.dataset.dl).then(function (d) {
+            var w = window.open('');
+            if (!w) { toast('Popup blocked — allow popups to preview', 'warn'); return; }
+            var src = 'data:' + d.fileMime + ';base64,' + d.fileData;
+            w.document.write(d.fileMime === 'application/pdf'
+              ? '<iframe src="' + src + '" style="border:0;width:100%;height:100vh"></iframe>'
+              : '<img src="' + src + '" style="max-width:100%">');
+          }).catch(function (e) { toast(e.message, 'error'); });
+        });
+      });
+
+      // Event handlers for viewing signed PDF
+      el.querySelectorAll('[data-view-pdf]').forEach(function (b) {
+        b.addEventListener('click', function () {
+          api('/onboarding/candidates/' + c.id + '/submissions/' + b.dataset.viewPdf + '/pdf')
+            .then(function (sub) {
+              var w = window.open('');
+              if (!w) { toast('Popup blocked — allow popups to preview', 'warn'); return; }
+              var src = 'data:' + sub.fileMime + ';base64,' + sub.fileData;
+              w.document.write('<iframe src="' + src + '" style="border:0;width:100%;height:100vh"></iframe>');
+            }).catch(function (err) { toast(err.message, 'error'); });
+        });
+      });
+
+      // Event handlers for viewing filled data
+      el.querySelectorAll('[data-view-data]').forEach(function (b) {
+        b.addEventListener('click', function () {
+          var sub = subsMap[b.dataset.viewData];
+          if (sub) {
+            alert('Submitted Answers:\n' + JSON.stringify(sub.filledData, null, 2));
+          }
+        });
+      });
+
+      // Copy the portal URL to the clipboard, with a select-and-copy fallback
+      // for browsers that block the async clipboard API.
+      var copyBtn = el.querySelector('#btn-copy-link');
+      if (copyBtn) copyBtn.addEventListener('click', function () {
+        var url = (el.querySelector('#portal-url') || {}).value || portalLink;
+        function done() { toast('Portal link copied'); }
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(url).then(done).catch(function () {
+            var i = el.querySelector('#portal-url'); if (i) { i.select(); document.execCommand('copy'); done(); }
+          });
+        } else {
+          var i = el.querySelector('#portal-url'); if (i) { i.select(); document.execCommand('copy'); done(); }
+        }
+      });
+
+      // Send Link
+      el.querySelector('#btn-send-portal').addEventListener('click', function () {
+        var btn = this;
+        btn.disabled = true;
+        btn.textContent = 'Sending email invite…';
+        api('/onboarding/candidates/' + c.id + '/send-portal-link', { method: 'POST' })
+          .then(function () {
+            toast('Portal invitation link emailed to candidate!');
+            refreshDetail();
+          })
+          .catch(function (err) {
+            btn.disabled = false;
+            btn.textContent = portalLink ? 'Resend invite' : 'Send portal link';
+            alert('Email failed (but token generated): ' + err.message);
+            refreshDetail();
+          });
+      });
+
+      // Upload template
+      if (isAdmin()) {
+        el.querySelector('#btn-upload-tmpl').addEventListener('click', function () {
+          var name = el.querySelector('#new-tmpl-name').value.trim();
+          var fileInp = el.querySelector('#new-tmpl-file');
+          var errEl = el.querySelector('#tmpl-err');
+          errEl.textContent = '';
+
+          if (!name) { errEl.textContent = 'Form name is required.'; return; }
+          var file = fileInp.files[0];
+          if (!file) { errEl.textContent = 'Please choose a PDF file template.'; return; }
+
+          var btn = this;
+          btn.disabled = true;
+          btn.textContent = 'Uploading template…';
+
+          var reader = new FileReader();
+          reader.onload = function (e) {
+            var base64 = e.target.result.split(',')[1];
+            api('/onboarding/forms', {
+              method: 'POST',
+              body: {
+                name: name,
+                fileData: base64,
+                fileName: file.name,
+                fileMime: file.type,
+                schema: []
+              }
+            }).then(function () {
+              toast('Template uploaded successfully!');
+              renderTab();
+            }).catch(function (err) {
+              btn.disabled = false;
+              btn.textContent = 'Upload Template Form';
+              errEl.textContent = err.message;
+            });
+          };
+          reader.readAsDataURL(file);
+        });
+      }
+
+    }).catch(function (err) {
+      el.innerHTML = '<div class="ob-empty">' + esc(err.message) + '</div>';
+    });
+  }
+
   /* -- timeline -- */
   function tabTimeline(el, c) {
+
     el.innerHTML = '<div class="ob-skel" style="height:80px"></div>';
     api('/onboarding/candidates/' + c.id + '/timeline').then(function (logs) {
       logs = logs || [];
@@ -1609,20 +2534,136 @@
     });
   }
 
-  /* ── candidate modal (create + edit) ──────────────────────────────────────
-     One form serves both flows. With no argument it creates (Create Candidate,
-     with an initial Status); passed a candidate object it edits (Save Changes, PATCH).
-  */
+  /* ── custom field rendering (shared by the New Candidate form & preview) ── */
+  var FIELD_TYPES = [
+    ['text', 'Text'], ['textarea', 'Text Area'], ['number', 'Number'],
+    ['date', 'Date'], ['email', 'Email'], ['phone', 'Phone'], ['url', 'URL'],
+    ['select', 'Dropdown'], ['multiselect', 'Multi Select'], ['radio', 'Radio'],
+    ['checkbox', 'Checkbox'],
+  ];
+  var OPTION_TYPES = { select: 1, multiselect: 1, radio: 1 };
+
+  function slug(s) {
+    return String(s || '').toLowerCase().trim().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+  }
+
+  /* One custom field's input. Carries data-ck (key) + data-ct (type) so
+     collectCustom() can gather values by key. Used live in the New Candidate
+     modal and, read-only, in the builder preview. */
+  function customFieldInput(f, value) {
+    var id = 'ncf-' + f.key;
+    var req = f.required ? ' <span class="req">*</span>' : '';
+    var help = f.help ? '<div class="ob-sub" style="margin:4px 0 0">' + esc(f.help) + '</div>' : '';
+    var ph = esc(f.placeholder || '');
+    var da = ' data-ck="' + esc(f.key) + '" data-ct="' + f.type + '"';
+    var input;
+
+    if (f.type === 'textarea') {
+      input = '<textarea class="ob-ta" id="' + id + '"' + da + ' placeholder="' + ph + '">' + esc(value || '') + '</textarea>';
+    } else if (f.type === 'select') {
+      input = '<select class="ob-sel" id="' + id + '"' + da + '><option value="">Select…</option>' +
+        (f.options || []).map(function (o) {
+          return '<option value="' + esc(o.value) + '"' + (value === o.value ? ' selected' : '') + '>' + esc(o.label) + '</option>';
+        }).join('') + '</select>';
+    } else if (f.type === 'multiselect') {
+      var vals = Array.isArray(value) ? value : [];
+      input = '<select class="ob-sel" id="' + id + '"' + da + ' multiple size="' +
+        Math.min(Math.max((f.options || []).length, 2), 5) + '">' +
+        (f.options || []).map(function (o) {
+          return '<option value="' + esc(o.value) + '"' + (vals.indexOf(o.value) !== -1 ? ' selected' : '') + '>' + esc(o.label) + '</option>';
+        }).join('') + '</select>' +
+        '<div class="ob-sub" style="margin:3px 0 0">Ctrl/Cmd-click for multiple</div>';
+    } else if (f.type === 'radio') {
+      input = '<div' + da + ' id="' + id + '">' + (f.options || []).map(function (o) {
+        return '<label class="ob-chk" style="display:inline-flex;margin-right:14px">' +
+          '<input type="radio" name="' + id + '" value="' + esc(o.value) + '"' + (value === o.value ? ' checked' : '') + '> ' + esc(o.label) + '</label>';
+      }).join('') + '</div>';
+    } else if (f.type === 'checkbox') {
+      return '<div class="' + (f.width === 'half' ? '' : 'full') + '"><label class="ob-chk">' +
+        '<input type="checkbox" id="' + id + '"' + da + (value ? ' checked' : '') + '> ' + esc(f.label) + '</label>' + help + '</div>';
+    } else {
+      var t = f.type === 'number' ? 'number' : f.type === 'date' ? 'date' :
+        f.type === 'email' ? 'email' : f.type === 'url' ? 'url' : f.type === 'phone' ? 'tel' : 'text';
+      input = '<input class="ob-in" id="' + id + '"' + da + ' type="' + t + '" placeholder="' + ph + '" value="' + esc(value == null ? '' : value) + '">';
+    }
+    return '<div class="' + (f.width === 'half' ? '' : 'full') + '">' +
+      '<label class="ob-lb">' + esc(f.label) + req + '</label>' + input + help + '</div>';
+  }
+
+  /* Render the admin-built sections (headers + fields) as one form body.
+
+     Core fields are skipped: they map to real columns and each form renders
+     them with its own bespoke input (the work-auth type dropdown drives the
+     rest of the tab, for instance), so emitting them here would duplicate
+     them. Mirrors the server's form_fields(include_core=False). */
+  function renderCustomSections(sections, values) {
+    values = values || {};
+    return (sections || []).map(function (s) {
+      var fields = (s.fields || []).filter(function (f) { return !f.core; }).map(function (f) {
+        return customFieldInput(f, values[f.key]);
+      }).join('');
+      if (!fields) return '';
+      var head = s.title
+        ? '<div class="full" style="border-top:1px solid var(--border,#2a3446);margin-top:6px;padding-top:14px">' +
+          '<div class="ob-lb" style="font-size:13px;color:var(--text,#e6edf7)">' + esc(s.title) + '</div></div>'
+        : '';
+      return head + fields;
+    }).join('');
+  }
+
+  function collectCustom(scope) {
+    var out = {};
+    scope.querySelectorAll('[data-ck]').forEach(function (i) {
+      var key = i.getAttribute('data-ck'), t = i.getAttribute('data-ct');
+      if (t === 'checkbox') { out[key] = i.checked; return; }
+      if (t === 'multiselect') {
+        var vals = Array.prototype.slice.call(i.selectedOptions || []).map(function (o) { return o.value; });
+        if (vals.length) out[key] = vals;
+        return;
+      }
+      if (t === 'radio') {
+        var picked = i.querySelector('input[type=radio]:checked');
+        if (picked) out[key] = picked.value;
+        return;
+      }
+      if (i.value !== '') out[key] = i.value;
+    });
+    return out;
+  }
+
+  function flattenSections(sections) {
+    var out = [];
+    (sections || []).forEach(function (s) { (s.fields || []).forEach(function (f) { out.push(f); }); });
+    return out;
+  }
+
+  /* The full Candidate Form Builder engine (hrms-onboarding-form-builder.js)
+     owns the New Candidate form and the builder — exactly like the Job Post
+     builder owns Post-a-Job. These wrappers prefer the engine and fall back to
+     the lightweight modal/builder below if it failed to load. */
+  function onbOpenForm() {
+    if (window.__hrmsOnbForm) return window.__hrmsOnbForm.openForm();
+    openNewModal();
+  }
+  function onbOpenBuilder() {
+    if (window.__hrmsOnbForm) return window.__hrmsOnbForm.openBuilder();
+    openFormBuilder();
+  }
+
+  /* ── new candidate modal (fallback if the engine is unavailable) ────────── */
+  /* GENDERS list for the candidate modal's Gender dropdown (kept from feature/onboarding). */
   var GENDERS = ['', 'Male', 'Female', 'Other', 'Prefer not to say'];
 
+  /* ── candidate modal (create + edit) ──────────────────────────────────────
+     One form serves both flows. With no argument it creates (Create Candidate,
+     with an initial Status); passed a candidate object it edits (Save Changes,
+     PATCH). Kept from feature/onboarding for its full fixed-field set (DOB,
+     gender, address, manager, work location) and edit support, with develop's
+     admin-built custom fields grafted in below the fixed fields. */
   function openCandidateModal(existing) {
     var isEdit = !!existing;
     var d = existing || {};
-    var ov = document.createElement('div');
-    ov.id = ID.modal;
-    ov.className = 'ob-ov';
-    ov.style.alignItems = 'center';
-    ov.style.justifyContent = 'center';
+    var formFields = [];   // flat non-core custom-field defs, for required-validation
 
     function field(id, label, req, type, val) {
       return '<div><label class="ob-lb">' + label + (req ? ' <span class="req">*</span>' : '') + '</label>' +
@@ -1632,6 +2673,12 @@
     function heading(t) {
       return '<div class="ob-lb full" style="font-size:13px;margin:6px 0 2px;color:var(--text,#e6edf7)">' + t + '</div>';
     }
+
+    var ov = document.createElement('div');
+    ov.id = 'ob-cand-modal';
+    ov.className = 'ob-ov';
+    ov.style.alignItems = 'center';
+    ov.style.justifyContent = 'center';
 
     ov.innerHTML =
       '<div class="ob-dw" style="width:min(680px,100%);height:auto;max-height:90vh;border-radius:14px;border:1px solid var(--border,#2a3446)">' +
@@ -1664,14 +2711,17 @@
           field('join', 'Joining Date', 0, 'date', d.joiningDate) +
           '<div><label class="ob-lb">Status</label><select class="ob-sel" id="nc-status">' +
             CAND_STATUSES.map(function (s) {
-              return '<option' + ((d.status || 'New') === s ? ' selected' : '') + '>' + s + '</option>';
+              return '<option' + ((d.status || 'Draft') === s ? ' selected' : '') + '>' + s + '</option>';
             }).join('') + '</select></div>' +
+          '<div class="full" id="nc-custom"></div>' +
         '</div>' +
         '<div class="ob-act">' +
           (isEdit
             ? '<button class="ob-btn primary" id="nc-savechanges">Save Changes</button>'
             : '<button class="ob-btn primary" id="nc-save">Create Candidate</button>') +
           '<button class="ob-btn" id="nc-cancel">Cancel</button>' +
+          (can('onboarding.settings')
+            ? '<button class="ob-btn" id="nc-fields" style="margin-left:auto">⚙ Edit Form</button>' : '') +
         '</div>' +
         '<div class="ob-err" id="nc-e"></div></div>' +
       '</div>';
@@ -1681,6 +2731,18 @@
     ov.addEventListener('click', function (e) { if (e.target === ov) close(); });
     ov.querySelector('#nc-x').addEventListener('click', close);
     ov.querySelector('#nc-cancel').addEventListener('click', close);
+
+    var fbtn = ov.querySelector('#nc-fields');
+    if (fbtn) fbtn.addEventListener('click', function () { close(); openFormBuilder(); });
+
+    // Admin-built custom fields (develop): render into the placeholder, prefilled
+    // on edit. Fetched lazily so the fixed form shows instantly.
+    api('/onboarding/field-config').then(function (cfg) {
+      var sections = (cfg && cfg.sections) || [];
+      formFields = flattenSections(sections).filter(function (f) { return !f.core; });
+      var box = ov.querySelector('#nc-custom');
+      if (box) box.innerHTML = renderCustomSections(sections, isEdit ? (d.customFields || {}) : {});
+    }).catch(function () {});
 
     var e = ov.querySelector('#nc-e');
     var v = function (id) { return ov.querySelector('#nc-' + id).value.trim(); };
@@ -1693,6 +2755,7 @@
         workLocation: v('location'), client: v('client'), vendor: v('vendor'),
         recruiter: v('recruiter'), joiningDate: v('join') || null,
         status: ov.querySelector('#nc-status').value,
+        customFields: collectCustom(ov),
       };
     }
     function valid() {
@@ -1701,6 +2764,14 @@
       if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v('email'))) { e.textContent = 'Enter a valid email address.'; return false; }
       if (v('dob') && v('dob') > new Date().toISOString().slice(0, 10)) {
         e.textContent = 'Date of birth cannot be in the future.'; return false;
+      }
+      var custom = collectCustom(ov);
+      for (var i = 0; i < formFields.length; i++) {
+        var f = formFields[i];
+        if (f.required && (custom[f.key] === undefined || custom[f.key] === '' ||
+            (Array.isArray(custom[f.key]) && !custom[f.key].length))) {
+          e.textContent = f.label + ' is required.'; return false;
+        }
       }
       return true;
     }
@@ -1734,6 +2805,474 @@
           .catch(function (err) { saveBtn.disabled = false; e.textContent = err.message; });
       });
     }
+  }
+
+  function openNewModal() {
+    // Fetch the admin-built form first, so it reflects the current schema.
+    api('/onboarding/field-config').then(function (cfg) {
+      renderNewModal((cfg && cfg.sections) || []);
+    }).catch(function () { renderNewModal([]); });
+  }
+
+  function renderNewModal(sections) {
+    var fields = flattenSections(sections);
+    var ov = document.createElement('div');
+    ov.id = ID.modal;
+    ov.className = 'ob-ov';
+    ov.style.alignItems = 'center';
+    ov.style.justifyContent = 'center';
+
+    ov.innerHTML =
+      '<div class="ob-dw" style="width:min(640px,100%);height:auto;max-height:90vh;border-radius:14px;border:1px solid var(--border,#2a3446)">' +
+        '<div class="ob-dw-h"><h3>New Candidate</h3><button class="ob-x" id="nc-x">×</button></div>' +
+        '<div class="ob-dw-b"><div class="ob-f">' +
+          '<div><label class="ob-lb">First Name <span class="req">*</span></label><input class="ob-in" id="nc-first"></div>' +
+          '<div><label class="ob-lb">Last Name</label><input class="ob-in" id="nc-last"></div>' +
+          '<div><label class="ob-lb">Email <span class="req">*</span></label><input class="ob-in" id="nc-email" type="email"></div>' +
+          '<div><label class="ob-lb">Phone</label><input class="ob-in" id="nc-phone"></div>' +
+          '<div><label class="ob-lb">Client</label><input class="ob-in" id="nc-client"></div>' +
+          '<div><label class="ob-lb">Vendor</label><input class="ob-in" id="nc-vendor"></div>' +
+          '<div><label class="ob-lb">Recruiter</label><input class="ob-in" id="nc-recruiter" value="' + esc(sessionEmail()) + '"></div>' +
+          '<div><label class="ob-lb">Job Title</label><input class="ob-in" id="nc-title"></div>' +
+          '<div><label class="ob-lb">Department</label><input class="ob-in" id="nc-dept"></div>' +
+          '<div><label class="ob-lb">Joining Date</label><input class="ob-in" id="nc-join" type="date"></div>' +
+          renderCustomSections(sections, {}) +
+        '</div>' +
+        '<div class="ob-act"><button class="ob-btn primary" id="nc-save">Create Candidate</button>' +
+        '<button class="ob-btn" id="nc-cancel">Cancel</button>' +
+        (can('onboarding.settings')
+          ? '<button class="ob-btn" id="nc-fields" style="margin-left:auto">⚙ Edit Form</button>' : '') +
+        '</div>' +
+        '<div class="ob-err" id="nc-e"></div></div>' +
+      '</div>';
+    document.body.appendChild(ov);
+
+    function close() { ov.remove(); }
+    ov.addEventListener('click', function (e) { if (e.target === ov) close(); });
+    ov.querySelector('#nc-x').addEventListener('click', close);
+    ov.querySelector('#nc-cancel').addEventListener('click', close);
+    var fbtn = ov.querySelector('#nc-fields');
+    if (fbtn) fbtn.addEventListener('click', function () { close(); openFormBuilder(); });
+
+    ov.querySelector('#nc-save').addEventListener('click', function () {
+      var e = ov.querySelector('#nc-e');
+      var v = function (id) { return ov.querySelector('#nc-' + id).value.trim(); };
+      if (!v('first')) { e.textContent = 'First name is required.'; return; }
+      if (!v('email')) { e.textContent = 'Email is required.'; return; }
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v('email'))) { e.textContent = 'Enter a valid email address.'; return; }
+      var custom = collectCustom(ov);
+      for (var i = 0; i < fields.length; i++) {
+        var f = fields[i];
+        if (f.required && (custom[f.key] === undefined || custom[f.key] === '' ||
+            (Array.isArray(custom[f.key]) && !custom[f.key].length))) {
+          e.textContent = f.label + ' is required.'; return;
+        }
+      }
+      var btn = ov.querySelector('#nc-save');
+      btn.disabled = true;
+      e.textContent = '';
+      api('/onboarding/candidates', {
+        method: 'POST',
+        body: {
+          firstName: v('first'), lastName: v('last'), email: v('email'), phone: v('phone'),
+          client: v('client'), vendor: v('vendor'), recruiter: v('recruiter'),
+          jobTitle: v('title'), department: v('dept'), joiningDate: v('join') || null,
+          customFields: custom,
+        },
+      }).then(function (c) {
+        close();
+        toast('Candidate created');
+        loadCandidates();
+        openDetail(c.id, 'workauth');
+      }).catch(function (err) {
+        btn.disabled = false;
+        e.textContent = err.message;
+      });
+    });
+  }
+
+  /* ── form builder (admin) ─────────────────────────────────────────────────
+     A job-builder-style two-pane editor: sections of fields on the left, a live
+     preview of the New Candidate form on the right. `bstate.sections` is the
+     single source of truth; text edits mutate it in place and refresh only the
+     preview (to preserve focus), while structural changes re-render the left
+     pane too. Fields reorder within a section by drag or with ▲▼, and move
+     between sections via the per-field section dropdown. */
+  var bstate = null;
+
+  /* The builder edits one of two schemas. Everything that differs between them
+     lives here, so the editor itself stays target-agnostic. */
+  var BUILDER_TARGETS = {
+    candidate: {
+      endpoint: '/onboarding/field-config',
+      title: 'Candidate Form Builder',
+      intro: 'Build the extra sections of the New Candidate form. Core fields (name, email, …) always appear first.',
+      previewTitle: 'Live Preview — New Candidate',
+      previewHead:
+        '<div><label class="ob-lb">First Name <span class="req">*</span></label><input class="ob-in"></div>' +
+        '<div><label class="ob-lb">Email <span class="req">*</span></label><input class="ob-in"></div>',
+      emptySection: 'Additional Information',
+    },
+    workAuth: {
+      key: 'workAuth',
+      group: 'workAuth',
+      switchLabel: 'General fields (all candidates)',
+      endpoint: '/onboarding/work-auth-field-config',
+      title: 'Work Authorization Field Builder',
+      intro: 'The Work Authorization tab\'s own fields. The five built-in ones are marked ' +
+             '"core" — you can relabel, reorder and require them, but not delete or retype ' +
+             'them, since they map to real columns. Anything you add here shows for every ' +
+             'candidate, whatever their visa type.',
+      previewTitle: 'Live Preview — Work Authorization',
+      previewHead:
+        '<div><label class="ob-lb">Work Authorization Type <span class="req">*</span></label><select class="ob-sel"></select></div>' +
+        '<div><label class="ob-lb">Status</label><select class="ob-sel"></select></div>',
+      emptySection: 'Additional Work Authorization Details',
+    },
+    workAuthTypes: {
+      key: 'workAuthTypes',
+      group: 'workAuth',
+      switchLabel: 'Fields by visa type',
+      endpoint: '/onboarding/work-auth-type-field-config',
+      title: 'Work Authorization — Fields by Visa Type',
+      intro: 'One section per visa type: its fields are what that type asks for. The list of ' +
+             'types is fixed (a candidate\'s type is stored as its name), so sections cannot ' +
+             'be added, renamed or removed — only their fields. Removing a field hides it; ' +
+             'values already saved against it are kept.',
+      previewTitle: 'Live Preview — fields by type',
+      previewHead: '',
+      // Sections here ARE the visa types: fixed set, and keys are unique within
+      // a type rather than across the form.
+      fixedSections: true,
+      uniquePerSection: true,
+      emptySection: '',
+    },
+  };
+
+  function openFormBuilder(targetKey) {
+    var target = BUILDER_TARGETS[targetKey] || BUILDER_TARGETS.candidate;
+    api(target.endpoint).then(function (cfg) {
+      bstate = { sections: normaliseSections((cfg && cfg.sections) || []), target: target };
+      // A fixed-section target always ships its sections (one per visa type),
+      // so an empty result there means a failure, not a blank slate to seed.
+      if (!bstate.sections.length && !target.fixedSections) {
+        bstate.sections = [{ id: uid(), title: target.emptySection, fields: [] }];
+      }
+      renderFormBuilder();
+    }).catch(function (e) { toast(e.message, 'error'); });
+  }
+
+  function uid() { return 's_' + Math.random().toString(36).slice(2, 9); }
+
+  function normaliseSections(sections) {
+    return sections.map(function (s) {
+      return {
+        id: s.id || uid(),
+        title: s.title || '',
+        fields: (s.fields || []).map(function (f) {
+          return {
+            key: f.key || '', label: f.label || '', type: f.type || 'text',
+            required: !!f.required, width: f.width === 'half' ? 'half' : 'full',
+            placeholder: f.placeholder || '', help: f.help || '',
+            // Preserved deliberately: builderSchema() sends it back, and losing
+            // it would turn a core field into a custom one on save.
+            core: !!f.core,
+            options: (f.options || []).map(function (o) {
+              return typeof o === 'string' ? o : o.value;
+            }),
+          };
+        }),
+      };
+    });
+  }
+
+  function renderFormBuilder() {
+    var ov = document.getElementById('hrms-ob-builder');
+    if (!ov) {
+      ov = document.createElement('div');
+      ov.id = 'hrms-ob-builder';
+      ov.className = 'ob-ov';
+      ov.style.alignItems = 'center';
+      ov.style.justifyContent = 'center';
+      document.body.appendChild(ov);
+      ov.addEventListener('click', function (e) { if (e.target === ov) closeBuilder(); });
+    }
+    ov.innerHTML =
+      '<div class="ob-dw" style="width:min(1100px,100%);height:auto;max-height:92vh;border-radius:14px;border:1px solid var(--border,#2a3446)">' +
+        '<div class="ob-dw-h"><h3>' + esc(bstate.target.title) + '</h3>' +
+          // Work Auth is split across two schemas (general vs per-visa-type);
+          // this switches between them without leaving the builder.
+          (bstate.target.group
+            ? '<select class="ob-sel" id="fb-target" style="width:auto;margin:0 8px 0 auto">' +
+                Object.keys(BUILDER_TARGETS).filter(function (k) {
+                  return BUILDER_TARGETS[k].group === bstate.target.group;
+                }).map(function (k) {
+                  return '<option value="' + k + '"' + (k === bstate.target.key ? ' selected' : '') +
+                         '>' + esc(BUILDER_TARGETS[k].switchLabel) + '</option>';
+                }).join('') +
+              '</select>'
+            : '') +
+          '<button class="ob-btn primary" id="fb-save">Save Form</button>' +
+          '<button class="ob-x" id="fb-x">×</button></div>' +
+        '<div style="display:grid;grid-template-columns:1.15fr 1fr;gap:0;overflow:hidden;flex:1;min-height:0">' +
+          '<div class="ob-dw-b" id="fb-build" style="border-right:1px solid var(--border,#2a3446)"></div>' +
+          '<div class="ob-dw-b" id="fb-preview" style="background:var(--bg2,#141b26)"></div>' +
+        '</div>' +
+        '<div class="ob-err" id="fb-e" style="padding:0 22px 14px"></div>' +
+      '</div>';
+    ov.querySelector('#fb-x').addEventListener('click', closeBuilder);
+    ov.querySelector('#fb-save').addEventListener('click', saveBuilder);
+    var tsel = ov.querySelector('#fb-target');
+    if (tsel) tsel.addEventListener('change', function () {
+      // Switching reloads from the server, so anything unsaved is lost.
+      openFormBuilder(tsel.value);
+    });
+    // Delegated listeners attach ONCE to the persistent #fb-build element.
+    // (Re-attaching them on every renderBuilderList would stack duplicates, so
+    // one click would fire the handler N times — fields would land in the wrong
+    // section and counts would double.)
+    wireBuilderList(ov.querySelector('#fb-build'));
+    renderBuilderList();
+    renderBuilderPreview();
+  }
+
+  function closeBuilder() {
+    var ov = document.getElementById('hrms-ob-builder');
+    if (ov) ov.remove();
+    bstate = null;
+  }
+
+  function renderBuilderList() {
+    var host = document.getElementById('fb-build');
+    if (!host) return;
+    host.innerHTML =
+      '<div class="ob-sub" style="margin-top:0">' + esc(bstate.target.intro) + '</div>' +
+      bstate.sections.map(sectionHtml).join('') +
+      (bstate.target.fixedSections ? '' : '<button class="ob-btn" id="fb-addsec">+ Add Section</button>');
+    // Wiring is delegated + attached once in renderFormBuilder — nothing to bind
+    // here, so re-rendering never duplicates handlers.
+  }
+
+  function sectionHtml(s, si) {
+    // For a fixed-section target the section IS a visa type — its name is
+    // identity (candidates store it), so it is shown, not edited.
+    var head = bstate.target.fixedSections
+      ? '<div class="ob-lb" style="font-size:13px;margin:0 0 10px">' + esc(s.title || s.id) + '</div>'
+      : '<div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">' +
+          '<input class="ob-in" data-sec="title" placeholder="Section title" value="' + esc(s.title || '') + '" style="font-weight:600">' +
+          '<button class="ob-btn" data-sec="up" title="Move up" style="padding:6px 9px">▲</button>' +
+          '<button class="ob-btn" data-sec="down" title="Move down" style="padding:6px 9px">▼</button>' +
+          '<button class="ob-btn danger" data-sec="del" title="Delete section" style="padding:6px 9px">✕</button>' +
+        '</div>';
+    return '<div class="fb-sec" data-si="' + si + '" style="border:1px solid var(--border,#2a3446);border-radius:10px;padding:12px;margin:12px 0">' +
+      head +
+      (s.fields || []).map(function (f, fi) { return fieldRowHtml(f, si, fi); }).join('') +
+      '<button class="ob-btn" data-sec="addfield" style="margin-top:6px">+ Add Field</button>' +
+    '</div>';
+  }
+
+  function fieldRowHtml(f, si, fi) {
+    var isOpt = !!OPTION_TYPES[f.type];
+    // A core field maps to a real column: its key and type are the contract, so
+    // only the label, order, width and required flag are editable. Deleting one
+    // would break the tab, and the server re-injects it anyway.
+    var core = !!f.core;
+    return '<div class="fb-fld" draggable="true" data-si="' + si + '" data-fi="' + fi + '" ' +
+      'style="border:1px solid var(--border2,#1d2634);border-radius:8px;padding:9px;margin-bottom:8px;background:var(--bg,#0d131c)">' +
+      '<div style="display:grid;grid-template-columns:1.3fr 1.2fr auto;gap:7px;align-items:center">' +
+        '<input class="ob-in" data-f="label" placeholder="Label" value="' + esc(f.label || '') + '">' +
+        '<select class="ob-sel" data-f="type"' + (core ? ' disabled title="A built-in field\'s type is fixed"' : '') + '>' +
+          FIELD_TYPES.map(function (t) {
+            return '<option value="' + t[0] + '"' + (f.type === t[0] ? ' selected' : '') + '>' + t[1] + '</option>';
+          }).join('') +
+          // The core types (select for authType/status) are not all in the
+          // palette, so keep the current one selectable to avoid a blank box.
+          (FIELD_TYPES.some(function (t) { return t[0] === f.type; })
+            ? '' : '<option value="' + esc(f.type) + '" selected>' + esc(f.type) + '</option>') +
+        '</select>' +
+        '<span style="white-space:nowrap">' +
+          '<button class="ob-btn" data-f="up" style="padding:5px 8px">▲</button>' +
+          '<button class="ob-btn" data-f="down" style="padding:5px 8px">▼</button>' +
+          (core
+            ? '<span class="ob-sub" style="padding:0 4px" title="Built-in field — maps to a database column">core</span>'
+            : '<button class="ob-btn danger" data-f="del" style="padding:5px 8px">✕</button>') +
+        '</span>' +
+      '</div>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr auto;gap:7px;align-items:center;margin-top:7px">' +
+        '<input class="ob-in" data-f="key" placeholder="key (auto from label)" value="' + esc(f.key || '') + '"' +
+          (core ? ' disabled title="A built-in field\'s key is fixed"' : '') + '>' +
+        '<select class="ob-sel" data-f="width"><option value="full"' + (f.width !== 'half' ? ' selected' : '') + '>Full width</option>' +
+          '<option value="half"' + (f.width === 'half' ? ' selected' : '') + '>Half width</option></select>' +
+        '<label class="ob-chk" style="white-space:nowrap"><input type="checkbox" data-f="required"' + (f.required ? ' checked' : '') + '> Required</label>' +
+      '</div>' +
+      '<input class="ob-in" data-f="placeholder" placeholder="Placeholder (optional)" value="' + esc(f.placeholder || '') + '" style="margin-top:7px">' +
+      // A core select (authType, status) draws its options from the app, not
+      // the schema, so the options box would be misleading there.
+      '<input class="ob-in" data-f="options" placeholder="Options, comma-separated" value="' + esc((f.options || []).join(', ')) +
+        '" style="margin-top:7px;display:' + (isOpt && !core ? 'block' : 'none') + '">' +
+    '</div>';
+  }
+
+  function wireBuilderList(host) {
+    // Text inputs: update the model in place, refresh only the preview.
+    host.addEventListener('input', function (e) {
+      var f = e.target.getAttribute('data-f'), sc = e.target.getAttribute('data-sec');
+      if (sc === 'title') {
+        bstate.sections[+e.target.closest('.fb-sec').dataset.si].title = e.target.value;
+        renderBuilderPreview(); return;
+      }
+      if (!f) return;
+      var fld = fieldOf(e.target);
+      if (!fld) return;
+      if (f === 'options') fld.options = e.target.value.split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+      else fld[f] = e.target.value;
+      renderBuilderPreview();
+    });
+    // Selects / checkboxes.
+    host.addEventListener('change', function (e) {
+      var f = e.target.getAttribute('data-f');
+      if (!f) return;
+      var fld = fieldOf(e.target);
+      if (!fld) return;
+      if (f === 'required') fld.required = e.target.checked;
+      else fld[f] = e.target.value;
+      if (f === 'type') { renderBuilderList(); }   // show/hide options box
+      renderBuilderPreview();
+    });
+    // Buttons: structural changes.
+    host.addEventListener('click', function (e) {
+      if (e.target.id === 'fb-addsec') {
+        bstate.sections.push({ id: uid(), title: 'New Section', fields: [] });
+        renderBuilderList(); renderBuilderPreview();
+        return;
+      }
+      var secBtn = e.target.getAttribute('data-sec');
+      var fBtn = e.target.getAttribute('data-f');
+      if (secBtn && secBtn !== 'title') {
+        var si = +e.target.closest('.fb-sec').dataset.si;
+        if (secBtn === 'del') bstate.sections.splice(si, 1);
+        else if (secBtn === 'up' && si > 0) swap(bstate.sections, si, si - 1);
+        else if (secBtn === 'down' && si < bstate.sections.length - 1) swap(bstate.sections, si, si + 1);
+        else if (secBtn === 'addfield') bstate.sections[si].fields.push({ label: '', key: '', type: 'text', required: false, width: 'full', options: [] });
+        else return;
+        renderBuilderList(); renderBuilderPreview();
+      } else if (fBtn && ['up', 'down', 'del'].indexOf(fBtn) !== -1) {
+        var row = e.target.closest('.fb-fld');
+        var s = bstate.sections[+row.dataset.si].fields, fi = +row.dataset.fi;
+        if (fBtn === 'del') s.splice(fi, 1);
+        else if (fBtn === 'up' && fi > 0) swap(s, fi, fi - 1);
+        else if (fBtn === 'down' && fi < s.length - 1) swap(s, fi, fi + 1);
+        else return;
+        renderBuilderList(); renderBuilderPreview();
+      }
+    });
+    // Drag to reorder fields (within or across sections).
+    var drag = null;
+    host.addEventListener('dragstart', function (e) {
+      var row = e.target.closest && e.target.closest('.fb-fld');
+      if (!row) return;
+      drag = { si: +row.dataset.si, fi: +row.dataset.fi };
+      row.classList.add('drag');
+      try { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', 'f'); } catch (_) {}
+    });
+    host.addEventListener('dragover', function (e) {
+      if (drag) e.preventDefault();
+    });
+    host.addEventListener('drop', function (e) {
+      if (!drag) return;
+      e.preventDefault();
+      var row = e.target.closest && e.target.closest('.fb-fld');
+      var sec = e.target.closest && e.target.closest('.fb-sec');
+      if (!sec) { drag = null; return; }
+      var from = bstate.sections[drag.si].fields;
+      var moved = from.splice(drag.fi, 1)[0];
+      var tsi = +sec.dataset.si;
+      var to = bstate.sections[tsi].fields;
+      var tfi = row ? +row.dataset.fi : to.length;
+      if (drag.si === tsi && drag.fi < tfi) tfi--;   // account for the removal
+      to.splice(tfi, 0, moved);
+      drag = null;
+      renderBuilderList(); renderBuilderPreview();
+    });
+    host.addEventListener('dragend', function () {
+      drag = null;
+      host.querySelectorAll('.drag').forEach(function (el) { el.classList.remove('drag'); });
+    });
+  }
+
+  function fieldOf(node) {
+    var row = node.closest('.fb-fld');
+    if (!row) return null;
+    return bstate.sections[+row.dataset.si].fields[+row.dataset.fi];
+  }
+  function swap(arr, a, b) { var t = arr[a]; arr[a] = arr[b]; arr[b] = t; }
+
+  /* Normalise the working model into the schema the API expects, filling in
+     keys from labels and dropping blank fields. */
+  function builderSchema() {
+    // Per-visa-type schemas scope keys to their section: each type has its own
+    // details blob, and the defaults genuinely reuse keys across types
+    // (eadNumber in both GC EAD and H4 EAD). Deduping globally would silently
+    // drop the second one.
+    var perSection = !!bstate.target.uniquePerSection;
+    var seen = {};
+    var sections = bstate.sections.map(function (s) {
+      if (perSection) seen = {};
+      var fields = [];
+      (s.fields || []).forEach(function (f) {
+        if (!f.label && !f.key) return;   // blank row
+        var key = (f.key || '').trim() || slug(f.label);
+        if (!key || seen[key.toLowerCase()]) return;   // skip blank/dup keys
+        seen[key.toLowerCase()] = 1;
+        var out = {
+          key: key, label: f.label || key, type: f.type || 'text',
+          required: !!f.required, width: f.width === 'half' ? 'half' : 'full',
+          placeholder: f.placeholder || '', help: f.help || '',
+        };
+        // Core fields map to real columns; the server rejects the key as
+        // reserved unless it is flagged, so this must survive the round-trip.
+        if (f.core) out.core = true;
+        if (OPTION_TYPES[out.type] && !f.core) out.options = (f.options || []).filter(Boolean);
+        fields.push(out);
+      });
+      return { id: s.id, title: (s.title || '').trim(), fields: fields };
+    });
+    // A fixed-section target's sections ARE the visa types — an emptied one is
+    // a real state, not a stray heading to prune.
+    if (!bstate.target.fixedSections) {
+      sections = sections.filter(function (s) { return s.fields.length; });
+    }
+    return { sections: sections };
+  }
+
+  function renderBuilderPreview() {
+    var host = document.getElementById('fb-preview');
+    if (!host) return;
+    var schema = builderSchema();
+    host.innerHTML =
+      '<div class="ob-lb" style="font-size:13px;margin-bottom:12px">' + esc(bstate.target.previewTitle) + '</div>' +
+      '<div class="ob-f" style="pointer-events:none;opacity:.95">' +
+        bstate.target.previewHead +
+        renderCustomSections(schema.sections, {}) +
+      '</div>';
+  }
+
+  function saveBuilder() {
+    var e = document.getElementById('fb-e');
+    e.textContent = '';
+    var target = bstate.target;
+    api(target.endpoint, { method: 'PUT', body: builderSchema() })
+      .then(function () {
+        toast('Form saved');
+        // Only the candidate form feeds the overview tab's label cache.
+        if (target === BUILDER_TARGETS.candidate) state.fieldDefs = null;
+        closeBuilder();
+        if (state.page === '/settings') render();
+        // The builder can be opened from the Work Auth tab, which is still
+        // behind it — re-render so the new fields show without reopening.
+        else if (state.detail) renderTab();
+      })
+      .catch(function (err) { e.textContent = err.message; });
   }
 
   /* ── export (CSV / Excel / PDF-via-print) ─────────────────────────────── */
@@ -2284,6 +3823,19 @@
     loadColPrefs();   // restore the saved candidate-grid column configuration
     // Capture phase: must run before the nav-item's own click handler.
     document.addEventListener('click', onNavClick, true);
+    // The form-builder engine creates candidates; when it does, open the new
+    // candidate's drawer at the next stage and refresh whatever list is showing.
+    window.addEventListener('hrmsOnbCandidateCreated', function (e) {
+      state.fieldDefs = null;   // schema/labels may have changed
+      if (state.page === '') loadDashboard(); else if (STAGE_PAGES[state.page]) loadStage(); else loadCandidates();
+      var id = e && e.detail && e.detail.id;
+      if (id) openDetail(id, 'workauth');
+    });
+    // Republish from the builder -> refresh cached labels + settings view.
+    window.addEventListener('hrmsOnbFormPublished', function () {
+      state.fieldDefs = null;
+      if (state.page === '/settings') render();
+    });
     ensureLayout();
     var scheduled = false;
     new MutationObserver(function () {

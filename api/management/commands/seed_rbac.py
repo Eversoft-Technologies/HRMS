@@ -146,8 +146,14 @@ class Command(BaseCommand):
             # 5. Grant permissions to Roles
             grants = {
                 'Super Admin': list(permissions.keys()),  # gets all
+                # Everything except RBAC management and manager approval.
+                # Onboarding splits those two duties on purpose: HR verifies the
+                # documents and a Manager approves them, so an HR Manager
+                # holding both could clear their own verification. Mirrors the
+                # grants in migration 0027, which withholds .approve here too.
                 'HR Manager': [
-                    code for code in permissions.keys() if code != 'rbac.manage'
+                    code for code in permissions.keys()
+                    if code not in ('rbac.manage', 'onboarding.approve')
                 ],
                 'HR Executive': [
                     'recruitment.view', 'recruitment.create', 'recruitment.edit',
