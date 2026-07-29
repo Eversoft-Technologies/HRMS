@@ -27,6 +27,78 @@
     }).then(function (r) { return r.json(); });
   }
 
+  /*
+   * Leaving the portal.
+   *
+   * This page is the candidate's entire view of the product — they are not HRMS
+   * users. The old "← Back to Home" link pointed at "/", which dropped them
+   * into the internal HRMS app (and its login screen). Close the tab instead;
+   * window.close() only works when the tab was script-opened, so when the
+   * browser refuses we say so rather than leaving a button that does nothing.
+   */
+  function wireExit(btn) {
+    if (!btn) return;
+    btn.addEventListener('click', function () {
+      window.close();
+      // Still here → the browser blocked it (tab opened from an email link).
+      setTimeout(function () {
+        btn.outerHTML = '<p style="font-size:14px;color:#64748b;margin:0;">' +
+          'You may now close this window.</p>';
+      }, 120);
+    });
+  }
+
+  // -------------------------------------------------------------------------
+  // AI interview hand-off
+  //
+  // Interviews are invited two different ways: the recruiter console mails a
+  // direct /recruit/interview?...&candidateEmail=... URL, while the server mails
+  // the single-use /interview-access?token=... link. Only the first knew how to
+  // start an AI interview, so a candidate arriving on a token link whose row has
+  // no external meeting URL used to hit "Your recruiter will share the meeting
+  // link shortly" — a dead end, since an AI interview never gets one.
+  //
+  // We rebuild the same URL the console does, including the &qid= question set,
+  // so both invite routes land the candidate in the identical session.
+  // -------------------------------------------------------------------------
+  function isAiInterview(data) {
+    var platform = String(data.platform || '');
+    if (/\bai\b/i.test(platform)) return true;
+    // Fall back to the stored question list: a row carrying interview questions
+    // but no meeting URL can only be an AI session.
+    return !data.link && Array.isArray(data.interviewQuestions) && data.interviewQuestions.length > 0;
+  }
+
+  function aiInterviewUrl(data, qid) {
+    var qs = [
+      'tab=ai-interviewer',
+      'candidateEmail=' + encodeURIComponent(data.email || ''),
+      'name=' + encodeURIComponent(data.name || ''),
+      'role=' + encodeURIComponent(data.role || ''),
+    ];
+    if (qid) qs.push('qid=' + encodeURIComponent(qid));
+    return window.location.origin + '/recruit/interview?' + qs.join('&');
+  }
+
+  /* Persist the recruiter's chosen questions so the interviewer can load them
+     by id, exactly as the console's invite mail does. Resolves to null when
+     there are none (or the POST fails) — the session then self-generates. */
+  function questionSetId(data) {
+    var questions = Array.isArray(data.interviewQuestions) ? data.interviewQuestions : [];
+    var text = questions
+      .map(function (q) { return (q && typeof q === 'object') ? (q.q || q.question || '') : q; })
+      .filter(function (q) { return typeof q === 'string' && q.trim(); });
+    if (!text.length) return Promise.resolve(null);
+    return fetch(API_BASE + '/question-sets', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ questions: text }),
+    })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) { return (d && d.id) || null; })
+      .catch(function () { return null; });
+  }
+
   // -------------------------------------------------------------------------
   // Interview access page renderer
   // -------------------------------------------------------------------------
@@ -99,6 +171,21 @@
                 note.textContent = 'Redirecting in ' + countdown + 's…';
               }
             }, 1000);
+          } else if (actionsEl && isAiInterview(data)) {
+            // AI interview: no external URL exists by design — start it here.
+            actionsEl.innerHTML =
+              '<p style="font-size:13px;color:#94a3b8;margin:0 0 14px;">Preparing your interview…</p>';
+            questionSetId(data).then(function (qid) {
+              actionsEl.innerHTML = [
+                '<a id="start-interview" href="', aiInterviewUrl(data, qid), '" ',
+                'style="display:inline-block;background:linear-gradient(135deg,#4f8ef7,#a855f7);',
+                'color:#fff;font-size:15px;font-weight:700;text-decoration:none;',
+                'padding:14px 36px;border-radius:12px;margin-top:8px;">',
+                'Start Interview →</a>',
+                '<p style="font-size:13px;color:#94a3b8;margin:14px 0 0;">',
+                'Please allow camera and microphone access when prompted.</p>',
+              ].join('');
+            });
           } else if (actionsEl) {
             actionsEl.innerHTML = '<p style="font-size:13px;color:#64748b;margin:8px 0 0;">Your recruiter will share the meeting link shortly.</p>';
           }
@@ -138,10 +225,12 @@
               '<p style="font-size:13px;color:#94a3b8;margin:8px 0 16px;">',
               'If you believe this is an error, please contact HR or your recruiter.',
               '</p>',
-              '<a href="/" style="display:inline-block;border:1.5px solid #e2e8f0;',
-              'color:#1e293b;font-size:14px;font-weight:600;text-decoration:none;',
-              'padding:11px 28px;border-radius:10px;">← Back to Home</a>',
+              '<button id="ia-exit" type="button" style="display:inline-block;',
+              'border:1.5px solid #e2e8f0;background:#fff;cursor:pointer;',
+              'color:#1e293b;font-size:14px;font-weight:600;font-family:inherit;',
+              'padding:11px 28px;border-radius:10px;">Close</button>',
             ].join('');
+            wireExit(document.getElementById('ia-exit'));
           }
         }
       })

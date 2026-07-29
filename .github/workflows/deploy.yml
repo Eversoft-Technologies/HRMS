@@ -3,7 +3,27 @@ name: Deploy to GoDaddy cPanel
 on:
   push:
     branches:
-      - master  # Trigger deployment on push to the master branch
+      - main  # Trigger deployment on push to the main branch
+
+# Never let two deploys run at once - they would race on the app symlink.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+env:
+  # The path cPanel points the Python App at. We make this path a SYMLINK to the
+  # active release, so the Application Root in cPanel never changes (and the
+  # cPanel-managed virtualenv is never moved). REMOTE_TARGET_DIR must stay the
+  # same value cPanel already uses (e.g. "hrms_django").
+  APP_LINK: /home/${{ secrets.REMOTE_USER }}/${{ secrets.REMOTE_TARGET_DIR }}
+  # Releases and shared files live in SIBLING directories, never inside APP_LINK.
+  RELEASES_DIR: /home/${{ secrets.REMOTE_USER }}/${{ secrets.REMOTE_TARGET_DIR }}_releases
+  SHARED_DIR: /home/${{ secrets.REMOTE_USER }}/${{ secrets.REMOTE_TARGET_DIR }}_shared
+  # Unique, monotonic id for this deploy (run id + attempt, so re-runs differ).
+  RELEASE_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+  # Existing cPanel virtualenv - unchanged, because the Application Root never
+  # changes. Adjust "3.10" to match the folder name under ~/virtualenv/<app>/.
+  VENV_ACTIVATE: /home/${{ secrets.REMOTE_USER }}/virtualenv/${{ secrets.REMOTE_TARGET_DIR }}/3.10/bin/activate
 
 jobs:
   deploy:
@@ -13,9 +33,8 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # (Optional) If you make changes to the React frontend under `src/` and do not want to commit the build `dist/` directory,
-      # you can uncomment this step to build the frontend dynamically in CI.
-      # Since `dist/` is currently checked into the repository, this step is disabled by default.
+      # (Optional) If you stop committing dist/ and want CI to build the frontend,
+      # uncomment this. dist/ is currently checked in, so it is disabled by default.
       # - name: Setup Node.js
       #   uses: actions/setup-node@v4
       #   with:
@@ -25,43 +44,89 @@ jobs:
       #     npm install
       #     npm run build
 
-      - name: Deploy Files to GoDaddy Server via SSH/rsync
+      # Upload the new code into a FRESH release directory - never the live dir.
+      # A partial/failed transfer therefore cannot touch the running site.
+      - name: Upload release to server
         uses: easingthemes/ssh-deploy@main
         with:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
           REMOTE_HOST: ${{ secrets.REMOTE_HOST }}
           REMOTE_USER: ${{ secrets.REMOTE_USER }}
           REMOTE_PORT: ${{ secrets.REMOTE_PORT || '22' }}
-          TARGET: /home/${{ secrets.REMOTE_USER }}/${{ secrets.REMOTE_TARGET_DIR }}
+          TARGET: ${{ env.RELEASES_DIR }}/${{ env.RELEASE_ID }}
           SOURCE: "./"
           EXCLUDE: "/.git/, /.github/, /.venv/, /node_modules/, /db.sqlite3, /smoke_test.sqlite3, /.env, /keypair, /keypair.pub"
 
-      - name: Run Database Migrations and Post-Deploy Scripts on Server
+      - name: Build, migrate, and atomically switch release
         uses: appleboy/ssh-action@master
         with:
           host: ${{ secrets.REMOTE_HOST }}
           username: ${{ secrets.REMOTE_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.REMOTE_PORT || '22' }}
+          envs: APP_LINK,RELEASES_DIR,SHARED_DIR,RELEASE_ID,VENV_ACTIVATE
           script: |
-            # 1. Navigate to the application root directory
-            cd /home/${{ secrets.REMOTE_USER }}/${{ secrets.REMOTE_TARGET_DIR }}
+            set -euo pipefail
 
-            # 2. Activate the Python virtual environment created by cPanel (adjust python version as configured in cPanel)
-            # Replace 'hrms' with your app root folder name if different
-            source /home/${{ secrets.REMOTE_USER }}/virtualenv/${{ secrets.REMOTE_TARGET_DIR }}/3.10/bin/activate
+            RELEASE_DIR="${RELEASES_DIR}/${RELEASE_ID}"
 
-            # 3. Install/upgrade pip and dependencies
+            echo ">>> Deploying release ${RELEASE_ID}"
+
+            # If ANY step below fails, set -e aborts, this trap runs, the app
+            # symlink is left untouched (old release keeps serving), and the
+            # half-built release dir is removed so failed attempts don't pile up.
+            cleanup_on_failure() {
+              echo "!!! Deploy FAILED - live site untouched, previous release still serving."
+              rm -rf "${RELEASE_DIR}" || true
+            }
+            trap cleanup_on_failure ERR
+
+            # 1. Link shared, persistent files into this release. They are excluded
+            #    from the upload so they survive across deploys. Add more lines here
+            #    for any other persistent paths (e.g. uploaded media directories).
+            mkdir -p "${SHARED_DIR}"
+            if [ ! -f "${SHARED_DIR}/.env" ]; then
+              echo "!!! Missing ${SHARED_DIR}/.env - create it once (see setup notes)."
+              exit 1
+            fi
+            ln -sfn "${SHARED_DIR}/.env" "${RELEASE_DIR}/.env"
+
+            # 1b. Normalize permissions so Passenger can read the release
+            #     (dirs 755, files 644). Symlinks (type l, e.g. the .env link)
+            #     are skipped, so the shared secret keeps its own 600 perms.
+            find "${RELEASE_DIR}" -type d -exec chmod 755 {} +
+            find "${RELEASE_DIR}" -type f -exec chmod 644 {} +
+
+            # 2. Activate the existing cPanel virtualenv (shared across releases).
+            if [ ! -f "${VENV_ACTIVATE}" ]; then
+              echo "!!! Virtualenv not found at ${VENV_ACTIVATE}"
+              exit 1
+            fi
+            source "${VENV_ACTIVATE}"
+
+            # 3. Install deps, collect static, then migrate - all against the NEW
+            #    release, which is not live yet. collectstatic (no DB writes) runs
+            #    before migrate so a static failure never leaves the schema ahead
+            #    of the running code. migrate is last, right before the switch.
+            cd "${RELEASE_DIR}"
             pip install --upgrade pip
             pip install -r requirements.txt
-
-            # 4. Run Django migrations and seed data if needed
-            python manage.py migrate --noinput
-            # python manage.py seed_rbac # Uncomment if setting up permissions for the first time
-
-            # 5. Collect static files
             python manage.py collectstatic --noinput
+            python manage.py migrate --noinput
 
-            # 6. Restart Phusion Passenger to apply changes
-            mkdir -p tmp
-            touch tmp/restart.txt
+            # 4. All steps succeeded -> atomically point the app symlink at the new
+            #    release. Writing a temp symlink then mv -T over the old one makes
+            #    the switch a single, uninterruptible rename (no missing-link gap).
+            ln -sfn "${RELEASE_DIR}" "${APP_LINK}.tmp"
+            mv -Tf "${APP_LINK}.tmp" "${APP_LINK}"
+
+            # 5. Restart Phusion Passenger so it loads the new release.
+            mkdir -p "${RELEASE_DIR}/tmp"
+            touch "${RELEASE_DIR}/tmp/restart.txt"
+
+            # 6. Success: drop the failure trap and prune old releases (keep 5).
+            trap - ERR
+            echo ">>> Deploy OK - now serving release ${RELEASE_ID}"
+            cd "${RELEASES_DIR}"
+            ls -1dt */ | tail -n +6 | xargs -r rm -rf
+            echo ">>> Pruned old releases (kept newest 5)."

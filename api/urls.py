@@ -1,6 +1,7 @@
 from django.urls import path
 
-from . import auth_views, live_views, views, attendance_views, job_form_views, onboarding_views
+from . import (auth_views, linkedin_oauth, live_views, views, attendance_views,
+               job_form_views, onboarding_views)
 
 # All paths are relative to the "/api/" prefix from the project urlconf.
 urlpatterns = [
@@ -13,8 +14,20 @@ urlpatterns = [
     path('auth/verify-reset-token', auth_views.verify_reset_token),
     path('auth/google', auth_views.google_auth),
 
+    # Per-user LinkedIn linking, so new jobs post to the creator's own profile
+    path('auth/linkedin/connect', linkedin_oauth.linkedin_connect),
+    path('auth/linkedin/callback', linkedin_oauth.linkedin_callback),
+    path('auth/linkedin/status', linkedin_oauth.linkedin_status),
+    path('auth/linkedin/preview', linkedin_oauth.linkedin_preview),
+    path('auth/linkedin/disconnect', linkedin_oauth.linkedin_disconnect),
+
     path('jobs', views.jobs),
     path('jobs/<int:pk>', views.job_detail),
+
+    # Reusable candidate follow-up email templates
+    path('email-templates', email_template_views.email_templates),
+    path('email-templates/preview', email_template_views.email_template_preview),
+    path('email-templates/<int:pk>', email_template_views.email_template_detail),
 
     # Job Form Builder: dynamic schema, templates, master data, currencies
     path('job-form/config', job_form_views.job_form_config),

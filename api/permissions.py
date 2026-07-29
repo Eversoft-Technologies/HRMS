@@ -171,7 +171,19 @@ def check_perm(request, code, or_self=False):
     return False, caller_email, user
 
 
-def require_perm(code, or_self=False):
+def _auth_required(request):
+    """401 for a caller whose identity could not be resolved."""
+    logger.info(
+        'Unauthenticated %s %s — denied (no resolvable X-User-Email)',
+        request.method, request.path,
+    )
+    return JsonResponse({
+        'message': 'Authentication required. Please sign in again.',
+        'code': 'AUTH_REQUIRED',
+    }, status=401)
+
+
+def require_perm(code, or_self=False, anonymous_methods=()):
     """Decorator that enforces an RBAC permission check on a DRF api_view.
 
     Usage::
@@ -194,6 +206,17 @@ def require_perm(code, or_self=False):
     or_self : bool
         When True, the caller passes the check if the request targets their own
         email (self-service actions like check-in, own leave, own profile).
+    anonymous_methods : tuple[str]
+        Methods that stay reachable without a resolvable identity. This exists
+        only for the candidate-facing interview flow, where the candidate is not
+        a signed-in user and has no AppUser row. Every other method — and every
+        endpoint that does not opt in — now denies an unidentified caller.
+
+    Identity comes from the X-User-Email header, attached to same-origin /api/
+    requests by dist/dist/assets/hrms-actor.js once a session exists. A request
+    that cannot be resolved to an active AppUser is anonymous and is refused;
+    it used to be waved through, which made every guarded endpoint reachable by
+    simply omitting the header.
     """
     def decorator(view_func):
         @functools.wraps(view_func)
@@ -204,14 +227,9 @@ def require_perm(code, or_self=False):
             allowed, caller_email, user = check_perm(request, code, or_self=or_self)
 
             if not caller_email or not user:
-                # No identity header — still allow the request but log it.
-                # This preserves backwards compatibility during rollout.
-                # Once all clients send the header, change this to deny.
-                logger.debug(
-                    'No X-User-Email header on %s %s — allowing (rollout grace)',
-                    request.method, request.path,
-                )
-                return view_func(request, *args, **kwargs)
+                if request.method in anonymous_methods:
+                    return view_func(request, *args, **kwargs)
+                return _auth_required(request)
 
             if not allowed:
                 # Resolve the human-readable code for the error message
@@ -243,24 +261,12 @@ def require_admin(view_func):
         _CACHE.clear()
         caller_email, user = _get_caller(request)
         if not caller_email or not user:
-            # Grace period — allow without header
-            logger.debug(
-                'No X-User-Email header on %s %s — allowing (rollout grace)',
-                request.method, request.path,
-            )
-            return view_func(request, *args, **kwargs)
-        
+            # Admin surfaces are never anonymous. This branch used to return the
+            # view, so omitting the header granted full role/permission admin.
+            return _auth_required(request)
+
         is_allowed = _is_super_admin(user) or (user.email or '').strip().lower() in ('srikanthreddya345@gmail.com', 'sri@eversoftit.com', 'sri')
         if not is_allowed:
-            role_name = user.role_ref.name if (user.role_ref_id and user.role_ref) else None
-            try:
-                import os
-                from datetime import datetime
-                log_msg = f"{datetime.now()}: require_admin check: email={user.email} role={user.role} role_ref={role_name}\n"
-                with open('c:/Users/SRIKANTH ADIPIREDDY/Desktop/Eversoft_hrms/hrms_django/logs/rbac_debug.log', 'a') as f:
-                    f.write(log_msg)
-            except Exception:
-                pass
             if user.role_ref_id and user.role_ref:
                 is_allowed = user.role_ref.name in ('HR Manager', 'HR Executive', 'Recruitment')
             else:

@@ -1574,21 +1574,16 @@
       if (document.getElementById(OVERLAY_ID)) close();
       return;
     }
-    if (existing) return;
-    var selectors = [
-      '[data-route*="recruit"] .page-header',
-      '[class*="recruit"] .page-actions',
-      '[class*="recruit"] .topbar-actions',
-      '.page-header .page-actions',
-      '.page-header',
-      '.topbar',
-    ];
-    var target = null;
-    for (var i = 0; i < selectors.length; i++) {
-      target = document.querySelector(selectors[i]);
-      if (target) break;
+    if (existing) {
+      // React mounts the Filters toolbar after our first pass, so a button that
+      // landed in the fallback spot has to be moved once its real home appears.
+      // isHomed() is O(1) — findFiltersButton() walks every button on the page
+      // and this runs on DOM mutations.
+      if (isHomed(existing)) return;
+      var home = findFiltersButton();
+      if (home && home.parentNode) home.parentNode.insertBefore(existing, home.nextSibling);
+      return;
     }
-    if (!target) return;
 
     injectStyle();
     var btn = document.createElement('button');
@@ -1598,7 +1593,51 @@
       e.stopPropagation();
       if (document.getElementById(OVERLAY_ID)) close(); else open();
     });
-    target.appendChild(btn);
+
+    // Preferred home: immediately after the page's own "Filters" button, so the
+    // dashboard opens from the toolbar it belongs to rather than the global
+    // topbar (where it sat next to the avatar on every recruitment screen).
+    var filters = findFiltersButton();
+    if (filters && filters.parentNode) {
+      filters.parentNode.insertBefore(btn, filters.nextSibling);
+      return;
+    }
+
+    // Fallback for screens that render no Filters control.
+    var selectors = [
+      '[data-route*="recruit"] .page-header',
+      '[class*="recruit"] .page-actions',
+      '[class*="recruit"] .topbar-actions',
+      '.page-header .page-actions',
+      '.page-header',
+    ];
+    for (var i = 0; i < selectors.length; i++) {
+      var target = document.querySelector(selectors[i]);
+      if (target) { target.appendChild(btn); return; }
+    }
+  }
+
+  /* The Filters control is rendered by the React bundle with no stable class or
+     id, so match it on its label. The bundle prefixes the text with a
+     non-breaking space ( Filters), hence the whitespace normalisation. */
+  function isFiltersButton(el) {
+    return !!el && el.id !== BTN_ID &&
+      (el.textContent || '').replace(/\s+/g, ' ').trim() === 'Filters';
+  }
+
+  function findFiltersButton() {
+    var buttons = document.querySelectorAll('button');
+    for (var i = 0; i < buttons.length; i++) {
+      if (isFiltersButton(buttons[i])) return buttons[i];
+    }
+    return null;
+  }
+
+  /* Already sitting right after Filters? Determined from the actual sibling
+     rather than a flag set once, so a React re-render that swaps the Filters
+     node out is detected and corrected on the next pass. */
+  function isHomed(btn) {
+    return !!btn && isFiltersButton(btn.previousElementSibling);
   }
 
   window.__hrmsOpenRecruitKPI = open;
@@ -1641,8 +1680,16 @@
         setTimeout(tryMount, 300);
       }
     }, 500);
+    // Re-run while the button is missing OR still parked in the fallback spot —
+    // the Filters toolbar mounts after we do, and only a later pass can move the
+    // button next to it. Trailing-debounced so a React render storm costs one
+    // pass per frame, and injectButton() early-returns once it is settled.
+    var pending = false;
     var obs = new MutationObserver(function () {
-      if (!document.getElementById(BTN_ID)) tryMount();
+      if (isHomed(document.getElementById(BTN_ID))) return;
+      if (pending) return;
+      pending = true;
+      requestAnimationFrame(function () { pending = false; tryMount(); });
     });
     obs.observe(document.body, { childList: true, subtree: true });
   }

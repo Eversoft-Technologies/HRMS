@@ -594,6 +594,15 @@
         row('Status', '<select id="pj-status">' + STATUS_OPTIONS.map(function (s) { return '<option>' + s + '</option>'; }).join('') + '</select>') +
         row('Remote', '<select id="pj-remote"><option value="false">No</option><option value="true">Yes</option></select>') +
         '<div class="jt-mrow top"><label>Description</label><textarea id="pj-desc" placeholder="Role summary…"></textarea></div>' +
+        // Hidden until we know whether LinkedIn is set up server-side and
+        // whether this user has linked their own account (see setupLinkedInRow).
+        '<div class="jt-mrow" id="pj-li-row" style="display:none"><label></label><div>' +
+          '<label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:600;color:var(--text)">' +
+            '<input type="checkbox" id="pj-li" style="width:auto;margin:0;flex:none">' +
+            '<span>Also post to my LinkedIn</span>' +
+          '</label>' +
+          '<div id="pj-li-hint" style="font-size:12px;color:var(--text3);margin-top:4px"></div>' +
+        '</div></div>' +
         '<div class="jt-mrow"><label></label><span id="pj-msg" style="font-size:12px;font-weight:600;color:var(--danger,#f75f4f)"></span></div>' +
       '</div>' +
       '<div class="jt-mf"><button class="jt-btn ghost" id="pj-cancel">Cancel</button><button class="jt-btn primary" id="pj-save">Post Job</button></div></div>';
@@ -603,15 +612,92 @@
     ov.addEventListener('click', function (e) { if (e.target === ov) close(); });
     ov.querySelector('#pj-x').addEventListener('click', close);
     ov.querySelector('#pj-cancel').addEventListener('click', close);
+    setupLinkedInRow(ov);
     ov.querySelector('#pj-save').addEventListener('click', function () {
       var title = val('pj-title'), dept = val('pj-dept'), msg = ov.querySelector('#pj-msg');
       if (!title || !dept) { msg.textContent = 'Title and Department are required.'; return; }
-      var btn = ov.querySelector('#pj-save'); btn.disabled = true; btn.textContent = 'Posting…';
-      var body = { title: title, dept: dept, location: val('pj-location'), type: val('pj-type'), salary: val('pj-salary'), openings: parseInt(val('pj-openings'), 10) || 1, priority: val('pj-priority'), status: val('pj-status'), remote: ov.querySelector('#pj-remote').value === 'true', description: val('pj-desc'), autoPost: false };
-      api('/api/jobs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
-        .then(function (job) { state.jobs.unshift(job); state.page = 1; renderTable(); close(); })
-        .catch(function (e) { msg.textContent = e.message || 'Could not post the job.'; btn.disabled = false; btn.textContent = 'Post Job'; });
+      var li = ov.querySelector('#pj-li');
+      var shareToLinkedIn = !!(li && li.checked && !li.disabled);
+      var btn = ov.querySelector('#pj-save');
+      var body = { title: title, dept: dept, location: val('pj-location'), type: val('pj-type'), salary: val('pj-salary'), openings: parseInt(val('pj-openings'), 10) || 1, priority: val('pj-priority'), status: val('pj-status'), remote: ov.querySelector('#pj-remote').value === 'true', description: val('pj-desc'), autoPost: shareToLinkedIn };
+      // Tells the backend whose LinkedIn to post under. Without it the job is
+      // still created, just never shared.
+      var email = currentUserEmail();
+      if (email) body.userEmail = email;
+
+      function save(approvedText) {
+        btn.disabled = true; btn.textContent = 'Posting…';
+        if (approvedText) body.linkedinMessage = approvedText;
+        api('/api/jobs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+          .then(function (job) {
+            state.jobs.unshift(job); state.page = 1; renderTable(); close();
+            // The job is created either way — a failed share is reported, not fatal.
+            if (shareToLinkedIn) reportShareResult(job.socialResults);
+          })
+          .catch(function (e) { msg.textContent = e.message || 'Could not post the job.'; btn.disabled = false; btn.textContent = 'Post Job'; });
+      }
+
+      // Sharing to a public profile gets a review step; plain saves do not.
+      if (shareToLinkedIn && window.HRMSLinkedIn && window.HRMSLinkedIn.review) {
+        window.HRMSLinkedIn.review(body, email).then(function (text) {
+          if (text) save(text);     // backed out -> nothing saved, form intact
+        });
+        return;
+      }
+      save(null);
     });
+  }
+
+  /* ── "Also post to my LinkedIn" ───────────────────────────────────────── */
+  function currentUserEmail() {
+    if (window.HRMSLinkedIn && window.HRMSLinkedIn.currentEmail) return window.HRMSLinkedIn.currentEmail();
+    try { var s = JSON.parse(localStorage.getItem('hrms_session') || 'null'); return (s && (s.email || s.userEmail)) || ''; } catch (e) {}
+    try { var u = JSON.parse(localStorage.getItem('hrms_user') || 'null'); return (u && (u.email || u.userEmail)) || ''; } catch (e) { return ''; }
+  }
+
+  function setupLinkedInRow(ov) {
+    var row = ov.querySelector('#pj-li-row');
+    var box = ov.querySelector('#pj-li');
+    var hint = ov.querySelector('#pj-li-hint');
+    if (!row || !box || !window.HRMSLinkedIn) return;
+    window.HRMSLinkedIn.status().then(function (s) {
+      // Not set up on the server at all — don't show a control nobody can use.
+      if (!s || !s.configured) return;
+      row.style.display = '';
+      if (s.connected && !s.expired) {
+        box.checked = true;
+        hint.textContent = s.name ? 'Posting as ' + s.name + '.' : 'Posting to your LinkedIn profile.';
+        return;
+      }
+      box.checked = false;
+      box.disabled = true;
+      hint.textContent = (s.expired
+        ? 'Your LinkedIn connection expired — reconnect it in '
+        : 'Connect your LinkedIn account in ') +
+        'Settings → Email Configuration → Social Media Accounts.';
+    });
+  }
+
+  function reportShareResult(results) {
+    var li = null;
+    for (var i = 0; i < (results || []).length; i++) {
+      if (results[i] && results[i].platform === 'linkedin') { li = results[i]; break; }
+    }
+    if (!li) return;
+    if (li.ok) { toast('Job posted to your LinkedIn.'); return; }
+    toast('Job created, but LinkedIn sharing failed: ' + (li.error || 'unknown error'), 'error');
+  }
+
+  function toast(text, type) {
+    var el = document.createElement('div');
+    el.style.cssText = 'position:fixed;top:20px;left:50%;transform:translateX(-50%);z-index:99999;' +
+      'padding:12px 22px;border-radius:10px;font:600 14px/1.4 inherit;max-width:min(560px,90vw);text-align:center;' +
+      'box-shadow:0 4px 20px rgba(0,0,0,0.18);color:#fff;transition:opacity .4s;' +
+      'background:' + (type === 'error' ? '#ef4444' : '#0a66c2');
+    el.textContent = text;
+    document.body.appendChild(el);
+    setTimeout(function () { el.style.opacity = '0'; }, type === 'error' ? 6000 : 3000);
+    setTimeout(function () { el.remove(); }, type === 'error' ? 6500 : 3500);
   }
 
   /* ── export ───────────────────────────────────────────────────────────── */
