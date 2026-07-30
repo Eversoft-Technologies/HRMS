@@ -1185,8 +1185,7 @@ class CandidateFormSubmission(models.Model):
     class Meta:
         db_table = 'candidate_form_submissions'
         ordering = ['-created_at']
-<<<<<<< HEAD
-=======
+
 
 
 
@@ -1211,4 +1210,4 @@ class EmailTemplate(models.Model):
     class Meta:
         db_table = 'email_templates'
         ordering = ['outcome', 'name']
->>>>>>> origin/develop
+
