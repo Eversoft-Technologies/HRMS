@@ -829,15 +829,29 @@ ONBOARDING_STAGES = [
 
 class OnboardingCandidate(models.Model):
     """A person being onboarded. Soft-deleted so the audit trail survives."""
+    # Human-friendly identifier (e.g. CAN0001). Server-generated on create by
+    # onboarding_views._next_candidate_code from the highest CAN-code ever
+    # assigned across ALL candidates — including soft-deleted ones — plus one, so
+    # a code is never reused: the sequence only climbs and a deletion leaves a
+    # permanent gap (it does NOT restart at CAN0001). Display-only label, not
+    # unique-constrained.
+    candidate_code = models.CharField(max_length=32, default='', blank=True, db_index=True)
     first_name = models.CharField(max_length=120, default='', blank=True)
     last_name = models.CharField(max_length=120, default='', blank=True)
     email = models.CharField(max_length=255, db_index=True)
     phone = models.CharField(max_length=40, default='', blank=True)
+    # Personal information (optional — collected during registration).
+    dob = models.DateField(null=True, blank=True)
+    gender = models.CharField(max_length=32, default='', blank=True)
+    address = models.CharField(max_length=500, default='', blank=True)
     client = models.CharField(max_length=255, default='', blank=True)
     vendor = models.CharField(max_length=255, default='', blank=True)
     recruiter = models.CharField(max_length=255, default='', blank=True)
     job_title = models.CharField(max_length=255, default='', blank=True)
     department = models.CharField(max_length=255, default='', blank=True)
+    # Reporting manager and the site/office the candidate will work from.
+    manager = models.CharField(max_length=255, default='', blank=True)
+    work_location = models.CharField(max_length=255, default='', blank=True)
     joining_date = models.DateField(null=True, blank=True)
     # Draft | Pending Verification | Pending Approval | Approved | Rejected | Onboarded
     status = models.CharField(max_length=32, default='Draft', db_index=True)
@@ -860,11 +874,9 @@ class OnboardingCandidate(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
-
     class Meta:
         db_table = 'onboarding_candidates'
         ordering = ['-created_at']
-
 
 
 class WorkAuthorization(models.Model):
@@ -1173,6 +1185,8 @@ class CandidateFormSubmission(models.Model):
     class Meta:
         db_table = 'candidate_form_submissions'
         ordering = ['-created_at']
+<<<<<<< HEAD
+=======
 
 
 
@@ -1197,3 +1211,4 @@ class EmailTemplate(models.Model):
     class Meta:
         db_table = 'email_templates'
         ordering = ['outcome', 'name']
+>>>>>>> origin/develop

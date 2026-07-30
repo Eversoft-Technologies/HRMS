@@ -1362,6 +1362,16 @@ class OnboardingCandidateSerializer(serializers.ModelSerializer):
     lastName = serializers.CharField(source='last_name', required=False, allow_blank=True, default='')
     jobTitle = serializers.CharField(source='job_title', required=False, allow_blank=True, default='')
     joiningDate = serializers.DateField(source='joining_date', required=False, allow_null=True)
+    # candidate_code is server-generated (see onboarding_views.candidates) — never
+    # accepted from the client, so it is declared read-only here.
+    candidateCode = serializers.CharField(source='candidate_code', read_only=True)
+    # dob/gender/address/manager share the model field name, so NO source= (DRF
+    # forbids source equal to the field name and raises on bind otherwise).
+    dob = serializers.DateField(required=False, allow_null=True)
+    gender = serializers.CharField(required=False, allow_blank=True, default='')
+    address = serializers.CharField(required=False, allow_blank=True, default='')
+    manager = serializers.CharField(required=False, allow_blank=True, default='')
+    workLocation = serializers.CharField(source='work_location', required=False, allow_blank=True, default='')
     interviewId = serializers.PrimaryKeyRelatedField(
         source='interview', queryset=InterviewLink.objects.all(),
         required=False, allow_null=True,
@@ -1372,13 +1382,12 @@ class OnboardingCandidateSerializer(serializers.ModelSerializer):
     class Meta:
         model = OnboardingCandidate
         fields = [
-            'id', 'firstName', 'lastName', 'email', 'phone', 'client', 'vendor',
-            'recruiter', 'jobTitle', 'department', 'joiningDate', 'status', 'interviewId',
+            'id', 'candidateCode', 'firstName', 'lastName', 'email', 'phone',
+            'dob', 'gender', 'address', 'client', 'vendor', 'recruiter', 'jobTitle',
+            'department', 'manager', 'workLocation', 'joiningDate', 'status', 'interviewId',
             'portalToken', 'requestedDocs',
         ]
-
-
-        read_only_fields = ['id']
+        read_only_fields = ['id', 'candidateCode']
         extra_kwargs = {
             'phone': {'required': False, 'allow_blank': True, 'default': ''},
             'client': {'required': False, 'allow_blank': True, 'default': ''},
@@ -1397,16 +1406,22 @@ class OnboardingCandidateSerializer(serializers.ModelSerializer):
         ).strip()
         return {
             'id': instance.id,
+            'candidateCode': instance.candidate_code or '',
             'firstName': instance.first_name or '',
             'lastName': instance.last_name or '',
             'name': full_name,
             'email': instance.email or '',
             'phone': instance.phone or '',
+            'dob': instance.dob.strftime(DATE_FMT) if instance.dob else None,
+            'gender': instance.gender or '',
+            'address': instance.address or '',
             'client': instance.client or '',
             'vendor': instance.vendor or '',
             'recruiter': instance.recruiter or '',
             'jobTitle': instance.job_title or '',
             'department': instance.department or '',
+            'manager': instance.manager or '',
+            'workLocation': instance.work_location or '',
             'joiningDate': instance.joining_date.strftime(DATE_FMT) if instance.joining_date else None,
             'status': instance.status or 'Draft',
             'interviewId': instance.interview_id,

@@ -663,6 +663,37 @@ def clean_custom_values(values, fields):
 # ---------------------------------------------------------------------------
 # Candidates
 # ---------------------------------------------------------------------------
+def _next_candidate_code():
+    """Return the next human-friendly candidate code, e.g. ``CAN0001``.
+
+    The number is the highest code ever assigned across ALL candidates —
+    including soft-deleted ones — plus one, so a code is never reused: the
+    sequence only ever climbs and a deletion leaves a permanent gap instead
+    of freeing its number for the next candidate. Deliberately does NOT use
+    the primary key (which jumps around as unrelated rows are created); only
+    the ``CAN****`` codes are considered.
+
+    ``candidate_code`` is a display-only label (never used as a lookup key
+    and not unique-constrained). Computed inside the caller's
+    ``transaction.atomic()`` block.
+    """
+    highest = 0
+    codes = (
+        OnboardingCandidate.objects
+        .filter(candidate_code__startswith='CAN')   # ALL candidates, incl. soft-deleted → never reuse
+        .values_list('candidate_code', flat=True)
+    )
+    for code in codes:
+        # Parse the numeric suffix; skip anything that isn't ``CAN<digits>``.
+        try:
+            n = int(code[3:])
+        except (TypeError, ValueError):
+            continue
+        if n > highest:
+            highest = n
+    return 'CAN%04d' % (highest + 1)
+
+
 @api_view(['GET', 'POST'])
 @require_perm({'GET': 'onboarding.view', 'POST': 'onboarding.create'})
 def candidates(request):
@@ -724,6 +755,12 @@ def candidates(request):
     if cerror:
         return err(cerror)
 
+    # A date of birth in the future is always a data-entry error. (Kept from
+    # feature/onboarding; a no-op when the form does not collect dob.)
+    dob = serializer.validated_data.get('dob')
+    if dob and dob > date.today():
+        return err('Date of birth cannot be in the future')
+
     DEFAULT_REQUESTED_DOCS = [
         {'type': 'ssn', 'label': 'SSN', 'required': True, 'sendToCandidate': True},
         {'type': 'driver_license', 'label': 'Driver License', 'required': False, 'sendToCandidate': True},
@@ -739,6 +776,13 @@ def candidates(request):
             custom_fields=custom,
             requested_docs=body.get('requestedDocs') or DEFAULT_REQUESTED_DOCS
         )
+        # Assign the human-friendly code from the CAN-code sequence (see
+        # _next_candidate_code) rather than the primary key. Kept from
+        # feature/onboarding; the sequence spans all candidates incl.
+        # soft-deleted ones, so codes are never reused.
+        if not candidate.candidate_code:
+            candidate.candidate_code = _next_candidate_code()
+            candidate.save(update_fields=['candidate_code'])
         seed_stages(candidate)
         set_stage(candidate, 'candidate_created', 'Completed', actor)
         set_stage(candidate, 'work_authorization', 'In Progress', actor)
@@ -798,6 +842,12 @@ def candidate_detail(request, pk):
     serializer = OnboardingCandidateSerializer(candidate, data=body, partial=True)
     if not serializer.is_valid():
         return serializer_err(serializer)
+
+    # A date of birth in the future is always a data-entry error. (Kept from
+    # feature/onboarding; a no-op when the form does not collect dob.)
+    dob = serializer.validated_data.get('dob')
+    if dob and dob > date.today():
+        return err('Date of birth cannot be in the future')
 
     with transaction.atomic():
         if custom is not None:
