@@ -157,8 +157,8 @@ MAX_DOC_BYTES = 10 * 1024 * 1024  # 10 MB decoded
 VERIFICATION_STATUSES = ['Pending', 'Approved', 'Rejected']
 APPROVAL_ACTIONS = ['Approved', 'Rejected', 'Returned']
 ASSET_SOURCES = ['Client', 'Eversoft']
-ASSET_STATUSES = ['Assigned', 'Returned', 'Lost', 'Damaged']
-EVERSOFT_ASSETS = ['Laptop', 'Monitor', 'Mouse', 'Keyboard', 'Dock', 'Bag', 'Headset']
+ASSET_STATUSES = ['Assigned', 'Returned', 'Lost', 'Damaged','pending','Delivered']
+EVERSOFT_ASSETS = ['Laptop', 'Monitor', 'Mouse', 'Keyboard', 'Dock', 'Bag', 'Headset','Office365','Email_ID','Software License','ID_Card','Desktop','Mobile']
 PAYROLL_STATUSES = ['Pending', 'Completed']
 
 # How far ahead a work authorization counts as "expiring soon" on the dashboard
@@ -1478,10 +1478,28 @@ def candidate_assets(request, pk):
     if not candidate:
         return err('Candidate not found', 404)
 
+    # -------------------------------------------------------------------
+    # Validation to enforce HR verification and manager approval before asset allocation.
+    # Users cannot allocate assets until HR Verification and Manager Approval are completed.
+    # -------------------------------------------------------------------
+    # if request.method == 'GET':
+    #     return Response(ItAssetAllocationSerializer(candidate.asset_allocations.all(), many=True).data)
+    
+    # hr_stage = candidate.stages.filter(stage='hr_verification').first()
+
+    # if not hr_stage or hr_stage.status != 'Completed':
+    #     return err('Cannot allocate assets until HR verification is completed.',409,)
+
+    
+    # manager_stage = candidate.stages.filter(stage='manager_approval').first()
+
+    # if not manager_stage or manager_stage.status != 'Completed':
+    #     return err('Cannot allocate assets until manager approval is completed.',409,)
+
+    # -------------------------------------------------------------------
+
     if request.method == 'GET':
-        return Response(
-            ItAssetAllocationSerializer(candidate.asset_allocations.all(), many=True).data
-        )
+        return Response(ItAssetAllocationSerializer(candidate.asset_allocations.all(), many=True).data)
 
     body = request.data
     source = (body.get('assetSource') or 'Eversoft').strip()
