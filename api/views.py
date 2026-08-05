@@ -1151,8 +1151,12 @@ def resume_score_file(request, pk):
 # ---------------------------------------------------------------------------
 def _recording_list_qs():
     return InterviewRecording.objects.annotate(
+        # ``_has_video`` is True when *either* storage column has data so that
+        # legacy recordings (base64 recording_data only) still show the Play
+        # button instead of "No video saved for this session".
         _has_video=Case(
             When(video_buffer__isnull=False, then=Value(True)),
+            When(recording_data__isnull=False, then=Value(True)),
             default=Value(False), output_field=BooleanField(),
         ),
         _has_recording=Case(
@@ -1258,7 +1262,13 @@ def recording_detail(request, pk):
 @csrf_exempt
 def recording_video(request, pk):
     """Binary (video/webm) upload + download. Kept as a plain Django view
-    because DRF's JSON parser cannot consume a raw binary body."""
+    because DRF's JSON parser cannot consume a raw binary body.
+
+    GET honours Range requests so the browser <video> element can seek.
+    Slicing is done in MySQL (SUBSTRING) to avoid loading the whole blob.
+    Falls back to the legacy base64 ``recording_data`` column when
+    ``video_buffer`` is NULL, so old recordings still play.
+    """
     obj = InterviewRecording.objects.filter(pk=pk).first()
     if not obj:
         return err('Recording not found', 404)
@@ -1273,17 +1283,87 @@ def recording_video(request, pk):
         obj.save(update_fields=['video_buffer', 'video_mime'])
         return JsonResponse({'ok': True})
 
-    if request.method == 'GET':
-        if not obj.video_buffer:
-            return err('No video data for this recording', 404)
-        payload = bytes(obj.video_buffer)
-        resp = HttpResponse(payload, content_type=obj.video_mime or 'video/webm')
-        resp['Content-Length'] = str(len(payload))
-        resp['Accept-Ranges'] = 'bytes'
-        resp['Cache-Control'] = 'public, max-age=31536000'
-        return resp
+    if request.method != 'GET':
+        return err('Method not allowed', 405)
 
-    return err('Method not allowed', 405)
+    # --- determine size + which column to read, without pulling the blob ----
+    with connection.cursor() as cur:
+        cur.execute(
+            'SELECT COALESCE(LENGTH(video_buffer), 0), video_mime, '
+            '       COALESCE(LENGTH(recording_data), 0) '
+            'FROM interview_recordings WHERE id = %s', [pk])
+        row = cur.fetchone()
+
+    if not row:
+        return err('Recording not found', 404)
+
+    buf_size, mime, rd_len = row
+    if buf_size:
+        source = 'buffer'
+        size = buf_size
+    elif rd_len:
+        # Legacy base64 path — decoded size ≈ rd_len * 3 / 4
+        source = 'base64'
+        size = int(rd_len * 3 // 4)
+    else:
+        return err('No video data for this recording', 404)
+
+    content_type = mime or 'video/webm'
+
+    def _slice(start, length):
+        """Fetch [start, start+length) bytes from the appropriate column."""
+        if source == 'buffer':
+            with connection.cursor() as cur:
+                cur.execute(
+                    'SELECT SUBSTRING(video_buffer, %s, %s) '
+                    'FROM interview_recordings WHERE id = %s',
+                    [start + 1, length, pk]  # SUBSTRING is 1-indexed
+                )
+                r = cur.fetchone()
+            return bytes(r[0]) if r and r[0] is not None else b''
+        else:  # base64 legacy
+            with connection.cursor() as cur:
+                cur.execute(
+                    'SELECT recording_data FROM interview_recordings WHERE id = %s', [pk])
+                r = cur.fetchone()
+            if not r or not r[0]:
+                return b''
+            import base64 as _b64
+            raw = _b64.b64decode(r[0])
+            return raw[start:start + length]
+
+    # --- parse optional Range header ---
+    import re as _re
+    _RANGE_RE = _re.compile(r'bytes=([0-9]*)-([0-9]*)', _re.I)
+    match = _RANGE_RE.match((request.META.get('HTTP_RANGE') or '').strip())
+
+    if match:
+        first, last = match.group(1), match.group(2)
+        if first == '':
+            length = int(last or 0)
+            start = max(0, size - length)
+            end = size - 1
+        else:
+            start = int(first)
+            end = size - 1 if last == '' else min(int(last), size - 1)
+
+        if start >= size or start > end:
+            resp = HttpResponse(status=416)
+            resp['Content-Range'] = f'bytes */{size}'
+            resp['Accept-Ranges'] = 'bytes'
+            return resp
+
+        chunk = _slice(start, end - start + 1)
+        resp = HttpResponse(chunk, status=206, content_type=content_type)
+        resp['Content-Range'] = f'bytes {start}-{end}/{size}'
+        resp['Content-Length'] = str(len(chunk))
+    else:
+        resp = HttpResponse(_slice(0, size), content_type=content_type)
+        resp['Content-Length'] = str(size)
+
+    resp['Accept-Ranges'] = 'bytes'
+    resp['Cache-Control'] = 'public, max-age=31536000'
+    return resp
 
 
 # ---------------------------------------------------------------------------

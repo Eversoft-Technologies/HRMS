@@ -1,7 +1,14 @@
 Options -MultiViews
 RewriteEngine On
 
-# Do NOT rewrite API requests — let cPanel's Node.js app (Passenger) handle them.
+# --- Allow large uploads (interview video recordings can be 20-200 MB) ------
+# 524288000 bytes = 500 MB
+LimitRequestBody 524288000
+
+# --- Prevent Apache from timing out large video uploads ---------------------
+TimeOut 600
+
+# Do NOT rewrite API requests — let Passenger/Django handle them.
 RewriteRule ^api(/.*)?$ - [L]
 
 # SPA fallback: everything else that isn't a real file/dir goes to index.html

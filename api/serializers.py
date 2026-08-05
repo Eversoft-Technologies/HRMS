@@ -458,7 +458,9 @@ class InterviewRecordingSerializer(serializers.ModelSerializer):
         # is what made GET /api/interview-recordings time out and 502 in production.
         has_video = getattr(instance, '_has_video', None)
         if has_video is None:                       # unannotated (detail view)
-            has_video = instance.video_buffer is not None
+            # True when either binary LONGBLOB *or* legacy base64 column has data.
+            has_video = (instance.video_buffer is not None
+                         or instance.recording_data is not None)
         has_recording = getattr(instance, '_has_recording', None)
         if has_recording is None:
             has_recording = instance.recording_data is not None
