@@ -23,7 +23,7 @@ import secrets
 from datetime import datetime, timedelta
 
 from django.conf import settings
-from django.db import transaction
+from django.db import connection, transaction
 from django.db.models import (
     BooleanField, Case, Count, IntegerField, OuterRef, Q, Subquery, Value, When,
 )
@@ -1255,15 +1255,44 @@ def recording_detail(request, pk):
     return Response({'ok': True})
 
 
+_RANGE_RE = re.compile(r'^bytes=(\d*)-(\d*)$')
+
+
+def _video_meta(pk):
+    """(size, mime) without pulling the blob into memory."""
+    with connection.cursor() as cur:
+        cur.execute(
+            'SELECT COALESCE(LENGTH(video_buffer), 0), video_mime '
+            'FROM interview_recordings WHERE id = %s', [pk])
+        row = cur.fetchone()
+    return (row[0], row[1]) if row else (0, None)
+
+
+def _video_slice(pk, start, length):
+    """Read just the requested window. SUBSTRING is 1-indexed in MySQL."""
+    with connection.cursor() as cur:
+        cur.execute(
+            'SELECT SUBSTRING(video_buffer, %s, %s) '
+            'FROM interview_recordings WHERE id = %s', [start + 1, length, pk])
+        row = cur.fetchone()
+    return bytes(row[0]) if row and row[0] is not None else b''
+
+
 @csrf_exempt
 def recording_video(request, pk):
     """Binary (video/webm) upload + download. Kept as a plain Django view
-    because DRF's JSON parser cannot consume a raw binary body."""
-    obj = InterviewRecording.objects.filter(pk=pk).first()
-    if not obj:
-        return err('Recording not found', 404)
+    because DRF's JSON parser cannot consume a raw binary body.
 
+    GET honours Range properly. It previously advertised ``Accept-Ranges: bytes``
+    but ignored the header, answering every request with 200 and the whole file,
+    so a player could not seek and re-fetched the entire recording each attempt.
+    The body is also sliced in MySQL rather than loaded whole — a 22 MB
+    recording used to be read fully into memory just to serve a few KB.
+    """
     if request.method == 'POST':
+        obj = InterviewRecording.objects.filter(pk=pk).first()
+        if not obj:
+            return err('Recording not found', 404)
         data = request.body
         if not data:
             return err('Invalid or empty video payload')
@@ -1273,17 +1302,46 @@ def recording_video(request, pk):
         obj.save(update_fields=['video_buffer', 'video_mime'])
         return JsonResponse({'ok': True})
 
-    if request.method == 'GET':
-        if not obj.video_buffer:
-            return err('No video data for this recording', 404)
-        payload = bytes(obj.video_buffer)
-        resp = HttpResponse(payload, content_type=obj.video_mime or 'video/webm')
-        resp['Content-Length'] = str(len(payload))
-        resp['Accept-Ranges'] = 'bytes'
-        resp['Cache-Control'] = 'public, max-age=31536000'
-        return resp
+    if request.method != 'GET':
+        return err('Method not allowed', 405)
 
-    return err('Method not allowed', 405)
+    size, mime = _video_meta(pk)
+    if not size:
+        if not InterviewRecording.objects.filter(pk=pk).exists():
+            return err('Recording not found', 404)
+        return err('No video data for this recording', 404)
+
+    content_type = mime or 'video/webm'
+    match = _RANGE_RE.match((request.META.get('HTTP_RANGE') or '').strip())
+
+    if match:
+        first, last = match.group(1), match.group(2)
+        if first == '':
+            # Suffix form "bytes=-N": the final N bytes.
+            length = int(last or 0)
+            start = max(0, size - length)
+            end = size - 1
+        else:
+            start = int(first)
+            end = size - 1 if last == '' else min(int(last), size - 1)
+
+        if start >= size or start > end:
+            resp = HttpResponse(status=416)
+            resp['Content-Range'] = f'bytes */{size}'
+            resp['Accept-Ranges'] = 'bytes'
+            return resp
+
+        chunk = _video_slice(pk, start, end - start + 1)
+        resp = HttpResponse(chunk, status=206, content_type=content_type)
+        resp['Content-Range'] = f'bytes {start}-{end}/{size}'
+        resp['Content-Length'] = str(len(chunk))
+    else:
+        resp = HttpResponse(_video_slice(pk, 0, size), content_type=content_type)
+        resp['Content-Length'] = str(size)
+
+    resp['Accept-Ranges'] = 'bytes'
+    resp['Cache-Control'] = 'public, max-age=31536000'
+    return resp
 
 
 # ---------------------------------------------------------------------------
