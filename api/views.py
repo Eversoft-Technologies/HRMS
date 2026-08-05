@@ -1302,9 +1302,27 @@ def recording_video(request, pk):
         source = 'buffer'
         size = buf_size
     elif rd_len:
-        # Legacy base64 path — decoded size ≈ rd_len * 3 / 4
+        # Legacy base64 path.
+        # recording_data may be stored as a raw base64 string OR as a full
+        # data-URL ("data:video/webm;base64,AAAA..."). Fetch just enough of
+        # the column to detect the prefix, then compute the real decoded size.
+        with connection.cursor() as cur:
+            cur.execute(
+                'SELECT recording_data FROM interview_recordings WHERE id = %s', [pk])
+            rd_row = cur.fetchone()
+        if not rd_row or not rd_row[0]:
+            return err('No video data for this recording', 404)
+        _rd_raw = rd_row[0]          # full base64 string (possibly with data: prefix)
+        if ',' in _rd_raw[:100]:     # strip "data:video/webm;base64," prefix
+            _rd_raw = _rd_raw.split(',', 1)[1]
+        import base64 as _b64
+        try:
+            _decoded = _b64.b64decode(_rd_raw)
+        except Exception:
+            return err('Could not decode legacy recording data', 500)
         source = 'base64'
-        size = int(rd_len * 3 // 4)
+        size = len(_decoded)
+        _rd_decoded_cache = _decoded   # avoid re-decoding on every slice call
     else:
         return err('No video data for this recording', 404)
 
@@ -1321,16 +1339,8 @@ def recording_video(request, pk):
                 )
                 r = cur.fetchone()
             return bytes(r[0]) if r and r[0] is not None else b''
-        else:  # base64 legacy
-            with connection.cursor() as cur:
-                cur.execute(
-                    'SELECT recording_data FROM interview_recordings WHERE id = %s', [pk])
-                r = cur.fetchone()
-            if not r or not r[0]:
-                return b''
-            import base64 as _b64
-            raw = _b64.b64decode(r[0])
-            return raw[start:start + length]
+        else:  # base64 legacy — use the already-decoded bytes cached above
+            return _rd_decoded_cache[start:start + length]
 
     # --- parse optional Range header ---
     import re as _re
