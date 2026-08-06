@@ -1964,11 +1964,6 @@ def attendance_check_in(request):
                 'code': 'LOCATION_APPROVAL_REQUESTED',
                 'status': 'Pending',
             }, status=202)
-            obj.location_reason = reason
-            obj.location_status = 'Pending'
-            obj.location_reviewer = ''
-            obj.location_reviewed_at = None
-            loc_desc = 'Outside office (pending approval)'
 
     # Status (present/late) based on first check-in
     if created:
