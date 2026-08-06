@@ -8,6 +8,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.exceptions import ValidationError
 
+from api.timeutil import local_now
 from api.models import (
     EmployeeAttendance, Shift, ShiftAssignment, Break, BreakPolicy,
     AttendanceEvent, LateCheckInAlert, LateCheckInPolicy, Overtime,
@@ -286,7 +287,7 @@ class LateCheckInAlertViewSet(viewsets.ViewSet):
             alert = LateCheckInAlert.objects.get(id=alert_id)
             alert.is_excused = True
             alert.excused_by = excused_by
-            alert.excused_at = datetime.now()
+            alert.excused_at = local_now()
             alert.save()
 
             # Send notification
@@ -500,7 +501,7 @@ class AttendanceCorrectionViewSet(viewsets.ViewSet):
             correction.status = 'Approved'
             correction.reviewer = reviewer_email
             correction.reviewer_note = reviewer_note
-            correction.reviewed_at = datetime.now()
+            correction.reviewed_at = local_now()
             correction.save()
 
             # Apply correction to attendance
@@ -544,7 +545,7 @@ class AttendanceCorrectionViewSet(viewsets.ViewSet):
             correction.status = 'Rejected'
             correction.reviewer = reviewer_email
             correction.reviewer_note = reviewer_note
-            correction.reviewed_at = datetime.now()
+            correction.reviewed_at = local_now()
             correction.save()
 
             # Send notification

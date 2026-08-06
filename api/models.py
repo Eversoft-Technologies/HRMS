@@ -364,6 +364,18 @@ class EmployeeAttendance(models.Model):
     location_lat = models.FloatField(null=True, blank=True)
     location_lng = models.FloatField(null=True, blank=True)
     geo_verified = models.BooleanField(default=False)
+    # --- Out-of-geofence check-in review ---------------------------------
+    # An employee who is not working from home and checks in outside every
+    # active fence is let through, but must give a reason and the check-in is
+    # held for HR/admin review. Blank status = nothing to review (WFH, inside a
+    # fence, or no fences configured).
+    location_reason = models.TextField(null=True, blank=True)
+    location_status = models.CharField(max_length=20, default='', blank=True)  # ''|Pending|Approved|Rejected
+    location_reviewer = models.CharField(max_length=255, default='', blank=True)
+    location_reviewed_at = models.DateTimeField(null=True, blank=True)
+    # Set once the "you have passed N hours today" mail goes out, so the
+    # reminder is sent at most once per employee per day.
+    overtime_alert_sent_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

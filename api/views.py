@@ -20,7 +20,7 @@ import logging
 import os
 import re
 import secrets
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 
 from django.conf import settings
 from django.db import transaction
@@ -36,6 +36,7 @@ from rest_framework.response import Response
 
 from . import ai, mailer, social_poster
 from .permissions import require_perm, require_admin, check_perm
+from .timeutil import local_now
 from .models import (
     AppUser,
     AttendanceEvent,
@@ -411,7 +412,7 @@ def _generate_interview_tokens(interview_date_str, interview_time_str):
 
     # Expiry is 24 hours from now, so links don't expire prematurely
     # regardless of when the interview is scheduled.
-    expiry = datetime.now() + timedelta(hours=INTERVIEW_LINK_EXPIRY_HOURS)
+    expiry = local_now() + timedelta(hours=INTERVIEW_LINK_EXPIRY_HOURS)
 
     return candidate_token, recruiter_token, expiry
 
@@ -574,7 +575,7 @@ def interview_note(request, pk):
     obj.notes = notes
     obj.notes_updated_by = name or (email.split('@')[0] if email else '')
     obj.notes_updated_by_email = email
-    obj.notes_updated_at = datetime.now()
+    obj.notes_updated_at = local_now()
     obj.save()
     return Response(InterviewLinkSerializer(obj).data)
 
@@ -797,7 +798,7 @@ def interview_verify_token(request):
     if not obj:
         return JsonResponse({'valid': False, 'reason': 'Token not found'}, status=404)
 
-    now = datetime.now()
+    now = local_now()
 
     # An interview may only be taken once. The recruiter link stays usable so
     # the interview can still be reviewed after the candidate is done.
@@ -859,7 +860,7 @@ def interview_complete(request):
             'interviewId': obj.id,
         })
 
-    obj.completed_at = datetime.now()
+    obj.completed_at = local_now()
     obj.status = 'Completed'
     obj.save(update_fields=['completed_at', 'status'])
     return Response({
@@ -893,7 +894,7 @@ def interview_regenerate_link(request, pk):
     )
     # Allow explicit override
     if body.get('extendHours'):
-        new_expiry = datetime.now() + timedelta(hours=extend_hours)
+        new_expiry = local_now() + timedelta(hours=extend_hours)
 
     obj.candidate_token = c_token
     obj.recruiter_token = r_token
@@ -1193,7 +1194,7 @@ def _mark_interview_taken(email, role, total_score=None):
         qs = qs.filter(role__iexact=role.strip())
     obj = qs.order_by('-id').first()
     if obj:
-        obj.completed_at = datetime.now()
+        obj.completed_at = local_now()
         obj.status = 'Completed'
         fields = ['completed_at', 'status']
         try:
@@ -1727,8 +1728,8 @@ def _get_active_shift(email, date_val):
         fallback = Shift.objects.create(
             id=1,
             name='General Shift',
-            start_time='09:00:00',
-            end_time='18:00:00',
+            start_time=time(9, 0),
+            end_time=time(18, 0),
             break_minutes=60,
             grace_minutes=15,
             is_flexible=False,
@@ -1736,7 +1737,21 @@ def _get_active_shift(email, date_val):
             overtime_after_minutes=540,
             created_by='system'
         )
+        # create() leaves whatever was passed in on the instance; only a
+        # reload turns the TimeField into a real ``time``. Callers do
+        # datetime.combine(date, shift.start_time), which rejects a string.
+        fallback.refresh_from_db()
     return fallback
+
+
+def _geofencing_enabled():
+    """True once at least one active fence exists.
+
+    Until an admin defines a fence there is nothing to be outside of, so the
+    out-of-office review is skipped entirely — otherwise turning this code on
+    would put every check-in in the company into a pending state.
+    """
+    return GeoFence.objects.filter(is_active=True).exists()
 
 
 def _check_geofence(lat, lng):
@@ -1762,7 +1777,7 @@ def attendance_check_in(request):
     email = norm_email(body.get('email'))
     if not email:
         return err('email is required')
-    now = datetime.now()
+    now = local_now()
     obj, created = EmployeeAttendance.objects.get_or_create(email=email, date=now.date())
     name = body.get('employee') or body.get('name') or ''
     if name:
@@ -1797,19 +1812,48 @@ def attendance_check_in(request):
         lng = None
 
     fence_obj = None
+    reason = str(body.get('locationReason') or body.get('reason') or '').strip()
+    needs_review = False
     if is_wfh:
+        # Working from home is exactly the case the fence does not apply to.
         obj.geo_verified = True
+        obj.location_status = ''
         loc_desc = 'Home'
-    else:
+    elif not _geofencing_enabled():
+        # No active fences configured — there is nothing to be outside of, so
+        # enforcing would lock out every employee on day one.
+        obj.geo_verified = False
         if lat is not None and lng is not None:
-            is_inside, fence_obj = _check_geofence(lat, lng)
-            obj.geo_verified = is_inside
-            obj.location_lat = lat
-            obj.location_lng = lng
-            loc_desc = fence_obj.name if fence_obj else 'Unverified Location'
+            obj.location_lat, obj.location_lng = lat, lng
+        loc_desc = 'Office'
+    else:
+        is_inside, fence_obj = _check_geofence(lat, lng)
+        if lat is not None and lng is not None:
+            obj.location_lat, obj.location_lng = lat, lng
+        obj.geo_verified = is_inside
+        if is_inside and fence_obj is not None:
+            obj.location_status = ''
+            loc_desc = fence_obj.name
         else:
-            obj.geo_verified = False
-            loc_desc = 'Office'
+            # Outside every fence (or the browser gave no position, which we
+            # cannot distinguish from being away). Let them work, but capture
+            # why and hold it for HR. Refusing the check-in would cost someone
+            # their day over a GPS glitch.
+            if not reason:
+                return Response({
+                    'message': 'You appear to be outside the office location. '
+                               'Please add a reason for this check-in — it will '
+                               'be sent to HR for approval.',
+                    'code': 'LOCATION_REASON_REQUIRED',
+                    'needsReason': True,
+                    'hasPosition': lat is not None and lng is not None,
+                }, status=422)
+            needs_review = True
+            obj.location_reason = reason
+            obj.location_status = 'Pending'
+            obj.location_reviewer = ''
+            obj.location_reviewed_at = None
+            loc_desc = 'Outside office (pending approval)'
 
     # Status (present/late) based on first check-in
     if created:
@@ -1840,6 +1884,16 @@ def attendance_check_in(request):
         at=now,
     )
 
+    if needs_review:
+        # The employee is in; HR decides afterwards whether the location stands.
+        notify_approvers(
+            'attendance.edit',
+            'Out-of-office check-in needs approval',
+            f'{obj.employee_name or email} checked in outside the office at '
+            f'{now.strftime("%H:%M")}. Reason given: "{reason}"',
+            '/attendance',
+        )
+
     create_notification(
         email,
         'Checked in',
@@ -1858,7 +1912,7 @@ def attendance_check_out(request):
     email = norm_email(body.get('email'))
     if not email:
         return err('email is required')
-    now = datetime.now()
+    now = local_now()
     obj = EmployeeAttendance.objects.filter(email=email, date=now.date()).first()
     if not obj:
         return err('No check-in found for today', 404)
@@ -1943,7 +1997,123 @@ def attendance_check_out(request):
         'info',
         '/employees/attendance',
     )
+    _maybe_send_long_day_alert(obj, shift)
     return Response(EmployeeAttendanceSerializer(obj).data)
+
+
+def _maybe_send_long_day_alert(obj, shift):
+    """Email the employee once when today's work passes the shift's OT threshold.
+
+    ``overtime_after_minutes`` defaults to 540 (9 hours). ``overtime_alert_sent_at``
+    makes this at-most-once per person per day, so repeated check-outs — or the
+    presence poller — cannot spam them. Delivery failure is swallowed: a mail
+    problem must never break a check-out.
+    """
+    try:
+        threshold = int(getattr(shift, 'overtime_after_minutes', 540) or 540)
+        if (obj.worked_minutes or 0) < threshold or obj.overtime_alert_sent_at:
+            return
+        hours, minutes = divmod(int(obj.worked_minutes), 60)
+        over_h, over_m = divmod(max(int(obj.worked_minutes) - threshold, 0), 60)
+        html = mailer.render_branded(
+            greeting=obj.employee_name or obj.email,
+            title='You have worked over %d hours today' % (threshold // 60),
+            intro=(
+                f'Our records show <strong>{hours}h {minutes}m</strong> of work logged '
+                f'for {obj.date:%d %B %Y}, which is {over_h}h {over_m}m beyond the '
+                f'{threshold // 60}-hour mark for your shift.<br><br>'
+                'Please make sure you take adequate rest. If this is incorrect, '
+                'raise an attendance correction and HR will review it.'
+            ),
+            highlight_html=mailer.render_details_card('Today\'s Attendance', [
+                ('Date', f'{obj.date:%d %B %Y}'),
+                ('Worked', f'{hours}h {minutes}m'),
+                ('Overtime', f'{over_h}h {over_m}m'),
+                ('Shift', getattr(shift, 'name', '') or '—'),
+            ]),
+        )
+        result = mailer.send_email(
+            to=obj.email,
+            subject=f'You have worked {hours}h {minutes}m today',
+            html=html,
+            text=(f'You have logged {hours}h {minutes}m on {obj.date:%d %B %Y}, '
+                  f'{over_h}h {over_m}m beyond your {threshold // 60}-hour shift mark.'),
+        )
+        if result.get('ok'):
+            obj.overtime_alert_sent_at = local_now()
+            obj.save(update_fields=['overtime_alert_sent_at'])
+        create_notification(
+            obj.email,
+            'Long working day',
+            f'You have logged {hours}h {minutes}m today. Please take adequate rest.',
+            'warning',
+            '/employees/attendance',
+        )
+    except Exception:
+        logger.exception('Could not send the long-day alert for %s', obj.email)
+
+
+@api_view(['GET', 'POST'])
+@require_perm({'GET': 'attendance.view', 'POST': 'attendance.edit'})
+def attendance_location_reviews(request):
+    """Out-of-geofence check-ins awaiting an HR/admin decision.
+
+    GET  -> the pending queue (?status= to see decided ones).
+    POST -> {id, decision: Approved|Rejected, note} records the decision and
+            tells the employee. Approving sets geo_verified so the day stops
+            reading as unverified in attendance reports.
+    """
+    if request.method == 'GET':
+        status_filter = (request.GET.get('status') or 'Pending').strip()
+        qs = EmployeeAttendance.objects.exclude(location_status='')
+        if status_filter and status_filter.lower() != 'all':
+            qs = qs.filter(location_status=status_filter)
+        rows = qs.order_by('-date', '-id')[:200]
+        return Response([{
+            'id': r.id,
+            'email': r.email,
+            'employee': r.employee_name,
+            'date': r.date.strftime('%Y-%m-%d') if r.date else None,
+            'checkIn': r.check_in.strftime(DATETIME_FMT) if r.check_in else None,
+            'reason': r.location_reason or '',
+            'status': r.location_status,
+            'reviewer': r.location_reviewer or '',
+            'reviewedAt': r.location_reviewed_at.strftime(DATETIME_FMT) if r.location_reviewed_at else None,
+            'latitude': r.location_lat,
+            'longitude': r.location_lng,
+        } for r in rows])
+
+    body = request.data
+    obj = EmployeeAttendance.objects.filter(pk=body.get('id')).first()
+    if not obj:
+        return err('Attendance record not found', 404)
+    decision = str(body.get('decision') or '').strip().title()
+    if decision not in ('Approved', 'Rejected'):
+        return err('decision must be Approved or Rejected')
+    if not obj.location_status:
+        return err('This check-in is not awaiting a location review')
+
+    from .permissions import _get_caller
+    caller, _user = _get_caller(request)
+    obj.location_status = decision
+    obj.location_reviewer = caller or ''
+    obj.location_reviewed_at = local_now()
+    if decision == 'Approved':
+        obj.geo_verified = True
+    obj.save(update_fields=[
+        'location_status', 'location_reviewer', 'location_reviewed_at', 'geo_verified',
+    ])
+
+    note = str(body.get('note') or '').strip()
+    create_notification(
+        obj.email,
+        f'Out-of-office check-in {decision.lower()}',
+        (f'Your check-in on {obj.date:%d %b %Y} from outside the office was '
+         f'{decision.lower()} by {caller or "HR"}.' + (f' Note: {note}' if note else '')),
+        'success' if decision == 'Approved' else 'warning',
+        '/employees/attendance',
+    )
+    return Response({'ok': True, 'id': obj.id, 'status': obj.location_status})
 
 
 @api_view(['GET'])
@@ -1953,10 +2123,10 @@ def attendance_today(request):
     email = norm_email(request.GET.get('email'))
     if not email:
         return err('email is required')
-    obj = EmployeeAttendance.objects.filter(email=email, date=datetime.now().date()).first()
+    obj = EmployeeAttendance.objects.filter(email=email, date=local_now().date()).first()
     if not obj:
         return Response({
-            'email': email, 'date': datetime.now().strftime('%Y-%m-%d'),
+            'email': email, 'date': local_now().strftime('%Y-%m-%d'),
             'checkedIn': False, 'checkIn': None, 'checkOut': None,
             'workedMinutes': 0, 'status': 'absent',
             'isWfh': False, 'breakMinutes': 0, 'overtimeMinutes': 0,
@@ -2021,7 +2191,7 @@ def remote_switch_check(email, day=None):
     """
     from .permissions import _user_has_perm
 
-    day = day or datetime.now().date()
+    day = day or local_now().date()
 
     approved = WfhRequest.objects.filter(
         email=email, status='Approved', from_date__lte=day, to_date__gte=day,
@@ -2049,7 +2219,7 @@ def attendance_events(request):
     """GET: today's (or ?date=) activity-log events for ?email=.
     POST: append an event (break / mode switch) to the signed-in user's day with GPS."""
     if request.method == 'GET':
-        day = parse_date(request.GET.get('date')) or datetime.now().date()
+        day = parse_date(request.GET.get('date')) or local_now().date()
         qs = AttendanceEvent.objects.filter(date=day)
         email = norm_email(request.GET.get('email'))
         if email:
@@ -2086,7 +2256,7 @@ def attendance_events(request):
     if lat is not None and lng is not None:
         _, fence_obj = _check_geofence(lat, lng)
 
-    now = datetime.now()
+    now = local_now()
     obj = AttendanceEvent.objects.create(
         email=email,
         employee_name=body.get('employee') or body.get('name') or '',
@@ -2134,7 +2304,7 @@ def attendance_presence(request):
         return err('email is required')
     if not label:
         return err('label is required')
-    now = datetime.now()
+    now = local_now()
     att = EmployeeAttendance.objects.filter(email=email, date=now.date()).first()
     if not att or not _is_checked_in(att):
         return err('Presence can only be set while checked in', 409)
@@ -2203,7 +2373,7 @@ def attendance_team(request):
     Intentionally ungated: every employee may see their team's presence on the
     Check In/Out page (it exposes only name + coarse status + since-time, no
     sensitive data), so the attendance.view permission is not required here."""
-    today = datetime.now().date()
+    today = local_now().date()
 
     # Latest event per email today (queryset is ordered by ``at`` ascending, so
     # the last write per email wins) + the best name we have seen for them.
@@ -3087,7 +3257,7 @@ def _fmt_duration(avg_seconds):
 
 def _date_filter(qs, field, range_param):
     """Filter a queryset by a date field based on the ?range= param."""
-    now = datetime.now()
+    now = local_now()
     if range_param == 'week':
         cutoff = now - timedelta(days=7)
     elif range_param == 'month':
@@ -3280,7 +3450,7 @@ def recruitment_kpis(request):
 
     if range_param in ('all', 'quarter'):
         # Weekly trend — last 12 weeks
-        twelve_weeks_ago = datetime.now() - timedelta(weeks=12)
+        twelve_weeks_ago = local_now() - timedelta(weeks=12)
         weekly_rows = (
             InterviewLink.objects.filter(created_at__gte=twelve_weeks_ago)
             .annotate(week=TruncWeek('created_at'))
@@ -3298,7 +3468,7 @@ def recruitment_kpis(request):
             })
 
     # Monthly trend — last 12 months
-    twelve_months_ago = datetime.now() - timedelta(days=365)
+    twelve_months_ago = local_now() - timedelta(days=365)
     monthly_rows_qs = InterviewLink.objects.filter(created_at__gte=twelve_months_ago)
     if scope == 'me' and caller_email:
         monthly_rows_qs = monthly_rows_qs.filter(interviewer__iexact=caller_email)
@@ -3715,7 +3885,7 @@ def attendance_overtime(request):
 @require_perm('settings.manage')
 def attendance_auto_correct(request):
     """Scan all active users, identify missing checkout for past dates and auto checkout at shift end."""
-    today = datetime.now().date()
+    today = local_now().date()
 
     updated_count = 0
     records = EmployeeAttendance.objects.filter(
@@ -3761,7 +3931,7 @@ def attendance_analytics(request):
     email = norm_email(request.GET.get('email'))
     range_param = request.GET.get('range', 'month')
 
-    now = datetime.now().date()
+    now = local_now().date()
     if range_param == 'week':
         days_back = 7
     elif range_param == 'quarter':
