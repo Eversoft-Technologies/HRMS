@@ -23,7 +23,7 @@
 
   var BTN_ID = 'hrms-att-admin-btn';
   var OVERLAY_ID = 'hrms-att-admin-overlay';
-  var state = { tab: 'fences', fences: [], shifts: [], assignments: [], reviews: [], busy: false };
+  var state = { tab: 'fences', fences: [], shifts: [], assignments: [], reviews: [], busy: false, errors: {} };
 
   /* ── helpers ─────────────────────────────────────────────────────────── */
   function can(code) {
@@ -353,12 +353,24 @@
 
   /* ── data ────────────────────────────────────────────────────────────── */
   function loadAll() {
-    state.busy = true; render();
+    state.busy = true;
+    state.errors = {};
+    render();
+    // Each failure is remembered per tab. Swallowing them into [] made a 500 on
+    // the reviews endpoint read as "Nothing waiting" — the queue looked healthy
+    // and empty while real requests sat unseen.
+    function grab(key, url) {
+      return api(url).catch(function (e) {
+        state.errors[key] = e.message || 'Could not load';
+        console.warn('[hrms-attendance-admin]', url, e);
+        return [];
+      });
+    }
     return Promise.all([
-      api('/api/attendance/geofences').catch(function () { return []; }),
-      api('/api/shifts').catch(function () { return []; }),
-      api('/api/shift-assignments').catch(function () { return []; }),
-      api('/api/attendance/location-reviews?status=Pending').catch(function () { return []; })
+      grab('fences', '/api/attendance/geofences'),
+      grab('shifts', '/api/shifts'),
+      grab('shifts', '/api/shift-assignments'),
+      grab('reviews', '/api/attendance/location-reviews?status=Pending')
     ]).then(function (r) {
       state.fences = Array.isArray(r[0]) ? r[0] : [];
       state.shifts = Array.isArray(r[1]) ? r[1] : [];
@@ -366,6 +378,16 @@
       state.reviews = Array.isArray(r[3]) ? r[3] : [];
       state.busy = false; render();
     });
+  }
+
+  function errorBanner(key) {
+    var msg = state.errors && state.errors[key];
+    if (!msg) return '';
+    return '<div style="background:#fef2f2;border:1px solid #fecaca;color:#b91c1c;' +
+      'border-radius:9px;padding:11px 14px;margin-bottom:14px;font-size:13px">' +
+      '<strong>Could not load this list.</strong> ' + esc(msg) +
+      ' — anything already submitted is still recorded; this is a display failure.' +
+      '</div>';
   }
 
   /* ── tab: geofences ──────────────────────────────────────────────────── */
@@ -379,7 +401,7 @@
         ((f.isActive === false) ? 'Inactive' : 'Active') + '</span></td>' +
         '<td style="text-align:right"><button class="haa-btn dgr" data-del-fence="' + f.id + '">Delete</button></td></tr>';
     }).join('');
-    return '' +
+    return errorBanner('fences') +
       '<div class="haa-card"><div style="font-weight:700;margin-bottom:12px;font-size:14px;">Add an office location</div>' +
       '<div class="haa-grid" style="margin-bottom:12px">' +
       '<div><label class="haa-lbl">Name</label><input class="haa-in" id="haa-f-name" placeholder="Head Office"></div>' +
@@ -426,7 +448,7 @@
         '<td>' + esc(a.effectiveTo || a.effective_to || 'open-ended') + '</td>' +
         '<td style="text-align:right"><button class="haa-btn dgr" data-del-asg="' + a.id + '">Remove</button></td></tr>';
     }).join('');
-    return '' +
+    return errorBanner('shifts') +
       '<div class="haa-card"><div style="font-weight:700;margin-bottom:12px;font-size:14px;">Create a shift</div>' +
       '<div class="haa-grid">' +
       '<div><label class="haa-lbl">Name</label><input class="haa-in" id="haa-s-name" placeholder="Morning Shift"></div>' +
@@ -454,7 +476,9 @@
   /* ── tab: off-site reviews ───────────────────────────────────────────── */
   function reviewsHtml() {
     if (!state.reviews.length) {
-      return '<div class="haa-empty">Nothing waiting. Off-site check-ins appear here for approval.</div>';
+      return errorBanner('reviews') +
+        (state.errors.reviews ? ''
+          : '<div class="haa-empty">Nothing waiting. Off-site check-ins appear here for approval.</div>');
     }
     // Nearest fence gives the map something to measure the check-in against.
     function nearestFence(lat, lng) {

@@ -10,7 +10,7 @@ Agreed behaviour:
 """
 import os
 import sys
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from unittest.mock import patch
 
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'hrms_project.settings')
@@ -155,10 +155,14 @@ class LocationReviewQueueTests(TestCase):
         self.client = Client()
         self.hr = 'hr@example.com'
         AppUser.objects.create(email=self.hr, status='active', role='admin')
+        # check_in is set deliberately: the queue formats it, and a row with a
+        # NULL check_in short-circuits that branch. A test built only on NULLs
+        # missed a NameError that made the whole endpoint 500 in production.
         self.row = EmployeeAttendance.objects.create(
             email='employee@example.com', employee_name='Test Person',
             date=local_today(), location_status='Pending',
             location_reason='Client visit', geo_verified=False,
+            check_in=datetime.now(),
         )
 
     def test_pending_rows_appear_in_the_queue(self):
