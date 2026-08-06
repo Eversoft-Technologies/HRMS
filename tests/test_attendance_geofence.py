@@ -3,7 +3,8 @@
 Agreed behaviour:
   * working from home  -> always allowed, no review
   * inside a fence     -> allowed, no review
-  * outside a fence    -> allowed, but a reason is required and HR approves
+  * outside a fence    -> NOT checked in; a reason is captured and HR must
+                          approve before the employee can check in
   * no fences defined  -> nothing to enforce
   * past the shift's overtime threshold -> the employee is emailed once
 """
@@ -61,16 +62,67 @@ class OutOfGeofenceCheckInTests(TestCase):
             'the check-in must not be stamped until a reason is supplied',
         )
 
-    def test_outside_the_fence_with_a_reason_is_allowed_and_held_for_hr(self):
+    def test_outside_the_fence_with_a_reason_requests_approval_only(self):
+        """Agreed flow: HR approves first, the employee checks in afterwards."""
         resp = self._check_in(latitude=FAR_LAT, longitude=FAR_LNG,
                               locationReason='Client visit in Bengaluru')
-        self.assertIn(resp.status_code, (200, 201), 'the employee must not be blocked')
+        self.assertEqual(resp.status_code, 202)
+        self.assertEqual(resp.json()['code'], 'LOCATION_APPROVAL_REQUESTED')
 
         row = EmployeeAttendance.objects.get(email=self.email, date=local_today())
-        self.assertIsNotNone(row.check_in)
+        self.assertIsNone(row.check_in, 'must not be checked in before approval')
         self.assertEqual(row.location_status, 'Pending')
         self.assertEqual(row.location_reason, 'Client visit in Bengaluru')
         self.assertFalse(row.geo_verified)
+
+    def test_a_second_attempt_while_pending_is_refused(self):
+        self._check_in(latitude=FAR_LAT, longitude=FAR_LNG, locationReason='Client visit')
+        resp = self._check_in(latitude=FAR_LAT, longitude=FAR_LNG)
+
+        self.assertEqual(resp.status_code, 409)
+        self.assertEqual(resp.json()['code'], 'LOCATION_APPROVAL_PENDING')
+
+    def test_after_approval_the_employee_can_check_in(self):
+        self._check_in(latitude=FAR_LAT, longitude=FAR_LNG, locationReason='Client visit')
+        row = EmployeeAttendance.objects.get(email=self.email, date=local_today())
+        row.location_status = 'Approved'
+        row.save(update_fields=['location_status'])
+
+        resp = self._check_in(latitude=FAR_LAT, longitude=FAR_LNG)
+        self.assertIn(resp.status_code, (200, 201))
+
+        row.refresh_from_db()
+        self.assertIsNotNone(row.check_in, 'approval must let the check-in through')
+        self.assertTrue(row.geo_verified)
+
+    def test_a_poor_gps_fix_is_given_the_benefit_of_the_doubt(self):
+        """A WiFi/IP position can be a kilometre out; someone at their desk must
+        not be told they are off-site because of it."""
+        resp = self._check_in(latitude=OFFICE_LAT + 0.005, longitude=OFFICE_LNG,
+                              accuracy=1200)
+        self.assertIn(resp.status_code, (200, 201))
+
+        row = EmployeeAttendance.objects.get(email=self.email, date=local_today())
+        self.assertTrue(row.geo_verified)
+
+    def test_an_accurate_fix_outside_the_fence_still_asks(self):
+        resp = self._check_in(latitude=OFFICE_LAT + 0.005, longitude=OFFICE_LNG,
+                              accuracy=25)
+        self.assertEqual(resp.status_code, 422)
+        body = resp.json()
+        self.assertIsNotNone(body['distance'], 'the employee must be told how far out they are')
+        self.assertEqual(body['fence'], 'HQ')
+
+    def test_a_missing_position_does_not_keep_yesterdays_coordinates(self):
+        EmployeeAttendance.objects.create(
+            email=self.email, date=local_today(),
+            location_lat=OFFICE_LAT, location_lng=OFFICE_LNG,
+        )
+        resp = self._check_in()          # no position at all
+        self.assertEqual(resp.status_code, 422)
+
+        row = EmployeeAttendance.objects.get(email=self.email, date=local_today())
+        self.assertIsNone(row.location_lat, 'a stale fix makes an unverified day look measured')
 
     def test_wfh_is_exempt_even_far_from_every_fence(self):
         WfhRequest.objects.create(

@@ -55,7 +55,14 @@
       try {
         navigator.geolocation.getCurrentPosition(
           function (p) {
-            finish({ latitude: p.coords.latitude, longitude: p.coords.longitude });
+            // accuracy travels with the fix: a WiFi/IP position can be a
+            // kilometre out, and the server widens the fence by it rather than
+            // calling someone at their desk off-site.
+            finish({
+              latitude: p.coords.latitude,
+              longitude: p.coords.longitude,
+              accuracy: p.coords.accuracy
+            });
           },
           function () { finish(null); },
           { enableHighAccuracy: true, timeout: 8000, maximumAge: 60000 }
@@ -67,11 +74,28 @@
     });
   }
 
+  /* A short banner for outcomes the employee must actually notice — the
+     toggle rolling back on its own looks like the click never registered. */
+  function notice(title, body) {
+    var el = document.createElement('div');
+    el.setAttribute('style',
+      'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);z-index:100003;' +
+      'background:#0f172a;color:#fff;padding:13px 20px;border-radius:10px;max-width:420px;' +
+      "font-family:'Segoe UI',Arial,sans-serif;box-shadow:0 10px 34px rgba(0,0,0,.35);");
+    el.innerHTML = '<div style="font-weight:700;font-size:13px;margin-bottom:3px;">' +
+      String(title).replace(/</g, '&lt;') + '</div>' +
+      '<div style="font-size:12px;opacity:.85;line-height:1.5;">' +
+      String(body).replace(/</g, '&lt;') + '</div>';
+    document.body.appendChild(el);
+    setTimeout(function () { if (el.parentNode) el.remove(); }, 6000);
+  }
+
   /* ── "why are you off-site?" prompt ───────────────────────────────────
      The server answers 422 LOCATION_REASON_REQUIRED when someone who is not
      working from home checks in outside every active geofence. It lets them
      in once a reason is supplied, and holds the day for HR approval. */
-  function askReason(hasPosition) {
+  function askReason(info) {
+    info = info || {};
     return new Promise(function (resolve) {
       var back = document.createElement('div');
       back.id = 'hrms-geo-modal';
@@ -79,18 +103,25 @@
         'position:fixed;inset:0;z-index:100000;background:rgba(15,23,42,0.55);' +
         'display:flex;align-items:center;justify-content:center;padding:20px;' +
         "font-family:'Segoe UI',Arial,sans-serif;");
+      // The server explains itself — distance, radius and GPS accuracy — so the
+      // employee can tell "you are 600 m away" from "we never got a fix".
+      var explain = info.message ||
+        'We could not confirm your location. Add a reason and HR will review it.';
+      var mapBtn = (info.hasPosition && info.fenceLat != null)
+        ? '<button id="hrms-geo-map" style="margin-top:12px;padding:7px 14px;border-radius:7px;' +
+          'border:1px solid #cbd5e1;background:#fff;color:#334155;font-size:12px;font-weight:600;' +
+          'cursor:pointer;">View on map</button>'
+        : '';
       back.innerHTML =
-        '<div style="background:#fff;border-radius:14px;max-width:440px;width:100%;' +
+        '<div style="background:#fff;border-radius:14px;max-width:460px;width:100%;' +
         'box-shadow:0 20px 60px rgba(0,0,0,0.25);overflow:hidden;">' +
         '<div style="padding:20px 24px 0;">' +
         '<div style="font-size:17px;font-weight:800;color:#0f172a;margin-bottom:8px;">' +
-        'You are outside the office location</div>' +
-        '<div style="font-size:13px;color:#475569;line-height:1.6;">' +
-        (hasPosition
-          ? 'Your location does not match any registered office. '
-          : 'We could not confirm your location — please allow location access, or ') +
-        'add a short reason and your check-in will be sent to HR for approval.' +
-        '</div>' +
+        (info.hasPosition ? 'You are outside the office location'
+                          : 'We could not confirm your location') + '</div>' +
+        '<div style="font-size:13px;color:#475569;line-height:1.6;">' + explain +
+        '<br><br><strong>Your check-in will start once HR approves it.</strong>' +
+        '</div>' + mapBtn +
         '<textarea id="hrms-geo-reason" rows="3" placeholder="e.g. Client visit in Bengaluru" ' +
         'style="width:100%;margin-top:14px;padding:10px 12px;border:1px solid #cbd5e1;' +
         'border-radius:8px;font-size:13px;font-family:inherit;resize:vertical;box-sizing:border-box;">' +
@@ -114,6 +145,18 @@
         if (back.parentNode) back.parentNode.removeChild(back);
         resolve(value);
       }
+      var mapEl = back.querySelector('#hrms-geo-map');
+      if (mapEl) mapEl.onclick = function () {
+        // OSM's own viewer: both markers, a real scale bar, and pan/zoom —
+        // everything the little preview in the admin screen cannot give.
+        var a = info.fenceLat + ',' + info.fenceLng;
+        var b = info.pointLat + ',' + info.pointLng;
+        window.open(
+          'https://www.openstreetmap.org/directions?engine=fossgis_osrm_foot&route=' +
+          encodeURIComponent(a) + ';' + encodeURIComponent(b),
+          '_blank', 'noopener'
+        );
+      };
       back.querySelector('#hrms-geo-cancel').onclick = function () { close(null); };
       back.querySelector('#hrms-geo-ok').onclick = function () {
         var v = (box && box.value || '').trim();
@@ -168,21 +211,42 @@
       .then(function (pos) {
         return post(pos || {}).then(function (r) {
           if (r.ok) return settle(r);
-          if (r.status !== 422) {
-            return r.json().catch(function () { return {}; }).then(function (d) {
-              console.warn('[hrms-checkin] attendance rejected', r.status, d);
-              return false;
-            });
-          }
-          // Outside the fence — collect a reason and try once more.
           return r.json().catch(function () { return {}; }).then(function (d) {
-            if (d && d.code !== 'LOCATION_REASON_REQUIRED') return false;
-            return askReason(!!(d && d.hasPosition)).then(function (reason) {
+            d = d || {};
+
+            // Already waiting on HR from an earlier attempt today.
+            if (r.status === 409 || d.code === 'LOCATION_APPROVAL_PENDING') {
+              notice('Waiting for HR approval',
+                d.message || 'Your off-site check-in is still awaiting approval.');
+              return false;
+            }
+
+            if (r.status !== 422 || d.code !== 'LOCATION_REASON_REQUIRED') {
+              console.warn('[hrms-checkin] attendance rejected', r.status, d);
+              notice('Could not check in', d.message || ('Server returned ' + r.status));
+              return false;
+            }
+
+            // Outside the fence: collect a reason, then submit for approval.
+            // The employee is NOT checked in until HR approves, so this always
+            // resolves false and the toggle rolls back.
+            if (pos) { d.pointLat = pos.latitude; d.pointLng = pos.longitude; }
+            return askReason(d).then(function (reason) {
               if (!reason) return false;                 // cancelled → stay checked out
-              var retry = pos ? { latitude: pos.latitude, longitude: pos.longitude } : {};
+              var retry = pos
+                ? { latitude: pos.latitude, longitude: pos.longitude, accuracy: pos.accuracy }
+                : {};
               retry.locationReason = reason;
               return post(retry).then(function (r2) {
-                return r2.ok ? settle(r2) : false;
+                if (r2.ok) return settle(r2);            // e.g. HR pre-approved
+                return r2.json().catch(function () { return {}; }).then(function (d2) {
+                  notice(
+                    r2.status === 202 ? 'Sent to HR' : 'Could not check in',
+                    (d2 && d2.message) ||
+                    'Your request has been sent to HR. You can check in once it is approved.'
+                  );
+                  return false;
+                });
               });
             });
           });

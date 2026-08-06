@@ -1754,7 +1754,66 @@ def _geofencing_enabled():
     return GeoFence.objects.filter(is_active=True).exists()
 
 
+#: A phone indoors, or a desktop located from WiFi/IP, can report a position
+#: hundreds of metres out. Trusting it blindly marks people who really are at
+#: their desk as off-site. We widen the fence by the reading's own stated
+#: accuracy, capped so a useless ±20 km fix cannot wave everybody through.
+GEO_ACCURACY_ALLOWANCE_CAP_M = 750
+
+
+def _locate_against_fences(lat, lng, accuracy=None):
+    """Resolve a position against every active fence.
+
+    Returns ``(is_inside, matched_fence, nearest_fence, distance_m)``. The
+    distance and nearest fence are returned even on a miss so the caller can
+    tell the employee how far out they were instead of just refusing them.
+    """
+    if lat is None or lng is None:
+        return False, None, None, None
+
+    allowance = 0.0
+    if accuracy is not None:
+        try:
+            allowance = min(max(float(accuracy), 0.0), GEO_ACCURACY_ALLOWANCE_CAP_M)
+        except (TypeError, ValueError):
+            allowance = 0.0
+
+    nearest, nearest_d = None, None
+    for fence in GeoFence.objects.filter(is_active=True):
+        dist = _haversine_distance(lat, lng, fence.latitude, fence.longitude)
+        if nearest_d is None or dist < nearest_d:
+            nearest, nearest_d = fence, dist
+        if dist <= fence.radius_meters + allowance:
+            return True, fence, fence, dist
+    return False, None, nearest, nearest_d
+
+
+def _location_help(lat, lng, accuracy, nearest, distance):
+    """Say exactly why the check-in was not auto-verified.
+
+    "You appear to be outside the office" is useless when the real problem is a
+    denied permission or a 2 km WiFi fix — the employee is standing in the
+    office and cannot act on it.
+    """
+    if lat is None or lng is None:
+        return ('We could not read your location, so this check-in cannot be '
+                'verified automatically. Allow location access in your browser '
+                'and try again, or add a reason to send it to HR for approval.')
+    if nearest is None:
+        return ('No office location is configured to check against. Add a reason '
+                'and HR will approve this check-in.')
+    acc = f' Your position is accurate to about {round(accuracy)} m.' if accuracy else ''
+    return (f'You are about {round(distance)} m from {nearest.name}, which covers '
+            f'{nearest.radius_meters} m.{acc} Add a reason and HR will review it.')
+
+
 def _check_geofence(lat, lng):
+    """Back-compat wrapper: check-out and the event log only need a yes/no."""
+    inside, fence, _nearest, _dist = _locate_against_fences(lat, lng)
+    return inside, fence
+
+
+def _check_geofence_legacy(lat, lng):
     if lat is None or lng is None:
         return False, None
     for fence in GeoFence.objects.filter(is_active=True):
@@ -1811,6 +1870,11 @@ def attendance_check_in(request):
         lat = None
         lng = None
 
+    try:
+        accuracy = float(body.get('accuracy')) if body.get('accuracy') is not None else None
+    except (ValueError, TypeError):
+        accuracy = None
+
     fence_obj = None
     reason = str(body.get('locationReason') or body.get('reason') or '').strip()
     needs_review = False
@@ -1827,28 +1891,79 @@ def attendance_check_in(request):
             obj.location_lat, obj.location_lng = lat, lng
         loc_desc = 'Office'
     else:
-        is_inside, fence_obj = _check_geofence(lat, lng)
+        is_inside, fence_obj, nearest, distance = _locate_against_fences(lat, lng, accuracy)
         if lat is not None and lng is not None:
             obj.location_lat, obj.location_lng = lat, lng
+        else:
+            # Do NOT keep yesterday's coordinates on the row — a stale position
+            # makes an unverified day look like it was measured.
+            obj.location_lat = obj.location_lng = None
         obj.geo_verified = is_inside
+
         if is_inside and fence_obj is not None:
             obj.location_status = ''
             loc_desc = fence_obj.name
+        elif obj.location_status == 'Approved':
+            # HR already cleared today's off-site check-in. Keep the verified
+            # flag their approval set — the line above reset it from the raw
+            # fence test, which is still (correctly) a miss.
+            obj.geo_verified = True
+            loc_desc = 'Outside office (approved)'
+        elif obj.location_status == 'Pending':
+            return Response({
+                'message': 'Your off-site check-in is waiting for HR approval. '
+                           'You will be able to check in once it is approved.',
+                'code': 'LOCATION_APPROVAL_PENDING',
+                'status': 'Pending',
+                'reason': obj.location_reason or '',
+            }, status=409)
+        elif not reason:
+            # Persist the position (or its absence) even though we are refusing:
+            # leaving an old fix on the row would show HR a location this
+            # attempt never actually reported.
+            obj.save(update_fields=['location_lat', 'location_lng', 'geo_verified'])
+            return Response({
+                'message': _location_help(lat, lng, accuracy, nearest, distance),
+                'code': 'LOCATION_REASON_REQUIRED',
+                'needsReason': True,
+                'hasPosition': lat is not None and lng is not None,
+                'accuracy': accuracy,
+                'distance': round(distance) if distance is not None else None,
+                'fence': nearest.name if nearest else None,
+                'fenceRadius': nearest.radius_meters if nearest else None,
+                'fenceLat': nearest.latitude if nearest else None,
+                'fenceLng': nearest.longitude if nearest else None,
+            }, status=422)
         else:
-            # Outside every fence (or the browser gave no position, which we
-            # cannot distinguish from being away). Let them work, but capture
-            # why and hold it for HR. Refusing the check-in would cost someone
-            # their day over a GPS glitch.
-            if not reason:
-                return Response({
-                    'message': 'You appear to be outside the office location. '
-                               'Please add a reason for this check-in — it will '
-                               'be sent to HR for approval.',
-                    'code': 'LOCATION_REASON_REQUIRED',
-                    'needsReason': True,
-                    'hasPosition': lat is not None and lng is not None,
-                }, status=422)
-            needs_review = True
+            # Record the request and stop. Per the agreed flow the employee is
+            # NOT checked in until HR approves; they retry afterwards.
+            obj.location_reason = reason
+            obj.location_status = 'Pending'
+            obj.location_reviewer = ''
+            obj.location_reviewed_at = None
+            obj.save()
+            notify_approvers(
+                'attendance.edit',
+                'Off-site check-in awaiting approval',
+                f'{obj.employee_name or email} asked to check in '
+                + (f'{round(distance)} m from {nearest.name}' if (distance is not None and nearest)
+                   else 'from an unverified location')
+                + f'. Reason: "{reason}"',
+                '/attendance',
+            )
+            create_notification(
+                email,
+                'Approval requested',
+                'Your off-site check-in has been sent to HR. You can check in once it is approved.',
+                'info',
+                '/employees/attendance',
+            )
+            return Response({
+                'message': 'Your request has been sent to HR. You will be able to '
+                           'check in once it is approved.',
+                'code': 'LOCATION_APPROVAL_REQUESTED',
+                'status': 'Pending',
+            }, status=202)
             obj.location_reason = reason
             obj.location_status = 'Pending'
             obj.location_reviewer = ''
