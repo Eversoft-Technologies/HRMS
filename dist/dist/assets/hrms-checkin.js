@@ -74,6 +74,98 @@
     });
   }
 
+  /* ── leaving the office while checked in ──────────────────────────────
+   *
+   * Samples the position on a timer and checks out when the employee has
+   * clearly left the geofence.
+   *
+   * What this genuinely cannot do, so nobody plans around it: browsers only
+   * run timers while the page is open, and throttle or suspend them when the
+   * tab is hidden or the machine sleeps. Closing the laptop does not trigger a
+   * checkout — the tab is gone. So treat this as a convenience for people who
+   * leave with the tab open, not as an authoritative record of departure. The
+   * shift-end sweep is what actually catches forgotten sessions.
+   *
+   * Safeguards, because a wrong auto-checkout silently costs someone hours:
+   *   - two consecutive out-of-fence samples, never a single reading
+   *   - the fix's own accuracy widens the fence, exactly as check-in does
+   *   - a poor fix (worse than the tolerance) is discarded, not acted on
+   *   - never for someone working from home
+   *   - the employee is warned on the first miss, before anything happens
+   */
+  var GEO_WATCH_MS = 5 * 60 * 1000;      // sample every 5 minutes
+  var GEO_STRIKES = 2;                   // consecutive misses before acting
+  var geoWatch = { timer: null, strikes: 0, warned: false };
+
+  function stopGeoWatch() {
+    if (geoWatch.timer) clearInterval(geoWatch.timer);
+    geoWatch.timer = null; geoWatch.strikes = 0; geoWatch.warned = false;
+  }
+
+  function startGeoWatch() {
+    stopGeoWatch();
+    if (!navigator.geolocation) return;
+    geoWatch.timer = setInterval(sampleGeo, GEO_WATCH_MS);
+  }
+
+  function sampleGeo() {
+    if (!isCheckedIn) { stopGeoWatch(); return; }
+    if (document.hidden) return;                    // timers are throttled anyway
+    var actor = getActor();
+    if (!actor.email) return;
+
+    getPosition().then(function (pos) {
+      if (!pos) return;                             // no fix: say nothing, do nothing
+      fetch('/api/attendance/geofence-check?latitude=' + pos.latitude +
+            '&longitude=' + pos.longitude +
+            (pos.accuracy ? '&accuracy=' + pos.accuracy : ''), {
+        headers: { 'Content-Type': 'application/json' }
+      })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (d) {
+          if (!d || d.enforced === false || d.wfh) { stopGeoWatch(); return; }
+          if (d.inside || d.uncertain) { geoWatch.strikes = 0; geoWatch.warned = false; return; }
+
+          geoWatch.strikes++;
+          if (geoWatch.strikes === 1) {
+            geoWatch.warned = true;
+            notice('You have left the office area',
+              'You are about ' + Math.round(d.distance || 0) + ' m from ' +
+              (d.fence || 'the office') + '. If you stay away you will be checked out ' +
+              'automatically at the next check.');
+            return;
+          }
+          if (geoWatch.strikes >= GEO_STRIKES) autoCheckOut(d);
+        })
+        .catch(function () { /* a failed check must never close someone's day */ });
+    });
+  }
+
+  function autoCheckOut(d) {
+    stopGeoWatch();
+    var actor = getActor();
+    fetch('/api/attendance/check-out', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: actor.email, auto: 'geofence' })
+    })
+      .then(function (r) { return r.ok ? r.json().catch(function () { return null; }) : null; })
+      .then(function (record) {
+        if (!record) return;
+        isCheckedIn = false;
+        localStorage.setItem(STORAGE_STATE, 'false');
+        var w = document.getElementById(WRAPPER_ID), t = document.getElementById(TOGGLE_ID);
+        if (w && t) refreshUI(w, t, w.querySelector('.hrms-ci-icon'), getCheckinDevice());
+        window.dispatchEvent(new CustomEvent('hrmsCheckinToggle',
+          { detail: { checkedIn: false, device: getCheckinDevice() } }));
+        window.dispatchEvent(new CustomEvent('hrmsAttendanceSynced',
+          { detail: { checkedIn: false, record: record } }));
+        notice('Checked out automatically',
+          'You left ' + (d.fence || 'the office') + '. Check in again when you return.');
+      })
+      .catch(function () {});
+  }
+
   /* A short banner for outcomes the employee must actually notice — the
      toggle rolling back on its own looks like the click never registered. */
   function notice(title, body) {
@@ -342,6 +434,7 @@
        to be put back, otherwise the widget claims they are working when the
        server has no record of it. */
     var attempted = isCheckedIn;
+    if (isCheckedIn) startGeoWatch(); else stopGeoWatch();
     syncAttendance(isCheckedIn, device).then(function (ok) {
       if (ok || isCheckedIn !== attempted) return;      // accepted, or toggled again meanwhile
       isCheckedIn = !attempted;
@@ -565,6 +658,7 @@
       if (!e.detail.fromTopbar) {
         var attempted = isCheckedIn;
         var dev = e.detail.device;
+        if (isCheckedIn) startGeoWatch(); else stopGeoWatch();
         syncAttendance(isCheckedIn, dev).then(function (ok) {
           if (ok || isCheckedIn !== attempted) return;
           // Same rollback as the topbar toggle: the page has already painted

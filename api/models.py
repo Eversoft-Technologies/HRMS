@@ -376,6 +376,12 @@ class EmployeeAttendance(models.Model):
     # Set once the "you have passed N hours today" mail goes out, so the
     # reminder is sent at most once per employee per day.
     overtime_alert_sent_at = models.DateTimeField(null=True, blank=True)
+    # Same idea for the "no check-in recorded" notice: the late sweep runs every
+    # few minutes, and nobody should be mailed twice for the same day.
+    late_alert_sent_at = models.DateTimeField(null=True, blank=True)
+    # Set when the browser closed the session because the employee left the
+    # geofence, so the day is distinguishable from a manual check-out.
+    auto_checkout_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

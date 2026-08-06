@@ -96,6 +96,7 @@ urlpatterns = [
     path('attendance/overtime', views.attendance_overtime),
     path('attendance/auto-correct', views.attendance_auto_correct),
     path('attendance/analytics', views.attendance_analytics),
+    path('attendance/geofence-check', views.attendance_geofence_check),
     path('attendance/location-reviews', views.attendance_location_reviews),
     path('attendance/geofences', views.attendance_geofences),
     path('attendance/geofences/<int:pk>', views.attendance_geofence_detail),

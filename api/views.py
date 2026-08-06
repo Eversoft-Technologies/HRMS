@@ -36,7 +36,7 @@ from rest_framework.response import Response
 
 from . import ai, mailer, social_poster
 from .permissions import require_perm, require_admin, check_perm
-from .timeutil import local_now
+from .timeutil import local_now, local_today
 from .models import (
     AppUser,
     AttendanceEvent,
@@ -1902,7 +1902,12 @@ def attendance_check_in(request):
         obj.geo_verified = is_inside
 
         if is_inside and fence_obj is not None:
-            obj.location_status = ''
+            # Do not erase a decision HR already made today. Checking in from
+            # inside the fence later left location_status='' while reviewer and
+            # reviewed_at stayed set — an approval with no record of what was
+            # approved.
+            if obj.location_status not in ('Approved', 'Rejected'):
+                obj.location_status = ''
             loc_desc = fence_obj.name
         elif obj.location_status == 'Approved':
             # HR already cleared today's off-site check-in. Keep the verified
@@ -2069,6 +2074,13 @@ def attendance_check_out(request):
     obj.check_out = now
     obj.presence = ''
     obj.presence_at = now
+    # The browser can close a session when the employee leaves the geofence.
+    # Stamping it keeps an auto-closed day distinguishable from one the person
+    # ended themselves, which matters if they dispute the hours.
+    if str(body.get('auto') or '').lower() in ('1', 'true', 'yes', 'geofence'):
+        obj.auto_checkout_at = now
+        if not obj.note:
+            obj.note = 'Auto checked out — left the office geofence'
 
     # Calculations based on active shift
     shift = _get_active_shift(email, now.date())
@@ -2162,6 +2174,54 @@ def _maybe_send_long_day_alert(obj, shift):
         )
     except Exception:
         logger.exception('Could not send the long-day alert for %s', obj.email)
+
+
+@api_view(['GET'])
+@require_perm('attendance.view', or_self=True)
+def attendance_geofence_check(request):
+    """Is this position inside a fence? Used by the in-tab geofence watcher.
+
+    Read-only and cheap so it can be polled. ``uncertain`` is the important
+    field: a fix too vague to judge must not be treated as "left the office",
+    or someone at their desk gets checked out by a bad WiFi reading.
+    """
+    email = norm_email(request.GET.get('email') or _resolve_recipient_email(request, ''))
+    try:
+        lat = float(request.GET.get('latitude'))
+        lng = float(request.GET.get('longitude'))
+    except (TypeError, ValueError):
+        return Response({'enforced': _geofencing_enabled(), 'uncertain': True})
+    try:
+        accuracy = float(request.GET.get('accuracy'))
+    except (TypeError, ValueError):
+        accuracy = None
+
+    if not _geofencing_enabled():
+        return Response({'enforced': False, 'inside': True, 'uncertain': False})
+
+    today = local_today()
+    wfh = bool(email) and (
+        WfhRequest.objects.filter(email=email, status='Approved',
+                                  from_date__lte=today, to_date__gte=today).exists()
+        or EmployeeAttendance.objects.filter(email=email, date=today, is_wfh=True).exists()
+    )
+
+    inside, fence, nearest, distance = _locate_against_fences(lat, lng, accuracy)
+    # A reading whose error bar is wider than how far outside they appear tells
+    # us nothing. Report it as uncertain rather than "outside".
+    uncertain = bool(
+        not inside and accuracy and nearest and distance is not None
+        and (distance - (nearest.radius_meters or 0)) < accuracy
+    )
+    return Response({
+        'enforced': True,
+        'wfh': wfh,
+        'inside': inside,
+        'uncertain': uncertain,
+        'distance': round(distance) if distance is not None else None,
+        'fence': (fence or nearest).name if (fence or nearest) else None,
+        'accuracy': accuracy,
+    })
 
 
 @api_view(['GET', 'POST'])
