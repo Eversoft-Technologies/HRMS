@@ -199,7 +199,9 @@
       // employee can tell "you are 600 m away" from "we never got a fix".
       var explain = info.message ||
         'We could not confirm your location. Add a reason and HR will review it.';
-      var mapBtn = (info.hasPosition && info.fenceLat != null)
+      // Plotting an IP-level fix would draw a confident pin 110 km away, so the
+      // map is offered only when the position is precise enough to mean something.
+      var mapBtn = (info.hasPosition && info.distance != null && info.fenceLat != null)
         ? '<button id="hrms-geo-map" style="margin-top:12px;padding:7px 14px;border-radius:7px;' +
           'border:1px solid #cbd5e1;background:#fff;color:#334155;font-size:12px;font-weight:600;' +
           'cursor:pointer;">View on map</button>'

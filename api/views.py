@@ -1789,17 +1789,43 @@ def _locate_against_fences(lat, lng, accuracy=None):
     return False, None, nearest, nearest_d
 
 
+#: Past this the reading carries no information about where someone is. A
+#: browser with no GPS or WiFi positioning falls back to IP geolocation, which
+#: resolves to the ISP gateway and reports accuracy in tens of kilometres — we
+#: have seen ±50 km place a person 110 km from an office they were sitting in.
+#: Such a fix must be reported as "unknown", never as a distance.
+GEO_UNUSABLE_ACCURACY_M = 5000
+
+
+def _fix_is_usable(lat, lng, accuracy):
+    if lat is None or lng is None:
+        return False
+    try:
+        return accuracy is None or float(accuracy) <= GEO_UNUSABLE_ACCURACY_M
+    except (TypeError, ValueError):
+        return True
+
+
 def _location_help(lat, lng, accuracy, nearest, distance):
     """Say exactly why the check-in was not auto-verified.
 
     "You appear to be outside the office" is useless when the real problem is a
-    denied permission or a 2 km WiFi fix — the employee is standing in the
-    office and cannot act on it.
+    denied permission or an IP-level fix — the employee is standing in the
+    office and cannot act on it. Worse, quoting a distance derived from a ±50 km
+    reading states as fact something the data cannot support.
     """
     if lat is None or lng is None:
         return ('We could not read your location, so this check-in cannot be '
                 'verified automatically. Allow location access in your browser '
                 'and try again, or add a reason to send it to HR for approval.')
+    if not _fix_is_usable(lat, lng, accuracy):
+        km = round(float(accuracy) / 1000)
+        return (f'Your device could not pinpoint you — the position it reported is '
+                f'only accurate to about {km} km, so we cannot tell whether you are '
+                f'at the office. This usually means precise location is switched '
+                f'off and the browser fell back to your internet connection. Turn on '
+                f'location/GPS for this site and try again, or add a reason and HR '
+                f'will approve it.')
     if nearest is None:
         return ('No office location is configured to check against. Add a reason '
                 'and HR will approve this check-in.')
@@ -1932,9 +1958,15 @@ def attendance_check_in(request):
                 'message': _location_help(lat, lng, accuracy, nearest, distance),
                 'code': 'LOCATION_REASON_REQUIRED',
                 'needsReason': True,
-                'hasPosition': lat is not None and lng is not None,
+                # hasPosition means "usable enough to quote a distance", not
+                # merely "the browser returned numbers" — an IP-level fix
+                # returns numbers that mean nothing.
+                'hasPosition': _fix_is_usable(lat, lng, accuracy),
+                'gotCoordinates': lat is not None and lng is not None,
                 'accuracy': accuracy,
-                'distance': round(distance) if distance is not None else None,
+                'distance': (round(distance)
+                             if (distance is not None and _fix_is_usable(lat, lng, accuracy))
+                             else None),
                 'fence': nearest.name if nearest else None,
                 'fenceRadius': nearest.radius_meters if nearest else None,
                 'fenceLat': nearest.latitude if nearest else None,
@@ -2208,10 +2240,15 @@ def attendance_geofence_check(request):
 
     inside, fence, nearest, distance = _locate_against_fences(lat, lng, accuracy)
     # A reading whose error bar is wider than how far outside they appear tells
-    # us nothing. Report it as uncertain rather than "outside".
+    # us nothing. Report it as uncertain rather than "outside". An IP-level fix
+    # (tens of km) is uncertain by definition, however far away it claims to be:
+    # acting on it would check out someone sitting at their desk.
     uncertain = bool(
-        not inside and accuracy and nearest and distance is not None
-        and (distance - (nearest.radius_meters or 0)) < accuracy
+        not inside and (
+            not _fix_is_usable(lat, lng, accuracy)
+            or (accuracy and nearest and distance is not None
+                and (distance - (nearest.radius_meters or 0)) < accuracy)
+        )
     )
     return Response({
         'enforced': True,

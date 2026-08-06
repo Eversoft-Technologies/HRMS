@@ -218,3 +218,58 @@ class AutoCheckoutTests(TestCase):
         row = EmployeeAttendance.objects.get(email=self.email, date=local_today())
         self.assertIsNotNone(row.check_out)
         self.assertIsNone(row.auto_checkout_at)
+
+
+class UnusableFixTests(TestCase):
+    """An IP-level fix reports numbers that mean nothing.
+
+    A browser with no GPS or WiFi positioning falls back to IP geolocation,
+    which resolves to the ISP gateway: we saw ±50 km place someone 110 km from
+    the office they were sitting in. It must never be quoted as a distance, and
+    never acted on.
+    """
+
+    def setUp(self):
+        self.client = Client()
+        self.email = 'ipfix@example.com'
+        AppUser.objects.create(email=self.email, status='active', role='admin')
+        GeoFence.objects.create(name='Nellore', latitude=OFFICE_LAT,
+                                longitude=OFFICE_LNG, radius_meters=200)
+
+    def test_the_watcher_calls_an_ip_fix_uncertain_however_far_it_claims(self):
+        d = self.client.get(
+            f'/api/attendance/geofence-check?latitude={OFFICE_LAT + 1.0}'
+            f'&longitude={OFFICE_LNG}&accuracy=50000',
+            HTTP_X_USER_EMAIL=self.email,
+        ).json()
+        self.assertFalse(d['inside'])
+        self.assertTrue(d['uncertain'], 'a ±50 km fix must never trigger auto-checkout')
+
+    def test_check_in_explains_the_fix_instead_of_quoting_a_distance(self):
+        resp = self.client.post(
+            '/api/attendance/check-in',
+            data={'email': self.email, 'latitude': OFFICE_LAT + 1.0,
+                  'longitude': OFFICE_LNG, 'accuracy': 50000},
+            content_type='application/json', HTTP_X_USER_EMAIL=self.email,
+        )
+        self.assertEqual(resp.status_code, 422)
+        body = resp.json()
+
+        self.assertFalse(body['hasPosition'], 'numbers arrived, but none of them mean anything')
+        self.assertTrue(body['gotCoordinates'])
+        self.assertIsNone(body['distance'], 'a distance from a ±50 km fix is fiction')
+        self.assertIn('50 km', body['message'])
+        self.assertIn('location', body['message'].lower())
+        self.assertNotIn('110', body['message'])
+
+    def test_a_good_fix_still_quotes_the_real_distance(self):
+        resp = self.client.post(
+            '/api/attendance/check-in',
+            data={'email': self.email, 'latitude': OFFICE_LAT + 0.02,
+                  'longitude': OFFICE_LNG, 'accuracy': 25},
+            content_type='application/json', HTTP_X_USER_EMAIL=self.email,
+        )
+        body = resp.json()
+        self.assertTrue(body['hasPosition'])
+        self.assertGreater(body['distance'], 1000)
+        self.assertIn('Nellore', body['message'])
