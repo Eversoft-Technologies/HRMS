@@ -54,6 +54,125 @@
     setTimeout(function () { if (t.parentNode) t.remove(); }, 3200);
   }
 
+  /* ── mini map ─────────────────────────────────────────────────────────
+   * A slippy-map view built from OpenStreetMap raster tiles. No mapping
+   * library: pulling Leaflet off a CDN would add a third-party script to every
+   * page load, and all this needs is Web Mercator plus absolutely-positioned
+   * <img> tiles. Draws the fence circle to scale and, when a check-in position
+   * is known, a marker for it and the line between the two.
+   *
+   * OSM's tile policy covers casual use like an internal HR screen; swap
+   * TILE_URL for your own tile server if this ever gets heavy traffic.
+   */
+  var TILE = 256;
+  var TILE_URL = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+
+  function lngToWorldX(lng, z) { return (lng + 180) / 360 * Math.pow(2, z) * TILE; }
+  function latToWorldY(lat, z) {
+    var r = lat * Math.PI / 180;
+    return (1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * Math.pow(2, z) * TILE;
+  }
+  function metersPerPixel(lat, z) {
+    return 156543.03392 * Math.cos(lat * Math.PI / 180) / Math.pow(2, z);
+  }
+  function haversine(aLat, aLng, bLat, bLng) {
+    var R = 6371000, rad = function (d) { return d * Math.PI / 180; };
+    var dLat = rad(bLat - aLat), dLng = rad(bLng - aLng);
+    var s = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(rad(aLat)) * Math.cos(rad(bLat)) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
+    return 2 * R * Math.asin(Math.sqrt(s));
+  }
+  function prettyDistance(m) {
+    if (m == null) return '';
+    return m < 1000 ? Math.round(m) + ' m' : (m / 1000).toFixed(m < 10000 ? 2 : 1) + ' km';
+  }
+  /* Biggest zoom at which `spanMeters` still fits inside `px`. */
+  function fitZoom(lat, spanMeters, px) {
+    for (var z = 18; z >= 2; z--) {
+      if (spanMeters / metersPerPixel(lat, z) <= px) return z;
+    }
+    return 2;
+  }
+
+  /*
+   * opts: { lat, lng, radius, label,        -- the fence (required)
+   *         pointLat, pointLng, pointLabel, -- the check-in (optional)
+   *         width, height }
+   */
+  function renderMap(opts) {
+    var W = opts.width || 380, H = opts.height || 240;
+    var fLat = Number(opts.lat), fLng = Number(opts.lng);
+    if (!isFinite(fLat) || !isFinite(fLng)) {
+      return '<div class="haa-empty">No coordinates to plot.</div>';
+    }
+    var radius = Number(opts.radius) || 0;
+    var hasPoint = isFinite(Number(opts.pointLat)) && isFinite(Number(opts.pointLng));
+    var pLat = Number(opts.pointLat), pLng = Number(opts.pointLng);
+
+    // Frame both the fence circle and the check-in, with a little margin.
+    var dist = hasPoint ? haversine(fLat, fLng, pLat, pLng) : 0;
+    var span = Math.max(radius * 2.6, hasPoint ? dist * 2.4 : 0, 120);
+    var z = fitZoom(fLat, span, Math.min(W, H));
+
+    // Centre between the two points so neither falls off the edge.
+    var cLat = hasPoint ? (fLat + pLat) / 2 : fLat;
+    var cLng = hasPoint ? (fLng + pLng) / 2 : fLng;
+    var originX = lngToWorldX(cLng, z) - W / 2;
+    var originY = latToWorldY(cLat, z) - H / 2;
+    var toX = function (lng) { return lngToWorldX(lng, z) - originX; };
+    var toY = function (lat) { return latToWorldY(lat, z) - originY; };
+
+    // Tiles covering the viewport.
+    var tiles = '';
+    var n = Math.pow(2, z);
+    var x0 = Math.floor(originX / TILE), x1 = Math.floor((originX + W) / TILE);
+    var y0 = Math.floor(originY / TILE), y1 = Math.floor((originY + H) / TILE);
+    for (var tx = x0; tx <= x1; tx++) {
+      for (var ty = y0; ty <= y1; ty++) {
+        if (ty < 0 || ty >= n) continue;                 // above the pole / below it
+        var wrapped = ((tx % n) + n) % n;                // wrap across the date line
+        var url = TILE_URL.replace('{z}', z).replace('{x}', wrapped).replace('{y}', ty);
+        tiles += '<img src="' + url + '" width="' + TILE + '" height="' + TILE + '" alt="" ' +
+          'loading="lazy" referrerpolicy="no-referrer" style="position:absolute;left:' +
+          (tx * TILE - originX) + 'px;top:' + (ty * TILE - originY) + 'px;">';
+      }
+    }
+
+    var fx = toX(fLng), fy = toY(fLat);
+    var rpx = radius / metersPerPixel(fLat, z);
+    var svg = '<svg width="' + W + '" height="' + H + '" style="position:absolute;inset:0;' +
+      'pointer-events:none;overflow:visible">';
+    if (hasPoint) {
+      svg += '<line x1="' + fx + '" y1="' + fy + '" x2="' + toX(pLng) + '" y2="' + toY(pLat) +
+        '" stroke="#dc2626" stroke-width="2" stroke-dasharray="5 4"/>';
+    }
+    if (rpx > 0) {
+      svg += '<circle cx="' + fx + '" cy="' + fy + '" r="' + rpx + '" fill="rgba(15,157,88,.18)" ' +
+        'stroke="#0f9d58" stroke-width="2"/>';
+    }
+    svg += '<circle cx="' + fx + '" cy="' + fy + '" r="6" fill="#0f9d58" stroke="#fff" stroke-width="2"/>';
+    if (hasPoint) {
+      var px = toX(pLng), py = toY(pLat);
+      svg += '<circle cx="' + px + '" cy="' + py + '" r="7" fill="#dc2626" stroke="#fff" stroke-width="2"/>';
+    }
+    svg += '</svg>';
+
+    var inside = hasPoint && radius > 0 && dist <= radius;
+    var caption = hasPoint
+      ? '<span style="color:' + (inside ? '#166534' : '#b91c1c') + ';font-weight:700">' +
+        (inside ? 'Inside' : 'Outside') + '</span> · ' + prettyDistance(dist) +
+        ' from ' + esc(opts.label || 'the office')
+      : esc(opts.label || '') + (radius ? ' · ' + radius + ' m radius' : '');
+
+    return '' +
+      '<div style="position:relative;width:' + W + 'px;height:' + H + 'px;overflow:hidden;' +
+      'border:1px solid #e2e8f0;border-radius:10px;background:#e8eef3">' + tiles + svg +
+      '<div style="position:absolute;right:0;bottom:0;background:rgba(255,255,255,.82);' +
+      'font-size:9px;color:#475569;padding:1px 5px;border-radius:5px 0 0 0">' +
+      '© OpenStreetMap contributors</div></div>' +
+      '<div style="font-size:12px;color:#475569;margin-top:6px">' + caption + '</div>';
+  }
+
   function injectStyle() {
     if (document.getElementById('hrms-att-admin-css')) return;
     var s = document.createElement('style');
@@ -138,7 +257,15 @@
       '<span style="font-size:12px;color:#64748b;">Employees outside every active location must give a reason.</span>' +
       '</div></div>' +
       (state.fences.length
-        ? '<table class="haa-tbl"><thead><tr><th>Name</th><th>Centre</th><th>Radius</th><th>Status</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>'
+        ? '<table class="haa-tbl" style="margin-bottom:18px"><thead><tr><th>Name</th><th>Centre</th><th>Radius</th><th>Status</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>' +
+          '<div style="display:flex;gap:16px;flex-wrap:wrap">' +
+          state.fences.map(function (f) {
+            return '<div>' + renderMap({
+              lat: f.latitude, lng: f.longitude,
+              radius: f.radiusMeters || f.radius_meters || 0,
+              label: f.name, width: 300, height: 200
+            }) + '</div>';
+          }).join('') + '</div>'
         : '<div class="haa-empty">No office locations yet — geofencing stays off until you add one.</div>');
   }
 
@@ -191,23 +318,49 @@
     if (!state.reviews.length) {
       return '<div class="haa-empty">Nothing waiting. Off-site check-ins appear here for approval.</div>';
     }
-    var rows = state.reviews.map(function (r) {
-      var map = (r.latitude != null && r.longitude != null)
-        ? '<a href="https://maps.google.com/?q=' + r.latitude + ',' + r.longitude +
-          '" target="_blank" rel="noopener" style="color:#2563eb;font-size:12px;">view map</a>'
-        : '<span style="color:#94a3b8;font-size:12px;">no position</span>';
-      return '<tr><td>' + esc(r.employee || r.email) + '<div style="font-size:11px;color:#64748b">' +
-        esc(r.email) + '</div></td>' +
-        '<td>' + esc(r.date || '') + '<div style="font-size:11px;color:#64748b">' +
-        esc((r.checkIn || '').slice(11, 16)) + '</div></td>' +
-        '<td style="max-width:260px">' + esc(r.reason || '') + '</td>' +
-        '<td>' + map + '</td>' +
-        '<td style="text-align:right;white-space:nowrap">' +
+    // Nearest fence gives the map something to measure the check-in against.
+    function nearestFence(lat, lng) {
+      var best = null, bestD = Infinity;
+      state.fences.forEach(function (f) {
+        if (f.isActive === false) return;
+        var d = haversine(lat, lng, Number(f.latitude), Number(f.longitude));
+        if (d < bestD) { bestD = d; best = f; }
+      });
+      return best;
+    }
+
+    return state.reviews.map(function (r) {
+      var hasPos = r.latitude != null && r.longitude != null;
+      var fence = hasPos ? nearestFence(Number(r.latitude), Number(r.longitude)) : state.fences[0];
+      var mapHtml = (hasPos && fence)
+        ? renderMap({
+            lat: fence.latitude, lng: fence.longitude,
+            radius: fence.radiusMeters || fence.radius_meters || 0,
+            label: fence.name,
+            pointLat: r.latitude, pointLng: r.longitude,
+            width: 340, height: 210
+          })
+        : '<div class="haa-empty" style="padding:16px">' +
+          (hasPos ? 'No office location defined to compare against.'
+                  : 'The browser gave no position for this check-in.') + '</div>';
+
+      return '<div class="haa-card" style="display:flex;gap:18px;flex-wrap:wrap;align-items:flex-start">' +
+        '<div style="flex:0 0 340px;max-width:100%">' + mapHtml + '</div>' +
+        '<div style="flex:1;min-width:220px">' +
+        '<div style="font-weight:700;font-size:14px;color:#0f172a">' + esc(r.employee || r.email) + '</div>' +
+        '<div style="font-size:12px;color:#64748b;margin-bottom:10px">' + esc(r.email) + '</div>' +
+        '<div style="font-size:12px;color:#64748b">Checked in</div>' +
+        '<div style="font-size:13px;margin-bottom:10px">' + esc(r.date || '') + ' at ' +
+        esc((r.checkIn || '').slice(11, 16) || '—') + '</div>' +
+        '<div style="font-size:12px;color:#64748b">Reason given</div>' +
+        '<div style="font-size:13px;margin-bottom:14px;white-space:pre-wrap">' +
+        esc(r.reason || '—') + '</div>' +
+        (hasPos ? '<a href="https://maps.google.com/?q=' + esc(r.latitude) + ',' + esc(r.longitude) +
+          '" target="_blank" rel="noopener" style="color:#2563eb;font-size:12px">Open in Google Maps</a><br><br>' : '') +
         '<button class="haa-btn" data-ok="' + r.id + '">Approve</button> ' +
-        '<button class="haa-btn dgr" data-no="' + r.id + '">Reject</button></td></tr>';
+        '<button class="haa-btn dgr" data-no="' + r.id + '">Reject</button>' +
+        '</div></div>';
     }).join('');
-    return '<table class="haa-tbl"><thead><tr><th>Employee</th><th>When</th><th>Reason</th><th>Location</th><th></th></tr></thead><tbody>' +
-      rows + '</tbody></table>';
   }
 
   /* ── render ──────────────────────────────────────────────────────────── */
