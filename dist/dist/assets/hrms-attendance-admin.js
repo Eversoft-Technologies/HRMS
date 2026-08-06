@@ -72,6 +72,11 @@
     var r = lat * Math.PI / 180;
     return (1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * Math.pow(2, z) * TILE;
   }
+  function worldXToLng(x, z) { return x / (TILE * Math.pow(2, z)) * 360 - 180; }
+  function worldYToLat(y, z) {
+    var n = Math.PI - 2 * Math.PI * y / (TILE * Math.pow(2, z));
+    return 180 / Math.PI * Math.atan(0.5 * (Math.exp(n) - Math.exp(-n)));
+  }
   function metersPerPixel(lat, z) {
     return 156543.03392 * Math.cos(lat * Math.PI / 180) / Math.pow(2, z);
   }
@@ -173,6 +178,137 @@
       '<div style="font-size:12px;color:#475569;margin-top:6px">' + caption + '</div>';
   }
 
+  /* ── interactive map picker ───────────────────────────────────────────
+   * Typing coordinates is what put a fence 5 km off: "13.4" is one decimal
+   * place, which is 11 km of ground. This lets an admin drag, zoom and click
+   * the exact spot instead, and always writes 6 decimal places (~0.1 m).
+   *
+   * Returns a handle with getCentre()/setCentre()/setRadius() so the form
+   * fields and the map stay in step in both directions.
+   */
+  function createPicker(host, opts) {
+    opts = opts || {};
+    var st = {
+      lat: opts.lat != null ? Number(opts.lat) : 20.5937,
+      lng: opts.lng != null ? Number(opts.lng) : 78.9629,
+      z: opts.zoom || (opts.lat != null ? 17 : 4),
+      radius: Number(opts.radius) || 200,
+      accuracy: null
+    };
+    var W = 0, H = 0, drag = null, moved = 0;
+
+    host.innerHTML =
+      '<div class="haa-map" style="position:relative;width:100%;height:' + (opts.height || 420) +
+      'px;overflow:hidden;border:1px solid #e2e8f0;border-radius:10px;background:#e8eef3;' +
+      'cursor:grab;touch-action:none;user-select:none">' +
+      '<div class="haa-tiles" style="position:absolute;inset:0"></div>' +
+      '<svg class="haa-ov" style="position:absolute;inset:0;pointer-events:none;overflow:visible"></svg>' +
+      '<div class="haa-zoom" style="position:absolute;left:10px;top:10px;display:flex;' +
+      'flex-direction:column;gap:4px;z-index:5">' +
+      '<button type="button" data-zi style="width:30px;height:30px;border-radius:7px;border:1px solid #cbd5e1;' +
+      'background:#fff;font-size:17px;font-weight:700;cursor:pointer;line-height:1">+</button>' +
+      '<button type="button" data-zo style="width:30px;height:30px;border-radius:7px;border:1px solid #cbd5e1;' +
+      'background:#fff;font-size:17px;font-weight:700;cursor:pointer;line-height:1">−</button>' +
+      '</div>' +
+      '<div class="haa-hint" style="position:absolute;left:50%;top:10px;transform:translateX(-50%);' +
+      'background:rgba(15,23,42,.78);color:#fff;font-size:11px;padding:4px 10px;border-radius:20px;' +
+      'pointer-events:none">Drag to pan · click to place the centre</div>' +
+      '<div style="position:absolute;right:0;bottom:0;background:rgba(255,255,255,.82);font-size:9px;' +
+      'color:#475569;padding:1px 5px;border-radius:5px 0 0 0">© OpenStreetMap contributors</div>' +
+      '</div>' +
+      '<div class="haa-read" style="font-size:12px;color:#475569;margin-top:6px"></div>';
+
+    var box = host.querySelector('.haa-map');
+    var tileLayer = host.querySelector('.haa-tiles');
+    var ov = host.querySelector('.haa-ov');
+    var read = host.querySelector('.haa-read');
+
+    function draw() {
+      W = box.clientWidth; H = box.clientHeight;
+      if (!W || !H) return;
+      var originX = lngToWorldX(st.lng, st.z) - W / 2;
+      var originY = latToWorldY(st.lat, st.z) - H / 2;
+      var n = Math.pow(2, st.z), html = '';
+      for (var tx = Math.floor(originX / TILE); tx <= Math.floor((originX + W) / TILE); tx++) {
+        for (var ty = Math.floor(originY / TILE); ty <= Math.floor((originY + H) / TILE); ty++) {
+          if (ty < 0 || ty >= n) continue;
+          var wx = ((tx % n) + n) % n;
+          html += '<img src="' + TILE_URL.replace('{z}', st.z).replace('{x}', wx).replace('{y}', ty) +
+            '" width="' + TILE + '" height="' + TILE + '" alt="" draggable="false" ' +
+            'referrerpolicy="no-referrer" style="position:absolute;pointer-events:none;left:' +
+            (tx * TILE - originX) + 'px;top:' + (ty * TILE - originY) + 'px">';
+        }
+      }
+      tileLayer.innerHTML = html;
+
+      var cx = W / 2, cy = H / 2;
+      var rpx = st.radius / metersPerPixel(st.lat, st.z);
+      var s = '';
+      if (st.accuracy) {
+        var apx = st.accuracy / metersPerPixel(st.lat, st.z);
+        s += '<circle cx="' + cx + '" cy="' + cy + '" r="' + apx + '" fill="rgba(37,99,235,.12)" ' +
+          'stroke="#2563eb" stroke-width="1" stroke-dasharray="4 3"/>';
+      }
+      s += '<circle cx="' + cx + '" cy="' + cy + '" r="' + rpx + '" fill="rgba(15,157,88,.18)" ' +
+        'stroke="#0f9d58" stroke-width="2"/>' +
+        '<circle cx="' + cx + '" cy="' + cy + '" r="6" fill="#0f9d58" stroke="#fff" stroke-width="2"/>';
+      ov.innerHTML = s;
+
+      read.innerHTML = '<strong>' + st.lat.toFixed(6) + ', ' + st.lng.toFixed(6) + '</strong>' +
+        ' · zoom ' + st.z + ' · ' + st.radius + ' m radius' +
+        (st.accuracy ? ' · GPS ±' + Math.round(st.accuracy) + ' m' : '');
+      if (opts.onChange) opts.onChange(st.lat, st.lng);
+    }
+
+    box.addEventListener('mousedown', function (e) {
+      drag = { x: e.clientX, y: e.clientY }; moved = 0; box.style.cursor = 'grabbing';
+    });
+    window.addEventListener('mousemove', function (e) {
+      if (!drag) return;
+      var dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+      drag = { x: e.clientX, y: e.clientY };
+      moved += Math.abs(dx) + Math.abs(dy);
+      st.lng = worldXToLng(lngToWorldX(st.lng, st.z) - dx, st.z);
+      st.lat = worldYToLat(latToWorldY(st.lat, st.z) - dy, st.z);
+      draw();
+    });
+    window.addEventListener('mouseup', function () {
+      if (drag) { drag = null; box.style.cursor = 'grab'; }
+    });
+    box.addEventListener('click', function (e) {
+      if (moved > 4) return;                       // that was a pan, not a pick
+      var r = box.getBoundingClientRect();
+      st.lng = worldXToLng(lngToWorldX(st.lng, st.z) - W / 2 + (e.clientX - r.left), st.z);
+      st.lat = worldYToLat(latToWorldY(st.lat, st.z) - H / 2 + (e.clientY - r.top), st.z);
+      st.accuracy = null;                          // hand-placed, no GPS error to show
+      draw();
+    });
+    box.addEventListener('wheel', function (e) {
+      e.preventDefault();
+      st.z = Math.max(2, Math.min(19, st.z + (e.deltaY < 0 ? 1 : -1)));
+      draw();
+    }, { passive: false });
+    box.querySelector('[data-zi]').onclick = function (e) {
+      e.stopPropagation(); st.z = Math.min(19, st.z + 1); draw();
+    };
+    box.querySelector('[data-zo]').onclick = function (e) {
+      e.stopPropagation(); st.z = Math.max(2, st.z - 1); draw();
+    };
+
+    setTimeout(draw, 0);
+    return {
+      getCentre: function () { return { lat: st.lat, lng: st.lng }; },
+      setCentre: function (lat, lng, zoom, accuracy) {
+        if (isFinite(lat) && isFinite(lng)) { st.lat = Number(lat); st.lng = Number(lng); }
+        if (zoom) st.z = zoom;
+        st.accuracy = accuracy || null;
+        draw();
+      },
+      setRadius: function (r) { st.radius = Number(r) || 0; draw(); },
+      redraw: draw
+    };
+  }
+
   function injectStyle() {
     if (document.getElementById('hrms-att-admin-css')) return;
     var s = document.createElement('style');
@@ -245,16 +381,18 @@
     }).join('');
     return '' +
       '<div class="haa-card"><div style="font-weight:700;margin-bottom:12px;font-size:14px;">Add an office location</div>' +
-      '<div class="haa-grid">' +
+      '<div class="haa-grid" style="margin-bottom:12px">' +
       '<div><label class="haa-lbl">Name</label><input class="haa-in" id="haa-f-name" placeholder="Head Office"></div>' +
-      '<div><label class="haa-lbl">Latitude</label><input class="haa-in" id="haa-f-lat" placeholder="17.4485"></div>' +
-      '<div><label class="haa-lbl">Longitude</label><input class="haa-in" id="haa-f-lng" placeholder="78.3908"></div>' +
-      '<div><label class="haa-lbl">Radius (m)</label><input class="haa-in" id="haa-f-rad" value="200"></div>' +
+      '<div><label class="haa-lbl">Radius (m)</label><input class="haa-in" id="haa-f-rad" value="200" type="number" min="20" step="10"></div>' +
+      '<div><label class="haa-lbl">Latitude</label><input class="haa-in" id="haa-f-lat" placeholder="click the map" readonly></div>' +
+      '<div><label class="haa-lbl">Longitude</label><input class="haa-in" id="haa-f-lng" placeholder="click the map" readonly></div>' +
       '</div>' +
-      '<div style="margin-top:12px;display:flex;gap:8px;align-items:center;">' +
+      '<div id="haa-picker"></div>' +
+      '<div style="margin-top:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' +
       '<button class="haa-btn" id="haa-f-add">Add location</button>' +
       '<button class="haa-btn sec" id="haa-f-here">Use my current position</button>' +
-      '<span style="font-size:12px;color:#64748b;">Employees outside every active location must give a reason.</span>' +
+      '<span style="font-size:12px;color:#64748b;">Place the centre precisely — a coordinate rounded to one ' +
+      'decimal place is 11&nbsp;km out.</span>' +
       '</div></div>' +
       (state.fences.length
         ? '<table class="haa-tbl" style="margin-bottom:18px"><thead><tr><th>Name</th><th>Centre</th><th>Radius</th><th>Status</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>' +
@@ -381,14 +519,46 @@
   function val(id) { var e = document.getElementById(id); return e ? e.value.trim() : ''; }
 
   function wire(body) {
+    var host = body.querySelector('#haa-picker');
+    if (host) {
+      var latEl = body.querySelector('#haa-f-lat'), lngEl = body.querySelector('#haa-f-lng');
+      // Seed from an existing fence so a second office starts near the first,
+      // not in the middle of the country.
+      var seed = state.fences[0];
+      state.picker = createPicker(host, {
+        lat: seed ? seed.latitude : null,
+        lng: seed ? seed.longitude : null,
+        radius: parseInt(val('haa-f-rad'), 10) || 200,
+        height: 400,
+        onChange: function (la, ln) {
+          // 6 dp ~= 0.1 m. The old free-text field let "13.4" through, which is
+          // 11 km of latitude.
+          if (latEl) latEl.value = la.toFixed(6);
+          if (lngEl) lngEl.value = ln.toFixed(6);
+        }
+      });
+      var radEl = body.querySelector('#haa-f-rad');
+      if (radEl) radEl.oninput = function () {
+        state.picker.setRadius(parseInt(radEl.value, 10) || 0);
+      };
+    }
+
     var add = body.querySelector('#haa-f-add');
     if (add) add.onclick = function () {
-      var name = val('haa-f-name'), lat = parseFloat(val('haa-f-lat')), lng = parseFloat(val('haa-f-lng'));
+      var name = val('haa-f-name');
+      var c = state.picker ? state.picker.getCentre() : null;
+      var lat = c ? c.lat : parseFloat(val('haa-f-lat'));
+      var lng = c ? c.lng : parseFloat(val('haa-f-lng'));
       var rad = parseInt(val('haa-f-rad'), 10) || 200;
-      if (!name || isNaN(lat) || isNaN(lng)) return toast('Name, latitude and longitude are required', true);
+      if (!name) return toast('Give the location a name', true);
+      if (!isFinite(lat) || !isFinite(lng)) return toast('Place the centre on the map first', true);
       api('/api/attendance/geofences', {
         method: 'POST',
-        body: JSON.stringify({ name: name, latitude: lat, longitude: lng, radiusMeters: rad, radius_meters: rad })
+        body: JSON.stringify({
+          name: name,
+          latitude: Number(lat.toFixed(6)), longitude: Number(lng.toFixed(6)),
+          radiusMeters: rad, radius_meters: rad
+        })
       }).then(function () { toast('Location added'); loadAll(); })
         .catch(function (e) { toast(e.message, true); });
     };
@@ -398,13 +568,24 @@
       if (!navigator.geolocation) return toast('This browser has no geolocation', true);
       here.disabled = true; here.textContent = 'Locating…';
       navigator.geolocation.getCurrentPosition(function (p) {
-        document.getElementById('haa-f-lat').value = p.coords.latitude.toFixed(6);
-        document.getElementById('haa-f-lng').value = p.coords.longitude.toFixed(6);
         here.disabled = false; here.textContent = 'Use my current position';
+        var acc = p.coords.accuracy;
+        if (state.picker) {
+          // Zoom to suit the fix: a ±2 km reading framed at street level just
+          // shows a confidently wrong spot.
+          var z = acc > 1000 ? 13 : acc > 300 ? 15 : acc > 80 ? 16 : 18;
+          state.picker.setCentre(p.coords.latitude, p.coords.longitude, z, acc);
+        }
+        if (acc > 100) {
+          toast('Your position is only accurate to ±' + Math.round(acc) +
+                ' m — check the map and click the exact spot', true);
+        } else {
+          toast('Placed at your position (±' + Math.round(acc) + ' m)');
+        }
       }, function () {
         here.disabled = false; here.textContent = 'Use my current position';
-        toast('Could not read your position', true);
-      }, { enableHighAccuracy: true, timeout: 8000 });
+        toast('Could not read your position — click the map instead', true);
+      }, { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 });
     };
 
     var sAdd = body.querySelector('#haa-s-add');
