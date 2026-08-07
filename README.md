@@ -28,7 +28,7 @@ Django REST Framework with a pre‑built React/Vite single‑page front end.
 
 ---
 
-## Repository Layout
+## Repository Project Layout 
 
 ```
 HRMS/
