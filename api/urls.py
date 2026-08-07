@@ -232,3 +232,19 @@ urlpatterns = [
 ]
 
 
+
+
+# --- Employee Chat routes (appended by chat-module integration) ---
+urlpatterns += [
+    path("chat/rooms", views.chat_rooms),
+    path("chat/rooms/<int:room_id>", views.chat_room_detail),
+    path("chat/messages/<int:room_id>", views.chat_messages),
+    path("chat/message/<int:msg_id>", views.chat_message_detail),
+    path("chat/attachment/<int:msg_id>", views.chat_attachment),
+    path("chat/rooms/<int:room_id>/read", views.chat_mark_read),
+    path("chat/rooms/<int:room_id>/members", views.chat_room_members),
+    path("chat/rooms/<int:room_id>/members/<str:email>", views.chat_room_member_detail),
+    path("chat/contacts", views.chat_contacts),
+    path("chat/meetings", views.chat_meetings),
+    path("chat/meetings/<int:meeting_id>", views.chat_meeting_detail),
+]
