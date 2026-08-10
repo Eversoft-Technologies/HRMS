@@ -3,7 +3,9 @@ Models mapped 1:1 onto the existing MySQL tables created by the original
 Node/Express server. Table and column names match exactly so the same
 database can be used without migrating data.
 """
+from decimal import Decimal
 from django.db import models
+from django.utils import timezone
 
 
 class JobPost(models.Model):
@@ -364,8 +366,6 @@ class EmployeeAttendance(models.Model):
     location_lat = models.FloatField(null=True, blank=True)
     location_lng = models.FloatField(null=True, blank=True)
     geo_verified = models.BooleanField(default=False)
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
     # --- Out-of-geofence check-in review ---------------------------------
     # An employee who is not working from home and checks in outside every
     # active fence is let through, but must give a reason and the check-in is
@@ -385,6 +385,8 @@ class EmployeeAttendance(models.Model):
     # geofence, so the day is distinguishable from a manual check-out.
     auto_checkout_at = models.DateTimeField(null=True, blank=True)
     is_auto_checked_out = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         db_table = 'employee_attendance'
@@ -1229,4 +1231,127 @@ class EmailTemplate(models.Model):
     class Meta:
         db_table = 'email_templates'
         ordering = ['outcome', 'name']
+
+
+# ===========================================================================
+# Core Payroll Module Models
+# ===========================================================================
+
+class EmployeeCompensation(models.Model):
+    """Effective-dated compensation records per employee (identified by email)."""
+    email = models.CharField(max_length=255, db_index=True)
+    pay_type = models.CharField(max_length=20, default='salaried')  # salaried | hourly
+    pay_frequency = models.CharField(max_length=20, default='monthly')  # monthly | semimonthly | biweekly | weekly
+    base_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    annual_ctc = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    currency = models.CharField(max_length=10, default='USD')
+    effective_from = models.DateField(default=timezone.now)
+    effective_to = models.DateField(null=True, blank=True)
+    status = models.CharField(max_length=20, default='active')  # active | inactive
+    notes = models.TextField(default='', blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'employee_compensation'
+        ordering = ['-effective_from']
+
+
+class PayComponent(models.Model):
+    """Catalogue of earnings and deduction components."""
+    code = models.CharField(max_length=50, unique=True)
+    name = models.CharField(max_length=100)
+    component_type = models.CharField(max_length=20, default='earning')  # earning | deduction
+    calc_type = models.CharField(max_length=30, default='fixed')  # fixed | percent_of_base | formula
+    rate = models.DecimalField(max_digits=8, decimal_places=4, default=Decimal('0.0000'))
+    default_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    is_taxable = models.BooleanField(default=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'pay_components'
+        ordering = ['component_type', 'code']
+
+
+class EmployeePayComponent(models.Model):
+    """Per-employee pay component overrides."""
+    email = models.CharField(max_length=255, db_index=True)
+    component = models.ForeignKey(PayComponent, on_delete=models.CASCADE, related_name='employee_components')
+    amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    rate = models.DecimalField(max_digits=8, decimal_places=4, null=True, blank=True)
+    effective_from = models.DateField(default=timezone.now)
+    effective_to = models.DateField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'employee_pay_components'
+        ordering = ['-effective_from']
+
+
+class PayrollRun(models.Model):
+    """Batch pay period run engine record."""
+    period_label = models.CharField(max_length=20, db_index=True)  # e.g., '2026-08'
+    period_start = models.DateField()
+    period_end = models.DateField()
+    pay_date = models.DateField(null=True, blank=True)
+    frequency = models.CharField(max_length=20, default='monthly')
+    status = models.CharField(max_length=30, default='draft')  # draft | processing | pending_approval | approved | paid | cancelled
+    created_by = models.CharField(max_length=255, default='', blank=True)
+    approved_by = models.CharField(max_length=255, default='', blank=True)
+    approved_at = models.DateTimeField(null=True, blank=True)
+    total_gross = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0.00'))
+    total_deductions = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0.00'))
+    total_net = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0.00'))
+    employee_count = models.IntegerField(default=0)
+    notes = models.TextField(default='', blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'payroll_runs'
+        ordering = ['-period_start']
+
+
+class Payslip(models.Model):
+    """Individual employee payslip record for a pay run."""
+    run = models.ForeignKey(PayrollRun, on_delete=models.CASCADE, related_name='payslips')
+    email = models.CharField(max_length=255, db_index=True)
+    employee_name = models.CharField(max_length=255, default='', blank=True)
+    worked_days = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0.00'))
+    paid_days = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0.00'))
+    lop_days = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0.00'))
+    overtime_hours = models.DecimalField(max_digits=6, decimal_places=2, default=Decimal('0.00'))
+    base_salary = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    gross_earnings = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    total_deductions = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    net_pay = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    earnings_data = models.JSONField(default=list, blank=True)
+    deductions_data = models.JSONField(default=list, blank=True)
+    status = models.CharField(max_length=20, default='draft')  # draft | approved | paid
+    file_name = models.CharField(max_length=255, default='', blank=True)
+    file_mime = models.CharField(max_length=100, default='application/pdf', blank=True)
+    file_size = models.IntegerField(default=0)
+    file_data = models.TextField(default='', blank=True)  # base64 PDF
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'payslips'
+        unique_together = ['run', 'email']
+        ordering = ['employee_name', 'email']
+
+
+class PayrollSetting(models.Model):
+    """Key/value configuration store for Payroll module."""
+    key = models.CharField(max_length=100, unique=True)
+    value = models.TextField(default='', blank=True)
+    description = models.CharField(max_length=255, default='', blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'payroll_settings'
+        ordering = ['key']
 
