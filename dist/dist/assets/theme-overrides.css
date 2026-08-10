@@ -6,7 +6,18 @@
    pre-paint script in index.html.
    "system" resolves to light/dark via prefers-color-scheme.
    ============================================================ */
-
+  /* Calendar fill tokens — Leave Management holidays grid.
+   Dark: low-alpha tint with the hue as text, so weekends don't swamp the card.
+   Light overrides these with solid fills in the block below. */
+:root {
+  --cal-holiday-bg: rgba(34, 211, 165, 0.20);
+  --cal-holiday-fg: #22d3a5;
+  --cal-holiday-dot: #22d3a5;
+  --cal-weekend-bg: rgba(247, 149, 79, 0.13);
+  --cal-weekend-fg: #f7954f;
+  --cal-weekend-dot: #f7954f;
+}
+ 
 /* Light palette — overrides the dark :root variables.
    Tuned for a clean, professional look: a soft neutral page behind crisp white
    surfaces, solid (not barely-there) borders, and high-contrast text. */
@@ -28,6 +39,14 @@ html[data-theme="light"] {
   --success: #15a37f;
   --warn: #c6881a;
   --danger: #d94835;
+  
+  /* Calendar fills — solid, as light mode renders them */
+  --cal-holiday-bg: #15a37f;
+  --cal-holiday-fg: #0a0e1a;
+  --cal-holiday-dot: #15a37f;
+  --cal-weekend-bg: #ef8b3c;
+  --cal-weekend-fg: #0a0e1a;
+  --cal-weekend-dot: #ef8b3c;
 }
 
 /* Light-mode scrollbar reads better with a muted thumb */
