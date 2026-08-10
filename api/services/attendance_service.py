@@ -438,3 +438,57 @@ class AttendanceService:
         }
 
         return summary
+
+    @staticmethod
+    def auto_checkout_open_shifts(for_date: date = None) -> list:
+        """
+        Auto check-out open attendance records past shift end or midnight cutoff.
+        Returns list of email addresses auto checked out.
+        """
+        if for_date is None:
+            for_date = timezone.now().date()
+
+        open_records = EmployeeAttendance.objects.filter(
+            date=for_date,
+            check_in__isnull=False,
+            check_out__isnull=True
+        )
+
+        checked_out = []
+        for record in open_records:
+            shift = AttendanceService.get_current_shift(record.email, record.check_in)
+            if shift:
+                checkout_time = datetime.combine(record.date, shift.end_time)
+                if timezone.is_naive(checkout_time):
+                    checkout_time = timezone.make_aware(checkout_time)
+                if checkout_time <= record.check_in:
+                    checkout_time = record.check_in + timedelta(hours=8)
+            else:
+                checkout_time = record.check_in + timedelta(hours=8)
+
+            result = AttendanceService.record_check_out(record.email, checkout_time)
+            if result.get('success'):
+                record.is_auto_checked_out = True
+                record.auto_checkout_at = timezone.now()
+                record.save(update_fields=['is_auto_checked_out', 'auto_checkout_at'])
+                checked_out.append(record.email)
+
+        return checked_out
+
+    @staticmethod
+    def record_device_punch(email: str, employee_name: str, punch_type: str = 'in', device_id: str = 'biometric') -> dict:
+        """Record punch from external biometric/RFID hardware device."""
+        punch_type = punch_type.lower().strip()
+        if punch_type in ['in', 'check_in', 'check-in']:
+            return AttendanceService.record_check_in(
+                email=email,
+                employee_name=employee_name,
+                device=f'hardware_{device_id}'
+            )
+        elif punch_type in ['out', 'check_out', 'check-out']:
+            return AttendanceService.record_check_out(
+                email=email,
+                device=f'hardware_{device_id}'
+            )
+        else:
+            return {'success': False, 'message': 'Invalid punch_type. Use "in" or "out".', 'status': 'error'}
