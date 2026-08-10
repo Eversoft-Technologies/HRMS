@@ -28,7 +28,6 @@ from django.db.models import Count, Q
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
-from .timeutil import local_now
 from .models import (
     ONBOARDING_STAGES,
     AppUser,
@@ -280,7 +279,7 @@ def set_stage(candidate, stage, status, actor_email=''):
     row, _ = OnboardingStatus.objects.get_or_create(candidate=candidate, stage=stage)
     row.status = status
     row.updated_by = actor_email or ''
-    now = local_now()
+    now = datetime.now()
     if status == 'In Progress' and not row.started_at:
         row.started_at = now
     if status == 'Completed':
@@ -816,7 +815,7 @@ def candidate_detail(request, pk):
         # Soft delete: the audit trail and documents must outlive the record.
         with transaction.atomic():
             candidate.is_deleted = True
-            candidate.deleted_at = local_now()
+            candidate.deleted_at = datetime.now()
             candidate.deleted_by = actor
             candidate.save()
             log_activity(candidate, 'Candidate Deleted', actor)
@@ -1412,7 +1411,7 @@ def candidate_verification(request, pk):
 
     with transaction.atomic():
         verification = serializer.save(
-            candidate=candidate, verified_by=actor, verified_at=local_now(),
+            candidate=candidate, verified_by=actor, verified_at=datetime.now(),
             custom_verified=clean_custom_verified(body.get('customVerified'), candidate),
         )
         if status_val == 'Approved':
@@ -2095,7 +2094,7 @@ def send_portal_link(request, pk):
 
     token = uuid.uuid4().hex
     candidate.portal_token = token
-    candidate.portal_token_expires_at = local_now() + timedelta(days=7)
+    candidate.portal_token_expires_at = datetime.now() + timedelta(days=7)
     candidate.save()
 
     # Build the portal URL.  In production the admin sets HRMS_PUBLIC_URL in
@@ -2109,7 +2108,7 @@ def send_portal_link(request, pk):
     portal_url = f"{public_base}/onboarding/fill?token={token}"
 
     subject = "Action Required: Complete your Onboarding & Payroll Forms"
-    today_str = local_now().strftime("%B %d, %Y")
+    today_str = datetime.now().strftime("%B %d, %Y")
     joining_date_str = candidate.joining_date.strftime("%B %d, %Y") if candidate.joining_date else "—"
 
     # Logo URL
@@ -2288,7 +2287,7 @@ def public_candidate_forms(request):
     if not candidate:
         return err('Invalid token', 404)
     
-    if candidate.portal_token_expires_at and local_now() > candidate.portal_token_expires_at:
+    if candidate.portal_token_expires_at and datetime.now() > candidate.portal_token_expires_at:
         return err('Token expired', 400)
 
     # List all active forms
@@ -2347,7 +2346,7 @@ def public_upload_document(request):
     candidate = OnboardingCandidate.objects.filter(portal_token=token, is_deleted=False).first()
     if not candidate:
         return err('Invalid token', 404)
-    if candidate.portal_token_expires_at and local_now() > candidate.portal_token_expires_at:
+    if candidate.portal_token_expires_at and datetime.now() > candidate.portal_token_expires_at:
         return err('Token expired', 400)
 
     body = request.data
@@ -2414,7 +2413,7 @@ def public_form_template_detail(request, form_id):
     candidate = OnboardingCandidate.objects.filter(portal_token=token, is_deleted=False).first()
     if not candidate:
         return err('Invalid token', 404)
-    if candidate.portal_token_expires_at and local_now() > candidate.portal_token_expires_at:
+    if candidate.portal_token_expires_at and datetime.now() > candidate.portal_token_expires_at:
         return err('Token expired', 400)
 
     form = PayrollForm.objects.filter(pk=form_id, is_active=True).first()
@@ -2441,7 +2440,7 @@ def public_submit_form(request):
     candidate = OnboardingCandidate.objects.filter(portal_token=token, is_deleted=False).first()
     if not candidate:
         return err('Invalid token', 404)
-    if candidate.portal_token_expires_at and local_now() > candidate.portal_token_expires_at:
+    if candidate.portal_token_expires_at and datetime.now() > candidate.portal_token_expires_at:
         return err('Token expired', 400)
 
     body = request.data
@@ -2468,7 +2467,7 @@ def public_submit_form(request):
         form=form,
         filled_data=body.get('filledData') or {},
         signature_data=body.get('signatureData') or '',
-        signed_at=local_now(),
+        signed_at=datetime.now(),
         file_name=file_name,
         file_mime=file_mime,
         file_size=size,

@@ -214,19 +214,14 @@ const CheckInComponent = () => {
               <div className="status-badge" data-status={status || todayAttendance.status}>
                 {status || todayAttendance.status}
               </div>
-              {todayAttendance.isAutoCheckedOut && (
-                <div style={{ padding: '4px 10px', backgroundColor: '#fef3c7', color: '#b45309', borderRadius: '12px', fontSize: '11px', fontWeight: 'bold', margin: '6px auto', width: 'max-content' }}>
-                  ⚠️ System Auto Checked-Out
-                </div>
-              )}
               <div className="status-details">
                 {todayAttendance.checkInTime && (
-                  <p>Check-In: {new Date(todayAttendance.checkInTime).toLocaleTimeString()} ({todayAttendance.device || 'web'})</p>
+                  <p>Check-In: {new Date(todayAttendance.checkInTime).toLocaleTimeString()}</p>
                 )}
                 {todayAttendance.checkOutTime && (
                   <p>Check-Out: {new Date(todayAttendance.checkOutTime).toLocaleTimeString()}</p>
                 )}
-                {todayAttendance.workedMinutes > 0 && (
+                {todayAttendance.workedMinutes && (
                   <p>Worked: {Math.floor(todayAttendance.workedMinutes / 60)}h {todayAttendance.workedMinutes % 60}m</p>
                 )}
               </div>

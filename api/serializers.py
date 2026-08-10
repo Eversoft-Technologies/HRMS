@@ -61,12 +61,6 @@ from .models import (
     PayrollInformation,
     PayrollForm,
     CandidateFormSubmission,
-    EmployeeCompensation,
-    PayComponent,
-    EmployeePayComponent,
-    PayrollRun,
-    Payslip,
-    PayrollSetting,
 )
 
 # Datetime wire format used everywhere by the original API (naive, USE_TZ=False).
@@ -1735,49 +1729,5 @@ class CandidateFormSubmissionSerializer(serializers.ModelSerializer):
         ret['candidateId'] = instance.candidate_id
         ret['formId'] = instance.form_id
         return ret
-
-
-# ===========================================================================
-# Core Payroll Serializers
-# ===========================================================================
-
-class EmployeeCompensationSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = EmployeeCompensation
-        fields = '__all__'
-
-
-class PayComponentSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = PayComponent
-        fields = '__all__'
-
-
-class EmployeePayComponentSerializer(serializers.ModelSerializer):
-    componentDetails = PayComponentSerializer(source='component', read_only=True)
-
-    class Meta:
-        model = EmployeePayComponent
-        fields = '__all__'
-
-
-class PayslipSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Payslip
-        fields = '__all__'
-
-
-class PayrollRunSerializer(serializers.ModelSerializer):
-    payslips = PayslipSerializer(many=True, read_only=True)
-
-    class Meta:
-        model = PayrollRun
-        fields = '__all__'
-
-
-class PayrollSettingSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = PayrollSetting
-        fields = '__all__'
 
 
