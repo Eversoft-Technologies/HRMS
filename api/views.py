@@ -1151,8 +1151,12 @@ def resume_score_file(request, pk):
 # ---------------------------------------------------------------------------
 def _recording_list_qs():
     return InterviewRecording.objects.annotate(
+        # ``_has_video`` is True when *either* storage column has data so that
+        # legacy recordings (base64 recording_data only) still show the Play
+        # button instead of "No video saved for this session".
         _has_video=Case(
             When(video_buffer__isnull=False, then=Value(True)),
+            When(recording_data__isnull=False, then=Value(True)),
             default=Value(False), output_field=BooleanField(),
         ),
         _has_recording=Case(
@@ -1255,93 +1259,149 @@ def recording_detail(request, pk):
     return Response({'ok': True})
 
 
-_RANGE_RE = re.compile(r'^bytes=(\d*)-(\d*)$')
+def _extract_video_bytes(raw_data):
+    """Extract binary video bytes from recording_data regardless of format:
+    - Plain base64 string
+    - Data URL string ('data:video/webm;base64,...')
+    - JSON array of base64 strings or Data URLs
+    - Raw binary bytes
+    """
+    if not raw_data:
+        return b''
 
+    if isinstance(raw_data, bytes):
+        # Check if it's already a webm / mp4 binary blob
+        if raw_data.startswith(b'\x1a\x45\xdf\xa3') or raw_data.startswith(b'\x00\x00\x00'):
+            return raw_data
+        try:
+            raw_str = raw_data.decode('utf-8', errors='ignore')
+        except Exception:
+            return raw_data
+    else:
+        raw_str = str(raw_data).strip()
 
-def _video_meta(pk):
-    """(size, mime) without pulling the blob into memory."""
-    with connection.cursor() as cur:
-        cur.execute(
-            'SELECT COALESCE(LENGTH(video_buffer), 0), video_mime '
-            'FROM interview_recordings WHERE id = %s', [pk])
-        row = cur.fetchone()
-    return (row[0], row[1]) if row else (0, None)
+    if not raw_str:
+        return b''
 
+    import base64 as _b64
 
-def _video_slice(pk, start, length):
-    """Read just the requested window. SUBSTRING is 1-indexed in MySQL."""
-    with connection.cursor() as cur:
-        cur.execute(
-            'SELECT SUBSTRING(video_buffer, %s, %s) '
-            'FROM interview_recordings WHERE id = %s', [start + 1, length, pk])
-        row = cur.fetchone()
-    return bytes(row[0]) if row and row[0] is not None else b''
+    def _decode_chunk(s):
+        if not s or not isinstance(s, str):
+            return b''
+        s = s.strip()
+        if ',' in s[:100]:
+            s = s.split(',', 1)[1]
+        s = s.strip().replace(' ', '+')
+        pad = len(s) % 4
+        if pad:
+            s += '=' * (4 - pad)
+        try:
+            return _b64.b64decode(s)
+        except Exception:
+            try:
+                return _b64.b64decode(s.encode('ascii', errors='ignore'))
+            except Exception:
+                return b''
+
+    # 1. Try parsing as JSON (array of chunks or nested string)
+    if raw_str.startswith('[') or raw_str.startswith('{') or raw_str.startswith('"'):
+        try:
+            parsed = json.loads(raw_str)
+            if isinstance(parsed, list):
+                chunks = [_decode_chunk(item) for item in parsed if item]
+                combined = b''.join(chunks)
+                if combined:
+                    return combined
+            elif isinstance(parsed, str):
+                decoded = _decode_chunk(parsed)
+                if decoded:
+                    return decoded
+        except Exception:
+            pass
+
+    # 2. Fallback: single base64 or Data-URL string
+    return _decode_chunk(raw_str)
 
 
 @csrf_exempt
 def recording_video(request, pk):
-    """Binary (video/webm) upload + download. Kept as a plain Django view
-    because DRF's JSON parser cannot consume a raw binary body.
+    """Binary (video/webm) upload + download.
 
-    GET honours Range properly. It previously advertised ``Accept-Ranges: bytes``
-    but ignored the header, answering every request with 200 and the whole file,
-    so a player could not seek and re-fetched the entire recording each attempt.
-    The body is also sliced in MySQL rather than loaded whole — a 22 MB
-    recording used to be read fully into memory just to serve a few KB.
+    POST: Stores raw binary video bytes directly into `video_buffer` LONGBLOB.
+    GET: Serves uncorrupted binary video data with HTTP Range request support (206 Partial Content).
     """
     if request.method == 'POST':
-        obj = InterviewRecording.objects.filter(pk=pk).first()
-        if not obj:
+        if not InterviewRecording.objects.filter(pk=pk).exists():
             return err('Recording not found', 404)
         data = request.body
         if not data:
             return err('Invalid or empty video payload')
         mime = (request.META.get('CONTENT_TYPE') or 'video/webm').split(';')[0]
-        obj.video_buffer = data
-        obj.video_mime = mime
-        obj.save(update_fields=['video_buffer', 'video_mime'])
+        InterviewRecording.objects.filter(pk=pk).update(
+            video_buffer=data,
+            video_mime=mime,
+        )
         return JsonResponse({'ok': True})
 
     if request.method != 'GET':
         return err('Method not allowed', 405)
 
-    size, mime = _video_meta(pk)
-    if not size:
-        if not InterviewRecording.objects.filter(pk=pk).exists():
+    try:
+        row = InterviewRecording.objects.filter(pk=pk).values_list('video_buffer', 'video_mime', 'recording_data').first()
+        if not row:
             return err('Recording not found', 404)
-        return err('No video data for this recording', 404)
 
-    content_type = mime or 'video/webm'
-    match = _RANGE_RE.match((request.META.get('HTTP_RANGE') or '').strip())
+        raw_buf, mime, rd = row
+        video_bytes = b''
 
-    if match:
-        first, last = match.group(1), match.group(2)
-        if first == '':
-            # Suffix form "bytes=-N": the final N bytes.
-            length = int(last or 0)
-            start = max(0, size - length)
-            end = size - 1
+        if raw_buf:
+            video_bytes = bytes(raw_buf)
+        elif rd:
+            video_bytes = _extract_video_bytes(rd)
+
+        if not video_bytes:
+            return err('No video data for this recording', 404)
+
+        size = len(video_bytes)
+        content_type = mime or 'video/webm'
+
+        # --- parse optional Range header ---
+        import re as _re
+        range_header = request.headers.get('Range') or request.META.get('HTTP_RANGE') or ''
+        _RANGE_RE = _re.compile(r'bytes=([0-9]*)-([0-9]*)', _re.I)
+        match = _RANGE_RE.match(range_header.strip())
+
+        if match:
+            first, last = match.group(1), match.group(2)
+            if first == '':
+                length = int(last or 0)
+                start = max(0, size - length)
+                end = size - 1
+            else:
+                start = int(first)
+                end = size - 1 if last == '' else min(int(last), size - 1)
+
+            if start >= size or start > end:
+                resp = HttpResponse(status=416)
+                resp['Content-Range'] = f'bytes */{size}'
+                resp['Accept-Ranges'] = 'bytes'
+                return resp
+
+            chunk = video_bytes[start:end + 1]
+            resp = HttpResponse(chunk, status=206, content_type=content_type)
+            resp['Content-Range'] = f'bytes {start}-{end}/{size}'
+            resp['Content-Length'] = str(len(chunk))
         else:
-            start = int(first)
-            end = size - 1 if last == '' else min(int(last), size - 1)
+            resp = HttpResponse(video_bytes, status=200, content_type=content_type)
+            resp['Content-Length'] = str(size)
 
-        if start >= size or start > end:
-            resp = HttpResponse(status=416)
-            resp['Content-Range'] = f'bytes */{size}'
-            resp['Accept-Ranges'] = 'bytes'
-            return resp
+        resp['Accept-Ranges'] = 'bytes'
+        resp['Cache-Control'] = 'public, max-age=31536000'
+        return resp
+    except Exception as exc:
+        logger.error(f'Error serving video recording {pk}: {exc}', exc_info=True)
+        return err(f'Video playback error: {exc}', 500)
 
-        chunk = _video_slice(pk, start, end - start + 1)
-        resp = HttpResponse(chunk, status=206, content_type=content_type)
-        resp['Content-Range'] = f'bytes {start}-{end}/{size}'
-        resp['Content-Length'] = str(len(chunk))
-    else:
-        resp = HttpResponse(_video_slice(pk, 0, size), content_type=content_type)
-        resp['Content-Length'] = str(size)
-
-    resp['Accept-Ranges'] = 'bytes'
-    resp['Cache-Control'] = 'public, max-age=31536000'
-    return resp
 
 
 # ---------------------------------------------------------------------------
