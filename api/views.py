@@ -23,7 +23,7 @@ import secrets
 from datetime import datetime, timedelta
 
 from django.conf import settings
-from django.db import transaction
+from django.db import connection, transaction
 from django.db.models import (
     BooleanField, Case, Count, IntegerField, OuterRef, Q, Subquery, Value, When,
 )
