@@ -931,7 +931,7 @@ class CandidateDocument(models.Model):
         OnboardingCandidate, on_delete=models.CASCADE,
         related_name='documents', db_column='candidate_id',
     )
-    # ssn | driver_license | state_id | visa | i94, or ``custom_<slug>`` for a
+    # ssn | driver_license | state_id | visa | i94 | passport, or ``custom_<slug>`` for a
     # document the uploader named themselves.
     doc_type = models.CharField(max_length=40, db_index=True)
     # Display name for a custom document. Empty for the fixed types, whose
@@ -954,15 +954,42 @@ class CandidateDocument(models.Model):
 
 class HrVerification(models.Model):
     """HR's document checklist. One row per candidate."""
+    # The PK is exposed as ``verification_id`` in the table; the Python attribute
+    # stays ``id`` so the rest of the code (and DRF) is unaffected.
+    id = models.AutoField(primary_key=True, db_column='verification_id')
     candidate = models.OneToOneField(
         OnboardingCandidate, on_delete=models.CASCADE,
         related_name='hr_verification', db_column='candidate_id',
     )
+    # HR's employee code for the candidate once one has been issued. Employees
+    # are keyed by email elsewhere in this schema, so this is a plain reference
+    # rather than a foreign key.
+    employee_id = models.CharField(max_length=64, default='', blank=True, db_index=True)
+    # Background | Education | Employment | Criminal | ... — free text, the set
+    # is an HR/vendor concern rather than something the app enforces.
+    verification_type = models.CharField(max_length=60, default='', blank=True, db_index=True)
+    # Third-party background-check agency running the check, if any.
+    vendor_name = models.CharField(max_length=255, default='', blank=True)
+    requested_on = models.DateTimeField(null=True, blank=True)
+    completed_on = models.DateTimeField(null=True, blank=True)
+    # Location of the vendor's report. A path/URL, not the file itself — unlike
+    # CandidateDocument these reports are not held in the row.
+    report_path = models.CharField(max_length=500, default='', blank=True)
     ssn_verified = models.BooleanField(default=False)
     driver_license_verified = models.BooleanField(default=False)
     state_id_verified = models.BooleanField(default=False)
     visa_verified = models.BooleanField(default=False)
     i94_verified = models.BooleanField(default=False)
+    passport_verified = models.BooleanField(default=False)
+    # The background-check areas the stage exists to cover. These are separate
+    # from the document tick-boxes above: a document box means "the right file
+    # arrived and matches", these mean "the check on that area came back clean".
+    identity_verified = models.BooleanField(default=False)
+    education_verified = models.BooleanField(default=False)
+    employment_verified = models.BooleanField(default=False)
+    address_verified = models.BooleanField(default=False)
+    criminal_verified = models.BooleanField(default=False)
+    reference_verified = models.BooleanField(default=False)
     # Tick-box state for custom documents, keyed by their ``custom_<slug>``
     # doc_type. The fixed types above get a column each; a custom document is
     # named at upload time, so there is no column to add and this JSON map
