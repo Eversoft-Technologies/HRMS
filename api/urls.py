@@ -1,7 +1,7 @@
 from django.urls import path
 
 from . import (auth_views, email_template_views, linkedin_oauth, live_views, views,
-               attendance_views, job_form_views, onboarding_views, payroll_views)
+               attendance_views, job_form_views, onboarding_views)
 
 # All paths are relative to the "/api/" prefix from the project urlconf.
 urlpatterns = [
@@ -96,8 +96,6 @@ urlpatterns = [
     path('attendance/overtime', views.attendance_overtime),
     path('attendance/auto-correct', views.attendance_auto_correct),
     path('attendance/analytics', views.attendance_analytics),
-    path('attendance/geofence-check', views.attendance_geofence_check),
-    path('attendance/location-reviews', views.attendance_location_reviews),
     path('attendance/geofences', views.attendance_geofences),
     path('attendance/geofences/<int:pk>', views.attendance_geofence_detail),
     path('attendance/wfh', views.wfh_requests),
@@ -158,25 +156,8 @@ urlpatterns = [
     # Check-In/Check-Out
     path('attendance/check-in/', attendance_views.AttendanceCheckInOutViewSet.as_view({'post': 'check_in'})),
     path('attendance/check-out/', attendance_views.AttendanceCheckInOutViewSet.as_view({'post': 'check_out'})),
-    path('attendance/device-punch/', attendance_views.AttendanceCheckInOutViewSet.as_view({'post': 'device_punch'})),
     path('attendance/today/', attendance_views.AttendanceCheckInOutViewSet.as_view({'get': 'today'})),
     path('attendance/summary/', attendance_views.AttendanceCheckInOutViewSet.as_view({'get': 'summary'})),
-
-    # Core Payroll Endpoints
-    path('payroll/compensations', payroll_views.EmployeeCompensationViewSet.as_view({'get': 'list', 'post': 'create'})),
-    path('payroll/compensations/<int:pk>', payroll_views.EmployeeCompensationViewSet.as_view({'get': 'retrieve', 'put': 'update', 'delete': 'destroy'})),
-    path('payroll/components', payroll_views.PayComponentViewSet.as_view({'get': 'list', 'post': 'create'})),
-    path('payroll/components/<int:pk>', payroll_views.PayComponentViewSet.as_view({'get': 'retrieve', 'put': 'update', 'delete': 'destroy'})),
-    path('payroll/employee-components', payroll_views.EmployeePayComponentViewSet.as_view({'get': 'list', 'post': 'create'})),
-    path('payroll/employee-components/<int:pk>', payroll_views.EmployeePayComponentViewSet.as_view({'get': 'retrieve', 'put': 'update', 'delete': 'destroy'})),
-    path('payroll/runs', payroll_views.PayrollRunViewSet.as_view({'get': 'list', 'post': 'create'})),
-    path('payroll/runs/<int:pk>', payroll_views.PayrollRunViewSet.as_view({'get': 'retrieve', 'put': 'update', 'delete': 'destroy'})),
-    path('payroll/runs/<int:pk>/approve', payroll_views.PayrollRunViewSet.as_view({'post': 'approve'})),
-    path('payroll/runs/<int:pk>/export-bank-file', payroll_views.PayrollRunViewSet.as_view({'get': 'export_bank_file'})),
-    path('payroll/payslips', payroll_views.PayslipViewSet.as_view({'get': 'list', 'post': 'create'})),
-    path('payroll/payslips/<int:pk>', payroll_views.PayslipViewSet.as_view({'get': 'retrieve'})),
-    path('payroll/payslips/<int:pk>/pdf', payroll_views.PayslipViewSet.as_view({'get': 'download_pdf'})),
-    path('payroll/settings', payroll_views.PayrollSettingViewSet.as_view({'get': 'list', 'post': 'create'})),
 
     # Breaks
     path('attendance/break/start/', attendance_views.BreakViewSet.as_view({'post': 'start'})),
