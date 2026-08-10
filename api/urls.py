@@ -96,6 +96,8 @@ urlpatterns = [
     path('attendance/overtime', views.attendance_overtime),
     path('attendance/auto-correct', views.attendance_auto_correct),
     path('attendance/analytics', views.attendance_analytics),
+    path('attendance/geofence-check', views.attendance_geofence_check),
+    path('attendance/location-reviews', views.attendance_location_reviews),
     path('attendance/geofences', views.attendance_geofences),
     path('attendance/geofences/<int:pk>', views.attendance_geofence_detail),
     path('attendance/wfh', views.wfh_requests),
@@ -156,6 +158,7 @@ urlpatterns = [
     # Check-In/Check-Out
     path('attendance/check-in/', attendance_views.AttendanceCheckInOutViewSet.as_view({'post': 'check_in'})),
     path('attendance/check-out/', attendance_views.AttendanceCheckInOutViewSet.as_view({'post': 'check_out'})),
+    path('attendance/device-punch/', attendance_views.AttendanceCheckInOutViewSet.as_view({'post': 'device_punch'})),
     path('attendance/today/', attendance_views.AttendanceCheckInOutViewSet.as_view({'get': 'today'})),
     path('attendance/summary/', attendance_views.AttendanceCheckInOutViewSet.as_view({'get': 'summary'})),
 
