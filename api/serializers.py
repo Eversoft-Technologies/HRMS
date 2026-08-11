@@ -1740,6 +1740,50 @@ class CandidateFormSubmissionSerializer(serializers.ModelSerializer):
         return ret
 
 
+# ===========================================================================
+# Core Payroll Serializers
+# ===========================================================================
+
+class EmployeeCompensationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = EmployeeCompensation
+        fields = '__all__'
+
+
+class PayComponentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PayComponent
+        fields = '__all__'
+
+
+class EmployeePayComponentSerializer(serializers.ModelSerializer):
+    componentDetails = PayComponentSerializer(source='component', read_only=True)
+
+    class Meta:
+        model = EmployeePayComponent
+        fields = '__all__'
+
+
+class PayslipSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Payslip
+        fields = '__all__'
+
+
+class PayrollRunSerializer(serializers.ModelSerializer):
+    payslips = PayslipSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = PayrollRun
+        fields = '__all__'
+
+
+class PayrollSettingSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PayrollSetting
+        fields = '__all__'
+
+
 # ==========================================================================
 # Chat serializers
 # ==========================================================================

@@ -1272,11 +1272,10 @@ class CandidateFormSubmission(models.Model):
         ordering = ['-created_at']
 
 
-
-
 class EmailTemplate(models.Model):
-    """A reusable candidate follow-up email, editable from the Email Preview
-    drawer. `outcome` ties a template to Selected / Waitlisted / Rejected so the
+    """A reusable email template used for candidate follow-ups.
+
+    `outcome` is an optional filter (e.g. "Scheduled", "Rejected") so the
     right ones surface first; blank means it suits any outcome.
 
     `subject` and `body` may contain {{name}}, {{role}}, {{company}} and
@@ -1295,6 +1294,128 @@ class EmailTemplate(models.Model):
     class Meta:
         db_table = 'email_templates'
         ordering = ['outcome', 'name']
+
+
+# ===========================================================================
+# Core Payroll Models
+# ===========================================================================
+
+class EmployeeCompensation(models.Model):
+    """Effective-dated employee compensation record."""
+    email = models.CharField(max_length=255, db_index=True)
+    pay_type = models.CharField(max_length=50, default='salaried')
+    pay_frequency = models.CharField(max_length=50, default='monthly')
+    base_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    annual_ctc = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    currency = models.CharField(max_length=10, default='USD')
+    effective_from = models.DateField(null=True, blank=True)
+    effective_to = models.DateField(null=True, blank=True)
+    status = models.CharField(max_length=20, default='active')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'employee_compensation'
+        ordering = ['-effective_from']
+
+
+class PayComponent(models.Model):
+    """Pay component catalogue item (earnings and deductions)."""
+    code = models.CharField(max_length=50, unique=True)
+    name = models.CharField(max_length=255)
+    type = models.CharField(max_length=20, default='earning')
+    calc_type = models.CharField(max_length=30, default='fixed')
+    rate = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    default_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    is_taxable = models.BooleanField(default=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'pay_components'
+        ordering = ['code']
+
+
+class EmployeePayComponent(models.Model):
+    """Per-employee override for a pay component."""
+    email = models.CharField(max_length=255, db_index=True)
+    component = models.ForeignKey(PayComponent, on_delete=models.CASCADE, related_name='employee_overrides')
+    amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    rate = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    effective_from = models.DateField(null=True, blank=True)
+    effective_to = models.DateField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'employee_pay_components'
+        ordering = ['email', 'component']
+
+
+class PayrollRun(models.Model):
+    """Payroll run record for a specific period."""
+    period_label = models.CharField(max_length=50)
+    period_start = models.DateField()
+    period_end = models.DateField()
+    pay_date = models.DateField(null=True, blank=True)
+    status = models.CharField(max_length=30, default='draft')
+    frequency = models.CharField(max_length=50, default='monthly')
+    created_by = models.CharField(max_length=255, default='', blank=True)
+    approved_by = models.CharField(max_length=255, default='', blank=True)
+    approved_at = models.DateTimeField(null=True, blank=True)
+    total_gross = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0.00'))
+    total_deductions = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0.00'))
+    total_net = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0.00'))
+    employee_count = models.IntegerField(default=0)
+    notes = models.TextField(default='', blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'payroll_runs'
+        ordering = ['-period_start']
+
+
+class Payslip(models.Model):
+    """Individual employee payslip record for a pay run."""
+    run = models.ForeignKey(PayrollRun, on_delete=models.CASCADE, related_name='payslips')
+    email = models.CharField(max_length=255, db_index=True)
+    employee_name = models.CharField(max_length=255, default='', blank=True)
+    worked_days = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0.00'))
+    paid_days = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0.00'))
+    lop_days = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0.00'))
+    overtime_hours = models.DecimalField(max_digits=6, decimal_places=2, default=Decimal('0.00'))
+    base_salary = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    gross_earnings = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    total_deductions = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    net_pay = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    earnings_data = models.JSONField(default=list, blank=True)
+    deductions_data = models.JSONField(default=list, blank=True)
+    status = models.CharField(max_length=20, default='draft')
+    file_name = models.CharField(max_length=255, default='', blank=True)
+    file_mime = models.CharField(max_length=100, default='application/pdf', blank=True)
+    file_size = models.IntegerField(default=0)
+    file_data = models.TextField(default='', blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'payslips'
+        unique_together = ['run', 'email']
+        ordering = ['employee_name', 'email']
+
+
+class PayrollSetting(models.Model):
+    """Key/value configuration store for Payroll module."""
+    key = models.CharField(max_length=100, unique=True)
+    value = models.TextField(default='', blank=True)
+    description = models.CharField(max_length=255, default='', blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'payroll_settings'
+        ordering = ['key']
 
 
 class ChatRoom(models.Model):
