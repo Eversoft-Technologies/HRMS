@@ -79,6 +79,15 @@ class Command(BaseCommand):
                 # Standing remote access: switch to Remote without filing a WFH
                 # request each time. Without it, an approved WfhRequest is required.
                 {'name': 'Work Remotely (no approval needed)', 'code': 'attendance.remote', 'group': 'Attendance Group'},
+                # The two approval decisions. Separate from attendance.edit so
+                # correcting a mistyped punch does not also let someone clear a
+                # check-in from outside the geofence.
+                {'name': 'Approve / Reject WFH Requests', 'code': 'attendance.approve_wfh', 'group': 'Attendance Group'},
+                {'name': 'Approve / Reject Off-site Check-ins', 'code': 'attendance.approve_offsite', 'group': 'Attendance Group'},
+                # Whether someone is onsite, hybrid or fully remote. A 'remote'
+                # arrangement exempts every check-in from the geofence, so this
+                # is the control the fence ultimately rests on.
+                {'name': 'Manage Work Arrangements (onsite / hybrid / remote)', 'code': 'attendance.manage_arrangement', 'group': 'Attendance Group'},
                 # Leave
                 {'name': 'View Leave Requests', 'code': 'leave.view', 'group': 'Leave Group'},
                 {'name': 'Create Leave Request', 'code': 'leave.create', 'group': 'Leave Group'},

@@ -23,7 +23,8 @@
 
   var BTN_ID = 'hrms-att-admin-btn';
   var OVERLAY_ID = 'hrms-att-admin-overlay';
-  var state = { tab: 'fences', fences: [], shifts: [], assignments: [], reviews: [], busy: false, errors: {} };
+  var state = { tab: 'fences', fences: [], shifts: [], assignments: [], reviews: [],
+                arrangements: [], roster: [], homes: [], busy: false, errors: {} };
 
   /* ── helpers ─────────────────────────────────────────────────────────── */
   function can(code) {
@@ -440,12 +441,18 @@
       grab('fences', '/api/attendance/geofences'),
       grab('shifts', '/api/shifts'),
       grab('shifts', '/api/shift-assignments'),
-      grab('reviews', '/api/attendance/location-reviews?status=Pending')
+      grab('reviews', '/api/attendance/location-reviews?status=Pending'),
+      grab('arrangements', '/api/attendance/arrangements'),
+      grab('roster', '/api/attendance/roster'),
+      grab('homes', '/api/attendance/home-locations')
     ]).then(function (r) {
       state.fences = Array.isArray(r[0]) ? r[0] : [];
       state.shifts = Array.isArray(r[1]) ? r[1] : [];
       state.assignments = Array.isArray(r[2]) ? r[2] : [];
       state.reviews = Array.isArray(r[3]) ? r[3] : [];
+      state.arrangements = Array.isArray(r[4]) ? r[4] : [];
+      state.roster = Array.isArray(r[5]) ? r[5] : [];
+      state.homes = Array.isArray(r[6]) ? r[6] : [];
       state.busy = false; render();
     });
   }
@@ -543,6 +550,204 @@
         : '<div class="haa-empty">No individual assignments — everyone is on the default shift.</div>');
   }
 
+  /* ── tab: work arrangements ──────────────────────────────────────────
+   *
+   * Where each person works: onsite, hybrid, or fully remote. This is the
+   * control the geofence ultimately rests on — a 'remote' arrangement exempts
+   * every check-in from it — so the form is deliberately explicit about what
+   * each choice means rather than presenting three interchangeable words.
+   *
+   * Changes are effective-dated on the server: saving does not overwrite the
+   * previous arrangement, it closes it and opens a new one. The form says so,
+   * because "from when" looks like a formality until someone backdates a
+   * change and wonders why last month's reports did not move.
+   */
+  var WEEKDAYS = [['0', 'Mon'], ['1', 'Tue'], ['2', 'Wed'], ['3', 'Thu'],
+                  ['4', 'Fri'], ['5', 'Sat'], ['6', 'Sun']];
+
+  function describeArrangement(a) {
+    if (!a) return '<span style="color:#94a3b8">Not set</span>';
+    if (a.arrangement === 'remote') return 'Any day, anywhere';
+    if (a.arrangement === 'onsite') return 'Office only';
+    var days = (a.remoteWeekdays || []);
+    if (days.length) {
+      return 'Remote on ' + days.map(function (d) { return WEEKDAYS[d][1]; }).join(', ');
+    }
+    if (a.remoteDaysPerWeek > 0) {
+      return a.remoteDaysPerWeek + ' remote day' +
+        (a.remoteDaysPerWeek === 1 ? '' : 's') + ' a week, employee picks';
+    }
+    // The API refuses to create this, but a row predating that check, or one
+    // written directly to the table, would otherwise render as a blank cell.
+    return '<span style="color:#b45309">Hybrid with no remote days allocated</span>';
+  }
+
+  function arrangementPill(kind) {
+    var c = kind === 'remote' ? '#dbeafe;color:#1e40af'
+      : kind === 'hybrid' ? '#fef3c7;color:#b45309'
+      : '#e2e8f0;color:#334155';
+    return '<span class="haa-pill" style="background:' + c + '">' +
+      esc((kind || 'onsite').charAt(0).toUpperCase() + (kind || 'onsite').slice(1)) + '</span>';
+  }
+
+  /* The employee field.
+   *
+   * A dropdown, because typing an email is how an arrangement gets attached to
+   * a typo: the API keys on the email string, so "ravi@evrsoft.com" creates a
+   * perfectly valid arrangement for a person who does not exist, and the check
+   * -in gate goes on refusing the real Ravi with nothing on screen to explain
+   * why.
+   *
+   * Falls back to a free-text input if the roster could not be loaded, rather
+   * than rendering an empty select — an empty dropdown is a dead end, and the
+   * roster failing is not a reason to block the whole form.
+   *
+   * Whoever already has an arrangement is marked, so it is obvious when you are
+   * about to supersede one rather than set a first.
+   */
+  function employeePicker() {
+    if (!state.roster.length) {
+      return '<input class="haa-in" id="haa-wa-email" placeholder="person@company.com">' +
+        (state.errors.roster
+          ? '<div style="font-size:11px;color:#b45309;margin-top:4px">Employee list ' +
+            'unavailable — type the address exactly.</div>'
+          : '');
+    }
+    var have = {};
+    state.arrangements.forEach(function (a) { have[a.email] = a.arrangement; });
+    return '<select class="haa-in" id="haa-wa-email">' +
+      '<option value="">Select an employee…</option>' +
+      state.roster.map(function (u) {
+        var tag = have[u.email] ? '  · ' + have[u.email] : '';
+        return '<option value="' + esc(u.email) + '">' +
+          esc(u.name) + ' (' + esc(u.email) + ')' + esc(tag) + '</option>';
+      }).join('') +
+      '</select>';
+  }
+
+  function arrangementsHtml() {
+    var may = can('attendance.manage_arrangement');
+    var rows = state.arrangements.map(function (a) {
+      return '<tr><td>' + esc(a.employee || a.email) +
+        (a.employee ? '<div style="font-size:11px;color:#94a3b8">' + esc(a.email) + '</div>' : '') +
+        '</td>' +
+        '<td>' + arrangementPill(a.arrangement) + '</td>' +
+        '<td style="font-size:13px">' + describeArrangement(a) + '</td>' +
+        '<td style="font-size:13px">' + esc(a.effectiveFrom || '—') + '</td>' +
+        '<td style="text-align:right">' +
+        (may ? '<button class="haa-btn sec" data-arr-hist="' + esc(a.email) + '">History</button> ' +
+               '<button class="haa-btn dgr" data-arr-del="' + a.id + '">Delete</button>' : '') +
+        '</td></tr>';
+    }).join('');
+
+    var dayBoxes = WEEKDAYS.map(function (d) {
+      return '<label style="display:inline-flex;align-items:center;gap:4px;margin-right:10px;font-size:13px">' +
+        '<input type="checkbox" class="haa-wa-day" value="' + d[0] + '"> ' + d[1] + '</label>';
+    }).join('');
+
+    var form = !may ? '' :
+      '<div class="haa-card">' +
+      '<div style="font-weight:700;margin-bottom:12px;font-size:14px;">Set a work arrangement</div>' +
+      '<div class="haa-grid" style="margin-bottom:12px">' +
+      '<div><label class="haa-lbl">Employee</label>' + employeePicker() + '</div>' +
+      '<div><label class="haa-lbl">Arrangement</label>' +
+      '<select class="haa-in" id="haa-wa-kind">' +
+      '<option value="onsite">Onsite — office only</option>' +
+      '<option value="hybrid">Hybrid — some remote days</option>' +
+      '<option value="remote">Remote — works remotely full time</option>' +
+      '</select></div>' +
+      '<div><label class="haa-lbl">Effective from</label>' +
+      '<input class="haa-in" id="haa-wa-from" type="date"></div>' +
+      '</div>' +
+      // Hybrid-only controls. Hidden rather than disabled: an onsite employee
+      // has no remote days, and showing greyed-out day boxes invites the
+      // reading that they exist but are switched off.
+      '<div id="haa-wa-hybrid" style="display:none;border-top:1px solid #e2e8f0;padding-top:12px;margin-bottom:12px">' +
+      '<label class="haa-lbl">Fixed remote days</label>' +
+      '<div style="margin-bottom:10px">' + dayBoxes + '</div>' +
+      '<div class="haa-grid">' +
+      '<div><label class="haa-lbl">…or days per week</label>' +
+      '<input class="haa-in" id="haa-wa-perweek" type="number" min="0" max="7" value="0"></div>' +
+      '</div>' +
+      '<div style="font-size:12px;color:#64748b;margin-top:8px">' +
+      'Tick specific days for a team with fixed in-office days. Otherwise leave them ' +
+      'unticked and set a number — the employee picks which days, up to that many a week. ' +
+      'Ticked days win: the weekly number is ignored when any day is ticked.' +
+      '</div></div>' +
+      '<div><label class="haa-lbl">Note (optional)</label>' +
+      '<input class="haa-in" id="haa-wa-note" placeholder="Agreed with manager, reviewed in Jan"></div>' +
+      '<div style="margin-top:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">' +
+      '<button class="haa-btn" id="haa-wa-save">Save arrangement</button>' +
+      '<span style="font-size:12px;color:#64748b">Saving does not overwrite the current ' +
+      'arrangement — it ends it the day before this one starts, so past attendance stays ' +
+      'judged by the rule that applied at the time.</span>' +
+      '</div></div>';
+
+    return errorBanner('arrangements') + form +
+      (state.arrangements.length
+        ? '<table class="haa-tbl"><thead><tr><th>Employee</th><th>Arrangement</th>' +
+          '<th>Remote entitlement</th><th>Since</th><th></th></tr></thead><tbody>' +
+          rows + '</tbody></table>'
+        : (state.errors.arrangements ? ''
+          : '<div class="haa-empty">No arrangements set. Everyone is treated as ' +
+            'office-based and needs an approved WFH request to work remotely.</div>'));
+  }
+
+  /* Registered home addresses awaiting confirmation.
+   *
+   * Shown above the off-site queue because it gates it: an employee with no
+   * confirmed home produces unverified WFH days rather than review items, so
+   * an empty off-site queue can mean "nobody is working away from home" or
+   * "nobody's home is registered yet", and those need telling apart.
+   *
+   * The map is the whole point of reviewing this. "17.4485, 78.3908" tells a
+   * reviewer nothing; a circle over a residential street tells them whether to
+   * confirm it, and a circle over an office park or a motorway tells them not
+   * to. The captured GPS accuracy is shown for the same reason.
+   */
+  function homesHtml() {
+    var may = can('attendance.approve_offsite');
+    var pending = state.homes.filter(function (h) { return h.status === 'Pending'; });
+    if (!pending.length) {
+      var confirmed = state.homes.filter(function (h) { return h.status === 'Approved'; }).length;
+      return errorBanner('homes') +
+        '<div class="haa-card"><div style="font-weight:700;font-size:14px;margin-bottom:6px">' +
+        'Home addresses</div><div style="font-size:13px;color:#64748b">' +
+        (confirmed
+          ? confirmed + ' confirmed. Nothing waiting.'
+          : 'None registered yet. Work-from-home check-ins are recorded but stay ' +
+            'unverified until employees register a home address and it is confirmed.') +
+        '</div></div>';
+    }
+    return errorBanner('homes') +
+      '<div class="haa-card"><div style="font-weight:700;font-size:14px;margin-bottom:12px">' +
+      'Home addresses awaiting confirmation (' + pending.length + ')</div>' +
+      '<div style="display:flex;gap:16px;flex-wrap:wrap">' +
+      pending.map(function (h) {
+        var acc = h.capturedAccuracy;
+        return '<div style="border:1px solid #e2e8f0;border-radius:10px;padding:12px;max-width:400px">' +
+          '<div style="font-weight:600;font-size:13px;margin-bottom:2px">' + esc(h.email) + '</div>' +
+          '<div style="font-size:12px;color:#64748b;margin-bottom:10px">' +
+          'Captured at GPS ' + (acc ? '±' + Math.round(acc) + ' m' : 'unknown accuracy') +
+          ' · ' + esc(h.radiusMeters) + ' m radius' +
+          (acc && acc > 100
+            ? '<div style="color:#b45309;margin-top:3px">Captured from a poor fix — ' +
+              'check the map carefully before confirming.</div>'
+            : '') +
+          '</div>' +
+          renderMap({ lat: h.latitude, lng: h.longitude, radius: h.radiusMeters,
+                      label: 'Home', width: 360, height: 220 }) +
+          (may
+            ? '<div style="margin-top:10px">' +
+              '<button class="haa-btn" data-home-ok="' + h.id + '">Confirm</button> ' +
+              '<button class="haa-btn dgr" data-home-no="' + h.id + '">Reject</button></div>'
+            : '<div style="font-size:12px;color:#64748b;margin-top:10px">You do not have ' +
+              'permission to confirm home addresses.</div>') +
+          '</div>';
+      }).join('') +
+      '</div></div>';
+  }
+
   /* ── tab: off-site reviews ───────────────────────────────────────────── */
   function reviewsHtml() {
     if (!state.reviews.length) {
@@ -589,8 +794,15 @@
         esc(r.reason || '—') + '</div>' +
         (hasPos ? '<a href="https://maps.google.com/?q=' + esc(r.latitude) + ',' + esc(r.longitude) +
           '" target="_blank" rel="noopener" style="color:#2563eb;font-size:12px">Open in Google Maps</a><br><br>' : '') +
-        '<button class="haa-btn" data-ok="' + r.id + '">Approve</button> ' +
-        '<button class="haa-btn dgr" data-no="' + r.id + '">Reject</button>' +
+        // Deciding is a separate grant from reading the queue: someone who can
+        // open this panel (attendance.edit) is not necessarily trusted to clear
+        // a check-in from outside the fence. Showing buttons the server would
+        // refuse just moves the refusal later and makes it look like a fault.
+        (can('attendance.approve_offsite')
+          ? '<button class="haa-btn" data-ok="' + r.id + '">Approve</button> ' +
+            '<button class="haa-btn dgr" data-no="' + r.id + '">Reject</button>'
+          : '<div style="font-size:12px;color:#64748b">You do not have permission ' +
+            'to approve or reject off-site check-ins.</div>') +
         '</div></div>';
     }).join('');
   }
@@ -606,7 +818,9 @@
     }
     if (state.busy) { body.innerHTML = '<div class="haa-empty">Loading…</div>'; return; }
     body.innerHTML = state.tab === 'fences' ? fencesHtml()
-      : state.tab === 'shifts' ? shiftsHtml() : reviewsHtml();
+      : state.tab === 'shifts' ? shiftsHtml()
+      : state.tab === 'arrangements' ? arrangementsHtml()
+      : (homesHtml() + reviewsHtml());
     wire(body);
   }
 
@@ -760,6 +974,160 @@
     }
     decide('data-ok', 'Approved');
     decide('data-no', 'Rejected');
+
+    function decideHome(attr, decision) {
+      var els = body.querySelectorAll('[' + attr + ']');
+      for (var i = 0; i < els.length; i++) {
+        (function (el) {
+          el.onclick = function () {
+            el.disabled = true;
+            api('/api/attendance/home-locations/review', {
+              method: 'POST',
+              body: JSON.stringify({ id: parseInt(el.getAttribute(attr), 10), decision: decision })
+            }).then(function () {
+              toast('Home address ' + decision.toLowerCase());
+              loadAll();
+            }).catch(function (e) { el.disabled = false; toast(e.message, true); });
+          };
+        })(els[i]);
+      }
+    }
+    decideHome('data-home-ok', 'Approved');
+    decideHome('data-home-no', 'Rejected');
+
+    /* ── work arrangements ─────────────────────────────────────────────── */
+    var kind = body.querySelector('#haa-wa-kind');
+    if (kind) {
+      var hybridBox = body.querySelector('#haa-wa-hybrid');
+      var syncKind = function () {
+        hybridBox.style.display = kind.value === 'hybrid' ? '' : 'none';
+      };
+      kind.onchange = syncKind;
+      syncKind();
+
+      // Default "effective from" to today rather than leaving it blank: an
+      // empty date reads as "no opinion", and the server would silently pick
+      // today anyway. Showing the date it will actually use is honest.
+      var fromEl = body.querySelector('#haa-wa-from');
+      if (fromEl && !fromEl.value) {
+        var n = new Date();
+        fromEl.value = n.getFullYear() + '-' +
+          String(n.getMonth() + 1).padStart(2, '0') + '-' +
+          String(n.getDate()).padStart(2, '0');
+      }
+    }
+
+    var save = body.querySelector('#haa-wa-save');
+    if (save) save.onclick = function () {
+      var emailEl = body.querySelector('#haa-wa-email');
+      var email = (emailEl.value || '').trim();
+      if (!email) {
+        return toast(emailEl.tagName === 'SELECT'
+          ? 'Select an employee' : 'Employee email is required', true);
+      }
+      // Carry the name across so the table reads "Ravi Kumar", not a bare
+      // address. Only the roster knows it; the arrangement row does not.
+      var picked = null;
+      for (var r = 0; r < state.roster.length; r++) {
+        if (state.roster[r].email === email) { picked = state.roster[r]; break; }
+      }
+      var which = body.querySelector('#haa-wa-kind').value;
+
+      var days = [];
+      var boxes = body.querySelectorAll('.haa-wa-day');
+      for (var i = 0; i < boxes.length; i++) if (boxes[i].checked) days.push(boxes[i].value);
+      var perWeek = parseInt(body.querySelector('#haa-wa-perweek').value, 10) || 0;
+
+      // Catch the useless-hybrid case here as well as server-side: a round trip
+      // to be told "pick something" is worse than being told before sending.
+      if (which === 'hybrid' && !days.length && perWeek < 1) {
+        return toast('Tick the remote days, or set how many days a week', true);
+      }
+
+      save.disabled = true;
+      api('/api/attendance/arrangements', {
+        method: 'POST',
+        body: JSON.stringify({
+          email: email,
+          employee: picked ? picked.name : '',
+          arrangement: which,
+          remoteWeekdays: days,
+          remoteDaysPerWeek: perWeek,
+          effectiveFrom: body.querySelector('#haa-wa-from').value || null,
+          notes: (body.querySelector('#haa-wa-note').value || '').trim()
+        })
+      }).then(function () {
+        toast('Work arrangement saved');
+        loadAll();
+      }).catch(function (e) {
+        save.disabled = false;
+        toast(e.message, true);
+      });
+    };
+
+    var hist = body.querySelectorAll('[data-arr-hist]');
+    for (var h = 0; h < hist.length; h++) {
+      (function (el) {
+        el.onclick = function () {
+          var em = el.getAttribute('data-arr-hist');
+          api('/api/attendance/arrangements?email=' + encodeURIComponent(em))
+            .then(function (rows) { showArrangementHistory(em, rows || []); })
+            .catch(function (e) { toast(e.message, true); });
+        };
+      })(hist[h]);
+    }
+
+    var dels = body.querySelectorAll('[data-arr-del]');
+    for (var d = 0; d < dels.length; d++) {
+      (function (el) {
+        el.onclick = function () {
+          if (!window.confirm(
+            'Delete this arrangement?\n\nThe one it replaced becomes current again. ' +
+            'Use this to undo a mistake — to record a genuine change, save a new ' +
+            'arrangement instead so the history is kept.')) return;
+          el.disabled = true;
+          api('/api/attendance/arrangements/' + el.getAttribute('data-arr-del'),
+              { method: 'DELETE' })
+            .then(function () { toast('Arrangement deleted'); loadAll(); })
+            .catch(function (e) { el.disabled = false; toast(e.message, true); });
+        };
+      })(dels[d]);
+    }
+  }
+
+  /* Full effective-dated history for one employee. Worth its own view: the
+   * table shows only what is in force today, and "why was this check-in
+   * allowed in March?" is answerable only from the row that applied then. */
+  function showArrangementHistory(email, rows) {
+    var back = document.createElement('div');
+    back.setAttribute('style',
+      'position:fixed;inset:0;z-index:100001;background:rgba(15,23,42,0.55);' +
+      'display:flex;align-items:center;justify-content:center;padding:20px;');
+    var body = rows.length ? rows.map(function (a) {
+      return '<tr><td>' + esc(a.effectiveFrom || '—') + '</td>' +
+        '<td>' + esc(a.effectiveTo || 'current') + '</td>' +
+        '<td>' + arrangementPill(a.arrangement) + '</td>' +
+        '<td style="font-size:13px">' + describeArrangement(a) + '</td>' +
+        '<td style="font-size:12px;color:#64748b">' + esc(a.notes || '') +
+        (a.createdBy ? '<div>set by ' + esc(a.createdBy) + '</div>' : '') + '</td></tr>';
+    }).join('') : '';
+
+    back.innerHTML =
+      '<div style="background:#fff;border-radius:12px;padding:20px;max-width:760px;' +
+      'width:100%;max-height:80vh;overflow:auto;font-family:\'Segoe UI\',Arial,sans-serif">' +
+      '<div style="font-weight:700;margin-bottom:4px">Work arrangement history</div>' +
+      '<div style="font-size:12px;color:#64748b;margin-bottom:14px">' + esc(email) + '</div>' +
+      (body
+        ? '<table class="haa-tbl"><thead><tr><th>From</th><th>Until</th><th>Arrangement</th>' +
+          '<th>Remote entitlement</th><th>Note</th></tr></thead><tbody>' + body + '</tbody></table>'
+        : '<div class="haa-empty">No arrangement has ever been set for this employee.</div>') +
+      '<div style="margin-top:16px;text-align:right">' +
+      '<button class="haa-btn sec" id="haa-hist-close">Close</button></div></div>';
+
+    document.body.appendChild(back);
+    function shut() { if (back.parentNode) back.parentNode.removeChild(back); }
+    back.querySelector('#haa-hist-close').onclick = shut;
+    back.addEventListener('click', function (e) { if (e.target === back) shut(); });
   }
 
   /* ── open / close ────────────────────────────────────────────────────── */
@@ -777,6 +1145,7 @@
       '<button class="haa-tab on" data-tab="fences">Office Locations</button>' +
       '<button class="haa-tab" data-tab="shifts">Shifts</button>' +
       '<button class="haa-tab" data-tab="reviews">Off-site Approvals</button>' +
+      '<button class="haa-tab" data-tab="arrangements">Work Arrangements</button>' +
       '</div><div class="haa-body"></div></div>';
     document.body.appendChild(back);
 

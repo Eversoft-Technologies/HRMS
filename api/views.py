@@ -65,6 +65,7 @@ from .models import (
     GeoFence,
     WfhRequest,
     WFHPolicy,
+    WorkArrangement,
 )
 from .serializers import (
     DATETIME_FMT,
@@ -1750,7 +1751,31 @@ def _geofencing_enabled():
     out-of-office review is skipped entirely — otherwise turning this code on
     would put every check-in in the company into a pending state.
     """
-    return GeoFence.objects.filter(is_active=True).exists()
+    return _office_fences().exists()
+
+
+def _office_fences():
+    """Active COMPANY locations only.
+
+    Every office-side query must go through this. An unfiltered fence list now
+    contains employees' homes, so matching against it would verify an office
+    check-in from a colleague's living room — and would count someone's house
+    as "a fence exists", switching enforcement on for the whole company.
+    """
+    return GeoFence.objects.filter(is_active=True, owner_email='')
+
+
+def home_fence_for(email):
+    """The employee's CONFIRMED home fence, or None.
+
+    Pending and Rejected homes deliberately return None: an unconfirmed pin is
+    a claim, not a verification basis, and treating it as one would let anyone
+    register wherever they stood and self-certify from then on.
+    """
+    if not email:
+        return None
+    return GeoFence.objects.filter(
+        is_active=True, owner_email=email, status=GeoFence.APPROVED).first()
 
 
 #: A phone indoors, or a desktop located from WiFi/IP, can report a position
@@ -1760,7 +1785,7 @@ def _geofencing_enabled():
 GEO_ACCURACY_ALLOWANCE_CAP_M = 750
 
 
-def _locate_against_fences(lat, lng, accuracy=None):
+def _locate_against_fences(lat, lng, accuracy=None, fences=None):
     """Resolve a position against every active fence.
 
     Returns ``(is_inside, matched_fence, nearest_fence, distance_m)``. The
@@ -1778,7 +1803,11 @@ def _locate_against_fences(lat, lng, accuracy=None):
             allowance = 0.0
 
     nearest, nearest_d = None, None
-    for fence in GeoFence.objects.filter(is_active=True):
+    # Defaults to company locations. A home check is the same maths against a
+    # different circle, so it passes its own list rather than duplicating the
+    # accuracy allowance — which is the part that stops a ±300 m fix marking
+    # someone at their kitchen table as away from home.
+    for fence in (_office_fences() if fences is None else fences):
         dist = _haversine_distance(lat, lng, fence.latitude, fence.longitude)
         if nearest_d is None or dist < nearest_d:
             nearest, nearest_d = fence, dist
@@ -1832,6 +1861,30 @@ def _location_help(lat, lng, accuracy, nearest, distance):
             f'{nearest.radius_meters} m.{acc} Add a reason and HR will review it.')
 
 
+def _home_location_help(lat, lng, accuracy, home, distance):
+    """Why a work-from-home check-in was not verified against the home fence.
+
+    Split from _location_help because the remedy differs: "go to the office" is
+    the wrong advice for someone whose problem is that their registered home is
+    pinned in the wrong place, and quoting a distance from a ±50 km fix would
+    tell them they are 60 km from their own living room.
+    """
+    if lat is None or lng is None:
+        return ('We could not read your location, so this work-from-home '
+                'check-in cannot be verified. Allow location access in your '
+                'browser and try again, or add a reason for HR.')
+    if not _fix_is_usable(lat, lng, accuracy):
+        km = round(float(accuracy) / 1000)
+        return (f'Your device could not pinpoint you — the position it reported '
+                f'is only accurate to about {km} km, so we cannot tell whether '
+                f'you are at your registered home. Turn on location/GPS for this '
+                f'site and try again, or add a reason and HR will approve it.')
+    return (f'You appear to be about {round(distance)} m from your registered '
+            f'home address, which covers {home.radius_meters} m. If you have '
+            f'moved, ask HR to update your home location. Otherwise add a reason '
+            f'and HR will review it.')
+
+
 def _check_geofence(lat, lng):
     """Back-compat wrapper: check-out and the event log only need a yes/no."""
     inside, fence, _nearest, _dist = _locate_against_fences(lat, lng)
@@ -1841,7 +1894,7 @@ def _check_geofence(lat, lng):
 def _check_geofence_legacy(lat, lng):
     if lat is None or lng is None:
         return False, None
-    for fence in GeoFence.objects.filter(is_active=True):
+    for fence in _office_fences():
         dist = _haversine_distance(lat, lng, fence.latitude, fence.longitude)
         if dist <= fence.radius_meters:
             return True, fence
@@ -1874,6 +1927,14 @@ def attendance_check_in(request):
     obj.shift_id = shift.id
 
     # WFH verification
+    #
+    # isWfh arrives from the client and used to be taken at face value, which
+    # made it a complete bypass of the geofence: the branch below skips the
+    # fence entirely and sets geo_verified for a WFH day, so anyone who posted
+    # {"isWfh": true} was verified from anywhere. A rejected request did not
+    # even register — only Approved was looked for, and only ever to turn the
+    # flag ON. Claiming to work from home now has to be backed by the same
+    # approval that switching to remote mid-day requires.
     is_wfh = bool(body.get('isWfh') or body.get('is_wfh') or False)
     has_approved_wfh = WfhRequest.objects.filter(
         email=email,
@@ -1882,7 +1943,20 @@ def attendance_check_in(request):
         to_date__gte=now.date()
     ).exists()
     if has_approved_wfh:
+        # An approval applies whether or not the client thought to ask for it.
         is_wfh = True
+    elif is_wfh:
+        allowed_remote, remote_reason = remote_switch_check(email, now.date())
+        if not allowed_remote:
+            return Response({
+                'message': remote_reason,
+                'code': 'WFH_APPROVAL_REQUIRED',
+                'needsWfhRequest': True,
+            }, status=403)
+        # Otherwise standing remote access or a no-approval policy allows it.
+        # Note this only PERMITS a claim the employee made; it never marks
+        # someone WFH who did not ask, which would skip the fence for every
+        # admin sitting at their desk.
     obj.is_wfh = is_wfh
 
     # GPS / Geofence verification
@@ -1904,10 +1978,102 @@ def attendance_check_in(request):
     reason = str(body.get('locationReason') or body.get('reason') or '').strip()
     needs_review = False
     if is_wfh:
-        # Working from home is exactly the case the fence does not apply to.
-        obj.geo_verified = True
-        obj.location_status = ''
-        loc_desc = 'Home'
+        # Working from home is exempt from the OFFICE fence, not from being
+        # anywhere in particular. This branch used to set geo_verified=True and
+        # discard the position entirely, so an approved WFH day was verified
+        # from a beach — the flag proved only that someone had claimed it.
+        #
+        # Verified against the employee's own registered home instead. No home
+        # on file is not a refusal: the position is recorded and the day is
+        # left unverified, the same way an unconfigured office fence does not
+        # lock the company out on day one.
+        home = home_fence_for(email)
+        if lat is not None and lng is not None:
+            obj.location_lat, obj.location_lng = lat, lng
+        else:
+            obj.location_lat = obj.location_lng = None
+
+        if home is None:
+            obj.geo_verified = False
+            if obj.location_status not in ('Approved', 'Rejected'):
+                obj.location_status = ''
+            loc_desc = 'Home (not registered)'
+        else:
+            at_home, _f, _n, home_dist = _locate_against_fences(
+                lat, lng, accuracy, fences=[home])
+            if at_home:
+                obj.geo_verified = True
+                if obj.location_status not in ('Approved', 'Rejected'):
+                    obj.location_status = ''
+                loc_desc = 'Home'
+            elif obj.location_status == 'Approved':
+                obj.geo_verified = True
+                loc_desc = 'Away from home (approved)'
+            elif obj.location_status == 'Pending':
+                return Response({
+                    'message': 'Your check-in away from your registered home is '
+                               'waiting for HR approval.',
+                    'code': 'LOCATION_APPROVAL_PENDING',
+                    'status': 'Pending',
+                    'reason': obj.location_reason or '',
+                }, status=409)
+            elif obj.location_status == 'Rejected':
+                return Response({
+                    'message': (
+                        'Your check-in away from your registered home was rejected'
+                        + (f' by {obj.location_reviewer}' if obj.location_reviewer else '')
+                        + '. Check in from your registered address, or speak to HR.'
+                    ),
+                    'code': 'LOCATION_APPROVAL_REJECTED',
+                    'status': 'Rejected',
+                    'reason': obj.location_reason or '',
+                    'reviewer': obj.location_reviewer or '',
+                }, status=403)
+            elif not reason:
+                obj.geo_verified = False
+                obj.save(update_fields=['location_lat', 'location_lng', 'geo_verified'])
+                return Response({
+                    'message': _home_location_help(lat, lng, accuracy, home, home_dist),
+                    'code': 'LOCATION_REASON_REQUIRED',
+                    'needsReason': True,
+                    # Tells the client this is the home case, not the office
+                    # one, so the dialog does not say "outside the office" to
+                    # somebody whose problem is that they are away from home.
+                    'isWfh': True,
+                    'hasPosition': _fix_is_usable(lat, lng, accuracy),
+                    'gotCoordinates': lat is not None and lng is not None,
+                    'accuracy': accuracy,
+                    'distance': (round(home_dist)
+                                 if (home_dist is not None
+                                     and _fix_is_usable(lat, lng, accuracy))
+                                 else None),
+                    'fence': home.name,
+                    'fenceRadius': home.radius_meters,
+                    'fenceLat': home.latitude,
+                    'fenceLng': home.longitude,
+                }, status=422)
+            else:
+                obj.geo_verified = False
+                obj.location_reason = reason
+                obj.location_status = 'Pending'
+                obj.location_reviewer = ''
+                obj.location_reviewed_at = None
+                obj.save()
+                notify_approvers(
+                    'attendance.approve_offsite',
+                    'Away-from-home check-in awaiting approval',
+                    f'{obj.employee_name or email} asked to check in '
+                    + (f'{round(home_dist)} m from their registered home'
+                       if home_dist is not None else 'away from their registered home')
+                    + f'. Reason: "{reason}"',
+                    '/attendance',
+                )
+                return Response({
+                    'message': 'Your reason has been sent to HR. You will be able '
+                               'to check in once it is approved.',
+                    'code': 'LOCATION_APPROVAL_PENDING',
+                    'status': 'Pending',
+                }, status=202)
     elif not _geofencing_enabled():
         # No active fences configured — there is nothing to be outside of, so
         # enforcing would lock out every employee on day one.
@@ -1947,6 +2113,26 @@ def attendance_check_in(request):
                 'status': 'Pending',
                 'reason': obj.location_reason or '',
             }, status=409)
+        elif obj.location_status == 'Rejected':
+            # A rejection is binding for the day. Without this the employee fell
+            # through to the branch below, which resets the row to Pending — so
+            # refusing an off-site check-in only cost them the time it took to
+            # retype a reason, and an approver could be asked the same question
+            # all afternoon. Note this blocks the OFF-SITE route only: the
+            # `is_inside` branch above still lets them check in normally the
+            # moment they reach the office, which is the point of refusing.
+            return Response({
+                'message': (
+                    'Your off-site check-in for today was rejected'
+                    + (f' by {obj.location_reviewer}' if obj.location_reviewer else '')
+                    + '. You can check in from the office, or speak to HR if you '
+                      'think this is wrong.'
+                ),
+                'code': 'LOCATION_APPROVAL_REJECTED',
+                'status': 'Rejected',
+                'reason': obj.location_reason or '',
+                'reviewer': obj.location_reviewer or '',
+            }, status=403)
         elif not reason:
             # Persist the position (or its absence) even though we are refusing:
             # leaving an old fix on the row would show HR a location this
@@ -1979,7 +2165,7 @@ def attendance_check_in(request):
             obj.location_reviewed_at = None
             obj.save()
             notify_approvers(
-                'attendance.edit',
+                'attendance.approve_offsite',
                 'Off-site check-in awaiting approval',
                 f'{obj.employee_name or email} asked to check in '
                 + (f'{round(distance)} m from {nearest.name}' if (distance is not None and nearest)
@@ -2047,7 +2233,14 @@ def attendance_check_in(request):
         'success',
         '/employees/attendance',
     )
-    return Response(EmployeeAttendanceSerializer(obj).data, status=201)
+    payload = EmployeeAttendanceSerializer(obj).data
+    # A work-from-home day that nothing could be checked against. The client
+    # uses this to offer registering a home address, at the one moment the
+    # employee is provably standing in it. Sent on the SUCCESS response
+    # deliberately: the check-in is not conditional on answering.
+    if is_wfh and home_fence_for(email) is None:
+        payload['homeLocationMissing'] = True
+    return Response(payload, status=201)
 
 
 @api_view(['POST'])
@@ -2060,8 +2253,20 @@ def attendance_check_out(request):
         return err('email is required')
     now = local_now()
     obj = EmployeeAttendance.objects.filter(email=email, date=now.date()).first()
-    if not obj:
-        return err('No check-in found for today', 404)
+    if not obj or not _is_checked_in(obj):
+        # Both cases are "there is no open session to close", and they must be
+        # refused identically. Only the missing-row case used to be caught, so
+        # a row with check_in still NULL — exactly what a geofence-refused
+        # attempt leaves behind, position recorded but never checked in — was
+        # accepted, and the day ended up stamped with a check-out and no
+        # check-in. Worked minutes are computed from that pair.
+        return Response({
+            'message': ('You are not checked in, so there is nothing to check '
+                        'out of. If the toggle showed otherwise it was out of '
+                        'date; it has been corrected.'),
+            'code': 'NO_OPEN_SESSION',
+            'checkedIn': False,
+        }, status=409)
 
     # GPS check for event
     lat = body.get('latitude')
@@ -2260,7 +2465,7 @@ def attendance_geofence_check(request):
 
 
 @api_view(['GET', 'POST'])
-@require_perm({'GET': 'attendance.view', 'POST': 'attendance.edit'})
+@require_perm({'GET': 'attendance.view', 'POST': 'attendance.approve_offsite'})
 def attendance_location_reviews(request):
     """Out-of-geofence check-ins awaiting an HR/admin decision.
 
@@ -2382,6 +2587,108 @@ def _looks_remote(location):
     return 'home' in loc or 'remote' in loc
 
 
+WEEKDAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday',
+                 'Saturday', 'Sunday']
+
+
+def arrangement_for(email, day=None):
+    """The WorkArrangement in force for ``email`` on ``day``, or None.
+
+    Rows are ordered newest-effective-first, so the first row that had started
+    by ``day`` and had not yet ended is the operative one. Asking by date is the
+    whole point: a check-in in March must be judged by the arrangement that was
+    in force in March, not by whatever it was changed to since.
+    """
+    day = day or local_now().date()
+    return (WorkArrangement.objects
+            .filter(email=email, effective_from__lte=day)
+            .filter(Q(effective_to__isnull=True) | Q(effective_to__gte=day))
+            .first())
+
+
+def remote_days_used(email, day):
+    """Remote days already recorded in ``day``'s Mon-Sun week, excluding it.
+
+    Today is excluded because its row is created before this runs and its
+    is_wfh flag is what we are deciding — counting it would have the employee
+    compete against themselves.
+    """
+    week_start = day - timedelta(days=day.weekday())
+    return (EmployeeAttendance.objects
+            .filter(email=email, is_wfh=True,
+                    date__gte=week_start, date__lte=week_start + timedelta(days=6))
+            .exclude(date=day)
+            .count())
+
+
+def remote_allowance_check(email, day, arr=None):
+    """Does ``email``'s own arrangement entitle them to work remotely on ``day``?
+
+    Returns (allowed, reason). A denial reason is written for the employee,
+    because it is the one they see: "Tuesday is not one of your remote days"
+    is actionable in a way that "not permitted" is not.
+
+    No arrangement on file is NOT a refusal by itself — it just means this
+    mechanism has nothing to say, and the caller falls through to the WFH
+    request flow exactly as before. Sites that never configure arrangements
+    keep their existing behaviour.
+    """
+    arr = arr if arr is not None else arrangement_for(email, day)
+
+    if arr is None:
+        return False, (
+            'You need an approved work-from-home request for today before '
+            'working remotely. Submit a WFH request, or ask an admin to set '
+            'your work arrangement.'
+        )
+
+    if arr.arrangement == WorkArrangement.REMOTE:
+        return True, 'remote work arrangement'
+
+    if arr.arrangement == WorkArrangement.ONSITE:
+        return False, (
+            'Your work arrangement is office-based, so remote check-in is not '
+            'available. Submit a WFH request if you need to work from home today.'
+        )
+
+    if arr.arrangement != WorkArrangement.HYBRID:
+        # An arrangement value nobody recognises must not silently grant
+        # remote work — fall back to the request flow.
+        return False, (
+            'Your work arrangement is not recognised. Submit a WFH request and '
+            'HR will review it.'
+        )
+
+    # Hybrid, anchor days named: only those days, and the quota does not apply.
+    anchors = arr.weekday_set()
+    if anchors:
+        if day.weekday() in anchors:
+            return True, 'hybrid anchor day'
+        names = ', '.join(WEEKDAY_NAMES[d] for d in sorted(anchors))
+        return False, (
+            f'{WEEKDAY_NAMES[day.weekday()]} is not one of your remote days '
+            f'({names}). Submit a WFH request if you need to work from home today.'
+        )
+
+    # Hybrid, employee picks the days: cap on how many per week.
+    quota = arr.remote_days_per_week or 0
+    if quota <= 0:
+        return False, (
+            'Your hybrid arrangement has no remote days allocated yet. Submit a '
+            'WFH request, or ask HR to set your remote days.'
+        )
+
+    used = remote_days_used(email, day)
+    if used < quota:
+        return True, f'hybrid allowance ({used + 1} of {quota} this week)'
+
+    return False, (
+        f'You have already used your {quota} remote '
+        f'{"day" if quota == 1 else "days"} this week. Submit a WFH request and '
+        f'HR will review it.'
+    )
+
+
 def remote_switch_check(email, day=None):
     """May ``email`` work remotely on ``day``? Returns (allowed, reason).
 
@@ -2391,19 +2698,45 @@ def remote_switch_check(email, day=None):
     holds:
 
       1. an APPROVED WfhRequest covers the day, or
-      2. the user holds ``attendance.remote`` (standing remote/hybrid staff and
+      2. their WorkArrangement entitles them to it — fully remote, or hybrid on
+         an anchor day / within the weekly allowance, or
+      3. the user holds ``attendance.remote`` (standing remote/hybrid staff and
          admins who don't file a request each time), or
-      3. the active WFH policy does not require approval at all.
+      4. the active WFH policy does not require approval at all.
+
+    A REJECTED request covering the day beats 2 and 3. An approver looked at
+    this specific day and said no; letting a standing grant quietly override
+    that would make rejection advisory in exactly the way this function exists
+    to prevent. Someone who genuinely needs to work remotely after a rejection
+    gets the decision changed, rather than routing around it. (An approved
+    request still wins, so an approver who reverses their own decision does not
+    have to delete the rejected row.)
     """
     from .permissions import _user_has_perm
 
     day = day or local_now().date()
 
-    approved = WfhRequest.objects.filter(
-        email=email, status='Approved', from_date__lte=day, to_date__gte=day,
-    ).exists()
-    if approved:
+    covering = WfhRequest.objects.filter(
+        email=email, from_date__lte=day, to_date__gte=day,
+    ).values_list('status', flat=True)
+    statuses = {(s or '').strip() for s in covering}
+
+    if 'Approved' in statuses:
         return True, 'approved WFH request'
+
+    if 'Rejected' in statuses:
+        return False, (
+            'Your work-from-home request covering today was rejected, so you '
+            'cannot check in as working from home. Check in from the office, or '
+            'speak to HR if you think this is wrong.'
+        )
+
+    # The employee's own arrangement. Its refusal message is the one worth
+    # showing — it can say "Tuesday is not one of your remote days" — so it is
+    # kept and returned below if nothing else lets them through.
+    entitled, why = remote_allowance_check(email, day)
+    if entitled:
+        return True, why
 
     user = AppUser.objects.select_related('role_ref').filter(email=email).first()
     if _user_has_perm(user, 'attendance.remote'):
@@ -2413,10 +2746,337 @@ def remote_switch_check(email, day=None):
     if policy and not policy.requires_approval:
         return True, 'policy does not require approval'
 
-    return False, (
-        'You need an approved work-from-home request for today before switching '
-        'to remote. Submit a WFH request, or ask an admin to grant you remote access.'
+    return False, why
+
+
+#: A house plus an indoor GPS fix. Tighter than this and people get flagged at
+#: their own kitchen table; looser and "home" starts covering the next street.
+HOME_FENCE_DEFAULT_RADIUS_M = 150
+
+#: Past this the captured fix is too vague to be worth confirming — accepting it
+#: would register a "home" the size of a district and verify nothing.
+HOME_CAPTURE_MAX_ACCURACY_M = 500
+
+
+def _home_json(f):
+    return {
+        'id': f.id,
+        'email': f.owner_email,
+        'name': f.name,
+        'latitude': f.latitude,
+        'longitude': f.longitude,
+        'radiusMeters': f.radius_meters,
+        'status': f.status,
+        'reviewer': f.reviewer or '',
+        'reviewedAt': f.reviewed_at.strftime(DATETIME_FMT) if f.reviewed_at else None,
+        'capturedAccuracy': f.captured_accuracy,
+    }
+
+
+@api_view(['GET', 'POST'])
+@require_perm({'GET': 'attendance.view', 'POST': 'attendance.view'}, or_self=True)
+def attendance_home_locations(request):
+    """An employee's registered home, used to verify work-from-home check-ins.
+
+    GET  ?email=  -> that person's home (self-service, or any attendance viewer)
+         (none)   -> every home, for the approvals queue
+    POST          -> the employee registers/replaces their own home. It lands
+                     Pending and verifies nothing until confirmed.
+
+    POST is or_self, deliberately: the employee is the one standing in the right
+    place, and asking HR to obtain accurate coordinates for everybody does not
+    work. The safeguard is not who captures it but that a capture is inert —
+    home_fence_for() only ever returns an Approved row — so registering the cafe
+    you are sitting in buys nothing until a human agrees it is your house.
+    """
+    if request.method == 'GET':
+        email = norm_email(request.GET.get('email'))
+        qs = GeoFence.objects.exclude(owner_email='')
+        if email:
+            qs = qs.filter(owner_email=email)
+        return Response([_home_json(f) for f in qs.order_by('owner_email')])
+
+    body = request.data
+    email = norm_email(body.get('email'))
+    if not email:
+        return err('email is required')
+
+    try:
+        lat = float(body.get('latitude'))
+        lng = float(body.get('longitude'))
+    except (TypeError, ValueError):
+        return err('latitude and longitude are required')
+
+    try:
+        accuracy = (float(body.get('accuracy'))
+                    if body.get('accuracy') is not None else None)
+    except (TypeError, ValueError):
+        accuracy = None
+    if accuracy is not None and accuracy > HOME_CAPTURE_MAX_ACCURACY_M:
+        return err(
+            f'That position is only accurate to ±{round(accuracy)} m, which is '
+            f'too vague to register as a home address. Move somewhere with a '
+            f'clearer view of the sky, or use a phone with GPS, and try again.')
+
+    try:
+        radius = int(body.get('radiusMeters') or HOME_FENCE_DEFAULT_RADIUS_M)
+    except (TypeError, ValueError):
+        radius = HOME_FENCE_DEFAULT_RADIUS_M
+    radius = max(50, min(radius, 1000))
+
+    from .permissions import _get_caller
+    caller, _u = _get_caller(request)
+    # One home per employee: replacing it re-opens the approval, so a move
+    # cannot quietly inherit the confirmation given to the old address.
+    row = GeoFence.objects.filter(owner_email=email).first()
+    if row is None:
+        row = GeoFence(owner_email=email)
+    row.name = str(body.get('name') or '').strip() or f'Home — {email}'
+    row.latitude, row.longitude = lat, lng
+    row.radius_meters = radius
+    row.is_active = True
+    row.status = GeoFence.PENDING
+    row.reviewer = ''
+    row.reviewed_at = None
+    row.captured_accuracy = accuracy
+    row.created_by = caller or email
+    row.save()
+
+    notify_approvers(
+        'attendance.approve_offsite',
+        'Home location awaiting confirmation',
+        f'{email} registered a home location'
+        + (f' (GPS ±{round(accuracy)} m)' if accuracy else '')
+        + '. Confirm it before their work-from-home check-ins can be verified.',
+        '/attendance',
     )
+    return Response(_home_json(row), status=201)
+
+
+@api_view(['POST'])
+@require_perm('attendance.approve_offsite')
+def attendance_home_location_review(request):
+    """Confirm or reject a registered home. {id, decision: Approved|Rejected}."""
+    body = request.data
+    row = GeoFence.objects.filter(pk=body.get('id')).exclude(owner_email='').first()
+    if not row:
+        return err('Home location not found', 404)
+    decision = str(body.get('decision') or '').strip().title()
+    if decision not in (GeoFence.APPROVED, GeoFence.REJECTED):
+        return err('decision must be Approved or Rejected')
+
+    from .permissions import _get_caller
+    caller, _u = _get_caller(request)
+    row.status = decision
+    row.reviewer = caller or ''
+    row.reviewed_at = local_now()
+    row.save(update_fields=['status', 'reviewer', 'reviewed_at'])
+
+    create_notification(
+        row.owner_email,
+        f'Home location {decision.lower()}',
+        (f'Your registered home address was {decision.lower()} by '
+         f'{caller or "HR"}.' if decision == GeoFence.APPROVED else
+         f'Your registered home address was rejected by {caller or "HR"}. '
+         f'Work-from-home check-ins cannot be verified until a correct one is set.'),
+        'success' if decision == GeoFence.APPROVED else 'warning',
+        '/employees/attendance',
+    )
+    return Response({'ok': True, 'id': row.id, 'status': row.status})
+
+
+@api_view(['GET'])
+@require_perm('attendance.view')
+def attendance_roster(request):
+    """Active employees as {email, name}, for pickers in the attendance screens.
+
+    Deliberately NOT /api/users: that returns the full AppUser record, which on
+    this schema includes the plain-text password column, and it is gated on
+    settings.view — a heavier grant than managing attendance. A dropdown needs
+    two fields, so it gets two fields.
+    """
+    rows = (AppUser.objects.filter(status='active')
+            .order_by('full_name', 'email')
+            .values_list('email', 'full_name'))
+    return Response([
+        {'email': e, 'name': (n or '').strip() or e} for e, n in rows if e
+    ])
+
+
+def _arrangement_json(a):
+    return {
+        'id': a.id,
+        'email': a.email,
+        'employee': a.employee_name,
+        'arrangement': a.arrangement,
+        'remoteWeekdays': sorted(a.weekday_set()),
+        'remoteDaysPerWeek': a.remote_days_per_week,
+        'effectiveFrom': a.effective_from.strftime('%Y-%m-%d') if a.effective_from else None,
+        'effectiveTo': a.effective_to.strftime('%Y-%m-%d') if a.effective_to else None,
+        'current': a.effective_to is None,
+        'notes': a.notes or '',
+        'createdBy': a.created_by or '',
+    }
+
+
+def _parse_weekdays(raw):
+    """Accept [0,4], "0,4" or "Mon,Fri". Returns (csv, error)."""
+    if raw in (None, '', []):
+        return '', None
+    if isinstance(raw, str):
+        raw = [p.strip() for p in raw.split(',') if p.strip()]
+    out = set()
+    for item in raw:
+        s = str(item).strip()
+        if s.isdigit():
+            n = int(s)
+        else:
+            names = [w[:3].lower() for w in WEEKDAY_NAMES]
+            n = names.index(s[:3].lower()) if s[:3].lower() in names else -1
+        if not (0 <= n <= 6):
+            return None, f'"{item}" is not a weekday'
+        out.add(n)
+    return ','.join(str(n) for n in sorted(out)), None
+
+
+@api_view(['GET', 'POST'])
+# or_self is scoped to GET on purpose: an employee may look up their own
+# arrangement, but self-service must stop there. With or_self=True the POST
+# branch would accept a body whose email is the caller's own — letting anyone
+# set themselves to "remote" and walk out of the geofence entirely.
+@require_perm({'GET': 'attendance.view', 'POST': 'attendance.manage_arrangement'},
+              or_self=('GET',))
+def attendance_arrangements(request):
+    """Where each employee works.
+
+    GET  ?email=       -> that employee's full history, newest first
+         (no email)    -> the arrangement currently in force for everyone
+    POST -> record a change. The previous row is CLOSED, never overwritten:
+            a check-in in March has to stay judged by March's arrangement, so
+            the old value must survive the change.
+    """
+    if request.method == 'GET':
+        email = norm_email(request.GET.get('email'))
+        if email:
+            rows = WorkArrangement.objects.filter(email=email)
+            return Response([_arrangement_json(a) for a in rows])
+        today = local_today()
+        rows = (WorkArrangement.objects
+                .filter(effective_from__lte=today)
+                .filter(Q(effective_to__isnull=True) | Q(effective_to__gte=today)))
+        # Newest-first ordering means the first row seen per employee is the
+        # operative one; later (superseded) rows for the same person are noise.
+        seen, out = set(), []
+        for a in rows:
+            if a.email in seen:
+                continue
+            seen.add(a.email)
+            out.append(_arrangement_json(a))
+        return Response(out)
+
+    body = request.data
+    email = norm_email(body.get('email'))
+    if not email:
+        return err('email is required')
+
+    arrangement = str(body.get('arrangement') or '').strip().lower()
+    if arrangement not in (WorkArrangement.ONSITE, WorkArrangement.HYBRID,
+                           WorkArrangement.REMOTE):
+        return err('arrangement must be onsite, hybrid or remote')
+
+    weekdays, wd_err = _parse_weekdays(body.get('remoteWeekdays'))
+    if wd_err:
+        return err(wd_err)
+
+    try:
+        per_week = int(body.get('remoteDaysPerWeek') or 0)
+    except (TypeError, ValueError):
+        return err('remoteDaysPerWeek must be a number')
+    if not (0 <= per_week <= 7):
+        return err('remoteDaysPerWeek must be between 0 and 7')
+
+    eff_from = parse_date(body.get('effectiveFrom')) or local_today()
+
+    # A hybrid arrangement with neither anchor days nor a quota entitles the
+    # employee to nothing, which reads as "hybrid" on screen while behaving
+    # exactly like onsite. Refuse it rather than create the confusion.
+    if arrangement == WorkArrangement.HYBRID and not weekdays and per_week < 1:
+        return err('A hybrid arrangement needs either remote weekdays or a '
+                   'remoteDaysPerWeek of at least 1')
+    if arrangement != WorkArrangement.HYBRID:
+        weekdays, per_week = '', 0
+
+    open_rows = WorkArrangement.objects.filter(email=email, effective_to__isnull=True)
+
+    future = open_rows.filter(effective_from__gt=eff_from).first()
+    if future:
+        return err(
+            f'This employee already has an arrangement starting '
+            f'{future.effective_from:%Y-%m-%d}, which is after {eff_from:%Y-%m-%d}. '
+            f'Delete that one first if you are replacing it.', 409)
+
+    caller, _user = check_perm(request, 'attendance.manage_arrangement')[1:]
+
+    same_day = open_rows.filter(effective_from=eff_from).first()
+    if same_day:
+        # Correcting an arrangement on the day it starts. Nothing has been
+        # judged under the old value yet, so replace it — closing it would
+        # leave a row that ended before it began.
+        same_day.arrangement = arrangement
+        same_day.remote_weekdays = weekdays
+        same_day.remote_days_per_week = per_week
+        same_day.notes = str(body.get('notes') or '').strip()
+        same_day.created_by = caller or same_day.created_by
+        if body.get('employee'):
+            same_day.employee_name = str(body.get('employee'))
+        same_day.save()
+        return Response(_arrangement_json(same_day))
+
+    # Close whatever was in force the day before the new one starts.
+    open_rows.filter(effective_from__lt=eff_from).update(
+        effective_to=eff_from - timedelta(days=1))
+
+    row = WorkArrangement.objects.create(
+        email=email,
+        employee_name=str(body.get('employee') or ''),
+        arrangement=arrangement,
+        remote_weekdays=weekdays,
+        remote_days_per_week=per_week,
+        effective_from=eff_from,
+        notes=str(body.get('notes') or '').strip(),
+        created_by=caller or '',
+    )
+    create_notification(
+        email,
+        'Work arrangement updated',
+        f'Your work arrangement is now "{arrangement}" from '
+        f'{eff_from:%d %b %Y}.',
+        'info', '/employees/attendance',
+    )
+    return Response(_arrangement_json(row), status=201)
+
+
+@api_view(['DELETE'])
+@require_perm('attendance.manage_arrangement')
+def attendance_arrangement_detail(request, pk):
+    """Remove an arrangement row that was entered by mistake.
+
+    Deleting reopens whatever it superseded: without this, correcting a
+    mis-keyed row would leave the employee with a gap where no arrangement
+    applies, which silently falls back to "needs a WFH request".
+    """
+    row = WorkArrangement.objects.filter(pk=pk).first()
+    if not row:
+        return err('Work arrangement not found', 404)
+    previous = (WorkArrangement.objects
+                .filter(email=row.email, effective_from__lt=row.effective_from)
+                .exclude(pk=row.pk)
+                .first())
+    row.delete()
+    if previous and previous.effective_to is not None:
+        previous.effective_to = None
+        previous.save(update_fields=['effective_to'])
+    return Response({'ok': True, 'reopened': previous.id if previous else None})
 
 
 @api_view(['GET', 'POST'])
@@ -3884,7 +4544,9 @@ def shift_assignment_detail(request, pk):
 @require_perm({'GET': 'attendance.view', 'POST': 'settings.manage'})
 def attendance_geofences(request):
     if request.method == 'GET':
-        qs = GeoFence.objects.all()
+        # Company locations only. Homes are personal data with their own
+        # endpoint and permission; they must not leak into the fence admin list.
+        qs = GeoFence.objects.filter(owner_email='')
         return Response(GeoFenceSerializer(qs, many=True).data)
     # POST
     ser = GeoFenceSerializer(data=request.data)
@@ -3897,7 +4559,7 @@ def attendance_geofences(request):
 @api_view(['GET', 'PUT', 'DELETE'])
 @require_perm({'GET': 'attendance.view', 'PUT': 'settings.manage', 'DELETE': 'settings.manage'})
 def attendance_geofence_detail(request, pk):
-    obj = GeoFence.objects.filter(pk=pk).first()
+    obj = GeoFence.objects.filter(pk=pk, owner_email='').first()
     if not obj:
         return err('Geofence not found', 404)
     if request.method == 'DELETE':
@@ -3931,7 +4593,7 @@ def wfh_requests(request):
         return serializer_err(ser)
     inst = ser.save()
     notify_approvers(
-        'settings.manage',
+        'attendance.approve_wfh',
         'New WFH Request',
         f"{inst.employee_name or email} has requested WFH from {inst.from_date} to {inst.to_date}.",
         '/employees/attendance',
@@ -3940,7 +4602,7 @@ def wfh_requests(request):
 
 
 @api_view(['GET', 'PUT', 'DELETE'])
-@require_perm({'GET': 'attendance.view', 'PUT': 'settings.manage', 'DELETE': 'attendance.delete'})
+@require_perm({'GET': 'attendance.view', 'PUT': 'attendance.approve_wfh', 'DELETE': 'attendance.delete'})
 def wfh_request_detail(request, pk):
     obj = WfhRequest.objects.filter(pk=pk).first()
     if not obj:

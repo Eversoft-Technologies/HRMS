@@ -21,8 +21,55 @@
   var TOGGLE_ID        = 'hrms-checkin-toggle';
   var WRAPPER_ID       = 'hrms-checkin-wrapper';
 
-  /* ── initial state (restored from localStorage) ──────────────────────── */
-  var isCheckedIn = localStorage.getItem(STORAGE_STATE) === 'true';
+  /* ── initial state ────────────────────────────────────────────────────
+   *
+   * The cached value is a first-paint hint ONLY. The server is the authority
+   * and syncFromServer() overrules this the moment it answers.
+   *
+   * It used to be a bare 'true'/'false' under one global key, with nothing
+   * ever reconciling it, which meant the toggle lied in two everyday ways:
+   *
+   *   - sign out, sign in as someone else on the same browser, and you
+   *     inherited THEIR checked-in state;
+   *   - check in on Monday, come back Tuesday, and it still read "checked in".
+   *
+   * Either way the toggle offered "check out", and pressing it asked the
+   * server to close a session that was never open — "No check-in found for
+   * today". So the cache is now stamped with whose it is and which day it is
+   * for, and is ignored when either fails to match.
+   */
+  function cachedState() {
+    try {
+      var c = JSON.parse(localStorage.getItem(STORAGE_STATE) || 'null');
+      if (!c || typeof c !== 'object') return false;   // legacy 'true'/'false': distrust
+      if (c.email !== sessionEmail()) return false;
+      if (c.date !== todayStamp()) return false;
+      return !!c.checkedIn;
+    } catch (_) { return false; }
+  }
+
+  function rememberState(v) {
+    try {
+      localStorage.setItem(STORAGE_STATE, JSON.stringify({
+        email: sessionEmail(), date: todayStamp(), checkedIn: !!v
+      }));
+    } catch (_) {}
+  }
+
+  function todayStamp() {
+    var n = new Date();
+    return n.getFullYear() + '-' + String(n.getMonth() + 1).padStart(2, '0') +
+           '-' + String(n.getDate()).padStart(2, '0');
+  }
+
+  function sessionEmail() {
+    try {
+      var s = JSON.parse(localStorage.getItem('hrms_session') || '{}');
+      return (s && s.email) || '';
+    } catch (_) { return ''; }
+  }
+
+  var isCheckedIn = false;   // set by cachedState() once the helpers exist
 
   /* ── helpers ─────────────────────────────────────────────────────────── */
   function detectDevice() {
@@ -73,7 +120,7 @@
   var GEO_WAIT_CHECKIN_MS = 15000;   // a person is watching a toggle: bounded
   var GEO_WAIT_SAMPLE_MS = 6000;     // background sweep, every 5 min: cheap
 
-  function getPosition(budgetMs) {
+  function getPosition(budgetMs, onProgress) {
     var budget = budgetMs || GEO_WAIT_CHECKIN_MS;
     return new Promise(function (resolve) {
       if (!navigator.geolocation) return resolve(null);
@@ -103,6 +150,9 @@
               longitude: p.coords.longitude,
               accuracy: acc
             };
+            // Callers that keep someone waiting (registering a home) show the
+            // fix tightening; the silent check-in path passes nothing.
+            if (onProgress) { try { onProgress(best); } catch (_) {} }
             if (acc <= GEO_GOOD_ENOUGH_M) finish();
           },
           function () {
@@ -194,7 +244,7 @@
       .then(function (record) {
         if (!record) return;
         isCheckedIn = false;
-        localStorage.setItem(STORAGE_STATE, 'false');
+        rememberState(false);
         var w = document.getElementById(WRAPPER_ID), t = document.getElementById(TOGGLE_ID);
         if (w && t) refreshUI(w, t, w.querySelector('.hrms-ci-icon'), getCheckinDevice());
         window.dispatchEvent(new CustomEvent('hrmsCheckinToggle',
@@ -247,17 +297,27 @@
           'border:1px solid #cbd5e1;background:#fff;color:#334155;font-size:12px;font-weight:600;' +
           'cursor:pointer;">View on map</button>'
         : '';
+      // The same dialog serves both refusals, and the difference matters: a
+      // working-from-home employee told they are "outside the office" reads it
+      // as the wrong problem and cannot act on it. The server's message below
+      // is already home-aware; the heading has to agree with it.
+      var atHomeCase = !!info.isWfh;
+      var heading = !info.hasPosition ? 'We could not confirm your location'
+        : atHomeCase ? 'You are not at your registered home'
+        : 'You are outside the office location';
+      var hint = atHomeCase ? 'e.g. Working from my parents this week'
+                            : 'e.g. Client visit in Bengaluru';
+
       back.innerHTML =
         '<div style="background:#fff;border-radius:14px;max-width:460px;width:100%;' +
         'box-shadow:0 20px 60px rgba(0,0,0,0.25);overflow:hidden;">' +
         '<div style="padding:20px 24px 0;">' +
         '<div style="font-size:17px;font-weight:800;color:#0f172a;margin-bottom:8px;">' +
-        (info.hasPosition ? 'You are outside the office location'
-                          : 'We could not confirm your location') + '</div>' +
+        heading + '</div>' +
         '<div style="font-size:13px;color:#475569;line-height:1.6;">' + explain +
         '<br><br><strong>Your check-in will start once HR approves it.</strong>' +
         '</div>' + mapBtn +
-        '<textarea id="hrms-geo-reason" rows="3" placeholder="e.g. Client visit in Bengaluru" ' +
+        '<textarea id="hrms-geo-reason" rows="3" placeholder="' + hint + '" ' +
         'style="width:100%;margin-top:14px;padding:10px 12px;border:1px solid #cbd5e1;' +
         'border-radius:8px;font-size:13px;font-family:inherit;resize:vertical;box-sizing:border-box;">' +
         '</textarea>' +
@@ -337,6 +397,11 @@
             detail: { checkedIn: checkedIn, record: record }
           }));
           console.log('[hrms-checkin] attendance', checkedIn ? 'check-in' : 'check-out', record);
+          // Checked in from home with no home address on file. Offered after
+          // the check-in has already succeeded, so declining costs nothing.
+          if (record && record.homeLocationMissing) {
+            setTimeout(offerHomeRegistration, 400);   // let the toggle settle first
+          }
           return true;
         });
     }
@@ -350,15 +415,54 @@
             d = d || {};
 
             // Already waiting on HR from an earlier attempt today.
-            if (r.status === 409 || d.code === 'LOCATION_APPROVAL_PENDING') {
+            // The toggle and the server disagreed about whether a session was
+            // open. Whatever caused the drift — a stale tab, a reload during
+            // the reason dialog, a second device — arguing with the user about
+            // it is useless; re-ask the server and show the truth.
+            if (d.code === 'NO_OPEN_SESSION') {
+              syncFromServer(true);
+              notice('You were not checked in',
+                d.message || 'The toggle was out of date and has been corrected.');
+              return false;
+            }
+
+            // Matched on the code, not on the bare status: NO_OPEN_SESSION is
+            // also a 409, and announcing it as "waiting for HR approval" would
+            // send someone chasing an approval that does not exist.
+            if (d.code === 'LOCATION_APPROVAL_PENDING') {
               notice('Waiting for HR approval',
                 d.message || 'Your off-site check-in is still awaiting approval.');
               return false;
             }
 
+            // A decision has already been made and it was no. Say so plainly
+            // rather than offering the reason box again — re-asking is exactly
+            // what the server now refuses, and a form that cannot succeed is
+            // worse than a clear refusal.
+            if (d.code === 'LOCATION_APPROVAL_REJECTED') {
+              notice('Off-site check-in rejected',
+                d.message || 'Your off-site check-in for today was rejected. ' +
+                'You can check in from the office.');
+              return false;
+            }
+
+            // Claimed to be working from home without an approved request.
+            if (d.code === 'WFH_APPROVAL_REQUIRED') {
+              notice('Work-from-home needs approval',
+                d.message || 'You need an approved work-from-home request for ' +
+                'today before checking in from home.');
+              return false;
+            }
+
             if (r.status !== 422 || d.code !== 'LOCATION_REASON_REQUIRED') {
               console.warn('[hrms-checkin] attendance rejected', r.status, d);
-              notice('Could not check in', d.message || ('Server returned ' + r.status));
+              notice(checkedIn ? 'Could not check in' : 'Could not check out',
+                d.message || ('Server returned ' + r.status));
+              // Any refusal we did not specifically model may have left the
+              // toggle disagreeing with the server. Rolling back locally only
+              // restores what the client believed, which is what was wrong in
+              // the first place — so re-read the truth instead.
+              syncFromServer(true);
               return false;
             }
 
@@ -463,7 +567,7 @@
     if (isCheckedIn) {
       localStorage.setItem(STORAGE_DEVICE, device);
     }
-    localStorage.setItem(STORAGE_STATE, isCheckedIn ? 'true' : 'false');
+    rememberState(isCheckedIn);
 
     refreshUI(wrap, toggle, iconEl, device);
 
@@ -481,7 +585,7 @@
     syncAttendance(isCheckedIn, device).then(function (ok) {
       if (ok || isCheckedIn !== attempted) return;      // accepted, or toggled again meanwhile
       isCheckedIn = !attempted;
-      localStorage.setItem(STORAGE_STATE, isCheckedIn ? 'true' : 'false');
+      rememberState(isCheckedIn);
       refreshUI(wrap, toggle, iconEl, device);
       window.dispatchEvent(new CustomEvent('hrmsCheckinToggle', {
         detail: { checkedIn: isCheckedIn, device: device }
@@ -707,7 +811,7 @@
           // Same rollback as the topbar toggle: the page has already painted
           // "Checked In", so put it back when the server would not take it.
           isCheckedIn = !attempted;
-          localStorage.setItem(STORAGE_STATE, isCheckedIn ? 'true' : 'false');
+          rememberState(isCheckedIn);
           var w = document.getElementById(WRAPPER_ID);
           var t = document.getElementById(TOGGLE_ID);
           if (w && t) refreshUI(w, t, w.querySelector('.hrms-ci-icon'), dev);
@@ -722,7 +826,135 @@
     }
   });
 
+  /* ── registering a home address ───────────────────────────────────────
+   *
+   * The employee captures this themselves, standing in their own home — HR
+   * cannot obtain an accurate position for everybody, and a rounded postal
+   * address is hundreds of metres wide.
+   *
+   * It is inert until confirmed. The server only ever verifies against an
+   * Approved row, so capturing the cafe you happen to be sitting in buys
+   * nothing; it just gives a reviewer something obviously wrong to reject.
+   *
+   * Uses the same refining watch as check-in, and holds out for a genuinely
+   * good fix: this pin is the basis for every future work-from-home check-in,
+   * so a lazy ±800 m reading here would either wave through half the
+   * neighbourhood or flag the person at their own desk every morning.
+   */
+  var HOME_TARGET_ACCURACY_M = 60;
+  var STORAGE_HOME_ASKED = 'hrms_home_prompt_declined';
+
+  /* Offer to register a home address, on the first work-from-home check-in
+   * where none is on file.
+   *
+   * This moment is chosen because it is the only one where the employee is
+   * provably standing in the place being registered — an HR screen weeks later
+   * would capture wherever they happen to be sitting.
+   *
+   * It runs AFTER the check-in has succeeded and never blocks it. A prompt
+   * that gated attendance on answering a question about your home address
+   * would be coercive; this is an offer, and "Not now" is remembered so it is
+   * not asked again on this device.
+   */
+  function offerHomeRegistration() {
+    if (localStorage.getItem(STORAGE_HOME_ASKED) === '1') return;
+    if (!navigator.geolocation) return;
+
+    var back = document.createElement('div');
+    back.setAttribute('style',
+      'position:fixed;inset:0;z-index:100000;background:rgba(15,23,42,0.55);' +
+      'display:flex;align-items:center;justify-content:center;padding:20px;' +
+      "font-family:'Segoe UI',Arial,sans-serif;");
+    back.innerHTML =
+      '<div style="background:#fff;border-radius:14px;max-width:440px;width:100%;' +
+      'box-shadow:0 20px 60px rgba(0,0,0,0.25);padding:22px 24px;">' +
+      '<div style="font-size:17px;font-weight:800;color:#0f172a;margin-bottom:8px;">' +
+      'Register your home address?</div>' +
+      '<div style="font-size:13px;color:#475569;line-height:1.6;">' +
+      'Your work-from-home days are recorded but cannot be confirmed, because we ' +
+      'do not know where home is. Registering it once means future days confirm ' +
+      'themselves.' +
+      '<br><br><strong>Only do this while you are at home.</strong> Your manager ' +
+      'confirms the location before it is used, and it is checked when you check ' +
+      'in — not tracked during the day.' +
+      '</div>' +
+      '<div id="hrms-home-status" style="font-size:12px;color:#64748b;min-height:18px;' +
+      'margin-top:12px;"></div>' +
+      '<div style="display:flex;gap:10px;justify-content:flex-end;margin-top:6px;">' +
+      '<button id="hrms-home-no" style="padding:9px 16px;border-radius:8px;' +
+      'border:1px solid #cbd5e1;background:#fff;color:#334155;font-size:13px;' +
+      'font-weight:600;cursor:pointer;">Not now</button>' +
+      '<button id="hrms-home-go" style="padding:9px 16px;border-radius:8px;border:none;' +
+      'background:#0f9d58;color:#fff;font-size:13px;font-weight:700;cursor:pointer;">' +
+      'Use my current position</button>' +
+      '</div></div>';
+    document.body.appendChild(back);
+
+    var status = back.querySelector('#hrms-home-status');
+    var go = back.querySelector('#hrms-home-go');
+    function shut() { if (back.parentNode) back.parentNode.removeChild(back); }
+
+    back.querySelector('#hrms-home-no').onclick = function () {
+      // Remembered, so someone who works from home daily is not asked daily.
+      // Clearing site data resets it, which is the intended escape hatch.
+      localStorage.setItem(STORAGE_HOME_ASKED, '1');
+      shut();
+    };
+
+    go.onclick = function () {
+      go.disabled = true;
+      status.textContent = 'Locating…';
+      registerHome(function (fix) {
+        status.textContent = 'Locating… ±' + Math.round(fix.accuracy) + ' m';
+      }).then(function () {
+        shut();
+        notice('Home address registered',
+          'Your manager will confirm it. Once confirmed, your work-from-home ' +
+          'check-ins are verified automatically.');
+      }).catch(function (e) {
+        go.disabled = false;
+        status.textContent = e.message || 'Could not read your position.';
+      });
+    };
+  }
+
+  function registerHome(onProgress) {
+    var actor = getActor();
+    if (!actor.email) return Promise.reject(new Error('You are not signed in'));
+    if (!navigator.geolocation) return Promise.reject(new Error('This browser has no geolocation'));
+
+    return getPosition(GEO_WAIT_CHECKIN_MS, onProgress).then(function (pos) {
+      if (!pos) throw new Error('Could not read your position. Allow location ' +
+                                'access and try again from your home.');
+      if (pos.accuracy > HOME_TARGET_ACCURACY_M * 4) {
+        // Refuse here rather than let the server do it, so the message can say
+        // what to change instead of just reporting a number back.
+        throw new Error('Your position is only accurate to ±' +
+          Math.round(pos.accuracy) + ' m — too vague to register as a home ' +
+          'address. Try near a window or outside, ideally on a phone with GPS.');
+      }
+      return fetch('/api/attendance/home-locations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: actor.email,
+          latitude: pos.latitude,
+          longitude: pos.longitude,
+          accuracy: pos.accuracy
+        })
+      }).then(function (r) {
+        return r.json().catch(function () { return {}; }).then(function (d) {
+          if (!r.ok) throw new Error((d && (d.message || d.error)) || ('HTTP ' + r.status));
+          return d;
+        });
+      });
+    });
+  }
+
   window.__hrmsCheckinAPI = {
+    /* Exposed so the attendance screen can offer "Set my home location".
+       Resolves with the saved (Pending) record. */
+    registerHome: registerHome,
     toggle: function (device) {
       if (device) localStorage.setItem(STORAGE_DEVICE, device);
       var wrap   = document.getElementById(WRAPPER_ID);
@@ -747,16 +979,96 @@
     }
   };
 
+  /* ── reconcile with the server ────────────────────────────────────────
+   *
+   * The widget had no idea what the server thought. It rendered whatever
+   * localStorage said and only ever found out it was wrong by attempting an
+   * impossible transition and being refused — which is what "No check-in
+   * found for today" was: the toggle offering a check-out for a session that
+   * did not exist.
+   *
+   * Asks once per session change. Cheap, and it is the only thing that makes
+   * the toggle trustworthy on a shared browser or the morning after.
+   */
+  var lastSyncedFor = null;
+
+  function syncFromServer(force) {
+    var email = sessionEmail();
+    if (!email) {
+      // Signed out: never keep showing the previous person's state.
+      if (isCheckedIn) { isCheckedIn = false; paintState(); }
+      lastSyncedFor = null;
+      return Promise.resolve(false);
+    }
+    var key = email + '|' + todayStamp();
+    if (!force && lastSyncedFor === key) return Promise.resolve(isCheckedIn);
+    lastSyncedFor = key;
+
+    return fetch('/api/attendance/today?email=' + encodeURIComponent(email), {
+      headers: { 'Content-Type': 'application/json' }
+    })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) {
+        if (!d) return isCheckedIn;
+        var truth = !!d.checkedIn;
+        if (truth !== isCheckedIn) {
+          console.log('[hrms-checkin] state corrected from server:',
+                      isCheckedIn, '->', truth);
+          isCheckedIn = truth;
+          paintState();
+        }
+        rememberState(truth);
+        if (truth) startGeoWatch(); else stopGeoWatch();
+        return truth;
+      })
+      .catch(function () {
+        // Offline or the endpoint is down. Leave the cached hint in place
+        // rather than guessing — but allow a retry on the next trigger.
+        lastSyncedFor = null;
+        return isCheckedIn;
+      });
+  }
+
+  function paintState() {
+    var wrap = document.getElementById(WRAPPER_ID);
+    var toggle = document.getElementById(TOGGLE_ID);
+    if (wrap && toggle) {
+      refreshUI(wrap, toggle, wrap.querySelector('.hrms-ci-icon'), getCheckinDevice());
+    }
+    window.dispatchEvent(new CustomEvent('hrmsCheckinToggle', {
+      detail: { checkedIn: isCheckedIn, device: getCheckinDevice() }
+    }));
+  }
+
   /* ── boot ────────────────────────────────────────────────────────────── */
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', function () {
-      wireSettingsFallback();
-      watchTopbar();
-    });
-  } else {
+  isCheckedIn = cachedState();
+
+  function boot() {
     wireSettingsFallback();
     watchTopbar();
+    syncFromServer(true);
   }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot);
+  } else {
+    boot();
+  }
+
+  // Signing in or out happens without a reload in this app, so the session key
+  // changing is the signal to re-ask. 'storage' covers other tabs; the poll
+  // covers this one, where localStorage writes fire no event.
+  window.addEventListener('storage', function (e) {
+    if (e.key === 'hrms_session') syncFromServer(true);
+  });
+  var lastSeenEmail = sessionEmail();
+  setInterval(function () {
+    var now = sessionEmail();
+    if (now !== lastSeenEmail) {
+      lastSeenEmail = now;
+      syncFromServer(true);
+    }
+  }, 2000);
 
   console.log('[hrms-checkin v3] loaded — state:', isCheckedIn, '| device:', getCheckinDevice());
 })();

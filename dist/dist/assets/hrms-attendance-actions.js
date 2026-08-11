@@ -377,7 +377,15 @@
     var em = actorEmail();
     if (!em) { isApprover = false; cb(false); return; }
     api('/api/me/permissions?email=' + encodeURIComponent(em))
-      .then(function (p) { isApprover = !!(p && (p.superAdmin || (Array.isArray(p.permissions) && p.permissions.indexOf('settings.manage') !== -1))); cb(isApprover); })
+      .then(function (p) {
+        // attendance.approve_wfh, not settings.manage: approving a day at home
+        // used to require the company-configuration permission, which also
+        // carries the SMTP credentials and the pay cycle. The server checks the
+        // new code, so this has to as well or the panel shows buttons that 403.
+        var perms = (p && Array.isArray(p.permissions)) ? p.permissions : [];
+        isApprover = !!(p && (p.superAdmin || perms.indexOf('attendance.approve_wfh') !== -1));
+        cb(isApprover);
+      })
       .catch(function () { isApprover = false; cb(false); });
   }
   function loadApprovals() {

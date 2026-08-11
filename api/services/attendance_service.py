@@ -237,8 +237,13 @@ class AttendanceService:
 
     @staticmethod
     def verify_geofence(latitude: float, longitude: float, geofence_id: int = None) -> bool:
-        """Verify if coordinates are within an active geofence."""
-        geofences = GeoFence.objects.filter(is_active=True)
+        """Verify if coordinates are within an active COMPANY geofence.
+
+        owner_email='' is load-bearing: the table also holds employees'
+        registered home fences, and matching against those would verify an
+        office check-in from somebody's house.
+        """
+        geofences = GeoFence.objects.filter(is_active=True, owner_email='')
         
         if geofence_id:
             geofence = geofences.filter(id=geofence_id).first()

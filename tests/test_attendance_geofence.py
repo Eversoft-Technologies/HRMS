@@ -124,7 +124,16 @@ class OutOfGeofenceCheckInTests(TestCase):
         row = EmployeeAttendance.objects.get(email=self.email, date=local_today())
         self.assertIsNone(row.location_lat, 'a stale fix makes an unverified day look measured')
 
-    def test_wfh_is_exempt_even_far_from_every_fence(self):
+    def test_wfh_is_exempt_from_the_office_fence(self):
+        """Being 500 km from the office is the normal case for a WFH day, so it
+        must not go into the out-of-office review queue.
+
+        Note what exemption does NOT mean any more: this used to also assert
+        geo_verified, which made `isWfh` a way to be marked verified from
+        anywhere. Verification for a WFH day now comes from the employee's own
+        registered home — see tests/test_home_geofence.py. With no home on file,
+        as here, the day is simply left unverified.
+        """
         WfhRequest.objects.create(
             email=self.email, status='Approved',
             from_date=local_today(), to_date=local_today(), days=1,
@@ -134,8 +143,9 @@ class OutOfGeofenceCheckInTests(TestCase):
         self.assertIn(resp.status_code, (200, 201))
         row = EmployeeAttendance.objects.get(email=self.email, date=local_today())
         self.assertTrue(row.is_wfh)
-        self.assertTrue(row.geo_verified)
         self.assertEqual(row.location_status, '', 'WFH must never need approval')
+        self.assertFalse(row.geo_verified,
+                         'nothing was checked against, so nothing may be claimed')
 
     def test_no_position_from_the_browser_is_treated_as_outside(self):
         """A denied geolocation prompt cannot be told apart from being away."""

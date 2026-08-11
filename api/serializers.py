@@ -67,6 +67,9 @@ from .models import (
     PayrollRun,
     Payslip,
     PayrollSetting,
+    ChatRoom,
+    ChatMessage,
+    ChatParticipant,
 )
 
 # Datetime wire format used everywhere by the original API (naive, USE_TZ=False).
@@ -1779,5 +1782,27 @@ class PayrollSettingSerializer(serializers.ModelSerializer):
     class Meta:
         model = PayrollSetting
         fields = '__all__'
+
+
+class ChatMessageSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ChatMessage
+        fields = '__all__'
+
+
+class ChatParticipantSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ChatParticipant
+        fields = '__all__'
+
+
+class ChatRoomSerializer(serializers.ModelSerializer):
+    messages = ChatMessageSerializer(many=True, read_only=True)
+    participants = ChatParticipantSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = ChatRoom
+        fields = '__all__'
+
 
 
