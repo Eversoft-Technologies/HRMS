@@ -57,9 +57,14 @@
   </script>
   <!-- Google Identity Services (for Sign In with Google) -->
   <script src="https://accounts.google.com/gsi/client" async defer></script>
-  <script type="module" crossorigin src="/assets/index-DCh6bk0Rv4.js?v=35"></script>
+  <!-- Must execute BEFORE the app bundle: it patches window.fetch to attach the
+       Authorization / X-User-Email headers. While deferred it lost the race
+       against the bundle's own start-up requests, which came back 401 and left
+       pages (Work Submissions especially) empty until a second reload. Loaded
+       first and not deferred, so the patch exists before any app code runs. -->
+  <script src="/assets/hrms-actor.js?v=2"></script>
+  <script type="module" crossorigin src="/assets/index-DCh6bk0Rv4.js?v=41"></script>
   <script defer src="/assets/hrms-net.js?v=1"></script>
-  <script defer src="/assets/hrms-actor.js?v=2"></script>
   <script defer src="/assets/hrms-live.js?v=5"></script>
   <script defer src="/assets/google-auth.js?v=11"></script>
   <script defer src="/assets/interview-access.js?v=3"></script>
