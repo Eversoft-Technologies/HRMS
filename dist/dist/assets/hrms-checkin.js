@@ -43,30 +43,354 @@
     }
   }
 
-  /* Records the check-in / check-out against the Django attendance API.
-     Auth + actor headers are attached automatically by hrms-actor.js. Fires
-     'hrmsAttendanceSynced' with the saved record so the check-in page can
-     display real times. No-op when logged out. */
-  function syncAttendance(checkedIn, device) {
+  /* ── geolocation ──────────────────────────────────────────────────────
+   *
+   * Resolves to {latitude, longitude, accuracy} or null. Never rejects: a
+   * denied prompt, a device without GPS and a timeout all mean "we cannot
+   * prove where you are", which the server treats the same as being outside
+   * the fence.
+   *
+   * Why a watch and not getCurrentPosition: the one-shot call resolves with
+   * the FIRST fix available, and the cheap sources answer first. WiFi/cell
+   * trilateration replies in milliseconds; the GPS radio needs seconds to lock
+   * and only ever reports through watchPosition. enableHighAccuracy requests
+   * the good fix, it does not wait for it. So we watch, keep the tightest
+   * reading, and stop early once it is good enough for a geofence decision.
+   *
+   * maximumAge is 0 deliberately. A cached fix is shared across every tab and
+   * every signed-in account on this browser, so accepting one meant a person
+   * who hit an IP-level reading got that identical reading back on every retry
+   * for the next minute — the "try again" the error message asks for could not
+   * possibly have worked. Each attempt now re-measures.
+   *
+   * None of this manufactures a GPS radio. Where the OS location service is
+   * off the readings stay IP-level however long we wait, which is precisely
+   * why accuracy is sent to the server: it widens the fence by the reading's
+   * own error, and refuses to quote a distance from a fix too coarse to
+   * support one.
+   */
+  var GEO_GOOD_ENOUGH_M = 50;        // tight enough to settle a geofence; stop
+  var GEO_WAIT_CHECKIN_MS = 15000;   // a person is watching a toggle: bounded
+  var GEO_WAIT_SAMPLE_MS = 6000;     // background sweep, every 5 min: cheap
+
+  function getPosition(budgetMs) {
+    var budget = budgetMs || GEO_WAIT_CHECKIN_MS;
+    return new Promise(function (resolve) {
+      if (!navigator.geolocation) return resolve(null);
+      var best = null, id = null, timer = null, done = false;
+
+      function finish() {
+        if (done) return;
+        done = true;
+        try { if (id !== null) navigator.geolocation.clearWatch(id); } catch (_) {}
+        if (timer) clearTimeout(timer);
+        resolve(best);
+      }
+
+      // Also covers Safari leaving the callbacks pending indefinitely when the
+      // permission prompt is dismissed rather than answered.
+      timer = setTimeout(finish, budget + 1000);
+
+      try {
+        id = navigator.geolocation.watchPosition(
+          function (p) {
+            var acc = p.coords.accuracy;
+            // Samples arrive out of order and a later one is often worse (a
+            // network fix landing after a GPS reading). Only ever tighten.
+            if (best && !(acc < best.accuracy)) return;
+            best = {
+              latitude: p.coords.latitude,
+              longitude: p.coords.longitude,
+              accuracy: acc
+            };
+            if (acc <= GEO_GOOD_ENOUGH_M) finish();
+          },
+          function () {
+            // A momentary failure mid-watch must not discard a fix in hand.
+            if (!best) finish();
+          },
+          { enableHighAccuracy: true, timeout: budget, maximumAge: 0 }
+        );
+      } catch (_) { finish(); }
+    });
+  }
+
+  /* ── leaving the office while checked in ──────────────────────────────
+   *
+   * Samples the position on a timer and checks out when the employee has
+   * clearly left the geofence.
+   *
+   * What this genuinely cannot do, so nobody plans around it: browsers only
+   * run timers while the page is open, and throttle or suspend them when the
+   * tab is hidden or the machine sleeps. Closing the laptop does not trigger a
+   * checkout — the tab is gone. So treat this as a convenience for people who
+   * leave with the tab open, not as an authoritative record of departure. The
+   * shift-end sweep is what actually catches forgotten sessions.
+   *
+   * Safeguards, because a wrong auto-checkout silently costs someone hours:
+   *   - two consecutive out-of-fence samples, never a single reading
+   *   - the fix's own accuracy widens the fence, exactly as check-in does
+   *   - a poor fix (worse than the tolerance) is discarded, not acted on
+   *   - never for someone working from home
+   *   - the employee is warned on the first miss, before anything happens
+   */
+  var GEO_WATCH_MS = 5 * 60 * 1000;      // sample every 5 minutes
+  var GEO_STRIKES = 2;                   // consecutive misses before acting
+  var geoWatch = { timer: null, strikes: 0, warned: false };
+
+  function stopGeoWatch() {
+    if (geoWatch.timer) clearInterval(geoWatch.timer);
+    geoWatch.timer = null; geoWatch.strikes = 0; geoWatch.warned = false;
+  }
+
+  function startGeoWatch() {
+    stopGeoWatch();
+    if (!navigator.geolocation) return;
+    geoWatch.timer = setInterval(sampleGeo, GEO_WATCH_MS);
+  }
+
+  function sampleGeo() {
+    if (!isCheckedIn) { stopGeoWatch(); return; }
+    if (document.hidden) return;                    // timers are throttled anyway
     var actor = getActor();
     if (!actor.email) return;
-    var path = checkedIn ? '/api/attendance/check-in' : '/api/attendance/check-out';
-    var body = checkedIn
-      ? { email: actor.email, device: device || detectDevice(), employee: actor.name }
-      : { email: actor.email };
-    fetch(path, {
+
+    getPosition(GEO_WAIT_SAMPLE_MS).then(function (pos) {
+      if (!pos) return;                             // no fix: say nothing, do nothing
+      fetch('/api/attendance/geofence-check?latitude=' + pos.latitude +
+            '&longitude=' + pos.longitude +
+            (pos.accuracy ? '&accuracy=' + pos.accuracy : ''), {
+        headers: { 'Content-Type': 'application/json' }
+      })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (d) {
+          if (!d || d.enforced === false || d.wfh) { stopGeoWatch(); return; }
+          if (d.inside || d.uncertain) { geoWatch.strikes = 0; geoWatch.warned = false; return; }
+
+          geoWatch.strikes++;
+          if (geoWatch.strikes === 1) {
+            geoWatch.warned = true;
+            notice('You have left the office area',
+              'You are about ' + Math.round(d.distance || 0) + ' m from ' +
+              (d.fence || 'the office') + '. If you stay away you will be checked out ' +
+              'automatically at the next check.');
+            return;
+          }
+          if (geoWatch.strikes >= GEO_STRIKES) autoCheckOut(d);
+        })
+        .catch(function () { /* a failed check must never close someone's day */ });
+    });
+  }
+
+  function autoCheckOut(d) {
+    stopGeoWatch();
+    var actor = getActor();
+    fetch('/api/attendance/check-out', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
+      body: JSON.stringify({ email: actor.email, auto: 'geofence' })
     })
       .then(function (r) { return r.ok ? r.json().catch(function () { return null; }) : null; })
       .then(function (record) {
-        window.dispatchEvent(new CustomEvent('hrmsAttendanceSynced', {
-          detail: { checkedIn: checkedIn, record: record }
-        }));
-        console.log('[hrms-checkin] attendance', checkedIn ? 'check-in' : 'check-out', record);
+        if (!record) return;
+        isCheckedIn = false;
+        localStorage.setItem(STORAGE_STATE, 'false');
+        var w = document.getElementById(WRAPPER_ID), t = document.getElementById(TOGGLE_ID);
+        if (w && t) refreshUI(w, t, w.querySelector('.hrms-ci-icon'), getCheckinDevice());
+        window.dispatchEvent(new CustomEvent('hrmsCheckinToggle',
+          { detail: { checkedIn: false, device: getCheckinDevice() } }));
+        window.dispatchEvent(new CustomEvent('hrmsAttendanceSynced',
+          { detail: { checkedIn: false, record: record } }));
+        notice('Checked out automatically',
+          'You left ' + (d.fence || 'the office') + '. Check in again when you return.');
       })
-      .catch(function (e) { console.warn('[hrms-checkin] attendance sync failed', e); });
+      .catch(function () {});
+  }
+
+  /* A short banner for outcomes the employee must actually notice — the
+     toggle rolling back on its own looks like the click never registered. */
+  function notice(title, body) {
+    var el = document.createElement('div');
+    el.setAttribute('style',
+      'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);z-index:100003;' +
+      'background:#0f172a;color:#fff;padding:13px 20px;border-radius:10px;max-width:420px;' +
+      "font-family:'Segoe UI',Arial,sans-serif;box-shadow:0 10px 34px rgba(0,0,0,.35);");
+    el.innerHTML = '<div style="font-weight:700;font-size:13px;margin-bottom:3px;">' +
+      String(title).replace(/</g, '&lt;') + '</div>' +
+      '<div style="font-size:12px;opacity:.85;line-height:1.5;">' +
+      String(body).replace(/</g, '&lt;') + '</div>';
+    document.body.appendChild(el);
+    setTimeout(function () { if (el.parentNode) el.remove(); }, 6000);
+  }
+
+  /* ── "why are you off-site?" prompt ───────────────────────────────────
+     The server answers 422 LOCATION_REASON_REQUIRED when someone who is not
+     working from home checks in outside every active geofence. It lets them
+     in once a reason is supplied, and holds the day for HR approval. */
+  function askReason(info) {
+    info = info || {};
+    return new Promise(function (resolve) {
+      var back = document.createElement('div');
+      back.id = 'hrms-geo-modal';
+      back.setAttribute('style',
+        'position:fixed;inset:0;z-index:100000;background:rgba(15,23,42,0.55);' +
+        'display:flex;align-items:center;justify-content:center;padding:20px;' +
+        "font-family:'Segoe UI',Arial,sans-serif;");
+      // The server explains itself — distance, radius and GPS accuracy — so the
+      // employee can tell "you are 600 m away" from "we never got a fix".
+      var explain = info.message ||
+        'We could not confirm your location. Add a reason and HR will review it.';
+      // Plotting an IP-level fix would draw a confident pin 110 km away, so the
+      // map is offered only when the position is precise enough to mean something.
+      var mapBtn = (info.hasPosition && info.distance != null && info.fenceLat != null)
+        ? '<button id="hrms-geo-map" style="margin-top:12px;padding:7px 14px;border-radius:7px;' +
+          'border:1px solid #cbd5e1;background:#fff;color:#334155;font-size:12px;font-weight:600;' +
+          'cursor:pointer;">View on map</button>'
+        : '';
+      back.innerHTML =
+        '<div style="background:#fff;border-radius:14px;max-width:460px;width:100%;' +
+        'box-shadow:0 20px 60px rgba(0,0,0,0.25);overflow:hidden;">' +
+        '<div style="padding:20px 24px 0;">' +
+        '<div style="font-size:17px;font-weight:800;color:#0f172a;margin-bottom:8px;">' +
+        (info.hasPosition ? 'You are outside the office location'
+                          : 'We could not confirm your location') + '</div>' +
+        '<div style="font-size:13px;color:#475569;line-height:1.6;">' + explain +
+        '<br><br><strong>Your check-in will start once HR approves it.</strong>' +
+        '</div>' + mapBtn +
+        '<textarea id="hrms-geo-reason" rows="3" placeholder="e.g. Client visit in Bengaluru" ' +
+        'style="width:100%;margin-top:14px;padding:10px 12px;border:1px solid #cbd5e1;' +
+        'border-radius:8px;font-size:13px;font-family:inherit;resize:vertical;box-sizing:border-box;">' +
+        '</textarea>' +
+        '<div id="hrms-geo-err" style="color:#dc2626;font-size:12px;min-height:16px;margin-top:4px;"></div>' +
+        '</div>' +
+        '<div style="display:flex;gap:10px;justify-content:flex-end;padding:8px 24px 20px;">' +
+        '<button id="hrms-geo-cancel" style="padding:9px 18px;border-radius:8px;border:1px solid #e2e8f0;' +
+        'background:#fff;color:#334155;font-size:13px;font-weight:600;cursor:pointer;">Cancel</button>' +
+        '<button id="hrms-geo-ok" style="padding:9px 20px;border-radius:8px;border:none;' +
+        'background:#0f9d58;color:#fff;font-size:13px;font-weight:700;cursor:pointer;">' +
+        'Submit for approval</button>' +
+        '</div></div>';
+      document.body.appendChild(back);
+
+      var box = back.querySelector('#hrms-geo-reason');
+      var err = back.querySelector('#hrms-geo-err');
+      if (box) box.focus();
+
+      function close(value) {
+        if (back.parentNode) back.parentNode.removeChild(back);
+        resolve(value);
+      }
+      var mapEl = back.querySelector('#hrms-geo-map');
+      if (mapEl) mapEl.onclick = function () {
+        // OSM's own viewer: both markers, a real scale bar, and pan/zoom —
+        // everything the little preview in the admin screen cannot give.
+        var a = info.fenceLat + ',' + info.fenceLng;
+        var b = info.pointLat + ',' + info.pointLng;
+        window.open(
+          'https://www.openstreetmap.org/directions?engine=fossgis_osrm_foot&route=' +
+          encodeURIComponent(a) + ';' + encodeURIComponent(b),
+          '_blank', 'noopener'
+        );
+      };
+      back.querySelector('#hrms-geo-cancel').onclick = function () { close(null); };
+      back.querySelector('#hrms-geo-ok').onclick = function () {
+        var v = (box && box.value || '').trim();
+        if (v.length < 3) {
+          err.textContent = 'Please give a brief reason.';
+          if (box) box.focus();
+          return;
+        }
+        close(v);
+      };
+      back.addEventListener('click', function (e) { if (e.target === back) close(null); });
+    });
+  }
+
+  /* Records the check-in / check-out against the Django attendance API.
+     Auth + actor headers are attached automatically by hrms-actor.js. Fires
+     'hrmsAttendanceSynced' with the saved record so the check-in page can
+     display real times. No-op when logged out.
+
+     Resolves true when the server accepted it, false otherwise — the caller
+     flips the toggle optimistically and needs to put it back on refusal. */
+  function syncAttendance(checkedIn, device) {
+    var actor = getActor();
+    if (!actor.email) return Promise.resolve(false);
+    var path = checkedIn ? '/api/attendance/check-in' : '/api/attendance/check-out';
+
+    function post(extra) {
+      var body = checkedIn
+        ? { email: actor.email, device: device || detectDevice(), employee: actor.name }
+        : { email: actor.email };
+      for (var k in extra) if (Object.prototype.hasOwnProperty.call(extra, k)) body[k] = extra[k];
+      return fetch(path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+    }
+
+    function settle(resp) {
+      return (resp ? resp.json().catch(function () { return null; }) : Promise.resolve(null))
+        .then(function (record) {
+          window.dispatchEvent(new CustomEvent('hrmsAttendanceSynced', {
+            detail: { checkedIn: checkedIn, record: record }
+          }));
+          console.log('[hrms-checkin] attendance', checkedIn ? 'check-in' : 'check-out', record);
+          return true;
+        });
+    }
+
+    // Only a check-in is location-checked; checking out never is.
+    return (checkedIn ? getPosition() : Promise.resolve(null))
+      .then(function (pos) {
+        return post(pos || {}).then(function (r) {
+          if (r.ok) return settle(r);
+          return r.json().catch(function () { return {}; }).then(function (d) {
+            d = d || {};
+
+            // Already waiting on HR from an earlier attempt today.
+            if (r.status === 409 || d.code === 'LOCATION_APPROVAL_PENDING') {
+              notice('Waiting for HR approval',
+                d.message || 'Your off-site check-in is still awaiting approval.');
+              return false;
+            }
+
+            if (r.status !== 422 || d.code !== 'LOCATION_REASON_REQUIRED') {
+              console.warn('[hrms-checkin] attendance rejected', r.status, d);
+              notice('Could not check in', d.message || ('Server returned ' + r.status));
+              return false;
+            }
+
+            // Outside the fence: collect a reason, then submit for approval.
+            // The employee is NOT checked in until HR approves, so this always
+            // resolves false and the toggle rolls back.
+            if (pos) { d.pointLat = pos.latitude; d.pointLng = pos.longitude; }
+            return askReason(d).then(function (reason) {
+              if (!reason) return false;                 // cancelled → stay checked out
+              var retry = pos
+                ? { latitude: pos.latitude, longitude: pos.longitude, accuracy: pos.accuracy }
+                : {};
+              retry.locationReason = reason;
+              return post(retry).then(function (r2) {
+                if (r2.ok) return settle(r2);            // e.g. HR pre-approved
+                return r2.json().catch(function () { return {}; }).then(function (d2) {
+                  notice(
+                    r2.status === 202 ? 'Sent to HR' : 'Could not check in',
+                    (d2 && d2.message) ||
+                    'Your request has been sent to HR. You can check in once it is approved.'
+                  );
+                  return false;
+                });
+              });
+            });
+          });
+        });
+      })
+      .catch(function (e) {
+        console.warn('[hrms-checkin] attendance sync failed', e);
+        return false;
+      });
   }
 
   /* ── SVG icons ───────────────────────────────────────────────────────── */
@@ -148,8 +472,22 @@
       detail: { checkedIn: isCheckedIn, device: device }
     }));
 
-    /* persist to the attendance backend */
-    syncAttendance(isCheckedIn, device);
+    /* persist to the attendance backend. The toggle above is optimistic, so
+       an off-site check-in the employee cancels — or any server refusal — has
+       to be put back, otherwise the widget claims they are working when the
+       server has no record of it. */
+    var attempted = isCheckedIn;
+    if (isCheckedIn) startGeoWatch(); else stopGeoWatch();
+    syncAttendance(isCheckedIn, device).then(function (ok) {
+      if (ok || isCheckedIn !== attempted) return;      // accepted, or toggled again meanwhile
+      isCheckedIn = !attempted;
+      localStorage.setItem(STORAGE_STATE, isCheckedIn ? 'true' : 'false');
+      refreshUI(wrap, toggle, iconEl, device);
+      window.dispatchEvent(new CustomEvent('hrmsCheckinToggle', {
+        detail: { checkedIn: isCheckedIn, device: device }
+      }));
+      console.warn('[hrms-checkin] server refused — rolled back to', isCheckedIn);
+    });
 
     console.log('[hrms-checkin] toggled →', { checkedIn: isCheckedIn, device: device });
   }
@@ -361,7 +699,25 @@
       /* React-origin toggle (employee Check-In/Out page) → persist attendance.
          Topbar toggles go through handleToggle instead, so this never double-fires. */
       if (!e.detail.fromTopbar) {
-        syncAttendance(isCheckedIn, e.detail.device);
+        var attempted = isCheckedIn;
+        var dev = e.detail.device;
+        if (isCheckedIn) startGeoWatch(); else stopGeoWatch();
+        syncAttendance(isCheckedIn, dev).then(function (ok) {
+          if (ok || isCheckedIn !== attempted) return;
+          // Same rollback as the topbar toggle: the page has already painted
+          // "Checked In", so put it back when the server would not take it.
+          isCheckedIn = !attempted;
+          localStorage.setItem(STORAGE_STATE, isCheckedIn ? 'true' : 'false');
+          var w = document.getElementById(WRAPPER_ID);
+          var t = document.getElementById(TOGGLE_ID);
+          if (w && t) refreshUI(w, t, w.querySelector('.hrms-ci-icon'), dev);
+          window.dispatchEvent(new CustomEvent('hrmsCheckinToggle', {
+            detail: { checkedIn: isCheckedIn, device: dev }
+          }));
+          window.dispatchEvent(new CustomEvent('hrmsAttendanceSynced', {
+            detail: { checkedIn: isCheckedIn, record: null }
+          }));
+        });
       }
     }
   });
