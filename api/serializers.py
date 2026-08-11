@@ -61,6 +61,18 @@ from .models import (
     PayrollInformation,
     PayrollForm,
     CandidateFormSubmission,
+<<<<<<< HEAD
+=======
+    EmployeeCompensation,
+    PayComponent,
+    EmployeePayComponent,
+    PayrollRun,
+    Payslip,
+    PayrollSetting,
+    ChatRoom,
+    ChatMessage,
+    ChatParticipant,
+>>>>>>> 266b31a (feat: add Django ORM chat models, migrations, serializers and views)
 )
 
 # Datetime wire format used everywhere by the original API (naive, USE_TZ=False).
@@ -1738,6 +1750,7 @@ class CandidateFormSubmissionSerializer(serializers.ModelSerializer):
 # ==========================================================================
 from .models import ChatRoom, ChatMember, ChatMessage, ChatMeeting  # noqa: E402
 
+<<<<<<< HEAD
 class ChatRoomSerializer(serializers.ModelSerializer):
     class Meta:
         model = ChatRoom
@@ -1829,3 +1842,27 @@ class ChatMeetingSerializer(serializers.ModelSerializer):
 
     def get_attendees_list(self, obj):
         raw = obj.attendees or ""
+=======
+class ChatMessageSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ChatMessage
+        fields = '__all__'
+
+
+class ChatParticipantSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ChatParticipant
+        fields = '__all__'
+
+
+class ChatRoomSerializer(serializers.ModelSerializer):
+    messages = ChatMessageSerializer(many=True, read_only=True)
+    participants = ChatParticipantSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = ChatRoom
+        fields = '__all__'
+
+
+
+>>>>>>> 266b31a (feat: add Django ORM chat models, migrations, serializers and views)

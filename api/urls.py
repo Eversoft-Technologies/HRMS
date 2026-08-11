@@ -1,10 +1,21 @@
 from django.urls import path
 
 from . import (auth_views, email_template_views, linkedin_oauth, live_views, views,
+<<<<<<< HEAD
                attendance_views, job_form_views, onboarding_views)
+=======
+               attendance_views, job_form_views, onboarding_views, payroll_views,
+               chat_views)
+>>>>>>> 266b31a (feat: add Django ORM chat models, migrations, serializers and views)
 
 # All paths are relative to the "/api/" prefix from the project urlconf.
 urlpatterns = [
+    # Chat Module
+    path('chat/rooms', chat_views.chat_rooms),
+    path('chat/rooms/', chat_views.chat_rooms),
+    path('chat/rooms/<int:room_id>/messages', chat_views.chat_messages),
+    path('chat/rooms/<int:room_id>/messages/', chat_views.chat_messages),
+
     # Authentication (OTP login + password reset + Google OAuth)
     path('auth/login', auth_views.login),
     path('auth/verify-otp', auth_views.verify_otp),
@@ -96,6 +107,16 @@ urlpatterns = [
     path('attendance/overtime', views.attendance_overtime),
     path('attendance/auto-correct', views.attendance_auto_correct),
     path('attendance/analytics', views.attendance_analytics),
+<<<<<<< HEAD
+=======
+    path('attendance/geofence-check', views.attendance_geofence_check),
+    path('attendance/location-reviews', views.attendance_location_reviews),
+    path('attendance/roster', views.attendance_roster),
+    path('attendance/home-locations', views.attendance_home_locations),
+    path('attendance/home-locations/review', views.attendance_home_location_review),
+    path('attendance/arrangements', views.attendance_arrangements),
+    path('attendance/arrangements/<int:pk>', views.attendance_arrangement_detail),
+>>>>>>> 266b31a (feat: add Django ORM chat models, migrations, serializers and views)
     path('attendance/geofences', views.attendance_geofences),
     path('attendance/geofences/<int:pk>', views.attendance_geofence_detail),
     path('attendance/wfh', views.wfh_requests),

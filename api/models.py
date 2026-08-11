@@ -525,7 +525,29 @@ class AttendanceCorrection(models.Model):
 
 
 class GeoFence(models.Model):
-    """A GPS circle zone. Check-ins inside are marked geo_verified=True."""
+    """A GPS circle zone. Check-ins inside are marked geo_verified=True.
+
+    Two kinds of fence live here, told apart by ``owner_email``:
+
+      * blank  — a company location. Any employee checking in inside it is
+        verified. This is what the table originally held.
+      * set    — one employee's registered home, used to verify their WFH
+        check-ins. It belongs to that person and to nobody else.
+
+    Keeping them in one table means home fences inherit the distance maths, the
+    GPS-accuracy allowance and the map rendering that already exist. It also
+    means every query has to be explicit about which kind it wants: an office
+    check-in matched against an unfiltered fence list would let anyone check in
+    "at the office" from a colleague's living room. See _office_fences() and
+    home_fence_for().
+
+    A home fence is only a verification basis once ``status`` is Approved. The
+    employee captures it themselves — they are the one standing in the right
+    place — but until someone confirms it, a person could register wherever
+    they happened to be and self-certify every future check-in.
+    """
+    PENDING, APPROVED, REJECTED = 'Pending', 'Approved', 'Rejected'
+
     name = models.CharField(max_length=100)
     latitude = models.FloatField()
     longitude = models.FloatField()
@@ -533,6 +555,16 @@ class GeoFence(models.Model):
     is_active = models.BooleanField(default=True)
     created_by = models.CharField(max_length=255, default='', blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    # Blank for a company location; an employee's address makes it their home.
+    owner_email = models.CharField(max_length=255, default='', blank=True, db_index=True)
+    # Only meaningful for home fences. Company locations are created by someone
+    # who already holds the permission, so they need no second approval.
+    status = models.CharField(max_length=20, default='', blank=True)
+    reviewer = models.CharField(max_length=255, default='', blank=True)
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    # The accuracy of the fix the employee captured, so a reviewer can see
+    # whether the pin was worth trusting before confirming it.
+    captured_accuracy = models.FloatField(null=True, blank=True)
 
     class Meta:
         db_table = 'attendance_geofences'
@@ -555,6 +587,59 @@ class WfhRequest(models.Model):
     class Meta:
         db_table = 'wfh_requests'
         ordering = ['-id']
+
+
+class WorkArrangement(models.Model):
+    """Where an employee works, effective-dated.
+
+    This is a property of the person, not a permission and not a per-day
+    request. It used to be neither: the only lever was the ``attendance.remote``
+    permission, which is binary (so hybrid could not be expressed at all), hangs
+    off a *role* (so making one person remote meant inventing a role for them),
+    and carries no dates.
+
+    Dates are the reason this is a table of rows rather than a column on the
+    employee. Arrangements change — someone moves onsite to hybrid, a remote
+    hire relocates to a city with an office — and a column would overwrite the
+    past, so recomputing or auditing an old month would judge it by today's
+    rule. Rows are never edited in place: closing one and opening the next
+    keeps the history intact. Same shape as EmployeeCompensation, for the same
+    reason.
+
+    ``remote_weekdays`` are anchor days (Python weekday numbers, Mon=0), used
+    when a team has fixed in-office days. When it is empty the employee picks
+    their own days and ``remote_days_per_week`` is the cap. Both only apply to
+    'hybrid': 'remote' is unrestricted and 'onsite' has no remote entitlement.
+    """
+    ONSITE, HYBRID, REMOTE = 'onsite', 'hybrid', 'remote'
+
+    email = models.CharField(max_length=255, db_index=True)
+    employee_name = models.CharField(max_length=255, default='', blank=True)
+    arrangement = models.CharField(max_length=20, default=ONSITE)  # onsite|hybrid|remote
+    # Anchor days as a comma-separated list of weekday numbers, e.g. "0,4" for
+    # Monday and Friday. Empty means "no fixed days, use the weekly quota".
+    remote_weekdays = models.CharField(max_length=32, default='', blank=True)
+    remote_days_per_week = models.IntegerField(default=0)
+    effective_from = models.DateField()
+    effective_to = models.DateField(null=True, blank=True)  # null = still in force
+    notes = models.TextField(default='', blank=True)
+    created_by = models.CharField(max_length=255, default='', blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'work_arrangements'
+        ordering = ['-effective_from', '-id']
+        indexes = [models.Index(fields=['email', 'effective_from'])]
+
+    def weekday_set(self):
+        """Anchor days as a set of ints. Tolerates blanks and stray values."""
+        out = set()
+        for part in (self.remote_weekdays or '').split(','):
+            part = part.strip()
+            if part.isdigit() and 0 <= int(part) <= 6:
+                out.add(int(part))
+        return out
 
 
 # ===========================================================================
@@ -1213,6 +1298,7 @@ class EmailTemplate(models.Model):
 
 
 
+<<<<<<< HEAD
 # ==========================================================================
 # Employee Chat models (appended by chat-module integration)
 # ==========================================================================
@@ -1317,3 +1403,45 @@ class ChatMeeting(models.Model):
     class Meta:
         db_table = "chat_meetings"
         managed = False
+=======
+
+class ChatRoom(models.Model):
+    """Chat room model representing direct and group chat sessions."""
+    room_id = models.CharField(max_length=128, unique=True, null=True, blank=True)
+    name = models.CharField(max_length=255, null=True, blank=True)
+    room_type = models.CharField(max_length=50, default='direct')
+    created_by = models.CharField(max_length=255, default='', blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'chat_rooms'
+        ordering = ['-updated_at']
+
+
+class ChatMessage(models.Model):
+    """Message sent within a chat room."""
+    room = models.ForeignKey(ChatRoom, on_delete=models.CASCADE, related_name='messages', null=True, blank=True)
+    sender_email = models.CharField(max_length=255, db_index=True)
+    content = models.TextField(null=True, blank=True)
+    message_type = models.CharField(max_length=50, default='text')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'chat_messages'
+        ordering = ['created_at']
+
+
+class ChatParticipant(models.Model):
+    """Mapping of users participating in a chat room."""
+    room = models.ForeignKey(ChatRoom, on_delete=models.CASCADE, related_name='participants')
+    email = models.CharField(max_length=255)
+    joined_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'chat_participants'
+        unique_together = ['room', 'email']
+        ordering = ['joined_at']
+
+
+>>>>>>> 266b31a (feat: add Django ORM chat models, migrations, serializers and views)

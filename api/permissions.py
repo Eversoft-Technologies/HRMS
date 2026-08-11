@@ -134,8 +134,12 @@ def check_perm(request, code, or_self=False):
     code : str or dict
         A permission code string, or a dict mapping HTTP methods to codes:
         ``{'GET': 'x.view', 'POST': 'x.create', 'DELETE': 'x.delete'}``
-    or_self : bool
-        If True, the check passes when the request targets the caller's own email.
+    or_self : bool or collection of str
+        If True, the check passes when the request targets the caller's own
+        email. A collection of HTTP methods (e.g. ``('GET',)``) restricts that
+        to those methods — necessary whenever reading your own record is
+        self-service but *writing* it is not. Granting it on a write is how an
+        employee ends up able to set their own work arrangement to "remote".
     """
     caller_email, user = _get_caller(request)
 
@@ -158,8 +162,10 @@ def check_perm(request, code, or_self=False):
     if _is_super_admin(user):
         return True, caller_email, user
 
-    # Self-service check: allow if caller is operating on their own data
-    if or_self:
+    # Self-service check: allow if caller is operating on their own data.
+    # A collection instead of True scopes this to specific methods.
+    allow_self = or_self if isinstance(or_self, bool) else request.method in or_self
+    if allow_self:
         target = _self_email(request)
         if target and target == caller_email:
             return True, caller_email, user
