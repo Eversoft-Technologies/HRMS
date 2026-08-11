@@ -53,6 +53,8 @@ CSRF_TRUSTED_ORIGINS = [
 # Keep the project minimal: no admin/auth/sessions tables are created in the
 # user's MySQL database — only the 8 application tables.
 INSTALLED_APPS = [
+    'daphne',
+    'channels',
     'corsheaders',
     # 'django.contrib.auth'
     
@@ -195,12 +197,7 @@ from corsheaders.defaults import default_headers  # noqa: E402
 CORS_ALLOW_HEADERS = list(default_headers) + ['x-api-key', 'x-user-email', 'x-actor-email']
 
 LANGUAGE_CODE = 'en-us'
-# Business timezone. Attendance is stored as naive local time (see USE_TZ
-# below), so this is the clock every stamp is written and read in. It must NOT
-# depend on the host: the dev machines run IST while the cPanel server runs UTC,
-# which stamped every production check-in 5h30m behind the wall clock the
-# employee saw. api.timeutil.local_now() reads this, never the host clock.
-TIME_ZONE = os.environ.get('HRMS_TIMEZONE', 'Asia/Kolkata')
+TIME_ZONE = 'UTC'
 USE_I18N = True
 USE_TZ = False  # the Node app stored naive datetimes (dateStrings)
 
@@ -209,4 +206,10 @@ LOGGING = {
     'disable_existing_loggers': False,
     'handlers': {'console': {'class': 'logging.StreamHandler'}},
     'root': {'handlers': ['console'], 'level': 'INFO'},
+}
+
+
+# Channels (WebSocket) layer for Employee Chat realtime.
+CHANNEL_LAYERS = {
+    "default": {"BACKEND": "channels.layers.InMemoryChannelLayer"},
 }

@@ -75,11 +75,20 @@ class NoHostClockLeftInAttendanceTests(TestCase):
     """datetime.now() reintroduces the bug wherever it comes back."""
 
     def test_attendance_paths_use_the_business_clock(self):
+        """Scans code, not prose.
+
+        The first version matched the raw file text, so a comment *explaining*
+        why datetime.now() is wrong failed the test that exists to keep it out.
+        Comments are stripped before the check — a rule you cannot write about
+        is a rule people work around instead of understanding.
+        """
         import pathlib
+        import re
         root = pathlib.Path(__file__).resolve().parent.parent
         offenders = []
         for name in ('api/views.py', 'api/attendance_views.py', 'api/onboarding_views.py'):
             src = (root / name).read_text(encoding='utf-8')
-            if 'datetime.now()' in src:
+            code = '\n'.join(re.sub(r'#.*$', '', line) for line in src.splitlines())
+            if 'datetime.now()' in code:
                 offenders.append(name)
         self.assertEqual(offenders, [], f'{offenders} still stamp from the host clock')

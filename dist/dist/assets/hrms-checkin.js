@@ -369,13 +369,10 @@
   /* Records the check-in / check-out against the Django attendance API.
      Auth + actor headers are attached automatically by hrms-actor.js. Fires
      'hrmsAttendanceSynced' with the saved record so the check-in page can
-     display real times. No-op when logged out.
-
-     Resolves true when the server accepted it, false otherwise — the caller
-     flips the toggle optimistically and needs to put it back on refusal. */
+     display real times. No-op when logged out. */
   function syncAttendance(checkedIn, device) {
     var actor = getActor();
-    if (!actor.email) return Promise.resolve(false);
+    if (!actor.email) return;
     var path = checkedIn ? '/api/attendance/check-in' : '/api/attendance/check-out';
 
     function post(extra) {
@@ -491,10 +488,7 @@
           });
         });
       })
-      .catch(function (e) {
-        console.warn('[hrms-checkin] attendance sync failed', e);
-        return false;
-      });
+      .catch(function (e) { console.warn('[hrms-checkin] attendance sync failed', e); });
   }
 
   /* ── SVG icons ───────────────────────────────────────────────────────── */

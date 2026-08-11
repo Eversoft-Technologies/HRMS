@@ -3531,14 +3531,17 @@ def submission_detail(request, pk):
         obj.delete()
         return Response({'ok': True})
 
-    # A PUT that approves/rejects the submission needs the single "action"
-    # permission (submission.action); any other edit needs employee.edit. This
-    # lets a reviewer approve OR reject without granting full edit rights.
+    # A PUT that moves the submission through review — into review, approved or
+    # rejected — needs the single "action" permission (submission.action); any
+    # other edit needs employee.edit. This lets a reviewer work the queue
+    # without granting full edit rights.
     status_val = str(request.data.get('status') or '').strip().lower()
     if status_val == 'approved':
         need, verb = 'submission.action', 'approve'
     elif status_val == 'rejected':
         need, verb = 'submission.action', 'reject'
+    elif status_val == 'in review':
+        need, verb = 'submission.action', 'review'
     else:
         need, verb = 'employee.edit', 'edit'
     allowed, caller_email, user = check_perm(request, need)
@@ -4877,3 +4880,861 @@ def attendance_analytics(request):
         'totalOvertimeHours': total_ot_hours,
         'trends': trends,
     })
+
+
+from .models import (  # noqa: E402,F811
+    ChatRoom, ChatMember, ChatMessage, ChatMeeting,
+    AppUser, UserProfile, OnboardingCandidate,
+)
+from .serializers import (  # noqa: E402
+    ChatRoomSerializer, ChatMemberSerializer,
+    ChatMessageSerializer, ChatMeetingSerializer,
+)
+# Chat APIs — direct messages, channels, and scheduled meetings.
+#
+# Rooms live in ``chat_rooms`` (is_group = 0 → direct 1:1, 1 → channel).
+# Membership is ``chat_members``; messages ``chat_messages``; scheduled
+# meetings ``chat_meetings`` (all managed outside Django — see
+# chat_migrations.sql). Realtime delivery is handled by the Channels
+# WebSocket consumer; the POST endpoints below persist + broadcast so the
+# frontend has a REST fallback when the socket is unavailable.
+# ===========================================================================
+
+# How long after sending a message it can still be edited or deleted.
+CHAT_EDIT_WINDOW = timedelta(minutes=5)
+
+
+def _chat_now():
+    # USE_TZ is False in this project, so store naive local datetimes to match
+    # the rest of the tables.
+    #
+    # local_now(), not datetime.now(): "local" has to mean the business
+    # timezone, not whichever clock the host happens to run. cPanel runs UTC
+    # and the dev machines run IST, so datetime.now() stamped every production
+    # message 5h30m behind the wall clock the sender saw — the same defect that
+    # made check-ins land on the wrong side of midnight.
+    return local_now()
+
+
+def _fmt_dt(dt):
+    try:
+        return dt.isoformat()
+    except Exception:
+        return None
+
+
+def _parse_dt(value):
+    s = str(value or "").strip().replace("Z", "")
+    s = s.replace("T", " ")
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S.%f"):
+        try:
+            return datetime.strptime(s, fmt)
+        except ValueError:
+            continue
+    # Last resort — let fromisoformat try.
+    return datetime.fromisoformat(str(value).replace("Z", ""))
+
+
+def _broadcast_message(room_id, payload):
+    """Best-effort push of a saved message to the room's WebSocket group."""
+    try:
+        from channels.layers import get_channel_layer
+        from asgiref.sync import async_to_sync
+        layer = get_channel_layer()
+        if layer is None:
+            return
+        async_to_sync(layer.group_send)(
+            f"chat_{room_id}",
+            {
+                "type": "chat_message",
+                "id": payload.get("id"),
+                "sender_email": payload.get("sender_email"),
+                "sender_name": payload.get("sender_name"),
+                "message": payload.get("message"),
+                "created_at": payload.get("created_at"),
+                "attachment_name": payload.get("attachment_name"),
+                "attachment_type": payload.get("attachment_type"),
+                "attachment_url": payload.get("attachment_url"),
+            },
+        )
+    except Exception:
+        # Never let a missing/broken channel layer break the REST response.
+        pass
+
+
+def _broadcast_event(room_id, event):
+    """Push an arbitrary event dict (must include ``type``) to a room group."""
+    try:
+        from channels.layers import get_channel_layer
+        from asgiref.sync import async_to_sync
+        layer = get_channel_layer()
+        if layer is None:
+            return
+        async_to_sync(layer.group_send)(f"chat_{room_id}", event)
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Chat file attachments — stored on disk under <BASE_DIR>/media/chat_uploads/
+# so large files (video, etc.) never bloat the database.
+# ---------------------------------------------------------------------------
+CHAT_UPLOAD_SUBDIR = "chat_uploads"
+
+
+def _chat_media_root():
+    return os.path.join(str(settings.BASE_DIR), "media")
+
+
+def _chat_upload_dir():
+    d = os.path.join(_chat_media_root(), CHAT_UPLOAD_SUBDIR)
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _save_attachment(data_url, orig_name):
+    """Decode a base64 data URL and write it to disk. Returns (rel_path, ctype)."""
+    import base64
+    raw = data_url
+    ctype = None
+    if isinstance(raw, str) and raw.startswith("data:"):
+        head, raw = raw.split(",", 1)
+        if ":" in head and ";" in head:
+            ctype = head.split(":", 1)[1].split(";", 1)[0] or None
+    blob = base64.b64decode(raw)
+    ext = os.path.splitext(orig_name or "")[1]
+    if len(ext) > 12 or "/" in ext or "\\" in ext:
+        ext = ""
+    fname = secrets.token_hex(16) + ext
+    with open(os.path.join(_chat_upload_dir(), fname), "wb") as fh:
+        fh.write(blob)
+    return CHAT_UPLOAD_SUBDIR + "/" + fname, ctype
+
+
+def _serve_file_range(request, full_path, ctype, name):
+    """Serve a disk file, honouring HTTP Range requests (needed for video)."""
+    size = os.path.getsize(full_path)
+    inline = ctype.startswith(("image/", "video/", "audio/")) or ctype == "application/pdf"
+    disp = "inline" if inline else "attachment"
+    range_header = request.headers.get("Range", "") or ""
+    if range_header.startswith("bytes="):
+        try:
+            rng = range_header.split("=", 1)[1].split(",")[0]
+            s, _, e = rng.partition("-")
+            start = int(s) if s else 0
+            end = int(e) if e else size - 1
+            end = min(end, size - 1)
+            if start > end or start >= size:
+                raise ValueError
+        except ValueError:
+            start, end = 0, size - 1
+        length = end - start + 1
+        with open(full_path, "rb") as fh:
+            fh.seek(start)
+            data = fh.read(length)
+        resp = HttpResponse(data, status=206, content_type=ctype)
+        resp["Content-Range"] = f"bytes {start}-{end}/{size}"
+        resp["Content-Length"] = str(length)
+    else:
+        with open(full_path, "rb") as fh:
+            data = fh.read()
+        resp = HttpResponse(data, content_type=ctype)
+        resp["Content-Length"] = str(size)
+    resp["Accept-Ranges"] = "bytes"
+    resp["Content-Disposition"] = f'{disp}; filename="{name}"'
+    resp["Cache-Control"] = "private, max-age=86400"
+    return resp
+
+
+def _contacts_directory(emails):
+    """Map each email → {email,name,initials,profilePic,department,...}."""
+    emails = [e for e in emails if e]
+    if not emails:
+        return {}
+    users = {u.email: u for u in AppUser.objects.filter(email__in=emails)}
+    profiles = {p.email: p for p in UserProfile.objects.filter(email__in=emails)}
+    out = {}
+    for e in emails:
+        u = users.get(e)
+        p = profiles.get(e)
+        name = (u.full_name if u and u.full_name else "").strip()
+        if not name and p:
+            name = f"{p.first_name} {p.last_name}".strip()
+        if not name:
+            name = e.split("@")[0]
+        initials = (u.initials if u and u.initials else "") or make_initials(name)
+        pic = ""
+        if u and u.profile_pic:
+            pic = u.profile_pic
+        elif p and p.profile_pic:
+            pic = p.profile_pic
+        out[e] = {
+            "email": e,
+            "name": name,
+            "initials": initials,
+            "profilePic": pic or "",
+            "department": (p.department if p else "") or "",
+            "designation": (p.designation if p else "") or "",
+            "role": (u.role if u else "") or "",
+            "status": (u.status if u else "active") or "active",
+        }
+    return out
+
+
+def _display_name_for(email):
+    if not email:
+        return ""
+    return _contacts_directory([email]).get(email, {}).get("name", email.split("@")[0])
+
+
+def _find_direct_room(a, b):
+    """Return the existing 1:1 room shared by exactly a and b, if any."""
+    a_rooms = set(ChatMember.objects.filter(employee_email=a).values_list("room_id", flat=True))
+    b_rooms = set(ChatMember.objects.filter(employee_email=b).values_list("room_id", flat=True))
+    for rid in (a_rooms & b_rooms):
+        room = ChatRoom.objects.filter(id=rid, is_group=False).first()
+        if room and ChatMember.objects.filter(room_id=rid).count() == 2:
+            return room
+    return None
+
+
+def _last_preview(msg):
+    if not msg:
+        return ""
+    if getattr(msg, "is_deleted", False):
+        return "This message was deleted"
+    if msg.message:
+        return msg.message
+    if getattr(msg, "attachment_name", None):
+        return "\U0001F4CE " + msg.attachment_name
+    return ""
+
+
+def _room_payload(room, viewer):
+    members_qs = list(ChatMember.objects.filter(room_id=room.id))
+    mem_emails = [m.employee_email for m in members_qs]
+    admin_map = {m.employee_email: bool(getattr(m, "is_admin", False)) for m in members_qs}
+    directory = _contacts_directory(set(mem_emails))
+    last = ChatMessage.objects.filter(room_id=room.id).order_by("-created_at").first()
+    unread = (
+        ChatMessage.objects.filter(room_id=room.id, is_read=False)
+        .exclude(sender_email=viewer)
+        .count()
+    )
+    is_group = bool(room.is_group)
+    display_name = room.name
+    other_email = ""
+    if not is_group:
+        other_email = next((e for e in mem_emails if e != viewer), "")
+        info = directory.get(other_email)
+        if info:
+            display_name = info["name"]
+
+    def member_obj(e):
+        base = dict(directory.get(e, {"email": e, "name": e, "initials": make_initials(e), "profilePic": ""}))
+        base["is_admin"] = admin_map.get(e, False)
+        return base
+
+    return {
+        "id": room.id,
+        "name": room.name,
+        "display_name": display_name,
+        "is_group": is_group,
+        "is_private": bool(room.is_private),
+        "created_by": room.created_by,
+        "members": [member_obj(e) for e in mem_emails],
+        "member_emails": mem_emails,
+        "admin_emails": [e for e in mem_emails if admin_map.get(e)],
+        "viewer_is_admin": admin_map.get(viewer, False),
+        "other_email": other_email,
+        "last_message": _last_preview(last),
+        "last_sender": last.sender_email if last else "",
+        "last_time": _fmt_dt(last.created_at) if last else None,
+        "unread": unread,
+    }
+
+
+@api_view(["GET", "POST"])
+def chat_rooms(request):
+    if request.method == "POST":
+        body = request.data or {}
+        creator = norm_email(body.get("created_by") or request.headers.get("X-Actor-Email") or "")
+        rtype = (body.get("type") or "").lower()
+        members = []
+        for e in (body.get("members") or []):
+            ne = norm_email(e)
+            if ne and ne not in members:
+                members.append(ne)
+        if creator and creator not in members:
+            members.append(creator)
+
+        is_group = rtype == "channel" or bool(body.get("is_group")) or len(members) > 2
+        if not is_group:
+            if len(members) < 2:
+                return err("A direct chat needs two participants")
+            existing = _find_direct_room(members[0], members[1])
+            if existing:
+                return Response(_room_payload(existing, creator), status=200)
+            name = "Direct"
+        else:
+            name = (body.get("name") or "").strip()
+            if not name:
+                return err("Channel name is required")
+
+        now = _chat_now()
+        room = ChatRoom.objects.create(
+            name=name,
+            is_group=is_group,
+            created_by=creator,
+            created_at=now,
+            is_private=bool(body.get("is_private", True)),
+        )
+        for e in members:
+            # The channel creator starts as the (only) admin.
+            ChatMember.objects.create(
+                employee_email=e, room=room, joined_at=now,
+                is_admin=(is_group and e == creator),
+            )
+        return Response(_room_payload(room, creator), status=201)
+
+    # GET — rooms the given user belongs to, newest-activity first.
+    email = norm_email(request.GET.get("email") or request.headers.get("X-Actor-Email") or "")
+    if not email:
+        return Response([])
+    room_ids = list(
+        ChatMember.objects.filter(employee_email=email).values_list("room_id", flat=True)
+    )
+    rooms = ChatRoom.objects.filter(id__in=room_ids)
+    out = [_room_payload(r, email) for r in rooms]
+    out.sort(key=lambda x: (x["last_time"] or ""), reverse=True)
+    return Response(out)
+
+
+@api_view(["GET", "POST"])
+def chat_messages(request, room_id):
+    room = ChatRoom.objects.filter(id=room_id).first()
+    if not room:
+        return err("Room not found", 404)
+
+    if request.method == "GET":
+        viewer = norm_email(request.GET.get("email") or request.headers.get("X-Actor-Email") or "")
+        msgs = (
+            ChatMessage.objects.filter(room_id=room_id)
+            .select_related("room")
+            .order_by("created_at")
+        )
+        data = ChatMessageSerializer(msgs, many=True).data
+        if viewer:
+            ChatMessage.objects.filter(room_id=room_id, is_read=False).exclude(
+                sender_email=viewer
+            ).update(is_read=True)
+        return Response(data)
+
+    # POST — persist + broadcast (REST fallback for the WebSocket). Supports an
+    # optional file attachment (base64 data URL in ``attachment_data``).
+    body = request.data or {}
+    sender_email = norm_email(body.get("sender_email") or request.headers.get("X-Actor-Email") or "")
+    text = (body.get("message") or "").strip()
+    att_name = (body.get("attachment_name") or "").strip() or None
+    att_type = (body.get("attachment_type") or "").strip() or None
+    att_data = body.get("attachment_data") or None
+    if not sender_email:
+        return err("sender_email is required")
+    if not text and not att_data:
+        return err("message or attachment is required")
+    sender_name = (body.get("sender_name") or _display_name_for(sender_email) or "").strip()
+
+    # Write any attachment to disk (keeps big files out of the DB).
+    att_path = None
+    if att_data:
+        try:
+            att_path, detected = _save_attachment(att_data, att_name)
+            if detected and not att_type:
+                att_type = detected
+        except Exception:
+            return err("Could not save the attachment")
+        att_data = None
+
+    now = _chat_now()
+    msg = ChatMessage.objects.create(
+        room=room,
+        sender_email=sender_email,
+        sender_name=sender_name,
+        message=text,
+        created_at=now,
+        is_read=False,
+        attachment_name=att_name,
+        attachment_type=att_type,
+        attachment_data=att_data,
+        attachment_path=att_path,
+    )
+    _broadcast_message(room_id, {
+        "id": msg.id,
+        "sender_email": sender_email,
+        "sender_name": sender_name,
+        "message": text,
+        "created_at": _fmt_dt(now),
+        "attachment_name": att_name,
+        "attachment_type": att_type,
+        "attachment_url": (f"/api/chat/attachment/{msg.id}" if att_path else ""),
+    })
+    return Response(ChatMessageSerializer(msg).data, status=201)
+
+
+@api_view(["PUT", "DELETE"])
+def chat_message_detail(request, msg_id):
+    """Edit (PUT) or soft-delete (DELETE) a single message. Sender only."""
+    msg = ChatMessage.objects.filter(id=msg_id).first()
+    if not msg:
+        return err("Message not found", 404)
+    actor = norm_email(
+        (request.data or {}).get("email")
+        or request.GET.get("email")
+        or request.headers.get("X-Actor-Email")
+        or ""
+    )
+    if not actor or actor != norm_email(msg.sender_email):
+        return err("You can only modify your own messages", 403)
+
+    # Time window: messages can only be edited/deleted shortly after sending.
+    if msg.created_at:
+        try:
+            if (_chat_now() - msg.created_at) > CHAT_EDIT_WINDOW:
+                mins = int(CHAT_EDIT_WINDOW.total_seconds() // 60)
+                verb = "deleted" if request.method == "DELETE" else "edited"
+                return err(
+                    f"Messages can only be {verb} within {mins} minutes of sending.",
+                    403,
+                )
+        except TypeError:
+            pass
+
+    room_id = msg.room_id
+
+    if request.method == "DELETE":
+        # If this message announced a meeting, cancel that meeting too — so its
+        # "Join" button disappears once the message with the link is removed.
+        old_text = msg.message or ""
+        if old_text and "meet.jit.si" in old_text:
+            for mt in ChatMeeting.objects.filter(room_id=room_id):
+                if mt.join_url and mt.join_url in old_text:
+                    mt.delete()
+
+        # Remove the on-disk file, if any.
+        old_path = getattr(msg, "attachment_path", None)
+        if old_path:
+            try:
+                full = os.path.normpath(os.path.join(_chat_media_root(), old_path))
+                if full.startswith(os.path.normpath(_chat_media_root())) and os.path.exists(full):
+                    os.remove(full)
+            except Exception:
+                pass
+        msg.is_deleted = True
+        msg.message = ""
+        msg.attachment_data = None
+        msg.attachment_name = None
+        msg.attachment_type = None
+        msg.attachment_path = None
+        msg.edited_at = _chat_now()
+        msg.save(update_fields=[
+            "is_deleted", "message", "attachment_data",
+            "attachment_name", "attachment_type", "attachment_path", "edited_at",
+        ])
+        _broadcast_event(room_id, {"type": "message_deleted", "id": msg.id})
+        return Response({"ok": True, "id": msg.id})
+
+    # PUT — edit text
+    new_text = ((request.data or {}).get("message") or "").strip()
+    if not new_text:
+        return err("message is required")
+    if msg.is_deleted:
+        return err("Cannot edit a deleted message")
+    now = _chat_now()
+    msg.message = new_text
+    msg.edited = True
+    msg.edited_at = now
+    msg.save(update_fields=["message", "edited", "edited_at"])
+    _broadcast_event(room_id, {
+        "type": "message_edited",
+        "id": msg.id,
+        "message": new_text,
+        "edited_at": _fmt_dt(now),
+    })
+    return Response(ChatMessageSerializer(msg).data)
+
+
+@api_view(["GET"])
+def chat_attachment(request, msg_id):
+    """Return a message's file attachment with the right content type."""
+    import base64
+    msg = ChatMessage.objects.filter(id=msg_id).first()
+    if not msg or msg.is_deleted:
+        return err("Attachment not found", 404)
+    ctype = msg.attachment_type or "application/octet-stream"
+    name = msg.attachment_name or "file"
+
+    # Disk-backed (new uploads) — supports HTTP Range for video/audio seeking.
+    path = getattr(msg, "attachment_path", None)
+    if path:
+        full = os.path.normpath(os.path.join(_chat_media_root(), path))
+        if full.startswith(os.path.normpath(_chat_media_root())) and os.path.exists(full):
+            return _serve_file_range(request, full, ctype, name)
+        return err("Attachment not found", 404)
+
+    # Base64-backed (older messages / fallback).
+    if msg.attachment_data:
+        raw = msg.attachment_data
+        if isinstance(raw, str) and raw.startswith("data:"):
+            try:
+                head, raw = raw.split(",", 1)
+                if ";" in head and ":" in head:
+                    ctype = head.split(":", 1)[1].split(";", 1)[0] or ctype
+            except ValueError:
+                pass
+        try:
+            blob = base64.b64decode(raw)
+        except Exception:
+            return err("Attachment could not be decoded", 400)
+        resp = HttpResponse(blob, content_type=ctype)
+        inline = ctype.startswith(("image/", "video/", "audio/")) or ctype == "application/pdf"
+        resp["Content-Disposition"] = f'{"inline" if inline else "attachment"}; filename="{name}"'
+        resp["Cache-Control"] = "private, max-age=86400"
+        return resp
+
+    return err("Attachment not found", 404)
+
+
+@api_view(["POST"])
+def chat_mark_read(request, room_id):
+    viewer = norm_email(
+        (request.data or {}).get("email") or request.headers.get("X-Actor-Email") or ""
+    )
+    if viewer:
+        ChatMessage.objects.filter(room_id=room_id, is_read=False).exclude(
+            sender_email=viewer
+        ).update(is_read=True)
+    return Response({"ok": True})
+
+
+# ---------------------------------------------------------------------------
+# Channel membership + admins (max 2 admins, min 1; admins manage members).
+# ---------------------------------------------------------------------------
+# The channel creator is always an admin (permanent). Up to CHAT_MAX_ADMINS
+# admins total are allowed — i.e. the creator plus (CHAT_MAX_ADMINS - 1) more.
+CHAT_MAX_ADMINS = 3
+
+
+def _is_room_admin(room_id, email):
+    if not email:
+        return False
+    return ChatMember.objects.filter(
+        room_id=room_id, employee_email=email, is_admin=True
+    ).exists()
+
+
+def _room_admin_count(room_id):
+    return ChatMember.objects.filter(room_id=room_id, is_admin=True).count()
+
+
+def _is_creator(room, email):
+    return bool(email) and norm_email(room.created_by) == norm_email(email)
+
+
+def _actor_of(request):
+    return norm_email(
+        request.GET.get("email")
+        or (request.data or {}).get("email")
+        or request.headers.get("X-Actor-Email")
+        or ""
+    )
+
+
+@api_view(["GET", "POST"])
+def chat_room_members(request, room_id):
+    room = ChatRoom.objects.filter(id=room_id).first()
+    if not room:
+        return err("Room not found", 404)
+    actor = _actor_of(request)
+
+    if request.method == "GET":
+        return Response(_room_payload(room, actor).get("members", []))
+
+    # POST — add a member (admins only, channels only).
+    if not room.is_group:
+        return err("Members can only be managed on channels", 400)
+    if not _is_room_admin(room_id, actor):
+        return err("Only channel admins can add members", 403)
+    email = norm_email(
+        (request.data or {}).get("member")
+        or (request.data or {}).get("member_email")
+        or ""
+    )
+    if not email:
+        return err("member email is required")
+    if ChatMember.objects.filter(room_id=room_id, employee_email=email).exists():
+        return err("This person is already in the channel", 409)
+    make_admin = bool((request.data or {}).get("is_admin"))
+    if make_admin and _room_admin_count(room_id) >= CHAT_MAX_ADMINS:
+        make_admin = False
+    ChatMember.objects.create(
+        employee_email=email, room=room, joined_at=_chat_now(), is_admin=make_admin
+    )
+    return Response(_room_payload(room, actor))
+
+
+@api_view(["PUT", "DELETE"])
+def chat_room_member_detail(request, room_id, email):
+    room = ChatRoom.objects.filter(id=room_id).first()
+    if not room:
+        return err("Room not found", 404)
+    if not room.is_group:
+        return err("Members can only be managed on channels", 400)
+    actor = _actor_of(request)
+    target = norm_email(email)
+    member = ChatMember.objects.filter(room_id=room_id, employee_email=target).first()
+    if not member:
+        return err("Member not found", 404)
+    is_self = (actor == target)
+
+    if request.method == "DELETE":
+        # A member may remove themselves (leave); otherwise admins only.
+        if not _is_room_admin(room_id, actor) and not is_self:
+            return err("Only channel admins can remove members", 403)
+        # The creator is a permanent member/admin and can't be removed.
+        if _is_creator(room, target):
+            return err("The channel creator can't be removed", 400)
+        member.delete()
+        return Response(_room_payload(room, actor))
+
+    # PUT — promote/demote admin (admins only).
+    if not _is_room_admin(room_id, actor):
+        return err("Only channel admins can change admins", 403)
+    make_admin = bool((request.data or {}).get("is_admin"))
+    if make_admin and not member.is_admin:
+        if _room_admin_count(room_id) >= CHAT_MAX_ADMINS:
+            extra = CHAT_MAX_ADMINS - 1
+            return err(f"A channel can have the creator plus {extra} more admins ({CHAT_MAX_ADMINS} total).")
+        member.is_admin = True
+        member.save(update_fields=["is_admin"])
+    elif not make_admin and member.is_admin:
+        # The creator's admin status is permanent.
+        if _is_creator(room, target):
+            return err("The channel creator is a permanent admin")
+        member.is_admin = False
+        member.save(update_fields=["is_admin"])
+    return Response(_room_payload(room, actor))
+
+
+@api_view(["GET"])
+def chat_contacts(request):
+    """The company directory a user can start a chat with.
+
+    Colleagues in this HRMS live across three tables, so the directory is the
+    union of all of them (de-duplicated by email):
+      • ``app_users``           — login accounts (only *disabled* ones hidden)
+      • ``user_profiles``       — employee profiles
+      • ``onboarding_candidates`` — people onboarded into the company
+    Pass ``?all=1`` to also include disabled logins and rejected candidates."""
+    me = norm_email(request.GET.get("email") or request.headers.get("X-Actor-Email") or "")
+    include_all = bool(request.GET.get("all"))
+
+    users = AppUser.objects.all()
+    if not include_all:
+        users = users.exclude(status="disabled")
+    au = {}
+    for u in users:
+        if u.email:
+            au[norm_email(u.email)] = u
+
+    profs = {}
+    for p in UserProfile.objects.all():
+        if p.email:
+            profs[norm_email(p.email)] = p
+
+    cands = {}
+    cand_qs = OnboardingCandidate.objects.filter(is_deleted=False)
+    if not include_all:
+        cand_qs = cand_qs.exclude(status="Rejected")
+    for c in cand_qs:  # ordered by -created_at → first (newest) per email wins
+        if c.email:
+            e = norm_email(c.email)
+            if e not in cands:
+                cands[e] = c
+
+    out = []
+    for e in (set(au) | set(profs) | set(cands)):
+        if not e or (me and e == me):
+            continue
+        u = au.get(e)
+        p = profs.get(e)
+        c = cands.get(e)
+        name = (u.full_name.strip() if u and u.full_name else "")
+        if not name and p:
+            name = (p.first_name + " " + p.last_name).strip()
+        if not name and c:
+            name = (c.first_name + " " + c.last_name).strip()
+        if not name:
+            name = e.split("@")[0]
+        dept = (p.department if p and p.department else "") or (c.department if c else "")
+        desg = (p.designation if p and p.designation else "") or (c.job_title if c else "")
+        pic = ""
+        if u and u.profile_pic:
+            pic = u.profile_pic
+        elif p and p.profile_pic:
+            pic = p.profile_pic
+        out.append({
+            "email": e,
+            "name": name,
+            "initials": (u.initials if u and u.initials else "") or make_initials(name),
+            "profilePic": pic or "",
+            "department": dept or "",
+            "designation": desg or "",
+            "role": (u.role if u else "") or "",
+            "status": (u.status if u else "active") or "active",
+        })
+
+    out.sort(key=lambda x: x["name"].lower())
+    return Response(out)
+
+
+@api_view(["GET", "POST"])
+def chat_meetings(request):
+    if request.method == "GET":
+        room_id = request.GET.get("room_id")
+        email = norm_email(request.GET.get("email") or request.headers.get("X-Actor-Email") or "")
+        qs = ChatMeeting.objects.all()
+        if room_id:
+            qs = qs.filter(room_id=room_id)
+        elif email:
+            room_ids = list(
+                ChatMember.objects.filter(employee_email=email).values_list("room_id", flat=True)
+            )
+            qs = qs.filter(
+                Q(room_id__in=room_ids) | Q(created_by=email) | Q(attendees__icontains=email)
+            )
+        return Response(ChatMeetingSerializer(qs.order_by("scheduled_at"), many=True).data)
+
+    # POST — schedule a meeting and announce it in the room timeline.
+    body = request.data or {}
+    creator = norm_email(body.get("created_by") or request.headers.get("X-Actor-Email") or "")
+    title = (body.get("title") or "").strip()
+    if not title:
+        return err("Meeting title is required")
+    if not body.get("scheduled_at"):
+        return err("scheduled_at is required")
+    try:
+        dt = _parse_dt(body.get("scheduled_at"))
+    except Exception:
+        return err("Invalid scheduled_at")
+
+    room = ChatRoom.objects.filter(id=body.get("room_id")).first() if body.get("room_id") else None
+
+    attendees = body.get("attendees") or []
+    if isinstance(attendees, str):
+        attendees = attendees.split(",")
+    attendees = [norm_email(a) for a in attendees if norm_email(a)]
+    if room:
+        for e in ChatMember.objects.filter(room_id=room.id).values_list("employee_email", flat=True):
+            if e not in attendees:
+                attendees.append(e)
+    if creator and creator not in attendees:
+        attendees.append(creator)
+
+    try:
+        duration = int(body.get("duration_minutes") or 30)
+    except (TypeError, ValueError):
+        duration = 30
+
+    join_url = (body.get("join_url") or "").strip()
+    if not join_url:
+        join_url = "https://meet.jit.si/hrms-" + secrets.token_hex(6)
+
+    creator_name = (body.get("created_by_name") or _display_name_for(creator) or "").strip()
+    now = _chat_now()
+    meeting = ChatMeeting.objects.create(
+        room=room,
+        title=title,
+        description=(body.get("description") or ""),
+        scheduled_at=dt,
+        duration_minutes=duration,
+        created_by=creator,
+        created_by_name=creator_name,
+        join_url=join_url,
+        attendees=",".join(attendees),
+        created_at=now,
+    )
+
+    if room:
+        when = dt.strftime("%b %d, %Y %I:%M %p")
+        text = f"\U0001F4C5 Meeting scheduled: “{title}” on {when}. Join: {join_url}"
+        msg = ChatMessage.objects.create(
+            room=room,
+            sender_email=creator,
+            sender_name=creator_name,
+            message=text,
+            created_at=now,
+            is_read=False,
+        )
+        _broadcast_message(room.id, {
+            "id": msg.id,
+            "sender_email": creator,
+            "sender_name": creator_name,
+            "message": text,
+            "created_at": _fmt_dt(now),
+        })
+
+    return Response(ChatMeetingSerializer(meeting).data, status=201)
+
+
+@api_view(["DELETE"])
+def chat_meeting_detail(request, meeting_id):
+    """Cancel a scheduled meeting (organiser or channel admin)."""
+    mt = ChatMeeting.objects.filter(id=meeting_id).first()
+    if not mt:
+        return err("Meeting not found", 404)
+    actor = _actor_of(request)
+    allowed = bool(actor) and actor == norm_email(mt.created_by)
+    if not allowed and mt.room_id:
+        allowed = _is_room_admin(mt.room_id, actor)
+    if not allowed:
+        return err("Only the organiser or a channel admin can cancel this meeting", 403)
+    mt.delete()
+    return Response({"ok": True, "id": meeting_id})
+
+
+@api_view(["DELETE"])
+def chat_room_detail(request, room_id):
+    """Delete a whole conversation.
+
+    Channels: only an admin (which includes the permanent creator) may delete.
+    Direct chats: either participant may delete. Removes the room together with
+    its members, messages, meetings, and any on-disk attachments."""
+    room = ChatRoom.objects.filter(id=room_id).first()
+    if not room:
+        return err("Room not found", 404)
+    actor = _actor_of(request)
+    is_member = ChatMember.objects.filter(room_id=room_id, employee_email=actor).exists()
+
+    if room.is_group:
+        if not _is_room_admin(room_id, actor):
+            return err("Only a channel admin can delete this channel", 403)
+    else:
+        if not is_member:
+            return err("You are not part of this chat", 403)
+
+    # Remove any on-disk attachment files first.
+    for m in ChatMessage.objects.filter(room_id=room_id):
+        p = getattr(m, "attachment_path", None)
+        if p:
+            try:
+                full = os.path.normpath(os.path.join(_chat_media_root(), p))
+                if full.startswith(os.path.normpath(_chat_media_root())) and os.path.exists(full):
+                    os.remove(full)
+            except Exception:
+                pass
+
+    ChatMessage.objects.filter(room_id=room_id).delete()
+    ChatMeeting.objects.filter(room_id=room_id).delete()
+    ChatMember.objects.filter(room_id=room_id).delete()
+    room.delete()
+    return Response({"ok": True, "id": room_id})

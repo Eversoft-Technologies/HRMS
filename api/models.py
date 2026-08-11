@@ -1441,42 +1441,107 @@ class PayrollSetting(models.Model):
         ordering = ['key']
 
 
+# ==========================================================================
+# Employee Chat models (appended by chat-module integration)
+# ==========================================================================
 class ChatRoom(models.Model):
-    """Chat room model representing direct and group chat sessions."""
-    room_id = models.CharField(max_length=128, unique=True, null=True, blank=True)
-    name = models.CharField(max_length=255, null=True, blank=True)
-    room_type = models.CharField(max_length=50, default='direct')
-    created_by = models.CharField(max_length=255, default='', blank=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
+    name = models.CharField(max_length=255)
+    is_group = models.BooleanField(default=False)
+    created_by = models.CharField(max_length=255)
+    created_at = models.DateTimeField()
+    is_private = models.BooleanField(default=True)
 
     class Meta:
-        db_table = 'chat_rooms'
-        ordering = ['-updated_at']
+        db_table = "chat_rooms"
+        managed = False
+
+
+class ChatMember(models.Model):
+    employee_email = models.CharField(max_length=255)
+
+    room = models.ForeignKey(
+        ChatRoom,
+        db_column="room_id",
+        on_delete=models.CASCADE,
+    )
+
+    joined_at = models.DateTimeField()
+    # Channel admins can add/remove members and manage other admins.
+    is_admin = models.BooleanField(default=False)
+
+    class Meta:
+        db_table = "chat_members"
+        managed = False
 
 
 class ChatMessage(models.Model):
-    """Message sent within a chat room."""
-    room = models.ForeignKey(ChatRoom, on_delete=models.CASCADE, related_name='messages', null=True, blank=True)
-    sender_email = models.CharField(max_length=255, db_index=True)
-    content = models.TextField(null=True, blank=True)
-    message_type = models.CharField(max_length=50, default='text')
-    created_at = models.DateTimeField(auto_now_add=True)
+    sender_email = models.CharField(max_length=255)
+
+    sender_name = models.CharField(max_length=255)
+
+    room = models.ForeignKey(
+        ChatRoom,
+        db_column="room_id",
+        on_delete=models.CASCADE,
+    )
+
+    message = models.TextField()
+
+    is_read = models.BooleanField(default=False)
+
+    created_at = models.DateTimeField()
+
+    # Editing / deleting (soft delete keeps the row so the timeline stays intact)
+    edited = models.BooleanField(default=False)
+    edited_at = models.DateTimeField(null=True, blank=True)
+    is_deleted = models.BooleanField(default=False)
+
+    # File sharing. New uploads are written to disk and referenced by
+    # ``attachment_path`` (keeps large files — video, etc. — out of the DB).
+    # ``attachment_data`` (base64) is retained for older messages / fallback.
+    attachment_name = models.CharField(max_length=255, null=True, blank=True)
+    attachment_type = models.CharField(max_length=100, null=True, blank=True)
+    attachment_data = models.TextField(null=True, blank=True)
+    attachment_path = models.CharField(max_length=512, null=True, blank=True)
 
     class Meta:
-        db_table = 'chat_messages'
-        ordering = ['created_at']
+        db_table = "chat_messages"
+        managed = False
+        ordering = ["created_at"]
 
 
-class ChatParticipant(models.Model):
-    """Mapping of users participating in a chat room."""
-    room = models.ForeignKey(ChatRoom, on_delete=models.CASCADE, related_name='participants')
-    email = models.CharField(max_length=255)
-    joined_at = models.DateTimeField(auto_now_add=True)
+class ChatMeeting(models.Model):
+    """A scheduled meeting attached to a chat room (direct or channel).
+
+    Stores the schedule plus a shareable ``join_url`` (e.g. a Jitsi Meet room
+    link). No video server is run by the app — the link is what participants
+    click to join. ``managed = False`` because the ``chat_meetings`` table is
+    created by the raw SQL migration (see chat_migrations.sql), matching the
+    other chat tables."""
+
+    room = models.ForeignKey(
+        ChatRoom,
+        db_column="room_id",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+    )
+
+    title = models.CharField(max_length=255)
+    description = models.TextField(default="", blank=True)
+    scheduled_at = models.DateTimeField()
+    duration_minutes = models.IntegerField(default=30)
+
+    created_by = models.CharField(max_length=255)
+    created_by_name = models.CharField(max_length=255, default="", blank=True)
+
+    join_url = models.CharField(max_length=512, default="", blank=True)
+    # Comma-separated attendee emails (kept simple so the table needs no JSON
+    # column on older MySQL/MariaDB installs).
+    attendees = models.TextField(default="", blank=True)
+
+    created_at = models.DateTimeField()
 
     class Meta:
-        db_table = 'chat_participants'
-        unique_together = ['room', 'email']
-        ordering = ['joined_at']
-
-
+        db_table = "chat_meetings"
+        managed = False
