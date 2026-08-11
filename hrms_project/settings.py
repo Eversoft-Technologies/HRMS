@@ -53,6 +53,8 @@ CSRF_TRUSTED_ORIGINS = [
 # Keep the project minimal: no admin/auth/sessions tables are created in the
 # user's MySQL database — only the 8 application tables.
 INSTALLED_APPS = [
+    'daphne',
+    'channels',
     'corsheaders',
     # 'django.contrib.auth'
     
@@ -204,4 +206,10 @@ LOGGING = {
     'disable_existing_loggers': False,
     'handlers': {'console': {'class': 'logging.StreamHandler'}},
     'root': {'handlers': ['console'], 'level': 'INFO'},
+}
+
+
+# Channels (WebSocket) layer for Employee Chat realtime.
+CHANNEL_LAYERS = {
+    "default": {"BACKEND": "channels.layers.InMemoryChannelLayer"},
 }
