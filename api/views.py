@@ -1740,8 +1740,6 @@ def _get_active_shift(email, date_val):
     return fallback
 
 
-<<<<<<< HEAD
-=======
 def _geofencing_enabled():
     """True once at least one active fence exists.
 
@@ -1883,7 +1881,6 @@ def _home_location_help(lat, lng, accuracy, home, distance):
             f'and HR will review it.')
 
 
->>>>>>> 266b31a (feat: add Django ORM chat models, migrations, serializers and views)
 def _check_geofence(lat, lng):
     if lat is None or lng is None:
         return False, None
@@ -1964,10 +1961,6 @@ def attendance_check_in(request):
 
     fence_obj = None
     if is_wfh:
-<<<<<<< HEAD
-        obj.geo_verified = True
-        loc_desc = 'Home'
-=======
         # Working from home is exempt from the OFFICE fence, not from being
         # anywhere in particular. This branch used to set geo_verified=True and
         # discard the position entirely, so an approved WFH day was verified
@@ -2071,7 +2064,6 @@ def attendance_check_in(request):
         if lat is not None and lng is not None:
             obj.location_lat, obj.location_lng = lat, lng
         loc_desc = 'Office'
->>>>>>> 266b31a (feat: add Django ORM chat models, migrations, serializers and views)
     else:
         if lat is not None and lng is not None:
             is_inside, fence_obj = _check_geofence(lat, lng)
@@ -2080,14 +2072,11 @@ def attendance_check_in(request):
             obj.location_lng = lng
             loc_desc = fence_obj.name if fence_obj else 'Unverified Location'
         else:
-<<<<<<< HEAD
-            obj.geo_verified = False
-            loc_desc = 'Office'
-=======
             # Do NOT keep yesterday's coordinates on the row — a stale position
             # makes an unverified day look like it was measured.
             obj.location_lat = obj.location_lng = None
-        obj.geo_verified = is_inside
+            obj.geo_verified = False
+            loc_desc = 'Office'
 
         if is_inside and fence_obj is not None:
             # Do not erase a decision HR already made today. Checking in from
@@ -2340,8 +2329,6 @@ def attendance_check_out(request):
     return Response(EmployeeAttendanceSerializer(obj).data)
 
 
-<<<<<<< HEAD
-=======
 def _maybe_send_long_day_alert(obj, shift):
     """Email the employee once when today's work passes the shift's OT threshold.
 
@@ -2510,7 +2497,6 @@ def attendance_location_reviews(request):
     return Response({'ok': True, 'id': obj.id, 'status': obj.location_status})
 
 
->>>>>>> 266b31a (feat: add Django ORM chat models, migrations, serializers and views)
 @api_view(['GET'])
 @require_perm('attendance.view', or_self=True)
 def attendance_today(request):

@@ -90,8 +90,6 @@
     }
   }
 
-<<<<<<< HEAD
-=======
   /* ── geolocation ──────────────────────────────────────────────────────
    *
    * Resolves to {latitude, longitude, accuracy} or null. Never rejects: a
@@ -368,7 +366,6 @@
     });
   }
 
->>>>>>> 266b31a (feat: add Django ORM chat models, migrations, serializers and views)
   /* Records the check-in / check-out against the Django attendance API.
      Auth + actor headers are attached automatically by hrms-actor.js. Fires
      'hrmsAttendanceSynced' with the saved record so the check-in page can
@@ -377,23 +374,6 @@
     var actor = getActor();
     if (!actor.email) return;
     var path = checkedIn ? '/api/attendance/check-in' : '/api/attendance/check-out';
-<<<<<<< HEAD
-    var body = checkedIn
-      ? { email: actor.email, device: device || detectDevice(), employee: actor.name }
-      : { email: actor.email };
-    fetch(path, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    })
-      .then(function (r) { return r.ok ? r.json().catch(function () { return null; }) : null; })
-      .then(function (record) {
-        window.dispatchEvent(new CustomEvent('hrmsAttendanceSynced', {
-          detail: { checkedIn: checkedIn, record: record }
-        }));
-        console.log('[hrms-checkin] attendance', checkedIn ? 'check-in' : 'check-out', record);
-=======
-
     function post(extra) {
       var body = checkedIn
         ? { email: actor.email, device: device || detectDevice(), employee: actor.name }
@@ -590,10 +570,6 @@
       detail: { checkedIn: isCheckedIn, device: device }
     }));
 
-<<<<<<< HEAD
-    /* persist to the attendance backend */
-    syncAttendance(isCheckedIn, device);
-=======
     /* persist to the attendance backend. The toggle above is optimistic, so
        an off-site check-in the employee cancels — or any server refusal — has
        to be put back, otherwise the widget claims they are working when the
@@ -610,7 +586,6 @@
       }));
       console.warn('[hrms-checkin] server refused — rolled back to', isCheckedIn);
     });
->>>>>>> 266b31a (feat: add Django ORM chat models, migrations, serializers and views)
 
     console.log('[hrms-checkin] toggled →', { checkedIn: isCheckedIn, device: device });
   }
@@ -822,9 +797,6 @@
       /* React-origin toggle (employee Check-In/Out page) → persist attendance.
          Topbar toggles go through handleToggle instead, so this never double-fires. */
       if (!e.detail.fromTopbar) {
-<<<<<<< HEAD
-        syncAttendance(isCheckedIn, e.detail.device);
-=======
         var attempted = isCheckedIn;
         var dev = e.detail.device;
         if (isCheckedIn) startGeoWatch(); else stopGeoWatch();
@@ -844,7 +816,6 @@
             detail: { checkedIn: isCheckedIn, record: null }
           }));
         });
->>>>>>> 266b31a (feat: add Django ORM chat models, migrations, serializers and views)
       }
     }
   });

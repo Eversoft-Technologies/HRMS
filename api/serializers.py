@@ -61,8 +61,6 @@ from .models import (
     PayrollInformation,
     PayrollForm,
     CandidateFormSubmission,
-<<<<<<< HEAD
-=======
     EmployeeCompensation,
     PayComponent,
     EmployeePayComponent,
@@ -72,7 +70,6 @@ from .models import (
     ChatRoom,
     ChatMessage,
     ChatParticipant,
->>>>>>> 266b31a (feat: add Django ORM chat models, migrations, serializers and views)
 )
 
 # Datetime wire format used everywhere by the original API (naive, USE_TZ=False).
@@ -1743,106 +1740,10 @@ class CandidateFormSubmissionSerializer(serializers.ModelSerializer):
         return ret
 
 
-
-
 # ==========================================================================
-# Employee Chat serializers (appended by chat-module integration)
+# Chat serializers
 # ==========================================================================
-from .models import ChatRoom, ChatMember, ChatMessage, ChatMeeting  # noqa: E402
 
-<<<<<<< HEAD
-class ChatRoomSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = ChatRoom
-        fields = "__all__"
-
-
-class ChatMemberSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = ChatMember
-        fields = "__all__"
-
-
-class ChatMessageSerializer(serializers.ModelSerializer):
-    room_name = serializers.CharField(
-        source="room.name",
-        read_only=True,
-    )
-    message = serializers.SerializerMethodField()
-    attachment_url = serializers.SerializerMethodField()
-    age_seconds = serializers.SerializerMethodField()
-
-    class Meta:
-        model = ChatMessage
-        fields = [
-            "id",
-            "sender_email",
-            "sender_name",
-            "message",
-            "is_read",
-            "created_at",
-            "age_seconds",
-            "room",
-            "room_name",
-            "edited",
-            "edited_at",
-            "is_deleted",
-            "attachment_name",
-            "attachment_type",
-            "attachment_url",
-        ]
-
-    def get_message(self, obj):
-        # Hide the original text once a message is deleted.
-        return "" if getattr(obj, "is_deleted", False) else obj.message
-
-    def get_age_seconds(self, obj):
-        # How long ago the message was sent, computed entirely server-side so
-        # it's immune to timezone differences between server and browser. The
-        # frontend uses this for correct time display and the edit window.
-        if not obj.created_at:
-            return None
-        try:
-            from datetime import datetime as _dt
-            return max(0, int((_dt.now() - obj.created_at).total_seconds()))
-        except Exception:
-            return None
-
-    def get_attachment_url(self, obj):
-        # Serve the file bytes on demand rather than shipping them in every
-        # message list. Empty when deleted or when there's no attachment.
-        if getattr(obj, "is_deleted", False):
-            return ""
-        if getattr(obj, "attachment_path", None) or obj.attachment_data:
-            return f"/api/chat/attachment/{obj.id}"
-        return ""
-
-
-class ChatMeetingSerializer(serializers.ModelSerializer):
-    room_name = serializers.CharField(source="room.name", read_only=True)
-    attendees_list = serializers.SerializerMethodField()
-
-    class Meta:
-        model = ChatMeeting
-        fields = [
-            "id",
-            "room",
-            "room_name",
-            "title",
-            "description",
-            "scheduled_at",
-            "duration_minutes",
-            "created_by",
-            "created_by_name",
-            "join_url",
-            "attendees",
-            "attendees_list",
-            "created_at",
-        ]
-
-    def get_attendees_list(self, obj):
-        raw = obj.attendees or ""
-=======
 class ChatMessageSerializer(serializers.ModelSerializer):
     class Meta:
         model = ChatMessage
@@ -1862,7 +1763,3 @@ class ChatRoomSerializer(serializers.ModelSerializer):
     class Meta:
         model = ChatRoom
         fields = '__all__'
-
-
-
->>>>>>> 266b31a (feat: add Django ORM chat models, migrations, serializers and views)
