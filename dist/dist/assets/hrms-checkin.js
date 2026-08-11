@@ -486,7 +486,6 @@
             });
           });
         });
->>>>>>> 266b31a (feat: add Django ORM chat models, migrations, serializers and views)
       })
       .catch(function (e) { console.warn('[hrms-checkin] attendance sync failed', e); });
   }

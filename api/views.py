@@ -2173,7 +2173,6 @@ def attendance_check_in(request):
                 'code': 'LOCATION_APPROVAL_REQUESTED',
                 'status': 'Pending',
             }, status=202)
->>>>>>> 266b31a (feat: add Django ORM chat models, migrations, serializers and views)
 
     # Status (present/late) based on first check-in
     if created:
