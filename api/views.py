@@ -20,10 +20,10 @@ import logging
 import os
 import re
 import secrets
-from datetime import datetime, time, timedelta
+from datetime import datetime, timedelta
 
 from django.conf import settings
-from django.db import transaction
+from django.db import connection, transaction
 from django.db.models import (
     BooleanField, Case, Count, IntegerField, OuterRef, Q, Subquery, Value, When,
 )
@@ -36,7 +36,6 @@ from rest_framework.response import Response
 
 from . import ai, mailer, social_poster
 from .permissions import require_perm, require_admin, check_perm
-from .timeutil import local_now, local_today
 from .models import (
     AppUser,
     AttendanceEvent,
@@ -67,7 +66,6 @@ from .models import (
     WFHPolicy,
 )
 from .serializers import (
-    DATETIME_FMT,
     AppUserSerializer,
     AttendanceEventSerializer,
     CompanySerializer,
@@ -413,7 +411,7 @@ def _generate_interview_tokens(interview_date_str, interview_time_str):
 
     # Expiry is 24 hours from now, so links don't expire prematurely
     # regardless of when the interview is scheduled.
-    expiry = local_now() + timedelta(hours=INTERVIEW_LINK_EXPIRY_HOURS)
+    expiry = datetime.now() + timedelta(hours=INTERVIEW_LINK_EXPIRY_HOURS)
 
     return candidate_token, recruiter_token, expiry
 
@@ -576,7 +574,7 @@ def interview_note(request, pk):
     obj.notes = notes
     obj.notes_updated_by = name or (email.split('@')[0] if email else '')
     obj.notes_updated_by_email = email
-    obj.notes_updated_at = local_now()
+    obj.notes_updated_at = datetime.now()
     obj.save()
     return Response(InterviewLinkSerializer(obj).data)
 
@@ -799,7 +797,7 @@ def interview_verify_token(request):
     if not obj:
         return JsonResponse({'valid': False, 'reason': 'Token not found'}, status=404)
 
-    now = local_now()
+    now = datetime.now()
 
     # An interview may only be taken once. The recruiter link stays usable so
     # the interview can still be reviewed after the candidate is done.
@@ -861,7 +859,7 @@ def interview_complete(request):
             'interviewId': obj.id,
         })
 
-    obj.completed_at = local_now()
+    obj.completed_at = datetime.now()
     obj.status = 'Completed'
     obj.save(update_fields=['completed_at', 'status'])
     return Response({
@@ -895,7 +893,7 @@ def interview_regenerate_link(request, pk):
     )
     # Allow explicit override
     if body.get('extendHours'):
-        new_expiry = local_now() + timedelta(hours=extend_hours)
+        new_expiry = datetime.now() + timedelta(hours=extend_hours)
 
     obj.candidate_token = c_token
     obj.recruiter_token = r_token
@@ -1153,14 +1151,16 @@ def resume_score_file(request, pk):
 # ---------------------------------------------------------------------------
 def _recording_list_qs():
     return InterviewRecording.objects.annotate(
-        # ``_has_video`` is True only when *either* storage column has non-empty data
+        # ``_has_video`` is True when *either* storage column has data so that
+        # legacy recordings (base64 recording_data only) still show the Play
+        # button instead of "No video saved for this session".
         _has_video=Case(
-            When(video_buffer__isnull=False, video_buffer__gt=b'', then=Value(True)),
-            When(recording_data__isnull=False, recording_data__gt='', then=Value(True)),
+            When(video_buffer__isnull=False, then=Value(True)),
+            When(recording_data__isnull=False, then=Value(True)),
             default=Value(False), output_field=BooleanField(),
         ),
         _has_recording=Case(
-            When(recording_data__isnull=False, recording_data__gt='', then=Value(True)),
+            When(recording_data__isnull=False, then=Value(True)),
             default=Value(False), output_field=BooleanField(),
         ),
     ).defer('video_buffer', 'recording_data')
@@ -1193,7 +1193,7 @@ def _mark_interview_taken(email, role, total_score=None):
         qs = qs.filter(role__iexact=role.strip())
     obj = qs.order_by('-id').first()
     if obj:
-        obj.completed_at = local_now()
+        obj.completed_at = datetime.now()
         obj.status = 'Completed'
         fields = ['completed_at', 'status']
         try:
@@ -1727,8 +1727,8 @@ def _get_active_shift(email, date_val):
         fallback = Shift.objects.create(
             id=1,
             name='General Shift',
-            start_time=time(9, 0),
-            end_time=time(18, 0),
+            start_time='09:00:00',
+            end_time='18:00:00',
             break_minutes=60,
             grace_minutes=15,
             is_flexible=False,
@@ -1736,109 +1736,10 @@ def _get_active_shift(email, date_val):
             overtime_after_minutes=540,
             created_by='system'
         )
-        # create() leaves whatever was passed in on the instance; only a
-        # reload turns the TimeField into a real ``time``. Callers do
-        # datetime.combine(date, shift.start_time), which rejects a string.
-        fallback.refresh_from_db()
     return fallback
 
 
-def _geofencing_enabled():
-    """True once at least one active fence exists.
-
-    Until an admin defines a fence there is nothing to be outside of, so the
-    out-of-office review is skipped entirely — otherwise turning this code on
-    would put every check-in in the company into a pending state.
-    """
-    return GeoFence.objects.filter(is_active=True).exists()
-
-
-#: A phone indoors, or a desktop located from WiFi/IP, can report a position
-#: hundreds of metres out. Trusting it blindly marks people who really are at
-#: their desk as off-site. We widen the fence by the reading's own stated
-#: accuracy, capped so a useless ±20 km fix cannot wave everybody through.
-GEO_ACCURACY_ALLOWANCE_CAP_M = 750
-
-
-def _locate_against_fences(lat, lng, accuracy=None):
-    """Resolve a position against every active fence.
-
-    Returns ``(is_inside, matched_fence, nearest_fence, distance_m)``. The
-    distance and nearest fence are returned even on a miss so the caller can
-    tell the employee how far out they were instead of just refusing them.
-    """
-    if lat is None or lng is None:
-        return False, None, None, None
-
-    allowance = 0.0
-    if accuracy is not None:
-        try:
-            allowance = min(max(float(accuracy), 0.0), GEO_ACCURACY_ALLOWANCE_CAP_M)
-        except (TypeError, ValueError):
-            allowance = 0.0
-
-    nearest, nearest_d = None, None
-    for fence in GeoFence.objects.filter(is_active=True):
-        dist = _haversine_distance(lat, lng, fence.latitude, fence.longitude)
-        if nearest_d is None or dist < nearest_d:
-            nearest, nearest_d = fence, dist
-        if dist <= fence.radius_meters + allowance:
-            return True, fence, fence, dist
-    return False, None, nearest, nearest_d
-
-
-#: Past this the reading carries no information about where someone is. A
-#: browser with no GPS or WiFi positioning falls back to IP geolocation, which
-#: resolves to the ISP gateway and reports accuracy in tens of kilometres — we
-#: have seen ±50 km place a person 110 km from an office they were sitting in.
-#: Such a fix must be reported as "unknown", never as a distance.
-GEO_UNUSABLE_ACCURACY_M = 5000
-
-
-def _fix_is_usable(lat, lng, accuracy):
-    if lat is None or lng is None:
-        return False
-    try:
-        return accuracy is None or float(accuracy) <= GEO_UNUSABLE_ACCURACY_M
-    except (TypeError, ValueError):
-        return True
-
-
-def _location_help(lat, lng, accuracy, nearest, distance):
-    """Say exactly why the check-in was not auto-verified.
-
-    "You appear to be outside the office" is useless when the real problem is a
-    denied permission or an IP-level fix — the employee is standing in the
-    office and cannot act on it. Worse, quoting a distance derived from a ±50 km
-    reading states as fact something the data cannot support.
-    """
-    if lat is None or lng is None:
-        return ('We could not read your location, so this check-in cannot be '
-                'verified automatically. Allow location access in your browser '
-                'and try again, or add a reason to send it to HR for approval.')
-    if not _fix_is_usable(lat, lng, accuracy):
-        km = round(float(accuracy) / 1000)
-        return (f'Your device could not pinpoint you — the position it reported is '
-                f'only accurate to about {km} km, so we cannot tell whether you are '
-                f'at the office. This usually means precise location is switched '
-                f'off and the browser fell back to your internet connection. Turn on '
-                f'location/GPS for this site and try again, or add a reason and HR '
-                f'will approve it.')
-    if nearest is None:
-        return ('No office location is configured to check against. Add a reason '
-                'and HR will approve this check-in.')
-    acc = f' Your position is accurate to about {round(accuracy)} m.' if accuracy else ''
-    return (f'You are about {round(distance)} m from {nearest.name}, which covers '
-            f'{nearest.radius_meters} m.{acc} Add a reason and HR will review it.')
-
-
 def _check_geofence(lat, lng):
-    """Back-compat wrapper: check-out and the event log only need a yes/no."""
-    inside, fence, _nearest, _dist = _locate_against_fences(lat, lng)
-    return inside, fence
-
-
-def _check_geofence_legacy(lat, lng):
     if lat is None or lng is None:
         return False, None
     for fence in GeoFence.objects.filter(is_active=True):
@@ -1861,7 +1762,7 @@ def attendance_check_in(request):
     email = norm_email(body.get('email'))
     if not email:
         return err('email is required')
-    now = local_now()
+    now = datetime.now()
     obj, created = EmployeeAttendance.objects.get_or_create(email=email, date=now.date())
     name = body.get('employee') or body.get('name') or ''
     if name:
@@ -1895,111 +1796,20 @@ def attendance_check_in(request):
         lat = None
         lng = None
 
-    try:
-        accuracy = float(body.get('accuracy')) if body.get('accuracy') is not None else None
-    except (ValueError, TypeError):
-        accuracy = None
-
     fence_obj = None
-    reason = str(body.get('locationReason') or body.get('reason') or '').strip()
-    needs_review = False
     if is_wfh:
-        # Working from home is exactly the case the fence does not apply to.
         obj.geo_verified = True
-        obj.location_status = ''
         loc_desc = 'Home'
-    elif not _geofencing_enabled():
-        # No active fences configured — there is nothing to be outside of, so
-        # enforcing would lock out every employee on day one.
-        obj.geo_verified = False
-        if lat is not None and lng is not None:
-            obj.location_lat, obj.location_lng = lat, lng
-        loc_desc = 'Office'
     else:
-        is_inside, fence_obj, nearest, distance = _locate_against_fences(lat, lng, accuracy)
         if lat is not None and lng is not None:
-            obj.location_lat, obj.location_lng = lat, lng
+            is_inside, fence_obj = _check_geofence(lat, lng)
+            obj.geo_verified = is_inside
+            obj.location_lat = lat
+            obj.location_lng = lng
+            loc_desc = fence_obj.name if fence_obj else 'Unverified Location'
         else:
-            # Do NOT keep yesterday's coordinates on the row — a stale position
-            # makes an unverified day look like it was measured.
-            obj.location_lat = obj.location_lng = None
-        obj.geo_verified = is_inside
-
-        if is_inside and fence_obj is not None:
-            # Do not erase a decision HR already made today. Checking in from
-            # inside the fence later left location_status='' while reviewer and
-            # reviewed_at stayed set — an approval with no record of what was
-            # approved.
-            if obj.location_status not in ('Approved', 'Rejected'):
-                obj.location_status = ''
-            loc_desc = fence_obj.name
-        elif obj.location_status == 'Approved':
-            # HR already cleared today's off-site check-in. Keep the verified
-            # flag their approval set — the line above reset it from the raw
-            # fence test, which is still (correctly) a miss.
-            obj.geo_verified = True
-            loc_desc = 'Outside office (approved)'
-        elif obj.location_status == 'Pending':
-            return Response({
-                'message': 'Your off-site check-in is waiting for HR approval. '
-                           'You will be able to check in once it is approved.',
-                'code': 'LOCATION_APPROVAL_PENDING',
-                'status': 'Pending',
-                'reason': obj.location_reason or '',
-            }, status=409)
-        elif not reason:
-            # Persist the position (or its absence) even though we are refusing:
-            # leaving an old fix on the row would show HR a location this
-            # attempt never actually reported.
-            obj.save(update_fields=['location_lat', 'location_lng', 'geo_verified'])
-            return Response({
-                'message': _location_help(lat, lng, accuracy, nearest, distance),
-                'code': 'LOCATION_REASON_REQUIRED',
-                'needsReason': True,
-                # hasPosition means "usable enough to quote a distance", not
-                # merely "the browser returned numbers" — an IP-level fix
-                # returns numbers that mean nothing.
-                'hasPosition': _fix_is_usable(lat, lng, accuracy),
-                'gotCoordinates': lat is not None and lng is not None,
-                'accuracy': accuracy,
-                'distance': (round(distance)
-                             if (distance is not None and _fix_is_usable(lat, lng, accuracy))
-                             else None),
-                'fence': nearest.name if nearest else None,
-                'fenceRadius': nearest.radius_meters if nearest else None,
-                'fenceLat': nearest.latitude if nearest else None,
-                'fenceLng': nearest.longitude if nearest else None,
-            }, status=422)
-        else:
-            # Record the request and stop. Per the agreed flow the employee is
-            # NOT checked in until HR approves; they retry afterwards.
-            obj.location_reason = reason
-            obj.location_status = 'Pending'
-            obj.location_reviewer = ''
-            obj.location_reviewed_at = None
-            obj.save()
-            notify_approvers(
-                'attendance.edit',
-                'Off-site check-in awaiting approval',
-                f'{obj.employee_name or email} asked to check in '
-                + (f'{round(distance)} m from {nearest.name}' if (distance is not None and nearest)
-                   else 'from an unverified location')
-                + f'. Reason: "{reason}"',
-                '/attendance',
-            )
-            create_notification(
-                email,
-                'Approval requested',
-                'Your off-site check-in has been sent to HR. You can check in once it is approved.',
-                'info',
-                '/employees/attendance',
-            )
-            return Response({
-                'message': 'Your request has been sent to HR. You will be able to '
-                           'check in once it is approved.',
-                'code': 'LOCATION_APPROVAL_REQUESTED',
-                'status': 'Pending',
-            }, status=202)
+            obj.geo_verified = False
+            loc_desc = 'Office'
 
     # Status (present/late) based on first check-in
     if created:
@@ -2030,16 +1840,6 @@ def attendance_check_in(request):
         at=now,
     )
 
-    if needs_review:
-        # The employee is in; HR decides afterwards whether the location stands.
-        notify_approvers(
-            'attendance.edit',
-            'Out-of-office check-in needs approval',
-            f'{obj.employee_name or email} checked in outside the office at '
-            f'{now.strftime("%H:%M")}. Reason given: "{reason}"',
-            '/attendance',
-        )
-
     create_notification(
         email,
         'Checked in',
@@ -2058,7 +1858,7 @@ def attendance_check_out(request):
     email = norm_email(body.get('email'))
     if not email:
         return err('email is required')
-    now = local_now()
+    now = datetime.now()
     obj = EmployeeAttendance.objects.filter(email=email, date=now.date()).first()
     if not obj:
         return err('No check-in found for today', 404)
@@ -2104,13 +1904,6 @@ def attendance_check_out(request):
     obj.check_out = now
     obj.presence = ''
     obj.presence_at = now
-    # The browser can close a session when the employee leaves the geofence.
-    # Stamping it keeps an auto-closed day distinguishable from one the person
-    # ended themselves, which matters if they dispute the hours.
-    if str(body.get('auto') or '').lower() in ('1', 'true', 'yes', 'geofence'):
-        obj.auto_checkout_at = now
-        if not obj.note:
-            obj.note = 'Auto checked out — left the office geofence'
 
     # Calculations based on active shift
     shift = _get_active_shift(email, now.date())
@@ -2150,176 +1943,7 @@ def attendance_check_out(request):
         'info',
         '/employees/attendance',
     )
-    _maybe_send_long_day_alert(obj, shift)
     return Response(EmployeeAttendanceSerializer(obj).data)
-
-
-def _maybe_send_long_day_alert(obj, shift):
-    """Email the employee once when today's work passes the shift's OT threshold.
-
-    ``overtime_after_minutes`` defaults to 540 (9 hours). ``overtime_alert_sent_at``
-    makes this at-most-once per person per day, so repeated check-outs — or the
-    presence poller — cannot spam them. Delivery failure is swallowed: a mail
-    problem must never break a check-out.
-    """
-    try:
-        threshold = int(getattr(shift, 'overtime_after_minutes', 540) or 540)
-        if (obj.worked_minutes or 0) < threshold or obj.overtime_alert_sent_at:
-            return
-        hours, minutes = divmod(int(obj.worked_minutes), 60)
-        over_h, over_m = divmod(max(int(obj.worked_minutes) - threshold, 0), 60)
-        html = mailer.render_branded(
-            greeting=obj.employee_name or obj.email,
-            title='You have worked over %d hours today' % (threshold // 60),
-            intro=(
-                f'Our records show <strong>{hours}h {minutes}m</strong> of work logged '
-                f'for {obj.date:%d %B %Y}, which is {over_h}h {over_m}m beyond the '
-                f'{threshold // 60}-hour mark for your shift.<br><br>'
-                'Please make sure you take adequate rest. If this is incorrect, '
-                'raise an attendance correction and HR will review it.'
-            ),
-            highlight_html=mailer.render_details_card('Today\'s Attendance', [
-                ('Date', f'{obj.date:%d %B %Y}'),
-                ('Worked', f'{hours}h {minutes}m'),
-                ('Overtime', f'{over_h}h {over_m}m'),
-                ('Shift', getattr(shift, 'name', '') or '—'),
-            ]),
-        )
-        result = mailer.send_email(
-            to=obj.email,
-            subject=f'You have worked {hours}h {minutes}m today',
-            html=html,
-            text=(f'You have logged {hours}h {minutes}m on {obj.date:%d %B %Y}, '
-                  f'{over_h}h {over_m}m beyond your {threshold // 60}-hour shift mark.'),
-        )
-        if result.get('ok'):
-            obj.overtime_alert_sent_at = local_now()
-            obj.save(update_fields=['overtime_alert_sent_at'])
-        create_notification(
-            obj.email,
-            'Long working day',
-            f'You have logged {hours}h {minutes}m today. Please take adequate rest.',
-            'warning',
-            '/employees/attendance',
-        )
-    except Exception:
-        logger.exception('Could not send the long-day alert for %s', obj.email)
-
-
-@api_view(['GET'])
-@require_perm('attendance.view', or_self=True)
-def attendance_geofence_check(request):
-    """Is this position inside a fence? Used by the in-tab geofence watcher.
-
-    Read-only and cheap so it can be polled. ``uncertain`` is the important
-    field: a fix too vague to judge must not be treated as "left the office",
-    or someone at their desk gets checked out by a bad WiFi reading.
-    """
-    email = norm_email(request.GET.get('email') or _resolve_recipient_email(request, ''))
-    try:
-        lat = float(request.GET.get('latitude'))
-        lng = float(request.GET.get('longitude'))
-    except (TypeError, ValueError):
-        return Response({'enforced': _geofencing_enabled(), 'uncertain': True})
-    try:
-        accuracy = float(request.GET.get('accuracy'))
-    except (TypeError, ValueError):
-        accuracy = None
-
-    if not _geofencing_enabled():
-        return Response({'enforced': False, 'inside': True, 'uncertain': False})
-
-    today = local_today()
-    wfh = bool(email) and (
-        WfhRequest.objects.filter(email=email, status='Approved',
-                                  from_date__lte=today, to_date__gte=today).exists()
-        or EmployeeAttendance.objects.filter(email=email, date=today, is_wfh=True).exists()
-    )
-
-    inside, fence, nearest, distance = _locate_against_fences(lat, lng, accuracy)
-    # A reading whose error bar is wider than how far outside they appear tells
-    # us nothing. Report it as uncertain rather than "outside". An IP-level fix
-    # (tens of km) is uncertain by definition, however far away it claims to be:
-    # acting on it would check out someone sitting at their desk.
-    uncertain = bool(
-        not inside and (
-            not _fix_is_usable(lat, lng, accuracy)
-            or (accuracy and nearest and distance is not None
-                and (distance - (nearest.radius_meters or 0)) < accuracy)
-        )
-    )
-    return Response({
-        'enforced': True,
-        'wfh': wfh,
-        'inside': inside,
-        'uncertain': uncertain,
-        'distance': round(distance) if distance is not None else None,
-        'fence': (fence or nearest).name if (fence or nearest) else None,
-        'accuracy': accuracy,
-    })
-
-
-@api_view(['GET', 'POST'])
-@require_perm({'GET': 'attendance.view', 'POST': 'attendance.edit'})
-def attendance_location_reviews(request):
-    """Out-of-geofence check-ins awaiting an HR/admin decision.
-
-    GET  -> the pending queue (?status= to see decided ones).
-    POST -> {id, decision: Approved|Rejected, note} records the decision and
-            tells the employee. Approving sets geo_verified so the day stops
-            reading as unverified in attendance reports.
-    """
-    if request.method == 'GET':
-        status_filter = (request.GET.get('status') or 'Pending').strip()
-        qs = EmployeeAttendance.objects.exclude(location_status='')
-        if status_filter and status_filter.lower() != 'all':
-            qs = qs.filter(location_status=status_filter)
-        rows = qs.order_by('-date', '-id')[:200]
-        return Response([{
-            'id': r.id,
-            'email': r.email,
-            'employee': r.employee_name,
-            'date': r.date.strftime('%Y-%m-%d') if r.date else None,
-            'checkIn': r.check_in.strftime(DATETIME_FMT) if r.check_in else None,
-            'reason': r.location_reason or '',
-            'status': r.location_status,
-            'reviewer': r.location_reviewer or '',
-            'reviewedAt': r.location_reviewed_at.strftime(DATETIME_FMT) if r.location_reviewed_at else None,
-            'latitude': r.location_lat,
-            'longitude': r.location_lng,
-        } for r in rows])
-
-    body = request.data
-    obj = EmployeeAttendance.objects.filter(pk=body.get('id')).first()
-    if not obj:
-        return err('Attendance record not found', 404)
-    decision = str(body.get('decision') or '').strip().title()
-    if decision not in ('Approved', 'Rejected'):
-        return err('decision must be Approved or Rejected')
-    if not obj.location_status:
-        return err('This check-in is not awaiting a location review')
-
-    from .permissions import _get_caller
-    caller, _user = _get_caller(request)
-    obj.location_status = decision
-    obj.location_reviewer = caller or ''
-    obj.location_reviewed_at = local_now()
-    if decision == 'Approved':
-        obj.geo_verified = True
-    obj.save(update_fields=[
-        'location_status', 'location_reviewer', 'location_reviewed_at', 'geo_verified',
-    ])
-
-    note = str(body.get('note') or '').strip()
-    create_notification(
-        obj.email,
-        f'Out-of-office check-in {decision.lower()}',
-        (f'Your check-in on {obj.date:%d %b %Y} from outside the office was '
-         f'{decision.lower()} by {caller or "HR"}.' + (f' Note: {note}' if note else '')),
-        'success' if decision == 'Approved' else 'warning',
-        '/employees/attendance',
-    )
-    return Response({'ok': True, 'id': obj.id, 'status': obj.location_status})
 
 
 @api_view(['GET'])
@@ -2329,10 +1953,10 @@ def attendance_today(request):
     email = norm_email(request.GET.get('email'))
     if not email:
         return err('email is required')
-    obj = EmployeeAttendance.objects.filter(email=email, date=local_now().date()).first()
+    obj = EmployeeAttendance.objects.filter(email=email, date=datetime.now().date()).first()
     if not obj:
         return Response({
-            'email': email, 'date': local_now().strftime('%Y-%m-%d'),
+            'email': email, 'date': datetime.now().strftime('%Y-%m-%d'),
             'checkedIn': False, 'checkIn': None, 'checkOut': None,
             'workedMinutes': 0, 'status': 'absent',
             'isWfh': False, 'breakMinutes': 0, 'overtimeMinutes': 0,
@@ -2397,7 +2021,7 @@ def remote_switch_check(email, day=None):
     """
     from .permissions import _user_has_perm
 
-    day = day or local_now().date()
+    day = day or datetime.now().date()
 
     approved = WfhRequest.objects.filter(
         email=email, status='Approved', from_date__lte=day, to_date__gte=day,
@@ -2425,7 +2049,7 @@ def attendance_events(request):
     """GET: today's (or ?date=) activity-log events for ?email=.
     POST: append an event (break / mode switch) to the signed-in user's day with GPS."""
     if request.method == 'GET':
-        day = parse_date(request.GET.get('date')) or local_now().date()
+        day = parse_date(request.GET.get('date')) or datetime.now().date()
         qs = AttendanceEvent.objects.filter(date=day)
         email = norm_email(request.GET.get('email'))
         if email:
@@ -2462,7 +2086,7 @@ def attendance_events(request):
     if lat is not None and lng is not None:
         _, fence_obj = _check_geofence(lat, lng)
 
-    now = local_now()
+    now = datetime.now()
     obj = AttendanceEvent.objects.create(
         email=email,
         employee_name=body.get('employee') or body.get('name') or '',
@@ -2510,7 +2134,7 @@ def attendance_presence(request):
         return err('email is required')
     if not label:
         return err('label is required')
-    now = local_now()
+    now = datetime.now()
     att = EmployeeAttendance.objects.filter(email=email, date=now.date()).first()
     if not att or not _is_checked_in(att):
         return err('Presence can only be set while checked in', 409)
@@ -2579,7 +2203,7 @@ def attendance_team(request):
     Intentionally ungated: every employee may see their team's presence on the
     Check In/Out page (it exposes only name + coarse status + since-time, no
     sensitive data), so the attendance.view permission is not required here."""
-    today = local_now().date()
+    today = datetime.now().date()
 
     # Latest event per email today (queryset is ordered by ``at`` ascending, so
     # the last write per email wins) + the best name we have seen for them.
@@ -3466,7 +3090,7 @@ def _fmt_duration(avg_seconds):
 
 def _date_filter(qs, field, range_param):
     """Filter a queryset by a date field based on the ?range= param."""
-    now = local_now()
+    now = datetime.now()
     if range_param == 'week':
         cutoff = now - timedelta(days=7)
     elif range_param == 'month':
@@ -3659,7 +3283,7 @@ def recruitment_kpis(request):
 
     if range_param in ('all', 'quarter'):
         # Weekly trend — last 12 weeks
-        twelve_weeks_ago = local_now() - timedelta(weeks=12)
+        twelve_weeks_ago = datetime.now() - timedelta(weeks=12)
         weekly_rows = (
             InterviewLink.objects.filter(created_at__gte=twelve_weeks_ago)
             .annotate(week=TruncWeek('created_at'))
@@ -3677,7 +3301,7 @@ def recruitment_kpis(request):
             })
 
     # Monthly trend — last 12 months
-    twelve_months_ago = local_now() - timedelta(days=365)
+    twelve_months_ago = datetime.now() - timedelta(days=365)
     monthly_rows_qs = InterviewLink.objects.filter(created_at__gte=twelve_months_ago)
     if scope == 'me' and caller_email:
         monthly_rows_qs = monthly_rows_qs.filter(interviewer__iexact=caller_email)
@@ -4094,7 +3718,7 @@ def attendance_overtime(request):
 @require_perm('settings.manage')
 def attendance_auto_correct(request):
     """Scan all active users, identify missing checkout for past dates and auto checkout at shift end."""
-    today = local_now().date()
+    today = datetime.now().date()
 
     updated_count = 0
     records = EmployeeAttendance.objects.filter(
@@ -4140,7 +3764,7 @@ def attendance_analytics(request):
     email = norm_email(request.GET.get('email'))
     range_param = request.GET.get('range', 'month')
 
-    now = local_now().date()
+    now = datetime.now().date()
     if range_param == 'week':
         days_back = 7
     elif range_param == 'quarter':
