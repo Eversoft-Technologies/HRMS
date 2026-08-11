@@ -2495,14 +2495,17 @@ def submission_detail(request, pk):
         obj.delete()
         return Response({'ok': True})
 
-    # A PUT that approves/rejects the submission needs the single "action"
-    # permission (submission.action); any other edit needs employee.edit. This
-    # lets a reviewer approve OR reject without granting full edit rights.
+    # A PUT that moves the submission through review — into review, approved or
+    # rejected — needs the single "action" permission (submission.action); any
+    # other edit needs employee.edit. This lets a reviewer work the queue
+    # without granting full edit rights.
     status_val = str(request.data.get('status') or '').strip().lower()
     if status_val == 'approved':
         need, verb = 'submission.action', 'approve'
     elif status_val == 'rejected':
         need, verb = 'submission.action', 'reject'
+    elif status_val == 'in review':
+        need, verb = 'submission.action', 'review'
     else:
         need, verb = 'employee.edit', 'edit'
     allowed, caller_email, user = check_perm(request, need)
