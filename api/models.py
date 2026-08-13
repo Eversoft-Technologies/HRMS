@@ -3,7 +3,9 @@ Models mapped 1:1 onto the existing MySQL tables created by the original
 Node/Express server. Table and column names match exactly so the same
 database can be used without migrating data.
 """
+from decimal import Decimal
 from django.db import models
+from django.utils import timezone
 
 
 class JobPost(models.Model):
@@ -364,6 +366,25 @@ class EmployeeAttendance(models.Model):
     location_lat = models.FloatField(null=True, blank=True)
     location_lng = models.FloatField(null=True, blank=True)
     geo_verified = models.BooleanField(default=False)
+    # --- Out-of-geofence check-in review ---------------------------------
+    # An employee who is not working from home and checks in outside every
+    # active fence is let through, but must give a reason and the check-in is
+    # held for HR/admin review. Blank status = nothing to review (WFH, inside a
+    # fence, or no fences configured).
+    location_reason = models.TextField(null=True, blank=True)
+    location_status = models.CharField(max_length=20, default='', blank=True)  # ''|Pending|Approved|Rejected
+    location_reviewer = models.CharField(max_length=255, default='', blank=True)
+    location_reviewed_at = models.DateTimeField(null=True, blank=True)
+    # Set once the "you have passed N hours today" mail goes out, so the
+    # reminder is sent at most once per employee per day.
+    overtime_alert_sent_at = models.DateTimeField(null=True, blank=True)
+    # Same idea for the "no check-in recorded" notice: the late sweep runs every
+    # few minutes, and nobody should be mailed twice for the same day.
+    late_alert_sent_at = models.DateTimeField(null=True, blank=True)
+    # Set when the browser closed the session because the employee left the
+    # geofence, so the day is distinguishable from a manual check-out.
+    auto_checkout_at = models.DateTimeField(null=True, blank=True)
+    is_auto_checked_out = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

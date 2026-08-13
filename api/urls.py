@@ -170,8 +170,25 @@ urlpatterns = [
     # Check-In/Check-Out
     path('attendance/check-in/', attendance_views.AttendanceCheckInOutViewSet.as_view({'post': 'check_in'})),
     path('attendance/check-out/', attendance_views.AttendanceCheckInOutViewSet.as_view({'post': 'check_out'})),
+    path('attendance/device-punch/', attendance_views.AttendanceCheckInOutViewSet.as_view({'post': 'device_punch'})),
     path('attendance/today/', attendance_views.AttendanceCheckInOutViewSet.as_view({'get': 'today'})),
     path('attendance/summary/', attendance_views.AttendanceCheckInOutViewSet.as_view({'get': 'summary'})),
+
+    # Core Payroll Endpoints
+    path('payroll/compensations', payroll_views.EmployeeCompensationViewSet.as_view({'get': 'list', 'post': 'create'})),
+    path('payroll/compensations/<int:pk>', payroll_views.EmployeeCompensationViewSet.as_view({'get': 'retrieve', 'put': 'update', 'delete': 'destroy'})),
+    path('payroll/components', payroll_views.PayComponentViewSet.as_view({'get': 'list', 'post': 'create'})),
+    path('payroll/components/<int:pk>', payroll_views.PayComponentViewSet.as_view({'get': 'retrieve', 'put': 'update', 'delete': 'destroy'})),
+    path('payroll/employee-components', payroll_views.EmployeePayComponentViewSet.as_view({'get': 'list', 'post': 'create'})),
+    path('payroll/employee-components/<int:pk>', payroll_views.EmployeePayComponentViewSet.as_view({'get': 'retrieve', 'put': 'update', 'delete': 'destroy'})),
+    path('payroll/runs', payroll_views.PayrollRunViewSet.as_view({'get': 'list', 'post': 'create'})),
+    path('payroll/runs/<int:pk>', payroll_views.PayrollRunViewSet.as_view({'get': 'retrieve', 'put': 'update', 'delete': 'destroy'})),
+    path('payroll/runs/<int:pk>/approve', payroll_views.PayrollRunViewSet.as_view({'post': 'approve'})),
+    path('payroll/runs/<int:pk>/export-bank-file', payroll_views.PayrollRunViewSet.as_view({'get': 'export_bank_file'})),
+    path('payroll/payslips', payroll_views.PayslipViewSet.as_view({'get': 'list', 'post': 'create'})),
+    path('payroll/payslips/<int:pk>', payroll_views.PayslipViewSet.as_view({'get': 'retrieve'})),
+    path('payroll/payslips/<int:pk>/pdf', payroll_views.PayslipViewSet.as_view({'get': 'download_pdf'})),
+    path('payroll/settings', payroll_views.PayrollSettingViewSet.as_view({'get': 'list', 'post': 'create'})),
 
     # Breaks
     path('attendance/break/start/', attendance_views.BreakViewSet.as_view({'post': 'start'})),
@@ -244,9 +261,6 @@ urlpatterns = [
     path('public/onboarding/upload-document', onboarding_views.public_upload_document),
     path('public/onboarding/complete', onboarding_views.public_complete_portal),
 ]
-
-
-
 
 # --- Employee Chat routes (appended by chat-module integration) ---
 urlpatterns += [

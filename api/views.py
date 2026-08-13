@@ -20,10 +20,10 @@ import logging
 import os
 import re
 import secrets
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 
 from django.conf import settings
-from django.db import connection, transaction
+from django.db import transaction
 from django.db.models import (
     BooleanField, Case, Count, IntegerField, OuterRef, Q, Subquery, Value, When,
 )
@@ -36,6 +36,7 @@ from rest_framework.response import Response
 
 from . import ai, mailer, social_poster
 from .permissions import require_perm, require_admin, check_perm
+from .timeutil import local_now, local_today
 from .models import (
     AppUser,
     AttendanceEvent,
@@ -67,6 +68,7 @@ from .models import (
     WorkArrangement,
 )
 from .serializers import (
+    DATETIME_FMT,
     AppUserSerializer,
     AttendanceEventSerializer,
     CompanySerializer,
@@ -412,7 +414,7 @@ def _generate_interview_tokens(interview_date_str, interview_time_str):
 
     # Expiry is 24 hours from now, so links don't expire prematurely
     # regardless of when the interview is scheduled.
-    expiry = datetime.now() + timedelta(hours=INTERVIEW_LINK_EXPIRY_HOURS)
+    expiry = local_now() + timedelta(hours=INTERVIEW_LINK_EXPIRY_HOURS)
 
     return candidate_token, recruiter_token, expiry
 
@@ -575,7 +577,7 @@ def interview_note(request, pk):
     obj.notes = notes
     obj.notes_updated_by = name or (email.split('@')[0] if email else '')
     obj.notes_updated_by_email = email
-    obj.notes_updated_at = datetime.now()
+    obj.notes_updated_at = local_now()
     obj.save()
     return Response(InterviewLinkSerializer(obj).data)
 
@@ -798,7 +800,7 @@ def interview_verify_token(request):
     if not obj:
         return JsonResponse({'valid': False, 'reason': 'Token not found'}, status=404)
 
-    now = datetime.now()
+    now = local_now()
 
     # An interview may only be taken once. The recruiter link stays usable so
     # the interview can still be reviewed after the candidate is done.
@@ -860,7 +862,7 @@ def interview_complete(request):
             'interviewId': obj.id,
         })
 
-    obj.completed_at = datetime.now()
+    obj.completed_at = local_now()
     obj.status = 'Completed'
     obj.save(update_fields=['completed_at', 'status'])
     return Response({
@@ -894,7 +896,7 @@ def interview_regenerate_link(request, pk):
     )
     # Allow explicit override
     if body.get('extendHours'):
-        new_expiry = datetime.now() + timedelta(hours=extend_hours)
+        new_expiry = local_now() + timedelta(hours=extend_hours)
 
     obj.candidate_token = c_token
     obj.recruiter_token = r_token
@@ -1152,16 +1154,14 @@ def resume_score_file(request, pk):
 # ---------------------------------------------------------------------------
 def _recording_list_qs():
     return InterviewRecording.objects.annotate(
-        # ``_has_video`` is True when *either* storage column has data so that
-        # legacy recordings (base64 recording_data only) still show the Play
-        # button instead of "No video saved for this session".
+        # ``_has_video`` is True only when *either* storage column has non-empty data
         _has_video=Case(
-            When(video_buffer__isnull=False, then=Value(True)),
-            When(recording_data__isnull=False, then=Value(True)),
+            When(video_buffer__isnull=False, video_buffer__gt=b'', then=Value(True)),
+            When(recording_data__isnull=False, recording_data__gt='', then=Value(True)),
             default=Value(False), output_field=BooleanField(),
         ),
         _has_recording=Case(
-            When(recording_data__isnull=False, then=Value(True)),
+            When(recording_data__isnull=False, recording_data__gt='', then=Value(True)),
             default=Value(False), output_field=BooleanField(),
         ),
     ).defer('video_buffer', 'recording_data')
@@ -1194,7 +1194,7 @@ def _mark_interview_taken(email, role, total_score=None):
         qs = qs.filter(role__iexact=role.strip())
     obj = qs.order_by('-id').first()
     if obj:
-        obj.completed_at = datetime.now()
+        obj.completed_at = local_now()
         obj.status = 'Completed'
         fields = ['completed_at', 'status']
         try:
@@ -1728,8 +1728,8 @@ def _get_active_shift(email, date_val):
         fallback = Shift.objects.create(
             id=1,
             name='General Shift',
-            start_time='09:00:00',
-            end_time='18:00:00',
+            start_time=time(9, 0),
+            end_time=time(18, 0),
             break_minutes=60,
             grace_minutes=15,
             is_flexible=False,
@@ -1737,6 +1737,10 @@ def _get_active_shift(email, date_val):
             overtime_after_minutes=540,
             created_by='system'
         )
+        # create() leaves whatever was passed in on the instance; only a
+        # reload turns the TimeField into a real ``time``. Callers do
+        # datetime.combine(date, shift.start_time), which rejects a string.
+        fallback.refresh_from_db()
     return fallback
 
 
@@ -1882,6 +1886,12 @@ def _home_location_help(lat, lng, accuracy, home, distance):
 
 
 def _check_geofence(lat, lng):
+    """Back-compat wrapper: check-out and the event log only need a yes/no."""
+    inside, fence, _nearest, _dist = _locate_against_fences(lat, lng)
+    return inside, fence
+
+
+def _check_geofence_legacy(lat, lng):
     if lat is None or lng is None:
         return False, None
     for fence in _office_fences():
@@ -1904,7 +1914,7 @@ def attendance_check_in(request):
     email = norm_email(body.get('email'))
     if not email:
         return err('email is required')
-    now = datetime.now()
+    now = local_now()
     obj, created = EmployeeAttendance.objects.get_or_create(email=email, date=now.date())
     name = body.get('employee') or body.get('name') or ''
     if name:
@@ -1959,7 +1969,14 @@ def attendance_check_in(request):
         lat = None
         lng = None
 
+    try:
+        accuracy = float(body.get('accuracy')) if body.get('accuracy') is not None else None
+    except (ValueError, TypeError):
+        accuracy = None
+
     fence_obj = None
+    reason = str(body.get('locationReason') or body.get('reason') or '').strip()
+    needs_review = False
     if is_wfh:
         # Working from home is exempt from the OFFICE fence, not from being
         # anywhere in particular. This branch used to set geo_verified=True and
@@ -2066,17 +2083,203 @@ def attendance_check_in(request):
         loc_desc = 'Office'
     else:
         if lat is not None and lng is not None:
-            is_inside, fence_obj = _check_geofence(lat, lng)
-            obj.geo_verified = is_inside
-            obj.location_lat = lat
-            obj.location_lng = lng
-            loc_desc = fence_obj.name if fence_obj else 'Unverified Location'
+            obj.location_lat, obj.location_lng = lat, lng
         else:
             # Do NOT keep yesterday's coordinates on the row — a stale position
             # makes an unverified day look like it was measured.
             obj.location_lat = obj.location_lng = None
             obj.geo_verified = False
-            loc_desc = 'Office'
+            if obj.location_status not in ('Approved', 'Rejected'):
+                obj.location_status = ''
+            loc_desc = 'Home (not registered)'
+        else:
+            at_home, _f, _n, home_dist = _locate_against_fences(
+                lat, lng, accuracy, fences=[home])
+            if at_home:
+                obj.geo_verified = True
+                if obj.location_status not in ('Approved', 'Rejected'):
+                    obj.location_status = ''
+                loc_desc = 'Home'
+            elif obj.location_status == 'Approved':
+                obj.geo_verified = True
+                loc_desc = 'Away from home (approved)'
+            elif obj.location_status == 'Pending':
+                return Response({
+                    'message': 'Your check-in away from your registered home is '
+                               'waiting for HR approval.',
+                    'code': 'LOCATION_APPROVAL_PENDING',
+                    'status': 'Pending',
+                    'reason': obj.location_reason or '',
+                }, status=409)
+            elif obj.location_status == 'Rejected':
+                return Response({
+                    'message': (
+                        'Your check-in away from your registered home was rejected'
+                        + (f' by {obj.location_reviewer}' if obj.location_reviewer else '')
+                        + '. Check in from your registered address, or speak to HR.'
+                    ),
+                    'code': 'LOCATION_APPROVAL_REJECTED',
+                    'status': 'Rejected',
+                    'reason': obj.location_reason or '',
+                    'reviewer': obj.location_reviewer or '',
+                }, status=403)
+            elif not reason:
+                obj.geo_verified = False
+                obj.save(update_fields=['location_lat', 'location_lng', 'geo_verified'])
+                return Response({
+                    'message': _home_location_help(lat, lng, accuracy, home, home_dist),
+                    'code': 'LOCATION_REASON_REQUIRED',
+                    'needsReason': True,
+                    # Tells the client this is the home case, not the office
+                    # one, so the dialog does not say "outside the office" to
+                    # somebody whose problem is that they are away from home.
+                    'isWfh': True,
+                    'hasPosition': _fix_is_usable(lat, lng, accuracy),
+                    'gotCoordinates': lat is not None and lng is not None,
+                    'accuracy': accuracy,
+                    'distance': (round(home_dist)
+                                 if (home_dist is not None
+                                     and _fix_is_usable(lat, lng, accuracy))
+                                 else None),
+                    'fence': home.name,
+                    'fenceRadius': home.radius_meters,
+                    'fenceLat': home.latitude,
+                    'fenceLng': home.longitude,
+                }, status=422)
+            else:
+                obj.geo_verified = False
+                obj.location_reason = reason
+                obj.location_status = 'Pending'
+                obj.location_reviewer = ''
+                obj.location_reviewed_at = None
+                obj.save()
+                notify_approvers(
+                    'attendance.approve_offsite',
+                    'Away-from-home check-in awaiting approval',
+                    f'{obj.employee_name or email} asked to check in '
+                    + (f'{round(home_dist)} m from their registered home'
+                       if home_dist is not None else 'away from their registered home')
+                    + f'. Reason: "{reason}"',
+                    '/attendance',
+                )
+                return Response({
+                    'message': 'Your reason has been sent to HR. You will be able '
+                               'to check in once it is approved.',
+                    'code': 'LOCATION_APPROVAL_PENDING',
+                    'status': 'Pending',
+                }, status=202)
+    elif not _geofencing_enabled():
+        # No active fences configured — there is nothing to be outside of, so
+        # enforcing would lock out every employee on day one.
+        obj.geo_verified = False
+        if lat is not None and lng is not None:
+            obj.location_lat, obj.location_lng = lat, lng
+        loc_desc = 'Office'
+    else:
+        is_inside, fence_obj, nearest, distance = _locate_against_fences(lat, lng, accuracy)
+        if lat is not None and lng is not None:
+            obj.location_lat, obj.location_lng = lat, lng
+        else:
+            # Do NOT keep yesterday's coordinates on the row — a stale position
+            # makes an unverified day look like it was measured.
+            obj.location_lat = obj.location_lng = None
+        obj.geo_verified = is_inside
+
+        if is_inside and fence_obj is not None:
+            # Do not erase a decision HR already made today. Checking in from
+            # inside the fence later left location_status='' while reviewer and
+            # reviewed_at stayed set — an approval with no record of what was
+            # approved.
+            if obj.location_status not in ('Approved', 'Rejected'):
+                obj.location_status = ''
+            loc_desc = fence_obj.name
+        elif obj.location_status == 'Approved':
+            # HR already cleared today's off-site check-in. Keep the verified
+            # flag their approval set — the line above reset it from the raw
+            # fence test, which is still (correctly) a miss.
+            obj.geo_verified = True
+            loc_desc = 'Outside office (approved)'
+        elif obj.location_status == 'Pending':
+            return Response({
+                'message': 'Your off-site check-in is waiting for HR approval. '
+                           'You will be able to check in once it is approved.',
+                'code': 'LOCATION_APPROVAL_PENDING',
+                'status': 'Pending',
+                'reason': obj.location_reason or '',
+            }, status=409)
+        elif obj.location_status == 'Rejected':
+            # A rejection is binding for the day. Without this the employee fell
+            # through to the branch below, which resets the row to Pending — so
+            # refusing an off-site check-in only cost them the time it took to
+            # retype a reason, and an approver could be asked the same question
+            # all afternoon. Note this blocks the OFF-SITE route only: the
+            # `is_inside` branch above still lets them check in normally the
+            # moment they reach the office, which is the point of refusing.
+            return Response({
+                'message': (
+                    'Your off-site check-in for today was rejected'
+                    + (f' by {obj.location_reviewer}' if obj.location_reviewer else '')
+                    + '. You can check in from the office, or speak to HR if you '
+                      'think this is wrong.'
+                ),
+                'code': 'LOCATION_APPROVAL_REJECTED',
+                'status': 'Rejected',
+                'reason': obj.location_reason or '',
+                'reviewer': obj.location_reviewer or '',
+            }, status=403)
+        elif not reason:
+            # Persist the position (or its absence) even though we are refusing:
+            # leaving an old fix on the row would show HR a location this
+            # attempt never actually reported.
+            obj.save(update_fields=['location_lat', 'location_lng', 'geo_verified'])
+            return Response({
+                'message': _location_help(lat, lng, accuracy, nearest, distance),
+                'code': 'LOCATION_REASON_REQUIRED',
+                'needsReason': True,
+                # hasPosition means "usable enough to quote a distance", not
+                # merely "the browser returned numbers" — an IP-level fix
+                # returns numbers that mean nothing.
+                'hasPosition': _fix_is_usable(lat, lng, accuracy),
+                'gotCoordinates': lat is not None and lng is not None,
+                'accuracy': accuracy,
+                'distance': (round(distance)
+                             if (distance is not None and _fix_is_usable(lat, lng, accuracy))
+                             else None),
+                'fence': nearest.name if nearest else None,
+                'fenceRadius': nearest.radius_meters if nearest else None,
+                'fenceLat': nearest.latitude if nearest else None,
+                'fenceLng': nearest.longitude if nearest else None,
+            }, status=422)
+        else:
+            # Record the request and stop. Per the agreed flow the employee is
+            # NOT checked in until HR approves; they retry afterwards.
+            obj.location_reason = reason
+            obj.location_status = 'Pending'
+            obj.location_reviewer = ''
+            obj.location_reviewed_at = None
+            obj.save()
+            notify_approvers(
+                'attendance.approve_offsite',
+                'Off-site check-in awaiting approval',
+                f'{obj.employee_name or email} asked to check in '
+                + (f'{round(distance)} m from {nearest.name}' if (distance is not None and nearest)
+                   else 'from an unverified location')
+                + f'. Reason: "{reason}"',
+                '/attendance',
+            )
+            create_notification(
+                email,
+                'Approval requested',
+                'Your off-site check-in has been sent to HR. You can check in once it is approved.',
+                'info',
+                '/employees/attendance',
+            )
+            return Response({
+                'message': 'Your request has been sent to HR. You will be able to '
+                           'check in once it is approved.',
+                'code': 'LOCATION_APPROVAL_REQUESTED',
+                'status': 'Pending',
+            }, status=202)
 
         if is_inside and fence_obj is not None:
             # Do not erase a decision HR already made today. Checking in from
@@ -2203,6 +2406,16 @@ def attendance_check_in(request):
         at=now,
     )
 
+    if needs_review:
+        # The employee is in; HR decides afterwards whether the location stands.
+        notify_approvers(
+            'attendance.edit',
+            'Out-of-office check-in needs approval',
+            f'{obj.employee_name or email} checked in outside the office at '
+            f'{now.strftime("%H:%M")}. Reason given: "{reason}"',
+            '/attendance',
+        )
+
     create_notification(
         email,
         'Checked in',
@@ -2228,7 +2441,7 @@ def attendance_check_out(request):
     email = norm_email(body.get('email'))
     if not email:
         return err('email is required')
-    now = datetime.now()
+    now = local_now()
     obj = EmployeeAttendance.objects.filter(email=email, date=now.date()).first()
     if not obj or not _is_checked_in(obj):
         # Both cases are "there is no open session to close", and they must be
@@ -2286,6 +2499,13 @@ def attendance_check_out(request):
     obj.check_out = now
     obj.presence = ''
     obj.presence_at = now
+    # The browser can close a session when the employee leaves the geofence.
+    # Stamping it keeps an auto-closed day distinguishable from one the person
+    # ended themselves, which matters if they dispute the hours.
+    if str(body.get('auto') or '').lower() in ('1', 'true', 'yes', 'geofence'):
+        obj.auto_checkout_at = now
+        if not obj.note:
+            obj.note = 'Auto checked out — left the office geofence'
 
     # Calculations based on active shift
     shift = _get_active_shift(email, now.date())
@@ -2325,6 +2545,7 @@ def attendance_check_out(request):
         'info',
         '/employees/attendance',
     )
+    _maybe_send_long_day_alert(obj, shift)
     return Response(EmployeeAttendanceSerializer(obj).data)
 
 
@@ -2503,10 +2724,10 @@ def attendance_today(request):
     email = norm_email(request.GET.get('email'))
     if not email:
         return err('email is required')
-    obj = EmployeeAttendance.objects.filter(email=email, date=datetime.now().date()).first()
+    obj = EmployeeAttendance.objects.filter(email=email, date=local_now().date()).first()
     if not obj:
         return Response({
-            'email': email, 'date': datetime.now().strftime('%Y-%m-%d'),
+            'email': email, 'date': local_now().strftime('%Y-%m-%d'),
             'checkedIn': False, 'checkIn': None, 'checkOut': None,
             'workedMinutes': 0, 'status': 'absent',
             'isWfh': False, 'breakMinutes': 0, 'overtimeMinutes': 0,
@@ -2683,7 +2904,7 @@ def remote_switch_check(email, day=None):
     """
     from .permissions import _user_has_perm
 
-    day = day or datetime.now().date()
+    day = day or local_now().date()
 
     covering = WfhRequest.objects.filter(
         email=email, from_date__lte=day, to_date__gte=day,
@@ -3054,7 +3275,7 @@ def attendance_events(request):
     """GET: today's (or ?date=) activity-log events for ?email=.
     POST: append an event (break / mode switch) to the signed-in user's day with GPS."""
     if request.method == 'GET':
-        day = parse_date(request.GET.get('date')) or datetime.now().date()
+        day = parse_date(request.GET.get('date')) or local_now().date()
         qs = AttendanceEvent.objects.filter(date=day)
         email = norm_email(request.GET.get('email'))
         if email:
@@ -3091,7 +3312,7 @@ def attendance_events(request):
     if lat is not None and lng is not None:
         _, fence_obj = _check_geofence(lat, lng)
 
-    now = datetime.now()
+    now = local_now()
     obj = AttendanceEvent.objects.create(
         email=email,
         employee_name=body.get('employee') or body.get('name') or '',
@@ -3139,7 +3360,7 @@ def attendance_presence(request):
         return err('email is required')
     if not label:
         return err('label is required')
-    now = datetime.now()
+    now = local_now()
     att = EmployeeAttendance.objects.filter(email=email, date=now.date()).first()
     if not att or not _is_checked_in(att):
         return err('Presence can only be set while checked in', 409)
@@ -3208,7 +3429,7 @@ def attendance_team(request):
     Intentionally ungated: every employee may see their team's presence on the
     Check In/Out page (it exposes only name + coarse status + since-time, no
     sensitive data), so the attendance.view permission is not required here."""
-    today = datetime.now().date()
+    today = local_now().date()
 
     # Latest event per email today (queryset is ordered by ``at`` ascending, so
     # the last write per email wins) + the best name we have seen for them.
@@ -4095,7 +4316,7 @@ def _fmt_duration(avg_seconds):
 
 def _date_filter(qs, field, range_param):
     """Filter a queryset by a date field based on the ?range= param."""
-    now = datetime.now()
+    now = local_now()
     if range_param == 'week':
         cutoff = now - timedelta(days=7)
     elif range_param == 'month':
@@ -4288,7 +4509,7 @@ def recruitment_kpis(request):
 
     if range_param in ('all', 'quarter'):
         # Weekly trend — last 12 weeks
-        twelve_weeks_ago = datetime.now() - timedelta(weeks=12)
+        twelve_weeks_ago = local_now() - timedelta(weeks=12)
         weekly_rows = (
             InterviewLink.objects.filter(created_at__gte=twelve_weeks_ago)
             .annotate(week=TruncWeek('created_at'))
@@ -4306,7 +4527,7 @@ def recruitment_kpis(request):
             })
 
     # Monthly trend — last 12 months
-    twelve_months_ago = datetime.now() - timedelta(days=365)
+    twelve_months_ago = local_now() - timedelta(days=365)
     monthly_rows_qs = InterviewLink.objects.filter(created_at__gte=twelve_months_ago)
     if scope == 'me' and caller_email:
         monthly_rows_qs = monthly_rows_qs.filter(interviewer__iexact=caller_email)
@@ -4725,7 +4946,7 @@ def attendance_overtime(request):
 @require_perm('settings.manage')
 def attendance_auto_correct(request):
     """Scan all active users, identify missing checkout for past dates and auto checkout at shift end."""
-    today = datetime.now().date()
+    today = local_now().date()
 
     updated_count = 0
     records = EmployeeAttendance.objects.filter(
@@ -4771,7 +4992,7 @@ def attendance_analytics(request):
     email = norm_email(request.GET.get('email'))
     range_param = request.GET.get('range', 'month')
 
-    now = datetime.now().date()
+    now = local_now().date()
     if range_param == 'week':
         days_back = 7
     elif range_param == 'quarter':
@@ -4851,17 +5072,6 @@ def attendance_analytics(request):
     })
 
 
-# ==========================================================================
-# Employee Chat module (appended by chat-module integration)
-# ==========================================================================
-import os  # noqa: E402,F811
-import secrets  # noqa: E402,F811
-from datetime import datetime, timedelta  # noqa: E402,F811
-from django.conf import settings  # noqa: E402,F811
-from django.db.models import Q  # noqa: E402,F811
-from django.http import HttpResponse  # noqa: E402,F811
-from rest_framework.decorators import api_view  # noqa: E402,F811
-from rest_framework.response import Response  # noqa: E402,F811
 from .models import (  # noqa: E402,F811
     ChatRoom, ChatMember, ChatMessage, ChatMeeting,
     AppUser, UserProfile, OnboardingCandidate,
@@ -4887,7 +5097,13 @@ CHAT_EDIT_WINDOW = timedelta(minutes=5)
 def _chat_now():
     # USE_TZ is False in this project, so store naive local datetimes to match
     # the rest of the tables.
-    return datetime.now()
+    #
+    # local_now(), not datetime.now(): "local" has to mean the business
+    # timezone, not whichever clock the host happens to run. cPanel runs UTC
+    # and the dev machines run IST, so datetime.now() stamped every production
+    # message 5h30m behind the wall clock the sender saw — the same defect that
+    # made check-ins land on the wrong side of midnight.
+    return local_now()
 
 
 def _fmt_dt(dt):
