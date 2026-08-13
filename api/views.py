@@ -2082,6 +2082,100 @@ def attendance_check_in(request):
             obj.location_lat, obj.location_lng = lat, lng
         loc_desc = 'Office'
     else:
+        if lat is not None and lng is not None:
+            obj.location_lat, obj.location_lng = lat, lng
+        else:
+            # Do NOT keep yesterday's coordinates on the row — a stale position
+            # makes an unverified day look like it was measured.
+            obj.location_lat = obj.location_lng = None
+            obj.geo_verified = False
+            if obj.location_status not in ('Approved', 'Rejected'):
+                obj.location_status = ''
+            loc_desc = 'Home (not registered)'
+        else:
+            at_home, _f, _n, home_dist = _locate_against_fences(
+                lat, lng, accuracy, fences=[home])
+            if at_home:
+                obj.geo_verified = True
+                if obj.location_status not in ('Approved', 'Rejected'):
+                    obj.location_status = ''
+                loc_desc = 'Home'
+            elif obj.location_status == 'Approved':
+                obj.geo_verified = True
+                loc_desc = 'Away from home (approved)'
+            elif obj.location_status == 'Pending':
+                return Response({
+                    'message': 'Your check-in away from your registered home is '
+                               'waiting for HR approval.',
+                    'code': 'LOCATION_APPROVAL_PENDING',
+                    'status': 'Pending',
+                    'reason': obj.location_reason or '',
+                }, status=409)
+            elif obj.location_status == 'Rejected':
+                return Response({
+                    'message': (
+                        'Your check-in away from your registered home was rejected'
+                        + (f' by {obj.location_reviewer}' if obj.location_reviewer else '')
+                        + '. Check in from your registered address, or speak to HR.'
+                    ),
+                    'code': 'LOCATION_APPROVAL_REJECTED',
+                    'status': 'Rejected',
+                    'reason': obj.location_reason or '',
+                    'reviewer': obj.location_reviewer or '',
+                }, status=403)
+            elif not reason:
+                obj.geo_verified = False
+                obj.save(update_fields=['location_lat', 'location_lng', 'geo_verified'])
+                return Response({
+                    'message': _home_location_help(lat, lng, accuracy, home, home_dist),
+                    'code': 'LOCATION_REASON_REQUIRED',
+                    'needsReason': True,
+                    # Tells the client this is the home case, not the office
+                    # one, so the dialog does not say "outside the office" to
+                    # somebody whose problem is that they are away from home.
+                    'isWfh': True,
+                    'hasPosition': _fix_is_usable(lat, lng, accuracy),
+                    'gotCoordinates': lat is not None and lng is not None,
+                    'accuracy': accuracy,
+                    'distance': (round(home_dist)
+                                 if (home_dist is not None
+                                     and _fix_is_usable(lat, lng, accuracy))
+                                 else None),
+                    'fence': home.name,
+                    'fenceRadius': home.radius_meters,
+                    'fenceLat': home.latitude,
+                    'fenceLng': home.longitude,
+                }, status=422)
+            else:
+                obj.geo_verified = False
+                obj.location_reason = reason
+                obj.location_status = 'Pending'
+                obj.location_reviewer = ''
+                obj.location_reviewed_at = None
+                obj.save()
+                notify_approvers(
+                    'attendance.approve_offsite',
+                    'Away-from-home check-in awaiting approval',
+                    f'{obj.employee_name or email} asked to check in '
+                    + (f'{round(home_dist)} m from their registered home'
+                       if home_dist is not None else 'away from their registered home')
+                    + f'. Reason: "{reason}"',
+                    '/attendance',
+                )
+                return Response({
+                    'message': 'Your reason has been sent to HR. You will be able '
+                               'to check in once it is approved.',
+                    'code': 'LOCATION_APPROVAL_PENDING',
+                    'status': 'Pending',
+                }, status=202)
+    elif not _geofencing_enabled():
+        # No active fences configured — there is nothing to be outside of, so
+        # enforcing would lock out every employee on day one.
+        obj.geo_verified = False
+        if lat is not None and lng is not None:
+            obj.location_lat, obj.location_lng = lat, lng
+        loc_desc = 'Office'
+    else:
         is_inside, fence_obj, nearest, distance = _locate_against_fences(lat, lng, accuracy)
         if lat is not None and lng is not None:
             obj.location_lat, obj.location_lng = lat, lng
@@ -2090,6 +2184,102 @@ def attendance_check_in(request):
             # makes an unverified day look like it was measured.
             obj.location_lat = obj.location_lng = None
         obj.geo_verified = is_inside
+
+        if is_inside and fence_obj is not None:
+            # Do not erase a decision HR already made today. Checking in from
+            # inside the fence later left location_status='' while reviewer and
+            # reviewed_at stayed set — an approval with no record of what was
+            # approved.
+            if obj.location_status not in ('Approved', 'Rejected'):
+                obj.location_status = ''
+            loc_desc = fence_obj.name
+        elif obj.location_status == 'Approved':
+            # HR already cleared today's off-site check-in. Keep the verified
+            # flag their approval set — the line above reset it from the raw
+            # fence test, which is still (correctly) a miss.
+            obj.geo_verified = True
+            loc_desc = 'Outside office (approved)'
+        elif obj.location_status == 'Pending':
+            return Response({
+                'message': 'Your off-site check-in is waiting for HR approval. '
+                           'You will be able to check in once it is approved.',
+                'code': 'LOCATION_APPROVAL_PENDING',
+                'status': 'Pending',
+                'reason': obj.location_reason or '',
+            }, status=409)
+        elif obj.location_status == 'Rejected':
+            # A rejection is binding for the day. Without this the employee fell
+            # through to the branch below, which resets the row to Pending — so
+            # refusing an off-site check-in only cost them the time it took to
+            # retype a reason, and an approver could be asked the same question
+            # all afternoon. Note this blocks the OFF-SITE route only: the
+            # `is_inside` branch above still lets them check in normally the
+            # moment they reach the office, which is the point of refusing.
+            return Response({
+                'message': (
+                    'Your off-site check-in for today was rejected'
+                    + (f' by {obj.location_reviewer}' if obj.location_reviewer else '')
+                    + '. You can check in from the office, or speak to HR if you '
+                      'think this is wrong.'
+                ),
+                'code': 'LOCATION_APPROVAL_REJECTED',
+                'status': 'Rejected',
+                'reason': obj.location_reason or '',
+                'reviewer': obj.location_reviewer or '',
+            }, status=403)
+        elif not reason:
+            # Persist the position (or its absence) even though we are refusing:
+            # leaving an old fix on the row would show HR a location this
+            # attempt never actually reported.
+            obj.save(update_fields=['location_lat', 'location_lng', 'geo_verified'])
+            return Response({
+                'message': _location_help(lat, lng, accuracy, nearest, distance),
+                'code': 'LOCATION_REASON_REQUIRED',
+                'needsReason': True,
+                # hasPosition means "usable enough to quote a distance", not
+                # merely "the browser returned numbers" — an IP-level fix
+                # returns numbers that mean nothing.
+                'hasPosition': _fix_is_usable(lat, lng, accuracy),
+                'gotCoordinates': lat is not None and lng is not None,
+                'accuracy': accuracy,
+                'distance': (round(distance)
+                             if (distance is not None and _fix_is_usable(lat, lng, accuracy))
+                             else None),
+                'fence': nearest.name if nearest else None,
+                'fenceRadius': nearest.radius_meters if nearest else None,
+                'fenceLat': nearest.latitude if nearest else None,
+                'fenceLng': nearest.longitude if nearest else None,
+            }, status=422)
+        else:
+            # Record the request and stop. Per the agreed flow the employee is
+            # NOT checked in until HR approves; they retry afterwards.
+            obj.location_reason = reason
+            obj.location_status = 'Pending'
+            obj.location_reviewer = ''
+            obj.location_reviewed_at = None
+            obj.save()
+            notify_approvers(
+                'attendance.approve_offsite',
+                'Off-site check-in awaiting approval',
+                f'{obj.employee_name or email} asked to check in '
+                + (f'{round(distance)} m from {nearest.name}' if (distance is not None and nearest)
+                   else 'from an unverified location')
+                + f'. Reason: "{reason}"',
+                '/attendance',
+            )
+            create_notification(
+                email,
+                'Approval requested',
+                'Your off-site check-in has been sent to HR. You can check in once it is approved.',
+                'info',
+                '/employees/attendance',
+            )
+            return Response({
+                'message': 'Your request has been sent to HR. You will be able to '
+                           'check in once it is approved.',
+                'code': 'LOCATION_APPROVAL_REQUESTED',
+                'status': 'Pending',
+            }, status=202)
 
         if is_inside and fence_obj is not None:
             # Do not erase a decision HR already made today. Checking in from

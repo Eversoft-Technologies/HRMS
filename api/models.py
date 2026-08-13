@@ -1293,11 +1293,10 @@ class CandidateFormSubmission(models.Model):
         ordering = ['-created_at']
 
 
-
-
 class EmailTemplate(models.Model):
-    """A reusable candidate follow-up email, editable from the Email Preview
-    drawer. `outcome` ties a template to Selected / Waitlisted / Rejected so the
+    """A reusable email template used for candidate follow-ups.
+
+    `outcome` is an optional filter (e.g. "Scheduled", "Rejected") so the
     right ones surface first; blank means it suits any outcome.
 
     `subject` and `body` may contain {{name}}, {{role}}, {{company}} and
@@ -1319,21 +1318,20 @@ class EmailTemplate(models.Model):
 
 
 # ===========================================================================
-# Core Payroll Module Models
+# Core Payroll Models
 # ===========================================================================
 
 class EmployeeCompensation(models.Model):
-    """Effective-dated compensation records per employee (identified by email)."""
+    """Effective-dated employee compensation record."""
     email = models.CharField(max_length=255, db_index=True)
-    pay_type = models.CharField(max_length=20, default='salaried')  # salaried | hourly
-    pay_frequency = models.CharField(max_length=20, default='monthly')  # monthly | semimonthly | biweekly | weekly
+    pay_type = models.CharField(max_length=50, default='salaried')
+    pay_frequency = models.CharField(max_length=50, default='monthly')
     base_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
     annual_ctc = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
     currency = models.CharField(max_length=10, default='USD')
-    effective_from = models.DateField(default=timezone.now)
+    effective_from = models.DateField(null=True, blank=True)
     effective_to = models.DateField(null=True, blank=True)
-    status = models.CharField(max_length=20, default='active')  # active | inactive
-    notes = models.TextField(default='', blank=True)
+    status = models.CharField(max_length=20, default='active')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -1343,12 +1341,12 @@ class EmployeeCompensation(models.Model):
 
 
 class PayComponent(models.Model):
-    """Catalogue of earnings and deduction components."""
+    """Pay component catalogue item (earnings and deductions)."""
     code = models.CharField(max_length=50, unique=True)
-    name = models.CharField(max_length=100)
-    component_type = models.CharField(max_length=20, default='earning')  # earning | deduction
-    calc_type = models.CharField(max_length=30, default='fixed')  # fixed | percent_of_base | formula
-    rate = models.DecimalField(max_digits=8, decimal_places=4, default=Decimal('0.0000'))
+    name = models.CharField(max_length=255)
+    type = models.CharField(max_length=20, default='earning')
+    calc_type = models.CharField(max_length=30, default='fixed')
+    rate = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
     default_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
     is_taxable = models.BooleanField(default=True)
     is_active = models.BooleanField(default=True)
@@ -1357,33 +1355,33 @@ class PayComponent(models.Model):
 
     class Meta:
         db_table = 'pay_components'
-        ordering = ['component_type', 'code']
+        ordering = ['code']
 
 
 class EmployeePayComponent(models.Model):
-    """Per-employee pay component overrides."""
+    """Per-employee override for a pay component."""
     email = models.CharField(max_length=255, db_index=True)
-    component = models.ForeignKey(PayComponent, on_delete=models.CASCADE, related_name='employee_components')
-    amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
-    rate = models.DecimalField(max_digits=8, decimal_places=4, null=True, blank=True)
-    effective_from = models.DateField(default=timezone.now)
+    component = models.ForeignKey(PayComponent, on_delete=models.CASCADE, related_name='employee_overrides')
+    amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    rate = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    effective_from = models.DateField(null=True, blank=True)
     effective_to = models.DateField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         db_table = 'employee_pay_components'
-        ordering = ['-effective_from']
+        ordering = ['email', 'component']
 
 
 class PayrollRun(models.Model):
-    """Batch pay period run engine record."""
-    period_label = models.CharField(max_length=20, db_index=True)  # e.g., '2026-08'
+    """Payroll run record for a specific period."""
+    period_label = models.CharField(max_length=50)
     period_start = models.DateField()
     period_end = models.DateField()
     pay_date = models.DateField(null=True, blank=True)
-    frequency = models.CharField(max_length=20, default='monthly')
-    status = models.CharField(max_length=30, default='draft')  # draft | processing | pending_approval | approved | paid | cancelled
+    status = models.CharField(max_length=30, default='draft')
+    frequency = models.CharField(max_length=50, default='monthly')
     created_by = models.CharField(max_length=255, default='', blank=True)
     approved_by = models.CharField(max_length=255, default='', blank=True)
     approved_at = models.DateTimeField(null=True, blank=True)
@@ -1415,11 +1413,11 @@ class Payslip(models.Model):
     net_pay = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
     earnings_data = models.JSONField(default=list, blank=True)
     deductions_data = models.JSONField(default=list, blank=True)
-    status = models.CharField(max_length=20, default='draft')  # draft | approved | paid
+    status = models.CharField(max_length=20, default='draft')
     file_name = models.CharField(max_length=255, default='', blank=True)
     file_mime = models.CharField(max_length=100, default='application/pdf', blank=True)
     file_size = models.IntegerField(default=0)
-    file_data = models.TextField(default='', blank=True)  # base64 PDF
+    file_data = models.TextField(default='', blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -1441,107 +1439,40 @@ class PayrollSetting(models.Model):
         ordering = ['key']
 
 
-# ==========================================================================
-# Employee Chat models (appended by chat-module integration)
-# ==========================================================================
 class ChatRoom(models.Model):
-    name = models.CharField(max_length=255)
-    is_group = models.BooleanField(default=False)
-    created_by = models.CharField(max_length=255)
-    created_at = models.DateTimeField()
-    is_private = models.BooleanField(default=True)
+    """Chat room model representing direct and group chat sessions."""
+    room_id = models.CharField(max_length=128, unique=True, null=True, blank=True)
+    name = models.CharField(max_length=255, null=True, blank=True)
+    room_type = models.CharField(max_length=50, default='direct')
+    created_by = models.CharField(max_length=255, default='', blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        db_table = "chat_rooms"
-        managed = False
-
-
-class ChatMember(models.Model):
-    employee_email = models.CharField(max_length=255)
-
-    room = models.ForeignKey(
-        ChatRoom,
-        db_column="room_id",
-        on_delete=models.CASCADE,
-    )
-
-    joined_at = models.DateTimeField()
-    # Channel admins can add/remove members and manage other admins.
-    is_admin = models.BooleanField(default=False)
-
-    class Meta:
-        db_table = "chat_members"
-        managed = False
+        db_table = 'chat_rooms'
+        ordering = ['-updated_at']
 
 
 class ChatMessage(models.Model):
-    sender_email = models.CharField(max_length=255)
-
-    sender_name = models.CharField(max_length=255)
-
-    room = models.ForeignKey(
-        ChatRoom,
-        db_column="room_id",
-        on_delete=models.CASCADE,
-    )
-
-    message = models.TextField()
-
-    is_read = models.BooleanField(default=False)
-
-    created_at = models.DateTimeField()
-
-    # Editing / deleting (soft delete keeps the row so the timeline stays intact)
-    edited = models.BooleanField(default=False)
-    edited_at = models.DateTimeField(null=True, blank=True)
-    is_deleted = models.BooleanField(default=False)
-
-    # File sharing. New uploads are written to disk and referenced by
-    # ``attachment_path`` (keeps large files — video, etc. — out of the DB).
-    # ``attachment_data`` (base64) is retained for older messages / fallback.
-    attachment_name = models.CharField(max_length=255, null=True, blank=True)
-    attachment_type = models.CharField(max_length=100, null=True, blank=True)
-    attachment_data = models.TextField(null=True, blank=True)
-    attachment_path = models.CharField(max_length=512, null=True, blank=True)
+    """Message sent within a chat room."""
+    room = models.ForeignKey(ChatRoom, on_delete=models.CASCADE, related_name='messages', null=True, blank=True)
+    sender_email = models.CharField(max_length=255, db_index=True)
+    content = models.TextField(null=True, blank=True)
+    message_type = models.CharField(max_length=50, default='text')
+    created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        db_table = "chat_messages"
-        managed = False
-        ordering = ["created_at"]
+        db_table = 'chat_messages'
+        ordering = ['created_at']
 
 
-class ChatMeeting(models.Model):
-    """A scheduled meeting attached to a chat room (direct or channel).
-
-    Stores the schedule plus a shareable ``join_url`` (e.g. a Jitsi Meet room
-    link). No video server is run by the app — the link is what participants
-    click to join. ``managed = False`` because the ``chat_meetings`` table is
-    created by the raw SQL migration (see chat_migrations.sql), matching the
-    other chat tables."""
-
-    room = models.ForeignKey(
-        ChatRoom,
-        db_column="room_id",
-        on_delete=models.CASCADE,
-        null=True,
-        blank=True,
-    )
-
-    title = models.CharField(max_length=255)
-    description = models.TextField(default="", blank=True)
-    scheduled_at = models.DateTimeField()
-    duration_minutes = models.IntegerField(default=30)
-
-    created_by = models.CharField(max_length=255)
-    created_by_name = models.CharField(max_length=255, default="", blank=True)
-
-    join_url = models.CharField(max_length=512, default="", blank=True)
-    # Comma-separated attendee emails (kept simple so the table needs no JSON
-    # column on older MySQL/MariaDB installs).
-    attendees = models.TextField(default="", blank=True)
-
-    created_at = models.DateTimeField()
+class ChatParticipant(models.Model):
+    """Mapping of users participating in a chat room."""
+    room = models.ForeignKey(ChatRoom, on_delete=models.CASCADE, related_name='participants')
+    email = models.CharField(max_length=255)
+    joined_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        db_table = "chat_meetings"
-        managed = False
+        db_table = 'chat_participants'
+        unique_together = ['room', 'email']
+        ordering = ['joined_at']
