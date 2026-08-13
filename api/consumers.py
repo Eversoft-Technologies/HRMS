@@ -63,6 +63,22 @@ class ChatConsumer(AsyncWebsocketConsumer):
                     "attachment_name": event.get("attachment_name"),
                     "attachment_type": event.get("attachment_type"),
                     "attachment_url": event.get("attachment_url"),
+                    "reply_to_id": event.get("reply_to_id"),
+                    "reply_to_sender": event.get("reply_to_sender"),
+                    "reply_to_text": event.get("reply_to_text"),
+                }
+            )
+        )
+
+    async def message_pinned(self, event):
+        await self.send(
+            text_data=json.dumps(
+                {
+                    "event": "pinned",
+                    "id": event["id"],
+                    "is_pinned": event["is_pinned"],
+                    "pinned_by": event.get("pinned_by", ""),
+                    "pin_expires_at": event.get("pin_expires_at"),
                 }
             )
         )

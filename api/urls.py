@@ -240,6 +240,8 @@ urlpatterns += [
     path("chat/rooms/<int:room_id>", views.chat_room_detail),
     path("chat/messages/<int:room_id>", views.chat_messages),
     path("chat/message/<int:msg_id>", views.chat_message_detail),
+    path("chat/message/<int:msg_id>/pin", views.chat_message_pin),
+    path("chat/translate", views.chat_translate),           # POST translate composer text
     path("chat/attachment/<int:msg_id>", views.chat_attachment),
     path("chat/rooms/<int:room_id>/read", views.chat_mark_read),
     path("chat/rooms/<int:room_id>/members", views.chat_room_members),

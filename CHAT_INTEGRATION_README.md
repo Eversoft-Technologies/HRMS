@@ -30,6 +30,9 @@ is untouched.
    mysql -u <user> -p <db_name> < chat_migrations.sql
    mysql -u <user> -p <db_name> < chat_migrations_v2.sql
    mysql -u <user> -p <db_name> < chat_migrations_v3.sql
+   mysql -u <user> -p <db_name> < chat_migrations_v4.sql
+   mysql -u <user> -p <db_name> < chat_migrations_v5sql
+
    ```
    (All use `IF NOT EXISTS`, safe to re-run.)
 3. Restart the server. With `daphne` installed, `python manage.py runserver`

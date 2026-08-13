@@ -1276,6 +1276,19 @@ class ChatMessage(models.Model):
     attachment_data = models.TextField(null=True, blank=True)
     attachment_path = models.CharField(max_length=512, null=True, blank=True)
 
+    # Pinned messages (WhatsApp-style) + threaded replies.
+    is_pinned = models.BooleanField(default=False)
+    # Pin metadata — who pinned it, when, and when the pin auto-expires.
+    # A pin lasts 30 days; after ``pin_expires_at`` it stops showing in the
+    # pinned section (the underlying message is untouched). Only ``pinned_by``
+    # may unpin — enforced in the view, not just the UI.
+    pinned_by = models.CharField(max_length=255, null=True, blank=True)
+    pinned_at = models.DateTimeField(null=True, blank=True)
+    pin_expires_at = models.DateTimeField(null=True, blank=True)
+    reply_to_id = models.IntegerField(null=True, blank=True)
+    reply_to_sender = models.CharField(max_length=255, null=True, blank=True)
+    reply_to_text = models.CharField(max_length=500, null=True, blank=True)
+
     class Meta:
         db_table = "chat_messages"
         managed = False
@@ -1317,3 +1330,4 @@ class ChatMeeting(models.Model):
     class Meta:
         db_table = "chat_meetings"
         managed = False
+        ordering = ["scheduled_at"]

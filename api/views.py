@@ -3919,6 +3919,9 @@ def _broadcast_message(room_id, payload):
                 "attachment_name": payload.get("attachment_name"),
                 "attachment_type": payload.get("attachment_type"),
                 "attachment_url": payload.get("attachment_url"),
+                "reply_to_id": payload.get("reply_to_id"),
+                "reply_to_sender": payload.get("reply_to_sender"),
+                "reply_to_text": payload.get("reply_to_text"),
             },
         )
     except Exception:
@@ -4182,6 +4185,9 @@ def chat_messages(request, room_id):
 
     if request.method == "GET":
         viewer = norm_email(request.GET.get("email") or request.headers.get("X-Actor-Email") or "")
+        # Drop any pins older than 30 days before serializing (backend-enforced
+        # expiry — the frontend never has to police it).
+        _expire_stale_pins(room_id)
         msgs = (
             ChatMessage.objects.filter(room_id=room_id)
             .select_related("room")
@@ -4219,6 +4225,23 @@ def chat_messages(request, room_id):
             return err("Could not save the attachment")
         att_data = None
 
+    # Reply: denormalise a short quote of the message being replied to, so the
+    # quote renders without an extra lookup (and survives if the original goes).
+    reply_to_id = None
+    reply_to_sender = None
+    reply_to_text = None
+    raw_reply = body.get("reply_to_id")
+    if raw_reply:
+        try:
+            orig = ChatMessage.objects.filter(id=int(raw_reply), room_id=room_id).first()
+        except (TypeError, ValueError):
+            orig = None
+        if orig and not orig.is_deleted:
+            reply_to_id = orig.id
+            reply_to_sender = orig.sender_name or (orig.sender_email or "").split("@")[0]
+            snippet = orig.message or (f"\U0001F4CE {orig.attachment_name}" if orig.attachment_name else "")
+            reply_to_text = snippet[:300]
+
     now = _chat_now()
     msg = ChatMessage.objects.create(
         room=room,
@@ -4231,6 +4254,9 @@ def chat_messages(request, room_id):
         attachment_type=att_type,
         attachment_data=att_data,
         attachment_path=att_path,
+        reply_to_id=reply_to_id,
+        reply_to_sender=reply_to_sender,
+        reply_to_text=reply_to_text,
     )
     _broadcast_message(room_id, {
         "id": msg.id,
@@ -4241,6 +4267,9 @@ def chat_messages(request, room_id):
         "attachment_name": att_name,
         "attachment_type": att_type,
         "attachment_url": (f"/api/chat/attachment/{msg.id}" if att_path else ""),
+        "reply_to_id": reply_to_id,
+        "reply_to_sender": reply_to_sender,
+        "reply_to_text": reply_to_text,
     })
     return Response(ChatMessageSerializer(msg).data, status=201)
 
@@ -4702,3 +4731,156 @@ def chat_room_detail(request, room_id):
     ChatMember.objects.filter(room_id=room_id).delete()
     room.delete()
     return Response({"ok": True, "id": room_id})
+
+
+# A pin stays active for 30 days, then quietly drops out of the pinned strip.
+CHAT_PIN_TTL = timedelta(days=30)
+
+
+def _expire_stale_pins(room_id):
+    """Clear pins whose 30-day window has elapsed. Backend-enforced so the
+    expiry doesn't depend on any frontend clock."""
+    try:
+        ChatMessage.objects.filter(
+            room_id=room_id, is_pinned=True, pin_expires_at__lt=_chat_now(),
+        ).update(is_pinned=False)
+    except Exception:
+        # Never let pin housekeeping break a message fetch.
+        pass
+
+
+@api_view(["POST"])
+def chat_message_pin(request, msg_id):
+    """Pin or unpin a message.
+
+    Any room member may pin (a pin lasts 30 days). Only the person who pinned a
+    message — ``pinned_by`` — may unpin it; anyone else gets 403. This is
+    enforced here on the server, not merely by hiding the button in the UI.
+    """
+    msg = ChatMessage.objects.filter(id=msg_id).first()
+    if not msg or msg.is_deleted:
+        return err("Message not found", 404)
+    actor = _actor_of(request)
+    if not actor or not ChatMember.objects.filter(
+        room_id=msg.room_id, employee_email=actor
+    ).exists():
+        return err("You are not part of this chat", 403)
+
+    # Roll off any pins that have already aged out before acting.
+    _expire_stale_pins(msg.room_id)
+    msg.refresh_from_db(fields=["is_pinned", "pinned_by", "pin_expires_at"])
+
+    pin = bool((request.data or {}).get("pin", True))
+    if pin and not msg.is_pinned:
+        now = _chat_now()
+        msg.is_pinned = True
+        msg.pinned_by = actor
+        msg.pinned_at = now
+        msg.pin_expires_at = now + CHAT_PIN_TTL
+        msg.save(update_fields=["is_pinned", "pinned_by", "pinned_at", "pin_expires_at"])
+    elif not pin and msg.is_pinned:
+        # Only the original pinner can remove a pin.
+        if (msg.pinned_by or "").strip().lower() != (actor or "").strip().lower():
+            return err("Only the person who pinned this message can unpin it.", 403)
+        msg.is_pinned = False
+        msg.pinned_by = None
+        msg.pinned_at = None
+        msg.pin_expires_at = None
+        msg.save(update_fields=["is_pinned", "pinned_by", "pinned_at", "pin_expires_at"])
+
+    _broadcast_event(msg.room_id, {
+        "type": "message_pinned",
+        "id": msg.id,
+        "is_pinned": msg.is_pinned,
+        "pinned_by": msg.pinned_by or "",
+        "pin_expires_at": _fmt_dt(msg.pin_expires_at) if msg.pin_expires_at else None,
+    })
+    return Response({
+        "ok": True,
+        "id": msg.id,
+        "is_pinned": msg.is_pinned,
+        "pinned_by": msg.pinned_by or "",
+        "pinned_at": _fmt_dt(msg.pinned_at) if msg.pinned_at else None,
+        "pin_expires_at": _fmt_dt(msg.pin_expires_at) if msg.pin_expires_at else None,
+    })
+
+
+# Languages offered by the composer's Translate tool. Keys are the codes the
+# frontend sends; values are the human names handed to the model.
+CHAT_TRANSLATE_LANGS = {
+    "en": "English",
+    "hi": "Hindi",
+    "te": "Telugu",
+    "ta": "Tamil",
+    "kn": "Kannada",
+    "ml": "Malayalam",
+    "es": "Spanish",
+    "fr": "French",
+    "de": "German",
+}
+
+
+@api_view(["POST"])
+def chat_translate(request):
+    """Translate the composer's text into the requested language.
+
+    The Anthropic API key stays on the server (read from the environment via
+    ``ai._api_key``) — it is never sent to or exposed in the browser. Returns
+    the translated string; the frontend drops it back into the input without
+    auto-sending, so the user can review/edit first.
+    """
+    body = request.data or {}
+    text = (body.get("text") or "").strip()
+    lang = (body.get("target") or body.get("lang") or "").strip().lower()
+
+    if not text:
+        return err("Nothing to translate.")
+    if len(text) > 5000:
+        return err("Text is too long to translate (5000 character limit).")
+    lang_name = CHAT_TRANSLATE_LANGS.get(lang)
+    if not lang_name:
+        return err("Unsupported target language.")
+
+    # Reuse the project's existing Anthropic integration + server-side key.
+    from . import ai as _ai
+    api_key = _ai._api_key()
+    if not api_key:
+        return err("Translation is unavailable (no API key configured).", 503)
+
+    prompt = (
+        f"Translate the following message into {lang_name}. "
+        "Return ONLY the translated text, with no quotes, notes, or explanation. "
+        "Preserve the original meaning, tone, emojis and any URLs.\n\n"
+        f"Message:\n{text}"
+    )
+    try:
+        import requests as _requests
+        resp = _requests.post(
+            _ai.ANTHROPIC_URL,
+            headers={
+                "Content-Type": "application/json",
+                "x-api-key": api_key,
+                "anthropic-version": _ai.ANTHROPIC_VERSION,
+            },
+            json={
+                "model": _ai.VALIDATION_MODEL,
+                "max_tokens": 1500,
+                "messages": [{"role": "user", "content": prompt}],
+            },
+            timeout=30,
+        )
+    except Exception:
+        return err("Could not reach the translation service.", 502)
+
+    if not resp.ok:
+        return err("The translation service returned an error.", 502)
+    try:
+        parts = resp.json().get("content") or []
+        translated = "".join(
+            p.get("text", "") for p in parts if isinstance(p, dict)
+        ).strip()
+    except Exception:
+        translated = ""
+    if not translated:
+        return err("The translation came back empty. Please try again.", 502)
+    return Response({"ok": True, "translated": translated, "target": lang})

@@ -52,6 +52,10 @@
     listening: false,
     dictBase: "",
     msgSearch: { q: "", matches: [], idx: -1 },
+    replyingTo: null,
+    pendingFile: null, // { file, dataUrl } staged in the composer, sent on Send
+    toolsOpen: false,  // composer "^" tools menu open?
+    camStream: null,   // active getUserMedia stream while the camera is open
   };
 
   // ───────────────────────────────────────────── helpers: session / api
@@ -222,7 +226,42 @@
     mic: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>',
     people: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
     dots: '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>',
+    reply: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/></svg>',
+    pin: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14l-1.6-2.1a2 2 0 0 1-.4-1.2V8a2 2 0 0 0-2-2H9a2 2 0 0 0-2 2v5.7a2 2 0 0 1-.4 1.2L5 17z"/></svg>',
+    pinFill: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M16 2v2l1 1v6l2 3v2h-6v5l-1 1-1-1v-5H5v-2l2-3V5l1-1V2h8z"/></svg>',
+    // Chevron used by the composer "tools" (^) button — points up when closed.
+    caretUp: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"/></svg>',
+    caretDown: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>',
+    camera: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>',
+    globe: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>',
+    smile: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>',
+    paperclip: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>',
   };
+
+  // Languages offered by the Translate tool (code → label). Must match the
+  // CHAT_TRANSLATE_LANGS map in api/views.py.
+  var TRANSLATE_LANGS = [
+    { code: "en", label: "English" },
+    { code: "hi", label: "Hindi" },
+    { code: "te", label: "Telugu" },
+    { code: "ta", label: "Tamil" },
+    { code: "kn", label: "Kannada" },
+    { code: "ml", label: "Malayalam" },
+    { code: "es", label: "Spanish" },
+    { code: "fr", label: "French" },
+    { code: "de", label: "German" },
+  ];
+
+  // A small, dependency-free set of common emojis for the picker.
+  var EMOJI_SET = [
+    "😀","😃","😄","😁","😆","😅","😂","🤣","😊","😇","🙂","🙃","😉","😌","😍","🥰",
+    "😘","😗","😙","😚","😋","😛","😝","😜","🤪","🤨","🧐","🤓","😎","🥳","🤩","😏",
+    "😒","😞","😔","😟","😕","🙁","😣","😖","😫","😩","🥺","😢","😭","😤","😠","😡",
+    "🤬","🤯","😳","🥵","🥶","😱","😨","😰","😥","😓","🤗","🤔","🤭","🤫","🫡","🤥",
+    "😴","😪","😵","🤐","🥴","🤢","🤮","🤧","😷","🤒","🤕","👍","👎","👌","🤌","✌️",
+    "🤞","🫶","🤝","🙏","👏","🙌","👋","💪","🔥","✨","🎉","🎊","❤️","🧡","💛","💚",
+    "💙","💜","🖤","🤍","💯","✅","❌","❓","❗","⚠️","👀","💡","📌","📎","⭐","🚀",
+  ];
 
   // ───────────────────────────────────────────── styles
   function injectStyles() {
@@ -324,6 +363,40 @@
       // search match highlight
       "#" + ROOT_ID + " .hcx-msg.match .hcx-bubble{outline:2px solid rgba(37,99,235,.35);}",
       "#" + ROOT_ID + " .hcx-msg.match-current .hcx-bubble{outline:2px solid var(--hcx-primary);box-shadow:0 0 0 4px rgba(37,99,235,.18);}",
+      "#" + ROOT_ID + " .hcx-msg.jump-flash .hcx-bubble{animation:hcx-flash 1.2s ease;}",
+      "@keyframes hcx-flash{0%,100%{box-shadow:none}30%{box-shadow:0 0 0 4px rgba(37,99,235,.28)}}",
+      // pinned strip
+      "#" + ROOT_ID + " .hcx-pins{background:var(--hcx-surface);border-bottom:1px solid var(--hcx-border);padding:6px 12px;display:flex;flex-direction:column;gap:4px;max-height:120px;overflow-y:auto;overscroll-behavior:contain;}",
+      "#" + ROOT_ID + " .hcx-pins::-webkit-scrollbar{width:6px;}",
+      "#" + ROOT_ID + " .hcx-pins::-webkit-scrollbar-thumb{background:var(--hcx-border);border-radius:3px;}",
+      "#" + ROOT_ID + " .hcx-pins{scrollbar-width:thin;}",
+      "#" + ROOT_ID + " .hcx-pin-row{display:flex;align-items:center;gap:9px;padding:6px 8px;border-radius:8px;cursor:pointer;}",
+      "#" + ROOT_ID + " .hcx-pin-row:hover{background:var(--hcx-hover);}",
+      "#" + ROOT_ID + " .hcx-pin-row .pi{color:var(--hcx-primary);display:flex;flex-shrink:0;}",
+      "#" + ROOT_ID + " .hcx-pin-row .pi svg{width:14px;height:14px;}",
+      "#" + ROOT_ID + " .hcx-pin-row .pm{flex:1;min-width:0;font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}",
+      "#" + ROOT_ID + " .hcx-pin-row .pm b{color:var(--hcx-primary);font-weight:700;}",
+      "#" + ROOT_ID + " .hcx-pin-row .px{width:24px;height:24px;border:none;background:transparent;color:var(--hcx-muted);border-radius:6px;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;}",
+      "#" + ROOT_ID + " .hcx-pin-row .px:hover{background:var(--hcx-hover);color:var(--hcx-danger,#ef4444);}",
+      "#" + ROOT_ID + " .hcx-pin-row .px svg{width:13px;height:13px;}",
+      "#" + ROOT_ID + " .hcx-pinnedtag{display:inline-flex;opacity:.75;}",
+      "#" + ROOT_ID + " .hcx-pinnedtag svg{width:12px;height:12px;}",
+      "#" + ROOT_ID + " .hcx-msg.sent .hcx-pinnedtag{color:rgba(255,255,255,.85);}",
+      // reply quote inside a bubble
+      "#" + ROOT_ID + " .hcx-quote{border-left:3px solid var(--hcx-primary);background:rgba(0,0,0,.05);border-radius:6px;padding:5px 8px;margin-bottom:5px;cursor:pointer;max-width:100%;}",
+      "#" + ROOT_ID + " .hcx-msg.sent .hcx-quote{background:rgba(255,255,255,.16);border-left-color:rgba(255,255,255,.85);}",
+      "#" + ROOT_ID + " .hcx-quote .qn{font-size:11.5px;font-weight:700;color:var(--hcx-primary);}",
+      "#" + ROOT_ID + " .hcx-msg.sent .hcx-quote .qn{color:#fff;}",
+      "#" + ROOT_ID + " .hcx-quote .qt{font-size:12px;opacity:.85;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:230px;}",
+      // reply compose bar
+      "#" + ROOT_ID + " .hcx-replybar{display:flex;align-items:center;gap:10px;padding:8px 18px;background:var(--hcx-surface);border-top:1px solid var(--hcx-border);}",
+      "#" + ROOT_ID + " .hcx-replybar .rb-l{width:3px;align-self:stretch;background:var(--hcx-primary);border-radius:2px;}",
+      "#" + ROOT_ID + " .hcx-replybar .rb-mid{flex:1;min-width:0;}",
+      "#" + ROOT_ID + " .hcx-replybar .rb-n{font-size:12px;font-weight:700;color:var(--hcx-primary);}",
+      "#" + ROOT_ID + " .hcx-replybar .rb-t{font-size:12.5px;color:var(--hcx-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}",
+      "#" + ROOT_ID + " .hcx-replybar .rb-x{width:28px;height:28px;border:none;background:transparent;color:var(--hcx-muted);border-radius:7px;cursor:pointer;display:flex;align-items:center;justify-content:center;}",
+      "#" + ROOT_ID + " .hcx-replybar .rb-x:hover{background:var(--hcx-hover);}",
+      "#" + ROOT_ID + " .hcx-replybar .rb-x svg{width:15px;height:15px;}",
 
       // meetings strip
       "#" + ROOT_ID + " .hcx-mtg-strip{padding:10px 18px;background:var(--hcx-surface);border-bottom:1px solid var(--hcx-border);display:flex;flex-direction:column;gap:8px;}",
@@ -408,6 +481,42 @@
       "#" + ROOT_ID + " .hcx-sendbtn{width:38px;height:38px;border-radius:10px;border:none;cursor:pointer;background:var(--hcx-sent);display:flex;align-items:center;justify-content:center;flex-shrink:0;}",
       "#" + ROOT_ID + " .hcx-sendbtn svg{width:17px;height:17px;color:#fff;}",
       "#" + ROOT_ID + " .hcx-sendbtn:disabled{opacity:.5;cursor:default;}",
+      // ---- composer tools (^) menu + emoji/translate popovers ----
+      "#" + ROOT_ID + " .hcx-toolswrap{position:relative;flex-shrink:0;}",
+      "#" + ROOT_ID + " .hcx-attachbtn.on{background:var(--hcx-hover);color:var(--hcx-primary);}",
+      "#" + ROOT_ID + " .hcx-toolsmenu{position:absolute;left:0;bottom:46px;z-index:40;background:var(--hcx-surface);border:1px solid var(--hcx-border);border-radius:12px;box-shadow:0 8px 28px rgba(0,0,0,.18);padding:6px;min-width:184px;display:flex;flex-direction:column;gap:2px;transform-origin:bottom left;animation:hcx-pop .13s ease-out;}",
+      "@keyframes hcx-pop{from{opacity:0;transform:translateY(8px) scale(.97);}to{opacity:1;transform:translateY(0) scale(1);}}",
+      "#" + ROOT_ID + " .hcx-toolsmenu button{display:flex;align-items:center;gap:11px;width:100%;border:none;background:transparent;color:var(--hcx-text);font-family:inherit;font-size:13.5px;padding:9px 11px;border-radius:9px;cursor:pointer;text-align:left;}",
+      "#" + ROOT_ID + " .hcx-toolsmenu button:hover{background:var(--hcx-hover);}",
+      "#" + ROOT_ID + " .hcx-toolsmenu button svg{width:18px;height:18px;color:var(--hcx-primary);flex-shrink:0;}",
+      "#" + ROOT_ID + " .hcx-pop{position:absolute;left:0;bottom:46px;z-index:41;background:var(--hcx-surface);border:1px solid var(--hcx-border);border-radius:12px;box-shadow:0 8px 28px rgba(0,0,0,.18);padding:8px;animation:hcx-pop .13s ease-out;}",
+      "#" + ROOT_ID + " .hcx-langpop{min-width:170px;display:flex;flex-direction:column;gap:1px;max-height:240px;overflow-y:auto;}",
+      "#" + ROOT_ID + " .hcx-langpop .lh{font-size:11px;font-weight:700;color:var(--hcx-muted);padding:4px 8px 6px;text-transform:uppercase;letter-spacing:.4px;}",
+      "#" + ROOT_ID + " .hcx-langpop button{display:block;width:100%;border:none;background:transparent;color:var(--hcx-text);font-family:inherit;font-size:13px;padding:8px 10px;border-radius:8px;cursor:pointer;text-align:left;}",
+      "#" + ROOT_ID + " .hcx-langpop button:hover{background:var(--hcx-hover);}",
+      "#" + ROOT_ID + " .hcx-langpop button:disabled{opacity:.55;cursor:default;}",
+      "#" + ROOT_ID + " .hcx-emojipop{width:288px;}",
+      "#" + ROOT_ID + " .hcx-emojigrid{display:grid;grid-template-columns:repeat(8,1fr);gap:2px;max-height:210px;overflow-y:auto;}",
+      "#" + ROOT_ID + " .hcx-emojigrid button{border:none;background:transparent;font-size:20px;line-height:1;padding:5px 0;border-radius:7px;cursor:pointer;}",
+      "#" + ROOT_ID + " .hcx-emojigrid button:hover{background:var(--hcx-hover);}",
+      // ---- staged attachment preview inside the composer ----
+      "#" + ROOT_ID + " .hcx-attpreview{display:flex;align-items:center;gap:10px;margin:0 0 8px;padding:8px 10px;background:var(--hcx-bg);border:1px solid var(--hcx-border);border-radius:10px;}",
+      "#" + ROOT_ID + " .hcx-attpreview img{width:40px;height:40px;object-fit:cover;border-radius:7px;flex-shrink:0;}",
+      "#" + ROOT_ID + " .hcx-attpreview .ai{width:38px;height:38px;border-radius:7px;background:var(--hcx-hover);display:flex;align-items:center;justify-content:center;color:var(--hcx-primary);flex-shrink:0;}",
+      "#" + ROOT_ID + " .hcx-attpreview .an{flex:1;min-width:0;font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}",
+      "#" + ROOT_ID + " .hcx-attpreview .as{font-size:11px;color:var(--hcx-muted);}",
+      "#" + ROOT_ID + " .hcx-attpreview .ax{width:26px;height:26px;border:none;background:transparent;color:var(--hcx-muted);border-radius:7px;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;}",
+      "#" + ROOT_ID + " .hcx-attpreview .ax:hover{background:var(--hcx-hover);color:var(--hcx-danger,#ef4444);}",
+      "#" + ROOT_ID + " .hcx-attpreview .ax svg{width:14px;height:14px;}",
+      // ---- camera capture modal ----
+      "#" + ROOT_ID + " .hcx-cammodal{position:fixed;inset:0;z-index:60;background:rgba(0,0,0,.72);display:flex;align-items:center;justify-content:center;padding:20px;}",
+      "#" + ROOT_ID + " .hcx-camcard{background:var(--hcx-surface);border-radius:16px;padding:16px;max-width:520px;width:100%;display:flex;flex-direction:column;gap:12px;}",
+      "#" + ROOT_ID + " .hcx-camcard video,#" + ROOT_ID + " .hcx-camcard canvas{width:100%;border-radius:12px;background:#000;max-height:56vh;}",
+      "#" + ROOT_ID + " .hcx-camrow{display:flex;gap:10px;justify-content:flex-end;}",
+      "#" + ROOT_ID + " .hcx-camrow button{border:none;border-radius:10px;padding:9px 16px;font-family:inherit;font-size:13.5px;font-weight:600;cursor:pointer;}",
+      "#" + ROOT_ID + " .hcx-camrow .ghost{background:var(--hcx-hover);color:var(--hcx-text);}",
+      "#" + ROOT_ID + " .hcx-camrow .primary{background:var(--hcx-primary);color:#fff;}",
+      "#" + ROOT_ID + " .hcx-camerr{color:var(--hcx-danger,#ef4444);font-size:13px;text-align:center;padding:10px;}",
 
       // welcome / empty conversation
       "#" + ROOT_ID + " .hcx-welcome{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;color:var(--hcx-muted);text-align:center;padding:20px;}",
@@ -701,6 +810,10 @@
     state.pending = [];
     state.editingId = null;
     state.msgSearch = { q: "", matches: [], idx: -1 };
+    state.replyingTo = null;
+    state.pendingFile = null; // drop any staged attachment when switching rooms
+    state.toolsOpen = false;
+    closeCamera();
     if (state.listening) stopDictation();
 
     renderConversation(room);
@@ -739,6 +852,7 @@
       '  <div class="hcx-menuwrap"><button class="hcx-hicon" data-act="room-menu" title="More">' + ICON.dots + "</button>" +
       '    <div class="hcx-menu" data-role="room-menu" style="display:none"></div></div>' +
       "</div>" +
+      '<div class="hcx-pins" data-role="pins" style="display:none"></div>' +
       '<div class="hcx-searchbar" data-role="searchbar" style="display:none">' +
       '  <span class="si">' + ICON.search + "</span>" +
       '  <input type="search" data-role="msg-search" placeholder="Search messages…" autocomplete="off">' +
@@ -749,12 +863,24 @@
       "</div>" +
       '<div class="hcx-mtg-strip" data-role="mtgs" style="display:none"></div>' +
       '<div class="hcx-area" data-role="area"><div class="hcx-empty">Loading messages…</div></div>' +
-      '<div class="hcx-inbar"><div class="hcx-inwrap">' +
+      '<div class="hcx-replybar" data-role="replybar" style="display:none"></div>' +
+      '<div class="hcx-inbar">' +
+      '  <div data-role="attwrap"></div>' +
+      '  <div class="hcx-inwrap">' +
       '  <input type="file" data-role="file" accept="*/*" style="display:none">' +
-      '  <button class="hcx-attachbtn" data-act="attach" title="Attach a file">' + ICON.attach + "</button>" +
-      '  <button class="hcx-attachbtn" data-act="mic" data-role="mic" title="Dictate (speech to text)">' + ICON.mic + "</button>" +
-      '  <textarea data-role="input" rows="1" placeholder="Type a message…"></textarea>' +
-      '  <button class="hcx-sendbtn" data-act="send">' + ICON.send + "</button>" +
+      // Composer order is fixed: [ ^ tools ] [ 🎤 mic ] [ input ] [ ➤ send ].
+      '  <div class="hcx-toolswrap">' +
+      '    <button class="hcx-attachbtn" data-act="tools" data-role="tools-btn" aria-label="Chat tools" aria-haspopup="menu" aria-expanded="false" title="More tools">' + ICON.caretUp + "</button>" +
+      '    <div class="hcx-toolsmenu" data-role="tools-menu" role="menu" style="display:none">' +
+      '      <button data-act="tool-file" role="menuitem" aria-label="Attach a file">' + ICON.paperclip + "<span>File</span></button>" +
+      '      <button data-act="tool-camera" role="menuitem" aria-label="Take a photo">' + ICON.camera + "<span>Camera</span></button>" +
+      '      <button data-act="tool-translate" role="menuitem" aria-label="Translate message">' + ICON.globe + "<span>Translate</span></button>" +
+      '      <button data-act="tool-emoji" role="menuitem" aria-label="Insert emoji">' + ICON.smile + "<span>Emoji</span></button>" +
+      "    </div>" +
+      "  </div>" +
+      '  <button class="hcx-attachbtn" data-act="mic" data-role="mic" aria-label="Speech to text" title="Dictate (speech to text)">' + ICON.mic + "</button>" +
+      '  <textarea data-role="input" rows="1" aria-label="Message input" placeholder="Type a message…"></textarea>' +
+      '  <button class="hcx-sendbtn" data-act="send" aria-label="Send message">' + ICON.send + "</button>" +
       "</div></div>";
 
     var input = main.querySelector('[data-role="input"]');
@@ -828,6 +954,7 @@
       if (ta1) { ta1.value = editVal; ta1.focus(); }
     }
     reapplySearchHighlights();
+    renderPins();
     scrollBottom();
   }
 
@@ -901,25 +1028,41 @@
       tick = '<span class="' + cls + '">' + (m.is_read ? ICON.check2 : ICON.check1) + "</span>";
     }
     var editedLabel = m.edited ? '<span class="hcx-edited">edited</span>' : "";
-    var body = attachmentHTML(m) + (m.message ? linkify(m.message) : "");
+    var pinnedTag = isActivePin(m) ? '<span class="hcx-pinnedtag" title="Pinned">' + ICON.pinFill + "</span>" : "";
 
-    // Own messages get hover actions: edit (text only) + delete — but only
-    // within the edit/delete time window.
-    var actions = "";
-    if (sent && m.id != null && withinEditWindow(m)) {
-      var editBtn = m.message
-        ? '<button class="hcx-actbtn" data-act="msg-edit" title="Edit">' + ICON.edit + "</button>"
-        : "";
-      actions =
-        '<div class="hcx-actions">' + editBtn +
-        '<button class="hcx-actbtn danger" data-act="msg-delete" title="Delete">' + ICON.trash + "</button></div>";
+    // Quote block for a reply.
+    var quote = "";
+    if (m.reply_to_id) {
+      quote =
+        '<div class="hcx-quote" data-act="jump" data-mid="' + esc(m.reply_to_id) + '">' +
+        '<div class="qn">' + esc(m.reply_to_sender || "") + "</div>" +
+        '<div class="qt">' + esc(m.reply_to_text || "") + "</div></div>";
     }
+
+    var body = quote + attachmentHTML(m) + (m.message ? linkify(m.message) : "");
+
+    // Hover actions: reply always; pin/unpin per ownership; edit/delete for own within window.
+    var active = isActivePin(m);
+    var btns = '<button class="hcx-actbtn" data-act="msg-reply" title="Reply" aria-label="Reply">' + ICON.reply + "</button>";
+    if (!active) {
+      // Not pinned → anyone can pin.
+      btns += '<button class="hcx-actbtn" data-act="msg-pin" title="Pin" aria-label="Pin message">' + ICON.pin + "</button>";
+    } else if (canUnpin(m)) {
+      // Pinned by me → I can unpin.
+      btns += '<button class="hcx-actbtn" data-act="msg-pin" title="Unpin" aria-label="Unpin message">' + ICON.pinFill + "</button>";
+    }
+    // Pinned by someone else → no pin/unpin button (the pinned tag still shows).
+    if (sent && withinEditWindow(m)) {
+      if (m.message) btns += '<button class="hcx-actbtn" data-act="msg-edit" title="Edit">' + ICON.edit + "</button>";
+      btns += '<button class="hcx-actbtn danger" data-act="msg-delete" title="Delete">' + ICON.trash + "</button>";
+    }
+    var actions = (m.id != null) ? '<div class="hcx-actions">' + btns + "</div>" : "";
 
     return (
       '<div class="hcx-msg ' + (sent ? "sent" : "recv") + (consecutive ? " cons" : "") + '"' + rowAttr + ">" +
       av +
       '<div class="hcx-bubble">' + senderLabel + body +
-      '<div class="hcx-meta">' + editedLabel + '<span class="tm">' + esc(fmtTimeOf(msgDate(m))) + "</span>" + tick + "</div>" +
+      '<div class="hcx-meta">' + pinnedTag + editedLabel + '<span class="tm">' + esc(fmtTimeOf(msgDate(m))) + "</span>" + tick + "</div>" +
       "</div>" + actions + "</div>"
     );
   }
@@ -979,6 +1122,132 @@
     bumpRoomPreview(state.activeRoomId, state.messages[state.messages.length - 1]);
   }
 
+  // ───────────────────────────────────────────── pin / reply
+  function snippetOf(m) {
+    if (!m) return "";
+    if (m.is_deleted) return "This message was deleted";
+    if (m.message) return m.message;
+    if (m.attachment_name) return "📎 " + m.attachment_name;
+    return "";
+  }
+
+  // A pin counts as active only while flagged AND still inside its 30-day
+  // window. The server sends is_pin_active; if it's missing (legacy payloads)
+  // fall back to the raw flag plus a local expiry check.
+  function isActivePin(m) {
+    if (!m || !m.is_pinned || m.is_deleted) return false;
+    if (typeof m.is_pin_active === "boolean") return m.is_pin_active;
+    if (m.pin_expires_at) {
+      var exp = parseDate(m.pin_expires_at);
+      if (exp && exp.getTime() <= new Date().getTime()) return false;
+    }
+    return true;
+  }
+
+  // Only the person who pinned a message may unpin it.
+  function canUnpin(m) {
+    return !!m && (m.pinned_by || "").toLowerCase() === (state.me.email || "").toLowerCase();
+  }
+
+  function renderPins() {
+    if (!state.root) return;
+    var strip = state.root.querySelector('[data-role="pins"]');
+    if (!strip) return;
+    var pinned = state.messages.filter(isActivePin);
+    if (!pinned.length) { strip.style.display = "none"; strip.innerHTML = ""; return; }
+    strip.style.display = "flex";
+    strip.innerHTML = pinned.map(function (m) {
+      var who = m.sender_email === state.me.email ? "You" : (m.sender_name || (m.sender_email || "").split("@")[0]);
+      // Unpin control is shown only to whoever pinned the message.
+      var unpinBtn = canUnpin(m)
+        ? '<button class="px" data-act="msg-unpin" data-mid="' + esc(m.id) + '" aria-label="Unpin message" title="Unpin">' + ICON.close + "</button>"
+        : "";
+      return (
+        '<div class="hcx-pin-row" data-act="jump" data-mid="' + esc(m.id) + '">' +
+        '<span class="pi">' + ICON.pin + "</span>" +
+        '<span class="pm"><b>' + esc(who) + ":</b> " + esc(snippetOf(m)) + "</span>" +
+        unpinBtn +
+        "</div>"
+      );
+    }).join("");
+  }
+
+  function pinMessage(id, pin) {
+    var m = state.messages.find(function (x) { return String(x.id) === String(id); });
+    if (!m) return;
+    // Guard the unpin path client-side too (the server also enforces it).
+    if (!pin && isActivePin(m) && !canUnpin(m)) {
+      alert("Only the person who pinned this message can unpin it.");
+      return;
+    }
+    applyPin(id, pin, pin ? state.me.email : null); // optimistic
+    apiFetch("POST", "/api/chat/message/" + id + "/pin", { email: state.me.email, pin: pin })
+      .then(function (res) {
+        if (res && res.id != null) {
+          var mm = state.messages.find(function (x) { return String(x.id) === String(res.id); });
+          if (mm) {
+            mm.is_pinned = !!res.is_pinned;
+            mm.pinned_by = res.pinned_by || null;
+            mm.pin_expires_at = res.pin_expires_at || null;
+            mm.is_pin_active = !!res.is_pinned;
+            renderMessages();
+          }
+        }
+      })
+      .catch(function (e) {
+        applyPin(id, !pin, !pin ? state.me.email : null); // revert
+        alert(e.message);
+      });
+  }
+
+  function applyPin(id, isPinned, pinnedBy) {
+    var m = state.messages.find(function (x) { return String(x.id) === String(id); });
+    if (m) {
+      m.is_pinned = !!isPinned;
+      m.is_pin_active = !!isPinned;
+      if (isPinned) { if (pinnedBy !== undefined) m.pinned_by = pinnedBy; }
+      else { m.pinned_by = null; m.pin_expires_at = null; }
+      renderMessages();
+    }
+  }
+
+  function jumpToMessage(id) {
+    var row = state.root.querySelector('.hcx-msg[data-mid="' + id + '"]');
+    if (!row) return;
+    row.scrollIntoView({ block: "center", behavior: "smooth" });
+    row.classList.add("jump-flash");
+    setTimeout(function () { row.classList.remove("jump-flash"); }, 1300);
+  }
+
+  function startReply(id) {
+    var m = state.messages.find(function (x) { return String(x.id) === String(id); });
+    if (!m || m.is_deleted) return;
+    state.replyingTo = m;
+    renderReplyBar();
+    var input = state.root.querySelector('[data-role="input"]');
+    if (input) input.focus();
+  }
+
+  function cancelReply() {
+    state.replyingTo = null;
+    renderReplyBar();
+  }
+
+  function renderReplyBar() {
+    if (!state.root) return;
+    var bar = state.root.querySelector('[data-role="replybar"]');
+    if (!bar) return;
+    var m = state.replyingTo;
+    if (!m) { bar.style.display = "none"; bar.innerHTML = ""; return; }
+    var who = m.sender_email === state.me.email ? "You" : (m.sender_name || (m.sender_email || "").split("@")[0]);
+    bar.style.display = "flex";
+    bar.innerHTML =
+      '<span class="rb-l"></span>' +
+      '<span class="' + "rb-mid" + '"><div class="rb-n">Replying to ' + esc(who) + '</div>' +
+      '<div class="rb-t">' + esc(snippetOf(m)) + "</div></span>" +
+      '<button class="rb-x" data-act="reply-cancel" title="Cancel">' + ICON.close + "</button>";
+  }
+
   function previewText(m) {
     if (m.is_deleted) return "This message was deleted";
     if (m.message) return m.message;
@@ -1001,10 +1270,22 @@
     var input = state.root.querySelector('[data-role="input"]');
     if (!input || !state.activeRoomId) return;
     var text = input.value.trim();
+    // A staged attachment is sent through the existing file path, with the
+    // typed text (if any) as its caption.
+    if (state.pendingFile) {
+      var pf = state.pendingFile;
+      state.pendingFile = null;
+      renderAttPreview();
+      sendFile(pf.file, pf.dataUrl, text);
+      return;
+    }
     if (!text) return;
     input.value = "";
     autoresize(input);
     resetDictationBuffer();
+
+    var replyTo = state.replyingTo;
+    cancelReply();
 
     var now = new Date().toISOString();
     var temp = {
@@ -1015,14 +1296,20 @@
       created_at: now,
       is_read: false,
     };
+    if (replyTo) {
+      temp.reply_to_id = replyTo.id;
+      temp.reply_to_sender = replyTo.sender_email === state.me.email ? "You" : (replyTo.sender_name || "");
+      temp.reply_to_text = snippetOf(replyTo);
+    }
     stampMsg(temp);
     state.messages.push(temp);
     state.pending.push({ message: text, att: "", ref: temp });
     renderMessages();
     bumpRoomPreview(state.activeRoomId, temp);
 
-    // Prefer WebSocket; fall back to REST when the socket isn't open.
-    if (state.ws && state.ws.readyState === 1 && String(state.wsRoomId) === String(state.activeRoomId)) {
+    // A reply carries extra fields the WebSocket send path doesn't handle, so
+    // replies always go via REST. Plain text prefers the socket.
+    if (!replyTo && state.ws && state.ws.readyState === 1 && String(state.wsRoomId) === String(state.activeRoomId)) {
       try {
         state.ws.send(JSON.stringify({
           sender_email: state.me.email,
@@ -1032,12 +1319,13 @@
         return;
       } catch (_) {}
     }
-    // REST fallback
-    apiPost("/api/chat/messages/" + state.activeRoomId, {
+    var payload = {
       sender_email: state.me.email,
       sender_name: temp.sender_name,
       message: text,
-    })
+    };
+    if (replyTo) payload.reply_to_id = replyTo.id;
+    apiPost("/api/chat/messages/" + state.activeRoomId, payload)
       .then(function (saved) { reconcileSaved(temp, saved); })
       .catch(function (e) { console.warn("[hcx] send failed", e); });
   }
@@ -1087,16 +1375,19 @@
     return msgAgeMs(m) < EDIT_WINDOW_MS;
   }
 
-  // Remove edit/delete buttons from messages whose window has closed, without a
-  // full re-render (so scroll position is untouched).
+  // Remove only the edit/delete buttons once the window closes (reply + pin
+  // stay available), without a full re-render so scroll position is untouched.
   function pruneExpiredActions() {
     if (!state.root) return;
     var rows = state.root.querySelectorAll(".hcx-msg[data-mid]");
     rows.forEach(function (row) {
+      if (withinEditWindow(findMsgById(row.getAttribute("data-mid")))) return;
       var acts = row.querySelector(".hcx-actions");
-      if (acts && !withinEditWindow(findMsgById(row.getAttribute("data-mid")))) {
-        acts.remove();
-      }
+      if (!acts) return;
+      var e = acts.querySelector('[data-act="msg-edit"]');
+      if (e) e.remove();
+      var d = acts.querySelector('[data-act="msg-delete"]');
+      if (d) d.remove();
     });
   }
 
@@ -1111,22 +1402,62 @@
     var file = fileInput.files && fileInput.files[0];
     fileInput.value = ""; // allow re-selecting the same file later
     if (!file || !state.activeRoomId) return;
+    stageFile(file);
+  }
+
+  // Stage a File in the composer with a removable preview. Nothing is stored
+  // in JS state beyond the browser's own File handle + a data URL used only for
+  // the local thumbnail; the bytes are uploaded through the existing REST
+  // attachment path when the user presses Send.
+  function stageFile(file) {
+    if (!file || !state.activeRoomId) return;
     if (file.size > MAX_FILE_BYTES) {
       alert("File is too large. Please choose a file under 50 MB.");
       return;
     }
     var reader = new FileReader();
     reader.onload = function () {
-      sendFile(file, reader.result); // result is a data: URL
+      state.pendingFile = { file: file, dataUrl: reader.result };
+      renderAttPreview();
+      var input = state.root && state.root.querySelector('[data-role="input"]');
+      if (input) input.focus();
     };
     reader.onerror = function () { alert("Could not read that file."); };
     reader.readAsDataURL(file);
   }
 
-  function sendFile(file, dataUrl) {
+  function clearPendingFile() {
+    state.pendingFile = null;
+    renderAttPreview();
+  }
+
+  function renderAttPreview() {
+    if (!state.root) return;
+    var wrap = state.root.querySelector('[data-role="attwrap"]');
+    if (!wrap) return;
+    var pf = state.pendingFile;
+    if (!pf) { wrap.innerHTML = ""; return; }
+    var f = pf.file;
+    var isImg = (f.type || "").indexOf("image/") === 0;
+    var thumb = isImg
+      ? '<img src="' + esc(pf.dataUrl) + '" alt="">'
+      : '<span class="ai">' + ICON.file + "</span>";
+    var kb = f.size < 1024 * 1024
+      ? Math.max(1, Math.round(f.size / 1024)) + " KB"
+      : (f.size / 1048576).toFixed(1) + " MB";
+    wrap.innerHTML =
+      '<div class="hcx-attpreview">' + thumb +
+      '<span class="an">' + esc(f.name) + '<div class="as">' + esc(kb) + " · ready to send</div></span>" +
+      '<button class="ax" data-act="att-remove" aria-label="Remove attachment" title="Remove">' + ICON.close + "</button>" +
+      "</div>";
+  }
+
+  function sendFile(file, dataUrl, captionArg) {
     var input = state.root.querySelector('[data-role="input"]');
-    var caption = input ? input.value.trim() : "";
+    var caption = (captionArg != null) ? captionArg : (input ? input.value.trim() : "");
     if (input) { input.value = ""; autoresize(input); resetDictationBuffer(); }
+    var replyTo = state.replyingTo;
+    cancelReply();
 
     var now = new Date().toISOString();
     var temp = {
@@ -1140,6 +1471,11 @@
       attachment_type: file.type || "application/octet-stream",
       attachment_url: dataUrl, // local preview until the server confirms
     };
+    if (replyTo) {
+      temp.reply_to_id = replyTo.id;
+      temp.reply_to_sender = replyTo.sender_email === state.me.email ? "You" : (replyTo.sender_name || "");
+      temp.reply_to_text = snippetOf(replyTo);
+    }
     stampMsg(temp);
     state.messages.push(temp);
     state.pending.push({ message: caption, att: file.name, ref: temp });
@@ -1154,12 +1490,237 @@
       attachment_name: file.name,
       attachment_type: temp.attachment_type,
       attachment_data: dataUrl,
+      reply_to_id: (replyTo ? replyTo.id : undefined),
     })
       .then(function (saved) { reconcileSaved(temp, saved); })
       .catch(function (e) {
         console.warn("[hcx] file send failed", e);
         alert("Could not send file: " + e.message);
       });
+  }
+
+  // ───────────────────────────────────────────── composer tools (^) menu
+  function toolsBtn() { return state.root && state.root.querySelector('[data-role="tools-btn"]'); }
+  function toolsMenuEl() { return state.root && state.root.querySelector('[data-role="tools-menu"]'); }
+
+  function toggleToolsMenu() {
+    if (state.toolsOpen) closeToolsMenu();
+    else openToolsMenu();
+  }
+
+  function openToolsMenu() {
+    var menu = toolsMenuEl(), btn = toolsBtn();
+    if (!menu || !btn) return;
+    closePopovers();
+    menu.style.display = "flex";
+    menu.innerHTML =
+      '<button data-act="tool-file" role="menuitem" aria-label="Attach a file">' + ICON.paperclip + "<span>File</span></button>" +
+      '<button data-act="tool-camera" role="menuitem" aria-label="Take a photo">' + ICON.camera + "<span>Camera</span></button>" +
+      '<button data-act="tool-translate" role="menuitem" aria-label="Translate message">' + ICON.globe + "<span>Translate</span></button>" +
+      '<button data-act="tool-emoji" role="menuitem" aria-label="Insert emoji">' + ICON.smile + "<span>Emoji</span></button>";
+    btn.innerHTML = ICON.caretDown;
+    btn.classList.add("on");
+    btn.setAttribute("aria-expanded", "true");
+    state.toolsOpen = true;
+  }
+
+  // Close the tools menu and any open emoji/translate popover, resetting the
+  // ^ button back to its closed (chevron-up) state.
+  function closeToolsMenu() {
+    var menu = toolsMenuEl(), btn = toolsBtn();
+    closePopovers();
+    if (menu) { menu.style.display = "none"; }
+    if (btn) {
+      btn.innerHTML = ICON.caretUp;
+      btn.classList.remove("on");
+      btn.setAttribute("aria-expanded", "false");
+    }
+    state.toolsOpen = false;
+  }
+
+  function closePopovers() {
+    if (!state.root) return;
+    var wrap = state.root.querySelector(".hcx-toolswrap");
+    if (!wrap) return;
+    wrap.querySelectorAll(".hcx-pop").forEach(function (p) { p.remove(); });
+  }
+
+  // Mount a popover (emoji grid / language list) into the tools cluster.
+  function mountPopover(html, extraClass) {
+    var wrap = state.root && state.root.querySelector(".hcx-toolswrap");
+    if (!wrap) return null;
+    closePopovers();
+    var menu = toolsMenuEl();
+    if (menu) menu.style.display = "none";
+    var pop = document.createElement("div");
+    pop.className = "hcx-pop " + (extraClass || "");
+    pop.innerHTML = html;
+    wrap.appendChild(pop);
+    return pop;
+  }
+
+  // ───────────────────────────────────────────── emoji picker
+  function openEmoji() {
+    var html =
+      '<div class="hcx-emojigrid" role="listbox" aria-label="Emoji">' +
+      EMOJI_SET.map(function (em) {
+        return '<button type="button" data-act="emoji-pick" data-emoji="' + esc(em) + '" aria-label="' + esc(em) + '">' + em + "</button>";
+      }).join("") +
+      "</div>";
+    mountPopover(html, "hcx-emojipop");
+    state.toolsOpen = true;
+    var btn = toolsBtn();
+    if (btn) { btn.classList.add("on"); btn.innerHTML = ICON.caretDown; btn.setAttribute("aria-expanded", "true"); }
+  }
+
+  // Insert an emoji at the caret without disturbing the rest of the text; the
+  // picker stays open so several can be added in a row.
+  function insertEmoji(em) {
+    if (!em) return;
+    var input = state.root && state.root.querySelector('[data-role="input"]');
+    if (!input) return;
+    var start = (typeof input.selectionStart === "number") ? input.selectionStart : input.value.length;
+    var end = (typeof input.selectionEnd === "number") ? input.selectionEnd : input.value.length;
+    var v = input.value;
+    input.value = v.slice(0, start) + em + v.slice(end);
+    var caret = start + em.length;
+    input.focus();
+    try { input.setSelectionRange(caret, caret); } catch (_) {}
+    autoresize(input);
+    // Keep the dictation base in sync so a following dictation doesn't clobber it.
+    state.dictBase = "";
+  }
+
+  // ───────────────────────────────────────────── translate
+  function openTranslate() {
+    var input = state.root && state.root.querySelector('[data-role="input"]');
+    var hasText = input && input.value.trim();
+    var body = hasText
+      ? '<div class="lh">Translate to</div>' +
+        TRANSLATE_LANGS.map(function (l) {
+          return '<button type="button" data-act="lang-pick" data-lang="' + l.code + '">' + esc(l.label) + "</button>";
+        }).join("")
+      : '<div class="lh">Translate</div><div style="padding:6px 10px;font-size:12.5px;color:var(--hcx-muted)">Type a message first, then pick a language.</div>';
+    mountPopover(body, "hcx-langpop");
+    state.toolsOpen = true;
+    var btn = toolsBtn();
+    if (btn) { btn.classList.add("on"); btn.innerHTML = ICON.caretDown; btn.setAttribute("aria-expanded", "true"); }
+  }
+
+  function doTranslate(lang) {
+    var input = state.root && state.root.querySelector('[data-role="input"]');
+    if (!input) return;
+    var original = input.value;
+    var text = original.trim();
+    if (!text || !lang) return;
+    // Show a lightweight loading state on the language buttons; keep the
+    // original text untouched until the translation succeeds.
+    var pop = state.root.querySelector(".hcx-langpop");
+    if (pop) {
+      pop.querySelectorAll("button").forEach(function (b) { b.disabled = true; });
+      var picked = pop.querySelector('[data-lang="' + lang + '"]');
+      if (picked) picked.textContent = "Translating…";
+    }
+    apiPost("/api/chat/translate", { text: text, target: lang, email: state.me.email })
+      .then(function (res) {
+        if (res && res.translated) {
+          input.value = res.translated; // editable, NOT auto-sent
+          autoresize(input);
+          state.dictBase = "";
+          input.focus();
+        }
+        closeToolsMenu();
+      })
+      .catch(function (e) {
+        // Leave the original text in place on failure.
+        input.value = original;
+        closeToolsMenu();
+        alert("Could not translate: " + (e && e.message ? e.message : "please try again."));
+      });
+  }
+
+  // ───────────────────────────────────────────── camera capture
+  function openCamera() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      alert("Camera isn't available in this browser.");
+      return;
+    }
+    closeCamera();
+    var modal = document.createElement("div");
+    modal.className = "hcx-cammodal";
+    modal.setAttribute("data-role", "cammodal");
+    modal.innerHTML =
+      '<div class="hcx-camcard">' +
+      '<video data-role="cam-video" autoplay playsinline muted></video>' +
+      '<canvas data-role="cam-canvas" style="display:none"></canvas>' +
+      '<div class="hcx-camrow">' +
+      '<button class="ghost" data-act="cam-cancel">Cancel</button>' +
+      '<button class="primary" data-act="cam-shoot">Take Photo</button>' +
+      "</div></div>";
+    state.root.appendChild(modal);
+    var video = modal.querySelector('[data-role="cam-video"]');
+    navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: false })
+      .then(function (stream) {
+        state.camStream = stream;
+        if (video) { video.srcObject = stream; }
+      })
+      .catch(function (err) {
+        var card = modal.querySelector(".hcx-camcard");
+        var msg = (err && err.name === "NotAllowedError")
+          ? "Camera permission was denied. Allow camera access and try again."
+          : (err && err.name === "NotFoundError")
+          ? "No camera was found on this device."
+          : "Could not start the camera.";
+        if (card) {
+          card.innerHTML = '<div class="hcx-camerr">' + esc(msg) + "</div>" +
+            '<div class="hcx-camrow"><button class="primary" data-act="cam-cancel">Close</button></div>';
+        }
+      });
+  }
+
+  function capturePhoto() {
+    var modal = state.root && state.root.querySelector('[data-role="cammodal"]');
+    if (!modal) return;
+    var video = modal.querySelector('[data-role="cam-video"]');
+    var canvas = modal.querySelector('[data-role="cam-canvas"]');
+    if (!video || !canvas || !video.videoWidth) { closeCamera(); return; }
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
+    var finish = function (file) {
+      closeCamera();
+      if (file) stageFile(file);
+    };
+    if (canvas.toBlob) {
+      canvas.toBlob(function (blob) {
+        if (!blob) { closeCamera(); return; }
+        var name = "photo-" + new Date().getTime() + ".png";
+        var file;
+        try { file = new File([blob], name, { type: "image/png" }); }
+        catch (_) { blob.name = name; file = blob; }
+        finish(file);
+      }, "image/png");
+    } else {
+      // Fallback for older browsers without toBlob.
+      var dataUrl = canvas.toDataURL("image/png");
+      closeCamera();
+      var arr = dataUrl.split(","), bstr = atob(arr[1]), n = bstr.length, u8 = new Uint8Array(n);
+      while (n--) u8[n] = bstr.charCodeAt(n);
+      var f2;
+      var nm = "photo-" + new Date().getTime() + ".png";
+      try { f2 = new File([u8], nm, { type: "image/png" }); }
+      catch (_) { f2 = new Blob([u8], { type: "image/png" }); f2.name = nm; }
+      stageFile(f2);
+    }
+  }
+
+  function closeCamera() {
+    if (state.camStream) {
+      try { state.camStream.getTracks().forEach(function (t) { t.stop(); }); } catch (_) {}
+      state.camStream = null;
+    }
+    var modal = state.root && state.root.querySelector('[data-role="cammodal"]');
+    if (modal) modal.remove();
   }
 
   // ───────────────────────────────────────────── edit / delete
@@ -1257,6 +1818,17 @@
           if (!data) return;
           if (data.event === "deleted") { applyDelete(data.id); return; }
           if (data.event === "edited") { applyEdit(data.id, data.message || ""); return; }
+          if (data.event === "pinned") {
+            var pm2 = state.messages.find(function (x) { return String(x.id) === String(data.id); });
+            if (pm2) {
+              pm2.is_pinned = !!data.is_pinned;
+              pm2.is_pin_active = !!data.is_pinned;
+              pm2.pinned_by = data.is_pinned ? (data.pinned_by || null) : null;
+              pm2.pin_expires_at = data.is_pinned ? (data.pin_expires_at || null) : null;
+              renderMessages();
+            }
+            return;
+          }
           if (data.message != null || data.attachment_url) ingestMessage(data);
         } catch (_) {}
       };
@@ -1319,11 +1891,17 @@
               // Existing message — sync edited/deleted/read changes.
               var cur = byId[String(m.id)];
               if (cur && (cur.is_deleted !== m.is_deleted || cur.edited !== m.edited ||
-                          cur.message !== m.message || cur.is_read !== m.is_read)) {
+                          cur.message !== m.message || cur.is_read !== m.is_read ||
+                          cur.is_pinned !== m.is_pinned || cur.is_pin_active !== m.is_pin_active ||
+                          cur.pinned_by !== m.pinned_by)) {
                 cur.is_deleted = m.is_deleted;
                 cur.edited = m.edited;
                 cur.message = m.message;
                 cur.is_read = m.is_read;
+                cur.is_pinned = m.is_pinned;
+                cur.is_pin_active = m.is_pin_active;
+                cur.pinned_by = m.pinned_by;
+                cur.pin_expires_at = m.pin_expires_at;
                 if (m.is_deleted) cur.attachment_url = "";
                 added = true;
               }
@@ -1652,6 +2230,9 @@
 
       // Close the room ⋯ menu on any click outside of it.
       if (!(t.closest && t.closest(".hcx-menuwrap"))) closeRoomMenu();
+      // Close the composer tools menu / emoji / translate popovers on any click
+      // that isn't inside the tools cluster.
+      if (!(t.closest && t.closest(".hcx-toolswrap"))) closeToolsMenu();
 
       if (act === "new-menu") return openNewMenu();
       if (act === "modal-close") return closeModal();
@@ -1659,9 +2240,24 @@
       if (act === "pick-channel") { closeModal(); return openNewChannel(); }
       if (act === "schedule") return openScheduleMeeting();
       if (act === "send") return sendMessage();
-      if (act === "attach") {
+      if (act === "tools") { e.stopPropagation(); return toggleToolsMenu(); }
+      if (act === "tool-file") {
+        closeToolsMenu();
         var fi = root.querySelector('[data-role="file"]');
         if (fi) fi.click();
+        return;
+      }
+      if (act === "tool-camera") { closeToolsMenu(); return openCamera(); }
+      if (act === "tool-translate") { e.stopPropagation(); return openTranslate(); }
+      if (act === "tool-emoji") { e.stopPropagation(); return openEmoji(); }
+      if (act === "lang-pick") { e.stopPropagation(); return doTranslate(actEl.getAttribute("data-lang")); }
+      if (act === "emoji-pick") { e.stopPropagation(); return insertEmoji(actEl.getAttribute("data-emoji")); }
+      if (act === "att-remove") { e.stopPropagation(); return clearPendingFile(); }
+      if (act === "cam-shoot") return capturePhoto();
+      if (act === "cam-cancel") return closeCamera();
+      if (act === "attach") {
+        var fi2 = root.querySelector('[data-role="file"]');
+        if (fi2) fi2.click();
         return;
       }
       if (act === "msg-edit") {
@@ -1674,6 +2270,22 @@
         if (rd) deleteMessage(rd.getAttribute("data-mid"));
         return;
       }
+      if (act === "msg-reply") {
+        var rr = actEl.closest(".hcx-msg");
+        if (rr) startReply(rr.getAttribute("data-mid"));
+        return;
+      }
+      if (act === "msg-pin") {
+        var rp = actEl.closest(".hcx-msg");
+        if (rp) {
+          var pm = state.messages.find(function (x) { return String(x.id) === String(rp.getAttribute("data-mid")); });
+          pinMessage(rp.getAttribute("data-mid"), !isActivePin(pm));
+        }
+        return;
+      }
+      if (act === "msg-unpin") { e.stopPropagation(); pinMessage(actEl.getAttribute("data-mid"), false); return; }
+      if (act === "jump") { jumpToMessage(actEl.getAttribute("data-mid")); return; }
+      if (act === "reply-cancel") return cancelReply();
       if (act === "edit-save") return saveEdit();
       if (act === "edit-cancel") return cancelEdit();
       if (act === "lightbox") return openLightbox(actEl.getAttribute("data-src"));
@@ -1735,6 +2347,12 @@
     // Keyboard: Enter to send; in the edit box Enter saves, Esc cancels.
     root.addEventListener("keydown", function (e) {
       var role = e.target.getAttribute && e.target.getAttribute("data-role");
+      // Escape closes the composer tools menu / emoji / translate popover first.
+      if (e.key === "Escape" && state.toolsOpen) {
+        e.preventDefault();
+        closeToolsMenu();
+        return;
+      }
       if (role === "msg-search") {
         if (e.key === "Enter") { e.preventDefault(); stepSearch(e.shiftKey ? -1 : 1); }
         else if (e.key === "Escape") { e.preventDefault(); closeSearch(); }
