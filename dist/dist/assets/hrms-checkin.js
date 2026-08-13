@@ -374,6 +374,7 @@
     var actor = getActor();
     if (!actor.email) return;
     var path = checkedIn ? '/api/attendance/check-in' : '/api/attendance/check-out';
+
     function post(extra) {
       var body = checkedIn
         ? { email: actor.email, device: device || detectDevice(), employee: actor.name }

@@ -1,17 +1,10 @@
 from django.urls import path
 
 from . import (auth_views, email_template_views, linkedin_oauth, live_views, views,
-               attendance_views, job_form_views, onboarding_views, payroll_views,
-               chat_views)
+               attendance_views, job_form_views, onboarding_views, payroll_views)
 
 # All paths are relative to the "/api/" prefix from the project urlconf.
 urlpatterns = [
-    # Chat Module
-    path('chat/rooms', chat_views.chat_rooms),
-    path('chat/rooms/', chat_views.chat_rooms),
-    path('chat/rooms/<int:room_id>/messages', chat_views.chat_messages),
-    path('chat/rooms/<int:room_id>/messages/', chat_views.chat_messages),
-
     # Authentication (OTP login + password reset + Google OAuth)
     path('auth/login', auth_views.login),
     path('auth/verify-otp', auth_views.verify_otp),
