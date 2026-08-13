@@ -4895,7 +4895,7 @@ from .serializers import (  # noqa: E402
 # Rooms live in ``chat_rooms`` (is_group = 0 → direct 1:1, 1 → channel).
 # Membership is ``chat_members``; messages ``chat_messages``; scheduled
 # meetings ``chat_meetings`` (all managed outside Django — see
-# chat_migrations.sql). Realtime delivery is handled by the Channels
+# migration 0045_chat_tables). Realtime delivery is handled by the Channels
 # WebSocket consumer; the POST endpoints below persist + broadcast so the
 # frontend has a REST fallback when the socket is unavailable.
 # ===========================================================================

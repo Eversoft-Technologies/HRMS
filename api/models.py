@@ -1516,7 +1516,7 @@ class ChatMeeting(models.Model):
     Stores the schedule plus a shareable ``join_url`` (e.g. a Jitsi Meet room
     link). No video server is run by the app — the link is what participants
     click to join. ``managed = False`` because the ``chat_meetings`` table is
-    created by the raw SQL migration (see chat_migrations.sql), matching the
+    created by migration 0045_chat_tables, matching the
     other chat tables."""
 
     room = models.ForeignKey(
