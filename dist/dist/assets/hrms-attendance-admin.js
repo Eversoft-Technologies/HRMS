@@ -1167,7 +1167,7 @@
 
   /* ── mount ───────────────────────────────────────────────────────────── */
   function onAttendancePage() {
-    return /attendance|check-?in|employees/i.test(location.pathname + location.hash);
+    return /check-?in/i.test(location.pathname + location.hash);
   }
 
   function mount() {
