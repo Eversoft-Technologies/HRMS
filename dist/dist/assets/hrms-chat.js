@@ -216,8 +216,10 @@
     close: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>',
     back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>',
     users: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
-    check2: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 13 13"/><polyline points="7 11 11 15 3 23"/></svg>',
-    check1: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>',
+    // Read receipt: a clean WhatsApp-style single (delivered) and double (read)
+    // tick. The double tick is two aligned checks — no overlapping/skewed look.
+    check2: '<svg viewBox="0 0 18 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 6.6 L4.3 9.8 L10.6 2.4"/><path d="M7.1 6.6 L10.4 9.8 L16.7 2.4"/></svg>',
+    check1: '<svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 6.6 L4.3 9.8 L10.6 2.4"/></svg>',
     edit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>',
     trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>',
     attach: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>',
@@ -271,23 +273,41 @@
     if (document.getElementById("hcx-styles")) return;
     var css = [
       "#" + PAGE_ID + "{position:relative;overflow:hidden;}",
+      // Palette is bound to the app's own theme tokens (--accent, --surface,
+      // --bg…) so the chat matches the rest of the site automatically in BOTH
+      // light and dark — the app sets data-theme on <html> and these vars
+      // cascade in. Hard-coded values are only fallbacks if the app CSS is
+      // missing. --hcx-pattern is the faint texture drawn on the message area.
       "#" + ROOT_ID + "{",
-      "  --hcx-primary:#2563eb;--hcx-primary-2:#4f46e5;--hcx-bg:#f8fafc;--hcx-surface:#ffffff;",
-      "  --hcx-border:#e5e7eb;--hcx-text:#0f172a;--hcx-muted:#64748b;--hcx-hover:#f1f5f9;",
-      "  --hcx-sent:linear-gradient(135deg,#2563eb 0%,#4f46e5 100%);--hcx-radius:14px;",
+      "  --hcx-primary:var(--accent,#2f6fe0);--hcx-primary-2:var(--accent2,#7c5cfc);",
+      "  --hcx-bg:var(--bg2,#f2f5fa);--hcx-surface:var(--surface,#ffffff);",
+      "  --hcx-border:var(--border2,#e5e7eb);--hcx-text:var(--text,#0f172a);",
+      "  --hcx-muted:var(--text3,#64748b);--hcx-hover:var(--bg3,#f1f5f9);",
+      "  --hcx-danger:var(--danger,#ef4444);",
+      "  --hcx-sent:linear-gradient(135deg,var(--accent,#2f6fe0) 0%,var(--accent2,#7c5cfc) 100%);--hcx-radius:14px;",
+      "  --hcx-pattern:rgba(47,111,224,.06);",
+      "  --hcx-glow1:rgba(47,111,224,.18);--hcx-glow2:rgba(124,92,252,.16);--hcx-glow3:rgba(22,184,148,.11);",
+      "  --hcx-wash-a:rgba(255,255,255,.32);--hcx-wash-b:rgba(47,111,224,.06);",
       "  --hcx-font:'DM Sans','Inter','Segoe UI',system-ui,sans-serif;",
       "  position:absolute;inset:0;display:flex;background:var(--hcx-bg);color:var(--hcx-text);",
       "  font-family:var(--hcx-font);-webkit-font-smoothing:antialiased;",
       "}",
-      // dark theme
-      '[data-theme="dark"] #' + ROOT_ID + "{",
-      "  --hcx-bg:#0f172a;--hcx-surface:#1e293b;--hcx-border:#334155;--hcx-text:#e2e8f0;",
-      "  --hcx-muted:#94a3b8;--hcx-hover:#273449;",
-      "}",
+      // Only the texture tint needs a per-theme tweak; everything else follows
+      // the app tokens above.
+      '[data-theme="dark"] #' + ROOT_ID + "{--hcx-glow1:rgba(79,142,247,.24);--hcx-glow2:rgba(124,92,252,.24);--hcx-glow3:rgba(34,211,165,.14);--hcx-wash-a:rgba(255,255,255,.03);--hcx-wash-b:rgba(2,6,23,.38);}",
       "#" + ROOT_ID + " *{box-sizing:border-box;}",
 
       // sidebar
-      "#" + ROOT_ID + " .hcx-side{width:330px;min-width:330px;background:var(--hcx-surface);border-right:1px solid var(--hcx-border);display:flex;flex-direction:column;}",
+      // Width is driven by --hcx-side-w so the drag handle can resize it (the
+      // mobile media query still overrides to full-width).
+      "#" + ROOT_ID + " .hcx-side{width:var(--hcx-side-w,330px);min-width:var(--hcx-side-w,330px);background:var(--hcx-surface);border-right:1px solid var(--hcx-border);display:flex;flex-direction:column;}",
+      // Drag handle between the list and the conversation.
+      "#" + ROOT_ID + " .hcx-resizer{flex:0 0 6px;width:6px;cursor:col-resize;position:relative;z-index:16;background:transparent;touch-action:none;}",
+      "#" + ROOT_ID + " .hcx-resizer::before{content:'';position:absolute;top:0;bottom:0;left:50%;transform:translateX(-50%);width:2px;background:var(--hcx-border);transition:background .15s,width .15s;}",
+      "#" + ROOT_ID + " .hcx-resizer:hover::before,#" + ROOT_ID + " .hcx-resizer.dragging::before{background:var(--hcx-primary);width:3px;}",
+      "#" + ROOT_ID + " .hcx-resizer::after{content:'';position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:4px;height:34px;border-radius:3px;background:var(--hcx-border);opacity:0;transition:opacity .15s;}",
+      "#" + ROOT_ID + " .hcx-resizer:hover::after,#" + ROOT_ID + " .hcx-resizer.dragging::after{opacity:1;background:var(--hcx-primary);}",
+      "#" + ROOT_ID + ".hcx-resizing{cursor:col-resize;user-select:none;}",
       "#" + ROOT_ID + " .hcx-side-top{padding:16px 16px 10px;border-bottom:1px solid var(--hcx-border);}",
       "#" + ROOT_ID + " .hcx-title{display:flex;align-items:center;gap:10px;}",
       "#" + ROOT_ID + " .hcx-title .hcx-logo{width:34px;height:34px;border-radius:9px;background:var(--hcx-sent);display:flex;align-items:center;justify-content:center;flex-shrink:0;}",
@@ -296,6 +316,9 @@
       "#" + ROOT_ID + " .hcx-title p{font-size:11.5px;color:var(--hcx-muted);margin:1px 0 0;}",
       "#" + ROOT_ID + " .hcx-newbtn{margin-left:auto;width:34px;height:34px;border-radius:9px;border:none;background:var(--hcx-primary);color:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center;}",
       "#" + ROOT_ID + " .hcx-newbtn svg{width:18px;height:18px;}",
+      "#" + ROOT_ID + " .hcx-exitbtn{width:34px;height:34px;border-radius:9px;border:1px solid var(--hcx-border);background:var(--hcx-hover);color:var(--hcx-text);cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;}",
+      "#" + ROOT_ID + " .hcx-exitbtn:hover{background:var(--hcx-primary);border-color:var(--hcx-primary);color:#fff;}",
+      "#" + ROOT_ID + " .hcx-exitbtn svg{width:18px;height:18px;}",
       "#" + ROOT_ID + " .hcx-tabs{display:flex;gap:6px;margin-top:12px;}",
       "#" + ROOT_ID + " .hcx-tab{flex:1;padding:8px;border:none;background:transparent;color:var(--hcx-muted);font-family:inherit;font-size:13px;font-weight:600;border-radius:9px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;}",
       "#" + ROOT_ID + " .hcx-tab svg{width:15px;height:15px;}",
@@ -327,7 +350,10 @@
       "#" + ROOT_ID + " .hcx-av.ch svg{width:20px;height:20px;color:#fff;}",
 
       // main panel
-      "#" + ROOT_ID + " .hcx-main{flex:1;display:flex;flex-direction:column;min-width:0;background:var(--hcx-bg);}",
+      // Smooth branded gradient wash behind the conversation — large, softly
+      // blended accent glows plus a gentle diagonal tint for depth. Pure CSS
+      // (no image), fixed to the panel so it stays put while messages scroll.
+      "#" + ROOT_ID + " .hcx-main{flex:1;display:flex;flex-direction:column;min-width:0;background-color:var(--hcx-bg);background-image:radial-gradient(120% 85% at 0% 0%,var(--hcx-glow1),transparent 55%),radial-gradient(110% 80% at 100% 4%,var(--hcx-glow2),transparent 55%),radial-gradient(130% 95% at 50% 118%,var(--hcx-glow3),transparent 60%),linear-gradient(155deg,var(--hcx-wash-a),transparent 55%,var(--hcx-wash-b));background-repeat:no-repeat;}",
       "#" + ROOT_ID + " .hcx-head{display:flex;align-items:center;gap:12px;padding:12px 18px;min-height:64px;background:var(--hcx-surface);border-bottom:1px solid var(--hcx-border);}",
       "#" + ROOT_ID + " .hcx-head .hcx-hn{font-size:15px;font-weight:700;}",
       "#" + ROOT_ID + " .hcx-head .hcx-hm{font-size:12px;color:var(--hcx-muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:52vw;}",
@@ -412,7 +438,11 @@
       "#" + ROOT_ID + " .hcx-mtg-x svg{width:15px;height:15px;}",
 
       // chat area
-      "#" + ROOT_ID + " .hcx-area{flex:1;overflow-y:auto;padding:20px 22px 8px;display:flex;flex-direction:column;gap:3px;}",
+      // Message area gets a very light dot-grid texture (pure CSS radial
+      // gradients — no image download) that reads subtly on both themes.
+      // Fully transparent — the smooth gradient wash lives on .hcx-main and
+      // shows through here. No texture/dots.
+      "#" + ROOT_ID + " .hcx-area{flex:1;overflow-y:auto;padding:20px 22px 8px;display:flex;flex-direction:column;gap:3px;background:transparent;}",
       "#" + ROOT_ID + " .hcx-sep{display:flex;align-items:center;gap:10px;margin:12px 0 8px;}",
       "#" + ROOT_ID + " .hcx-sep .l{flex:1;height:1px;background:var(--hcx-border);}",
       "#" + ROOT_ID + " .hcx-sep .t{font-size:11.5px;font-weight:600;color:var(--hcx-muted);background:var(--hcx-bg);padding:2px 10px;border:1px solid var(--hcx-border);border-radius:99px;}",
@@ -429,8 +459,9 @@
       "#" + ROOT_ID + " .hcx-meta .tm{font-size:10.5px;opacity:.72;}",
       "#" + ROOT_ID + " .hcx-msg.sent .hcx-meta .tm{color:rgba(255,255,255,.85);}",
       "#" + ROOT_ID + " .hcx-meta svg{width:14px;height:14px;}",
-      "#" + ROOT_ID + " .hcx-tick{color:rgba(255,255,255,.85);display:inline-flex;}",
-      "#" + ROOT_ID + " .hcx-tick.read{color:#93c5fd;}",
+      "#" + ROOT_ID + " .hcx-tick{color:rgba(255,255,255,.85);display:inline-flex;align-items:center;margin-left:3px;}",
+      "#" + ROOT_ID + " .hcx-tick svg{height:11px;width:auto;display:block;}",
+      "#" + ROOT_ID + " .hcx-tick.read{color:#bfe0ff;}",
       "#" + ROOT_ID + " .hcx-link{color:inherit;text-decoration:underline;font-weight:600;}",
       "#" + ROOT_ID + " .hcx-msg.recv .hcx-link{color:var(--hcx-primary);}",
 
@@ -568,6 +599,7 @@
       "@media (max-width:820px){",
       "  #" + ROOT_ID + " .hcx-side{width:100%;min-width:0;position:absolute;inset:0;z-index:20;}",
       "  #" + ROOT_ID + ".show-convo .hcx-side{display:none;}",
+      "  #" + ROOT_ID + " .hcx-resizer{display:none;}",
       "  #" + ROOT_ID + " .hcx-main{width:100%;}",
       "  #" + ROOT_ID + " .hcx-iconbtn.back{display:flex;}",
       "  #" + ROOT_ID + " .hcx-head .hcx-hm{max-width:60vw;}",
@@ -609,6 +641,7 @@
     state.root = root;
 
     wireEvents(root);
+    initResizer(root);
     fitLayout();
     // Re-fit a few times while the shell (top bar) finishes mounting, and on
     // every window resize.
@@ -626,33 +659,115 @@
     state.booted = true;
   }
 
+  // Draggable divider between the chat list and the conversation so each user
+  // can size the panels to taste. The width is stored in a CSS variable on the
+  // root (so the mobile media query can still force full-width) and remembered
+  // in localStorage across sessions.
+  var HCX_SIDE_MIN = 240;
+  var HCX_SIDE_KEY = "hcx_side_w";
+
+  function clampSideWidth(root, w) {
+    var total = root.getBoundingClientRect().width || window.innerWidth;
+    var max = Math.min(560, Math.round(total * 0.6));
+    return Math.max(HCX_SIDE_MIN, Math.min(max, Math.round(w)));
+  }
+
+  function applySideWidth(root, w) {
+    root.style.setProperty("--hcx-side-w", w + "px");
+  }
+
+  function initResizer(root) {
+    var resizer = root.querySelector('[data-role="resizer"]');
+    if (!resizer) return;
+
+    // Restore a previously chosen width (clamped to the current viewport).
+    var saved = parseInt(localStorage.getItem(HCX_SIDE_KEY) || "", 10);
+    if (saved) applySideWidth(root, clampSideWidth(root, saved));
+
+    var dragging = false;
+
+    resizer.addEventListener("pointerdown", function (e) {
+      if (window.innerWidth <= 820) return; // single-pane layout on mobile
+      dragging = true;
+      resizer.classList.add("dragging");
+      root.classList.add("hcx-resizing");
+      try { resizer.setPointerCapture(e.pointerId); } catch (_) {}
+      e.preventDefault();
+    });
+
+    resizer.addEventListener("pointermove", function (e) {
+      if (!dragging) return;
+      var rect = root.getBoundingClientRect();
+      applySideWidth(root, clampSideWidth(root, e.clientX - rect.left));
+    });
+
+    function endDrag(e) {
+      if (!dragging) return;
+      dragging = false;
+      resizer.classList.remove("dragging");
+      root.classList.remove("hcx-resizing");
+      try { resizer.releasePointerCapture(e.pointerId); } catch (_) {}
+      var cur = getComputedStyle(root).getPropertyValue("--hcx-side-w");
+      var w = parseInt(cur, 10);
+      if (w) localStorage.setItem(HCX_SIDE_KEY, String(w));
+    }
+    resizer.addEventListener("pointerup", endDrag);
+    resizer.addEventListener("pointercancel", endDrag);
+
+    // Double-click resets to the default width.
+    resizer.addEventListener("dblclick", function () {
+      root.style.removeProperty("--hcx-side-w");
+      try { localStorage.removeItem(HCX_SIDE_KEY); } catch (_) {}
+    });
+  }
+
   // Pin the chat panel to the real content area: below the app top bar and to
   // the right of the nav rail — instead of the raw 100vh the route container
   // is given (which tucks the top of the chat behind the fixed top bar).
   function fitLayout() {
     var page = getPage();
     if (!page || !state.root) return;
-    var top = 0;
-    var bar = document.querySelector(".topbar");
-    if (bar) {
-      var br = bar.getBoundingClientRect();
-      if (br.height && br.bottom > 0) top = br.bottom;
-    }
-    var prect = page.getBoundingClientRect();
-    var left = Math.max(0, prect.left);
-    var h = Math.max(320, window.innerHeight - top);
-    var w = Math.max(320, window.innerWidth - left);
+    // Full-screen: cover the entire viewport (over the app top bar + nav rail).
+    // A very high z-index keeps it above the app's fixed chrome; the in-chat
+    // "Back" button is the way out.
     var s = state.root.style;
     s.position = "fixed";
     s.inset = "auto";
-    s.top = top + "px";
-    s.left = left + "px";
-    s.width = w + "px";
-    s.height = h + "px";
-    // Neutralise the container's inline height:100vh so it doesn't reserve a
-    // full extra viewport behind the fixed panel.
-    page.style.height = h + "px";
+    s.top = "0";
+    s.left = "0";
+    s.right = "0";
+    s.bottom = "0";
+    s.width = "100vw";
+    s.height = "100vh";
+    s.zIndex = "2147483000";
+    page.style.height = "100vh";
     page.style.overflow = "hidden";
+    document.documentElement.classList.add("hcx-fullscreen");
+    // Lock background scroll while the full-screen chat is up.
+    document.body.style.overflow = "hidden";
+  }
+
+  // Leave the full-screen chat and return to the rest of the app. Restore the
+  // chrome we suppressed first, then step back in the SPA history (falling back
+  // to the app root if there's nowhere to go back to). The unmount observer
+  // handles WebSocket/timer teardown once the route actually changes.
+  function exitChat() {
+    document.documentElement.classList.remove("hcx-fullscreen");
+    document.body.style.overflow = "";
+    var page = getPage();
+    if (page) { page.style.height = ""; page.style.overflow = ""; }
+    try {
+      if (window.history && window.history.length > 1) {
+        window.history.back();
+        // Safety net: if the SPA didn't navigate (still on the chat route after
+        // a moment), go to the app root explicitly.
+        setTimeout(function () {
+          if (getPage()) window.location.assign("/");
+        }, 400);
+        return;
+      }
+    } catch (_) {}
+    window.location.assign("/");
   }
 
   // When the route changes the React app removes #hrms-chat-page. Detect that
@@ -662,6 +777,9 @@
       if (!document.body.contains(page)) {
         teardownWS();
         if (state.listening) stopDictation();
+        // Restore the app chrome / background scroll we suppressed for full-screen.
+        document.documentElement.classList.remove("hcx-fullscreen");
+        document.body.style.overflow = "";
         if (state.pollTimer) clearInterval(state.pollTimer);
         state.pollTimer = null;
         if (state._fit) {
@@ -681,6 +799,7 @@
       '<div class="hcx-side">' +
       '  <div class="hcx-side-top">' +
       '    <div class="hcx-title">' +
+      '      <button class="hcx-exitbtn" data-act="exit-chat" aria-label="Exit chat and go back" title="Back">' + ICON.back + "</button>" +
       '      <span class="hcx-logo">' + ICON.chat + "</span>" +
       "      <div><h2>Chat</h2><p>Team messaging</p></div>" +
       '      <button class="hcx-newbtn" data-act="new-menu" title="New chat / channel">' + ICON.plus + "</button>" +
@@ -694,6 +813,7 @@
       '    <input type="search" placeholder="Search…" data-role="search" autocomplete="off"></div></div>' +
       '  <div class="hcx-list" data-role="list"><div class="hcx-empty">Loading…</div></div>' +
       "</div>" +
+      '<div class="hcx-resizer" data-role="resizer" role="separator" aria-orientation="vertical" aria-label="Drag to resize the chat list" title="Drag to resize"></div>' +
       '<div class="hcx-main" data-role="main">' + welcomeHTML() + "</div>"
     );
   }
@@ -2234,6 +2354,7 @@
       // that isn't inside the tools cluster.
       if (!(t.closest && t.closest(".hcx-toolswrap"))) closeToolsMenu();
 
+      if (act === "exit-chat") return exitChat();
       if (act === "new-menu") return openNewMenu();
       if (act === "modal-close") return closeModal();
       if (act === "pick-direct") { closeModal(); return openNewDirect(); }
