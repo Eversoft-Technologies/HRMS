@@ -220,6 +220,7 @@
     // tick. The double tick is two aligned checks — no overlapping/skewed look.
     check2: '<svg viewBox="0 0 18 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 6.6 L4.3 9.8 L10.6 2.4"/><path d="M7.1 6.6 L10.4 9.8 L16.7 2.4"/></svg>',
     check1: '<svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 6.6 L4.3 9.8 L10.6 2.4"/></svg>',
+    eye: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>',
     edit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>',
     trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>',
     attach: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>',
@@ -462,6 +463,10 @@
       "#" + ROOT_ID + " .hcx-tick{color:rgba(255,255,255,.85);display:inline-flex;align-items:center;margin-left:3px;}",
       "#" + ROOT_ID + " .hcx-tick svg{height:11px;width:auto;display:block;}",
       "#" + ROOT_ID + " .hcx-tick.read{color:#bfe0ff;}",
+      // Teams-style "Seen" indicator (eye + label) shown on your own read messages.
+      "#" + ROOT_ID + " .hcx-seen{display:inline-flex;align-items:center;gap:3px;margin-left:4px;color:#bfe0ff;}",
+      "#" + ROOT_ID + " .hcx-seen svg{width:13px;height:13px;display:block;}",
+      "#" + ROOT_ID + " .hcx-seen-t{font-size:10.5px;font-weight:600;letter-spacing:.2px;}",
       "#" + ROOT_ID + " .hcx-link{color:inherit;text-decoration:underline;font-weight:600;}",
       "#" + ROOT_ID + " .hcx-msg.recv .hcx-link{color:var(--hcx-primary);}",
 
@@ -577,6 +582,10 @@
       "#" + ROOT_ID + " .hcx-btn svg{width:16px;height:16px;flex-shrink:0;}",
       "#" + ROOT_ID + " .hcx-btn.primary{background:var(--hcx-primary);border-color:var(--hcx-primary);color:#fff;}",
       "#" + ROOT_ID + " .hcx-btn:disabled{opacity:.55;cursor:default;}",
+      "#" + ROOT_ID + " .hcx-picksearch{position:relative;display:flex;align-items:center;margin-bottom:10px;}",
+      "#" + ROOT_ID + " .hcx-picksearch svg{position:absolute;left:11px;width:15px;height:15px;color:var(--hcx-muted);pointer-events:none;}",
+      "#" + ROOT_ID + " .hcx-picksearch input{width:100%;padding:9px 12px 9px 34px;border:1.5px solid var(--hcx-border);border-radius:10px;background:var(--hcx-bg);color:var(--hcx-text);font-family:inherit;font-size:13px;outline:none;}",
+      "#" + ROOT_ID + " .hcx-picksearch input:focus{border-color:var(--hcx-primary);}",
       "#" + ROOT_ID + " .hcx-picklist{max-height:230px;overflow-y:auto;border:1px solid var(--hcx-border);border-radius:11px;}",
       "#" + ROOT_ID + " .hcx-pick{display:flex;align-items:center;gap:11px;padding:9px 12px;cursor:pointer;border-bottom:1px solid var(--hcx-border);}",
       "#" + ROOT_ID + " .hcx-pick:last-child{border-bottom:none;}",
@@ -655,8 +664,33 @@
     }
     loadContacts();
     loadRooms();
+    // Keep the sidebar live: poll the room list so messages that arrive in
+    // OTHER conversations (or while you're on the list) update the previews,
+    // ordering and unread badges without needing a page refresh.
+    if (state.roomsPollTimer) clearInterval(state.roomsPollTimer);
+    state.roomsPollTimer = setInterval(refreshRooms, 5000);
     observeUnmount(page);
     state.booted = true;
+  }
+
+  // Silent background refresh of the sidebar room list (does not touch the open
+  // conversation's message state).
+  function refreshRooms() {
+    apiGet("/api/chat/rooms?email=" + encodeURIComponent(state.me.email))
+      .then(function (list) {
+        if (!Array.isArray(list)) return;
+        state.rooms = list;
+        // The room we're viewing has been read locally — keep its badge clear
+        // and re-point activeRoom at the fresh object.
+        if (state.activeRoomId != null) {
+          var found = state.rooms.find(function (r) {
+            return String(r.id) === String(state.activeRoomId);
+          });
+          if (found) { found.unread = 0; state.activeRoom = found; }
+        }
+        renderList();
+      })
+      .catch(function () {});
   }
 
   // Draggable divider between the chat list and the conversation so each user
@@ -782,6 +816,8 @@
         document.body.style.overflow = "";
         if (state.pollTimer) clearInterval(state.pollTimer);
         state.pollTimer = null;
+        if (state.roomsPollTimer) clearInterval(state.roomsPollTimer);
+        state.roomsPollTimer = null;
         if (state._fit) {
           window.removeEventListener("resize", state._fit);
           state._fit = null;
@@ -1144,8 +1180,11 @@
 
     var tick = "";
     if (sent) {
-      var cls = m.is_read ? "hcx-tick read" : "hcx-tick";
-      tick = '<span class="' + cls + '">' + (m.is_read ? ICON.check2 : ICON.check1) + "</span>";
+      // Delivered → a single check. Seen → a Teams-style "eye" (with a subtle
+      // "Seen" label), instead of the old double tick.
+      tick = m.is_read
+        ? '<span class="hcx-seen" title="Seen">' + ICON.eye + "<span class='hcx-seen-t'>Seen</span></span>"
+        : '<span class="hcx-tick">' + ICON.check1 + "</span>";
     }
     var editedLabel = m.edited ? '<span class="hcx-edited">edited</span>' : "";
     var pinnedTag = isActivePin(m) ? '<span class="hcx-pinnedtag" title="Pinned">' + ICON.pinFill + "</span>" : "";
@@ -2158,9 +2197,14 @@
       '<div class="hcx-modal-h"><h3>New direct message</h3>' +
       '<button class="hcx-modal-x" data-act="modal-close">' + ICON.close + "</button></div>" +
       '<div class="hcx-modal-b">' +
+      (state.contacts.length
+        ? '<div class="hcx-picksearch">' + ICON.search +
+          '<input data-role="pick-search" type="search" placeholder="Search colleagues…" autocomplete="off"></div>'
+        : "") +
       (rows
         ? '<div class="hcx-picklist" data-role="direct-list">' + rows + "</div>"
         : '<div class="hcx-empty">No colleagues found.</div>') +
+      '<div class="hcx-empty" data-role="pick-none" style="display:none">No colleagues match your search.</div>' +
       "</div>";
     var bg = openModal(html);
     bg.querySelectorAll(".hcx-pick").forEach(function (row) {
@@ -2169,6 +2213,27 @@
         startDirect(email);
       });
     });
+    wirePickSearch(bg);
+  }
+
+  // Live-filter the colleague rows in a New-DM / New-channel modal by name,
+  // email, designation or department. Case-insensitive substring match.
+  function wirePickSearch(bg) {
+    var inp = bg.querySelector('[data-role="pick-search"]');
+    if (!inp) return;
+    inp.addEventListener("input", function () {
+      var q = inp.value.toLowerCase().trim();
+      var none = bg.querySelector('[data-role="pick-none"]');
+      var shown = 0;
+      bg.querySelectorAll(".hcx-pick").forEach(function (row) {
+        var hay = ((row.getAttribute("data-email") || "") + " " + (row.textContent || "")).toLowerCase();
+        var match = !q || hay.indexOf(q) !== -1;
+        row.style.display = match ? "" : "none";
+        if (match) shown++;
+      });
+      if (none) none.style.display = shown ? "none" : "block";
+    });
+    try { inp.focus(); } catch (_) {}
   }
 
   function startDirect(email) {
@@ -2211,7 +2276,12 @@
       '<div class="hcx-field"><label>Channel name</label>' +
       '<input class="hcx-input" data-role="ch-name" placeholder="e.g. Engineering, Design team"></div>' +
       '<div class="hcx-field"><label>Add members</label>' +
+      (state.contacts.length
+        ? '<div class="hcx-picksearch">' + ICON.search +
+          '<input data-role="pick-search" type="search" placeholder="Search colleagues…" autocomplete="off"></div>'
+        : "") +
       (rows ? '<div class="hcx-picklist">' + rows + "</div>" : '<div class="hcx-empty">No colleagues found.</div>') +
+      '<div class="hcx-empty" data-role="pick-none" style="display:none">No colleagues match your search.</div>' +
       "</div></div>" +
       '<div class="hcx-modal-f">' +
       '<button class="hcx-btn" data-act="modal-close">Cancel</button>' +
@@ -2224,6 +2294,7 @@
         else { selected[email] = true; row.classList.add("sel"); }
       });
     });
+    wirePickSearch(bg);
     bg.querySelector('[data-role="ch-create"]').addEventListener("click", function () {
       var name = (bg.querySelector('[data-role="ch-name"]').value || "").trim();
       if (!name) { alert("Please enter a channel name."); return; }
