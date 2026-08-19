@@ -333,10 +333,19 @@
         lbl.innerHTML = '🏢 ' + esc(f.name) + ' <span style="background:#4f8ef7;color:#fff;border-radius:10px;padding:1px 6px;margin-left:4px;font-size:10px;">' + (f.activeCount || 0) + ' on-site</span>';
         lbl.onclick = function (e) {
           e.stopPropagation();
-          st.lat = f.latitude;
-          st.lng = f.longitude;
-          st.z = 16;
-          redraw();
+          var fenceEmps = visibleEmps.filter(function (emp) {
+            if (emp.latitude == null || emp.longitude == null) return false;
+            var d = haversine(emp.latitude, emp.longitude, f.latitude, f.longitude);
+            return d <= (Number(f.radiusMeters || f.radius_meters) || 200) + 40;
+          });
+          if (fenceEmps.length > 0) {
+            showClusterPopover(fenceEmps, fx, fy - 10, '🏢 ' + f.name + ' (' + fenceEmps.length + ' on-site)');
+          } else {
+            st.lat = f.latitude;
+            st.lng = f.longitude;
+            st.z = 16;
+            redraw();
+          }
         };
         overlayLayer.appendChild(lbl);
       });
@@ -367,51 +376,117 @@
         });
 
         clusters.forEach(function (cl) {
-          if (cl.members.length > 1) {
+          if (cl.members.length > 1 && st.z < 17) {
             var cMarker = document.createElement('div');
             cMarker.className = 'haa-map-cluster-bubble';
             cMarker.style.cssText = 'position:absolute;left:' + cl.x + 'px;top:' + cl.y + 'px;transform:translate(-50%,-50%);' +
-              'width:38px;height:38px;border-radius:50%;background:linear-gradient(135deg,#4f46e5,#7c3aed);color:#fff;' +
-              'display:flex;align-items:center;justify-content:center;font-weight:800;font-size:13px;border:3px solid #fff;' +
-              'box-shadow:0 4px 14px rgba(79,70,229,0.45);cursor:pointer;transition:transform 0.15s;z-index:20;';
+              'width:40px;height:40px;border-radius:50%;background:linear-gradient(135deg,#4f46e5,#7c3aed);color:#fff;' +
+              'display:flex;align-items:center;justify-content:center;font-weight:800;font-size:14px;border:3px solid #fff;' +
+              'box-shadow:0 4px 16px rgba(79,70,229,0.5);cursor:pointer;transition:transform 0.15s;z-index:25;';
             cMarker.textContent = cl.members.length;
-            cMarker.title = cl.members.length + ' employees (click to zoom in)';
+            cMarker.title = cl.members.length + ' employees checked in here (click to view profiles)';
             cMarker.onclick = function (e) {
               e.stopPropagation();
-              st.lat = cl.lat;
-              st.lng = cl.lng;
-              st.z = Math.min(18, st.z + 2);
-              redraw();
+              showClusterPopover(cl.members, cl.x, cl.y, '👥 Checked-In Here (' + cl.members.length + ')');
             };
             overlayLayer.appendChild(cMarker);
           } else {
-            var emp = cl.members[0];
-            var dotColor = emp.isWfh ? '#3b82f6' : (emp.status === 'Pending Review' ? '#f59e0b' : '#10b981');
-            var initials = (emp.name || 'U').split(' ').map(function (w) { return w[0]; }).join('').toUpperCase().slice(0, 2);
+            var count = cl.members.length;
+            cl.members.forEach(function (emp, idx) {
+              var angle = (idx / count) * 2 * Math.PI;
+              var offsetRadius = count > 1 ? 26 : 0;
+              var pinX = cl.x + Math.cos(angle) * offsetRadius;
+              var pinY = cl.y + Math.sin(angle) * offsetRadius;
 
-            var eMarker = document.createElement('div');
-            eMarker.className = 'haa-map-emp-pin';
-            eMarker.style.cssText = 'position:absolute;left:' + cl.x + 'px;top:' + cl.y + 'px;transform:translate(-50%,-50%);' +
-              'cursor:pointer;z-index:15;transition:transform 0.15s;';
-            eMarker.innerHTML =
-              '<div style="width:34px;height:34px;border-radius:50%;background:' + dotColor + ';border:3px solid #fff;' +
-              'display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:12px;' +
-              'box-shadow:0 4px 12px rgba(0,0,0,0.3);position:relative;">' +
-              esc(initials) +
-              (emp.device === 'mobile' ? '<span style="position:absolute;bottom:-3px;right:-3px;font-size:10px;">📱</span>' : '') +
-              '</div>';
+              var dotColor = emp.isWfh ? '#3b82f6' : (emp.status === 'Pending Review' ? '#f59e0b' : '#10b981');
+              var initials = (emp.name || 'U').split(' ').map(function (w) { return w[0]; }).join('').toUpperCase().slice(0, 2);
 
-            eMarker.onclick = function (e) {
-              e.stopPropagation();
-              showEmployeePopup(emp, cl.x, cl.y);
-            };
-            overlayLayer.appendChild(eMarker);
+              var eMarker = document.createElement('div');
+              eMarker.className = 'haa-map-emp-pin';
+              eMarker.style.cssText = 'position:absolute;left:' + pinX + 'px;top:' + pinY + 'px;transform:translate(-50%,-50%);' +
+                'cursor:pointer;z-index:20;transition:transform 0.15s;';
+              eMarker.innerHTML =
+                '<div style="width:34px;height:34px;border-radius:50%;background:' + dotColor + ';border:3px solid #fff;' +
+                'display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:12px;' +
+                'box-shadow:0 4px 12px rgba(0,0,0,0.3);position:relative;" title="' + esc(emp.name) + ' (' + esc(emp.department) + ')">' +
+                esc(initials) +
+                (emp.device === 'mobile' ? '<span style="position:absolute;bottom:-3px;right:-3px;font-size:10px;">📱</span>' : '') +
+                '</div>';
+
+              eMarker.onclick = function (e) {
+                e.stopPropagation();
+                showEmployeePopup(emp, pinX, pinY, count > 1 ? cl.members : null);
+              };
+              overlayLayer.appendChild(eMarker);
+            });
           }
         });
       }
     }
 
-    function showEmployeePopup(emp, px, py) {
+    function showClusterPopover(members, px, py, title) {
+      var existing = overlayLayer.querySelector('.haa-map-emp-popover');
+      if (existing) existing.remove();
+
+      var pop = document.createElement('div');
+      pop.className = 'haa-map-emp-popover';
+      pop.style.cssText = 'position:absolute;left:' + px + 'px;top:' + (py - 14) + 'px;transform:translate(-50%,-100%);' +
+        'background:var(--haa-surface,#ffffff);color:var(--haa-text,#0f172a);border-radius:14px;padding:16px;' +
+        'box-shadow:0 16px 42px rgba(0,0,0,0.3);border:1px solid var(--haa-line,#cbd5e1);z-index:50;min-width:320px;' +
+        'max-width:380px;max-height:420px;display:flex;flex-direction:column;font-family:\'Segoe UI\',Arial,sans-serif;animation:haa-pop-in 0.18s ease;';
+
+      var listHtml = members.map(function (emp, idx) {
+        var statusColor = emp.isWfh ? '#3b82f6' : (emp.status === 'Pending Review' ? '#f59e0b' : '#10b981');
+        var initials = (emp.name || 'U').split(' ').map(function (w) { return w[0]; }).join('').toUpperCase().slice(0, 2);
+        return '<div class="haa-cluster-emp-row" data-cl-idx="' + idx + '" style="display:flex;align-items:flex-start;gap:10px;padding:10px 8px;border-bottom:1px solid var(--haa-line,#e2e8f0);border-radius:8px;cursor:pointer;transition:background 0.15s;">' +
+          '  <div style="width:34px;height:34px;border-radius:50%;background:' + statusColor + ';color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px;flex-shrink:0;margin-top:2px;">' + esc(initials) + '</div>' +
+          '  <div style="flex:1;min-width:0;">' +
+          '    <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;">' +
+          '      <div style="font-weight:700;font-size:13px;color:var(--haa-text,#0f172a);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + esc(emp.name) + '</div>' +
+          '      <span style="font-size:10px;font-weight:700;padding:2px 6px;border-radius:10px;background:' + (emp.geoVerified ? 'rgba(16,185,129,0.15);color:#059669;' : 'rgba(59,130,246,0.15);color:#2563eb;') + '">' + esc(emp.status) + '</span>' +
+          '    </div>' +
+          '    <div style="font-size:11px;color:var(--haa-muted,#64748b);margin-top:1px;">' + esc(emp.department) + ' · ' + esc(emp.role || 'Staff') + '</div>' +
+          '    <div style="display:flex;align-items:center;justify-content:space-between;margin-top:4px;font-size:11px;color:var(--haa-muted,#64748b);">' +
+          '      <span>🕒 ' + esc(emp.checkIn || '—') + ' · ' + (emp.device === 'mobile' ? '📱 Mobile' : '💻 Desktop') + '</span>' +
+          '      <span style="font-size:11px;color:var(--haa-link,#4f46e5);font-weight:600;">Details →</span>' +
+          '    </div>' +
+          '  </div>' +
+          '</div>';
+      }).join('');
+
+      pop.innerHTML =
+        '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid var(--haa-line,#cbd5e1);">' +
+        '  <div style="display:flex;align-items:center;gap:6px;font-weight:700;font-size:14px;color:var(--haa-text,#0f172a);">' +
+        '    <span>' + esc(title || '👥 Checked-In Employees') + '</span>' +
+        '    <span style="background:var(--haa-accent,#4f46e5);color:#fff;font-size:11px;padding:2px 8px;border-radius:12px;">' + members.length + '</span>' +
+        '  </div>' +
+        '  <button id="haa-pop-x" style="background:none;border:none;color:var(--haa-muted,#64748b);font-size:16px;cursor:pointer;padding:2px 6px;line-height:1;">✕</button>' +
+        '</div>' +
+        '<div style="overflow-y:auto;max-height:300px;padding-right:2px;">' + listHtml + '</div>';
+
+      overlayLayer.appendChild(pop);
+      pop.querySelector('#haa-pop-x').onclick = function (ev) {
+        ev.stopPropagation();
+        pop.remove();
+      };
+
+      var rows = pop.querySelectorAll('.haa-cluster-emp-row');
+      for (var r = 0; r < rows.length; r++) {
+        (function (row) {
+          row.onmouseenter = function () { row.style.background = 'rgba(79,70,229,0.06)'; };
+          row.onmouseleave = function () { row.style.background = 'transparent'; };
+          row.onclick = function (ev) {
+            ev.stopPropagation();
+            var idx = parseInt(row.getAttribute('data-cl-idx'), 10);
+            if (members[idx]) {
+              showEmployeePopup(members[idx], px, py, members);
+            }
+          };
+        })(rows[r]);
+      }
+    }
+
+    function showEmployeePopup(emp, px, py, clusterMembers) {
       var existing = overlayLayer.querySelector('.haa-map-emp-popover');
       if (existing) existing.remove();
 
@@ -425,7 +500,12 @@
       var statusColor = emp.isWfh ? '#3b82f6' : (emp.status === 'Pending Review' ? '#f59e0b' : '#10b981');
       var initials = (emp.name || 'U').split(' ').map(function (w) { return w[0]; }).join('').toUpperCase().slice(0, 2);
 
+      var backBtnHtml = clusterMembers && clusterMembers.length > 1
+        ? '<button id="haa-pop-back" style="background:none;border:none;color:var(--haa-link,#4f46e5);font-size:12px;cursor:pointer;padding:0;font-weight:600;display:flex;align-items:center;gap:2px;">← Back to list</button>'
+        : '';
+
       pop.innerHTML =
+        (backBtnHtml ? '<div style="margin-bottom:8px;">' + backBtnHtml + '</div>' : '') +
         '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">' +
         '  <div style="display:flex;align-items:center;gap:10px;">' +
         '    <div style="width:36px;height:36px;border-radius:50%;background:' + statusColor + ';color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;">' + esc(initials) + '</div>' +
@@ -452,6 +532,13 @@
         ev.stopPropagation();
         pop.remove();
       };
+      var backBtn = pop.querySelector('#haa-pop-back');
+      if (backBtn) {
+        backBtn.onclick = function (ev) {
+          ev.stopPropagation();
+          showClusterPopover(clusterMembers, px, py);
+        };
+      }
     }
 
     container.onmousedown = function (e) {
