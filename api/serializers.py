@@ -1816,13 +1816,10 @@ class ChatMessageSerializer(serializers.ModelSerializer):
     message = serializers.SerializerMethodField()
     attachment_url = serializers.SerializerMethodField()
     age_seconds = serializers.SerializerMethodField()
-<<<<<<< HEAD
     # True only while a pin is still within its 30-day window. The frontend
     # shows the pinned strip based on this, so an expired pin disappears from
     # the UI even if the raw ``is_pinned`` flag hasn't been cleared yet.
     is_pin_active = serializers.SerializerMethodField()
-=======
->>>>>>> fix/chat-admin-backfill
 
     class Meta:
         model = ChatMessage
@@ -1842,7 +1839,6 @@ class ChatMessageSerializer(serializers.ModelSerializer):
             "attachment_name",
             "attachment_type",
             "attachment_url",
-<<<<<<< HEAD
             "is_pinned",
             "is_pin_active",
             "pinned_by",
@@ -1866,11 +1862,6 @@ class ChatMessageSerializer(serializers.ModelSerializer):
             return exp > _dt.now()
         except Exception:
             return True
-
-=======
-        ]
-
->>>>>>> fix/chat-admin-backfill
     def get_message(self, obj):
         # Hide the original text once a message is deleted.
         return "" if getattr(obj, "is_deleted", False) else obj.message
@@ -1921,7 +1912,4 @@ class ChatMeetingSerializer(serializers.ModelSerializer):
 
     def get_attendees_list(self, obj):
         raw = obj.attendees or ""
-<<<<<<< HEAD
         return [e.strip() for e in raw.split(",") if e.strip()]
-=======
->>>>>>> fix/chat-admin-backfill
