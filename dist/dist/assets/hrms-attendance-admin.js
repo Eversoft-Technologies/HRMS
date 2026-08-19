@@ -165,18 +165,18 @@
 
     var inside = hasPoint && radius > 0 && dist <= radius;
     var caption = hasPoint
-      ? '<span style="color:' + (inside ? '#166534' : '#b91c1c') + ';font-weight:700">' +
+      ? '<span style="color:' + (inside ? 'var(--haa-ok-fg)' : 'var(--haa-err-fg)') + ';font-weight:700">' +
         (inside ? 'Inside' : 'Outside') + '</span> · ' + prettyDistance(dist) +
         ' from ' + esc(opts.label || 'the office')
       : esc(opts.label || '') + (radius ? ' · ' + radius + ' m radius' : '');
 
     return '' +
       '<div style="position:relative;width:' + W + 'px;height:' + H + 'px;overflow:hidden;' +
-      'border:1px solid #e2e8f0;border-radius:10px;background:#e8eef3">' + tiles + svg +
-      '<div style="position:absolute;right:0;bottom:0;background:rgba(255,255,255,.82);' +
-      'font-size:9px;color:#475569;padding:1px 5px;border-radius:5px 0 0 0">' +
+      'border:1px solid var(--haa-line);border-radius:10px;background:var(--haa-map-bg)">' + tiles + svg +
+      '<div style="position:absolute;right:0;bottom:0;background:var(--haa-attrib);' +
+      'font-size:9px;color:var(--haa-muted);padding:1px 5px;border-radius:5px 0 0 0">' +
       '© OpenStreetMap contributors</div></div>' +
-      '<div style="font-size:12px;color:#475569;margin-top:6px">' + caption + '</div>';
+      '<div style="font-size:12px;color:var(--haa-muted);margin-top:6px">' + caption + '</div>';
   }
 
   /* ── interactive map picker ───────────────────────────────────────────
@@ -200,24 +200,24 @@
 
     host.innerHTML =
       '<div class="haa-map" style="position:relative;width:100%;height:' + (opts.height || 420) +
-      'px;overflow:hidden;border:1px solid #e2e8f0;border-radius:10px;background:#e8eef3;' +
+      'px;overflow:hidden;border:1px solid var(--haa-line);border-radius:10px;background:var(--haa-map-bg);' +
       'cursor:grab;touch-action:none;user-select:none">' +
       '<div class="haa-tiles" style="position:absolute;inset:0"></div>' +
       '<svg class="haa-ov" style="position:absolute;inset:0;pointer-events:none;overflow:visible"></svg>' +
       '<div class="haa-zoom" style="position:absolute;left:10px;top:10px;display:flex;' +
       'flex-direction:column;gap:4px;z-index:5">' +
-      '<button type="button" data-zi style="width:30px;height:30px;border-radius:7px;border:1px solid #cbd5e1;' +
-      'background:#fff;font-size:17px;font-weight:700;cursor:pointer;line-height:1">+</button>' +
-      '<button type="button" data-zo style="width:30px;height:30px;border-radius:7px;border:1px solid #cbd5e1;' +
-      'background:#fff;font-size:17px;font-weight:700;cursor:pointer;line-height:1">−</button>' +
+      '<button type="button" data-zi style="width:30px;height:30px;border-radius:7px;border:1px solid var(--haa-in-line);' +
+      'background:var(--haa-card);color:var(--haa-text);font-size:17px;font-weight:700;cursor:pointer;line-height:1">+</button>' +
+      '<button type="button" data-zo style="width:30px;height:30px;border-radius:7px;border:1px solid var(--haa-in-line);' +
+      'background:var(--haa-card);color:var(--haa-text);font-size:17px;font-weight:700;cursor:pointer;line-height:1">−</button>' +
       '</div>' +
       '<div class="haa-hint" style="position:absolute;left:50%;top:10px;transform:translateX(-50%);' +
       'background:rgba(15,23,42,.78);color:#fff;font-size:11px;padding:4px 10px;border-radius:20px;' +
       'pointer-events:none">Drag to pan · click to place the centre</div>' +
-      '<div style="position:absolute;right:0;bottom:0;background:rgba(255,255,255,.82);font-size:9px;' +
-      'color:#475569;padding:1px 5px;border-radius:5px 0 0 0">© OpenStreetMap contributors</div>' +
+      '<div style="position:absolute;right:0;bottom:0;background:var(--haa-attrib);font-size:9px;' +
+      'color:var(--haa-muted);padding:1px 5px;border-radius:5px 0 0 0">© OpenStreetMap contributors</div>' +
       '</div>' +
-      '<div class="haa-read" style="font-size:12px;color:#475569;margin-top:6px"></div>';
+      '<div class="haa-read" style="font-size:12px;color:var(--haa-muted);margin-top:6px"></div>';
 
     var box = host.querySelector('.haa-map');
     var tileLayer = host.querySelector('.haa-tiles');
@@ -310,44 +310,120 @@
     };
   }
 
+  /* The panel is scoped to its overlay root (.haa-back) and painted from its
+   * own token set, defined twice: once for light and once under
+   * html[data-theme="dark"], which index.html always stamps before first paint.
+   *
+   * Scoping matters because the check-in page's sidecar
+   * (hrms-attendance-actions.js) uses the same haa- prefix for its Work From
+   * Home / Activity Log / Team Status cards. While both sheets were global they
+   * fought over the same names in both directions, whichever <style> landed
+   * last winning: .haa-tbl painted that page's tables solid #fff, and
+   * .haa-head / .haa-title / .haa-empty pulled its grid and sticky-header rules
+   * into this panel's chrome.
+   *
+   * Tokens matter because the panel used to hard-code a light palette and set
+   * no `color` on its own surfaces. Text inside it therefore inherited the
+   * app's, which in dark mode is near-white — so headings like "Add an office
+   * location" rendered white-on-white and simply were not there. Every colour
+   * below is a token, so the same rule serves both themes and nothing inherits
+   * a colour from a surface it is not sitting on.
+   *
+   * The mount button lives OUTSIDE the overlay, so it takes the app's own
+   * palette tokens rather than these. */
   function injectStyle() {
     if (document.getElementById('hrms-att-admin-css')) return;
     var s = document.createElement('style');
     s.id = 'hrms-att-admin-css';
     s.textContent = [
+      /* ── light palette (the default) ─────────────────────────────────── */
+      '.haa-back{',
+      '--haa-surface:#ffffff;--haa-body:#f8fafc;--haa-card:#ffffff;--haa-alt:#f1f5f9;',
+      '--haa-line:#e2e8f0;--haa-line2:#f1f5f9;',
+      '--haa-text:#0f172a;--haa-text2:#334155;--haa-muted:#64748b;--haa-faint:#94a3b8;',
+      '--haa-in-bg:#ffffff;--haa-in-line:#cbd5e1;',
+      '--haa-ok-bg:#dcfce7;--haa-ok-fg:#166534;',
+      '--haa-warn-bg:#fef3c7;--haa-warn-fg:#b45309;',
+      '--haa-err-bg:#fee2e2;--haa-err-fg:#b91c1c;--haa-err-soft:#fef2f2;--haa-err-line:#fecaca;',
+      '--haa-chip:#e2e8f0;--haa-link:#2563eb;--haa-scrim:rgba(15,23,42,.55);',
+      '--haa-info-bg:#dbeafe;--haa-info-fg:#1e40af;',
+      /* The tiles are raster OpenStreetMap PNGs, so dark mode cannot restyle
+         them — it inverts them instead. The filter is on the tile layer alone,
+         never the SVG overlay above it, or the geofence circle and the centre
+         pin would invert with it and stop meaning what they mean. */
+      '--haa-map-bg:#e8eef3;--haa-map-filter:none;',
+      '--haa-attrib:rgba(255,255,255,.82);',
+      'color-scheme:light}',
+      /* ── dark palette ────────────────────────────────────────────────── */
+      'html[data-theme="dark"] .haa-back{',
+      '--haa-surface:#111827;--haa-body:#0a0e1a;--haa-card:#131c2e;--haa-alt:#1a2235;',
+      '--haa-line:rgba(255,255,255,.10);--haa-line2:rgba(255,255,255,.06);',
+      '--haa-text:#e8edf7;--haa-text2:#c7d2e4;--haa-muted:#8a9bb8;--haa-faint:#6b7c99;',
+      '--haa-in-bg:#0d1424;--haa-in-line:rgba(255,255,255,.16);',
+      '--haa-ok-bg:rgba(34,211,165,.16);--haa-ok-fg:#22d3a5;',
+      '--haa-warn-bg:rgba(247,201,79,.16);--haa-warn-fg:#f7c94f;',
+      '--haa-err-bg:rgba(247,95,79,.16);--haa-err-fg:#f87171;',
+      '--haa-err-soft:rgba(247,95,79,.10);--haa-err-line:rgba(247,95,79,.35);',
+      '--haa-chip:rgba(148,163,184,.18);--haa-link:#7aa7ff;--haa-scrim:rgba(0,0,0,.62);',
+      '--haa-info-bg:rgba(79,142,247,.18);--haa-info-fg:#8ab4ff;',
+      '--haa-map-bg:#0d1424;',
+      '--haa-map-filter:invert(1) hue-rotate(180deg) brightness(.86) contrast(1.05);',
+      '--haa-attrib:rgba(10,14,26,.82);',
+      'color-scheme:dark}',
+      /* ── mount button (outside the overlay: app tokens, not panel ones) ─ */
       '#' + BTN_ID + '{display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border-radius:8px;',
-      'border:1.5px solid var(--border,#e5e7eb);background:var(--card,#fff);color:var(--text1,#111);',
+      'border:1px solid var(--border2,#e5e7eb);background:var(--bg3,#fff);color:var(--text,#111);',
       'font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap}',
       '#' + BTN_ID + ':hover{background:#0f9d58;color:#fff;border-color:#0f9d58}',
-      '.haa-back{position:fixed;inset:0;z-index:100001;background:rgba(15,23,42,.55);display:flex;',
+      /* ── panel chrome ───────────────────────────────────────────────── */
+      '.haa-back{position:fixed;inset:0;z-index:100001;background:var(--haa-scrim);display:flex;',
       "align-items:center;justify-content:center;padding:24px;font-family:'Segoe UI',Arial,sans-serif}",
-      '.haa-panel{background:#fff;border-radius:14px;width:100%;max-width:940px;max-height:88vh;',
-      'display:flex;flex-direction:column;overflow:hidden;box-shadow:0 24px 70px rgba(0,0,0,.3)}',
-      '.haa-head{padding:18px 24px;border-bottom:1px solid #e2e8f0;display:flex;align-items:center;gap:14px}',
-      '.haa-title{font-size:17px;font-weight:800;color:#0f172a;flex:1}',
-      '.haa-tabs{display:flex;gap:6px;padding:12px 24px 0}',
-      '.haa-tab{padding:7px 15px;border-radius:8px 8px 0 0;border:1px solid transparent;background:none;',
-      'font-size:13px;font-weight:600;color:#64748b;cursor:pointer}',
-      '.haa-tab.on{background:#f1f5f9;color:#0f172a;border-color:#e2e8f0;border-bottom-color:#f1f5f9}',
-      '.haa-body{padding:18px 24px 24px;overflow:auto;flex:1;background:#f8fafc}',
-      '.haa-tbl{width:100%;border-collapse:collapse;background:#fff;border-radius:10px;overflow:hidden;',
-      'border:1px solid #e2e8f0}',
-      '.haa-tbl th{background:#f1f5f9;font-size:11px;text-transform:uppercase;letter-spacing:.5px;',
-      'color:#64748b;text-align:left;padding:9px 12px}',
-      '.haa-tbl td{padding:9px 12px;border-top:1px solid #f1f5f9;font-size:13px;color:#1e293b}',
-      '.haa-in{padding:8px 10px;border:1px solid #cbd5e1;border-radius:7px;font-size:13px;',
-      'font-family:inherit;box-sizing:border-box;width:100%}',
-      '.haa-btn{padding:8px 16px;border-radius:8px;border:none;background:#0f9d58;color:#fff;',
+      '.haa-back .haa-panel{background:var(--haa-surface);color:var(--haa-text);border-radius:14px;',
+      'width:100%;max-width:940px;max-height:88vh;display:flex;flex-direction:column;overflow:hidden;',
+      'box-shadow:0 24px 70px rgba(0,0,0,.3)}',
+      '.haa-back .haa-head{padding:18px 24px;border-bottom:1px solid var(--haa-line);display:flex;',
+      'align-items:center;gap:14px}',
+      '.haa-back .haa-title{font-size:17px;font-weight:800;color:var(--haa-text);flex:1}',
+      '.haa-back .haa-tabs{display:flex;gap:6px;padding:12px 24px 0}',
+      '.haa-back .haa-tab{padding:7px 15px;border-radius:8px 8px 0 0;border:1px solid transparent;',
+      'background:none;font-size:13px;font-weight:600;color:var(--haa-muted);cursor:pointer}',
+      '.haa-back .haa-tab:hover{color:var(--haa-text)}',
+      '.haa-back .haa-tab.on{background:var(--haa-alt);color:var(--haa-text);border-color:var(--haa-line);',
+      'border-bottom-color:var(--haa-alt)}',
+      '.haa-back .haa-body{padding:18px 24px 24px;overflow:auto;flex:1;background:var(--haa-body)}',
+      /* ── tables ─────────────────────────────────────────────────────── */
+      '.haa-back .haa-tbl{width:100%;border-collapse:collapse;background:var(--haa-card);',
+      'border-radius:10px;overflow:hidden;border:1px solid var(--haa-line)}',
+      '.haa-back .haa-tbl th{background:var(--haa-alt);font-size:11px;text-transform:uppercase;',
+      'letter-spacing:.5px;color:var(--haa-muted);text-align:left;padding:9px 12px}',
+      '.haa-back .haa-tbl td{padding:9px 12px;border-top:1px solid var(--haa-line2);font-size:13px;',
+      'color:var(--haa-text2)}',
+      /* ── form controls ──────────────────────────────────────────────── */
+      '.haa-back .haa-in{padding:8px 10px;border:1px solid var(--haa-in-line);border-radius:7px;',
+      'font-size:13px;font-family:inherit;box-sizing:border-box;width:100%;',
+      'background:var(--haa-in-bg);color:var(--haa-text)}',
+      '.haa-back .haa-in::placeholder{color:var(--haa-faint)}',
+      '.haa-back .haa-in:focus{outline:none;border-color:#0f9d58}',
+      '.haa-back select.haa-in{cursor:pointer}',
+      /* ── buttons ────────────────────────────────────────────────────── */
+      '.haa-back .haa-btn{padding:8px 16px;border-radius:8px;border:none;background:#0f9d58;color:#fff;',
       'font-size:13px;font-weight:700;cursor:pointer}',
-      '.haa-btn.sec{background:#fff;color:#334155;border:1px solid #e2e8f0}',
-      '.haa-btn.dgr{background:#fee2e2;color:#b91c1c}',
-      '.haa-btn:disabled{opacity:.5;cursor:not-allowed}',
-      '.haa-card{background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:16px;margin-bottom:16px}',
-      '.haa-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}',
-      '.haa-lbl{font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;',
+      '.haa-back .haa-btn.sec{background:var(--haa-card);color:var(--haa-text2);',
+      'border:1px solid var(--haa-line)}',
+      '.haa-back .haa-btn.dgr{background:var(--haa-err-bg);color:var(--haa-err-fg)}',
+      '.haa-back .haa-btn:disabled{opacity:.5;cursor:not-allowed}',
+      /* ── cards + labels ─────────────────────────────────────────────── */
+      '.haa-back .haa-card{background:var(--haa-card);border:1px solid var(--haa-line);',
+      'border-radius:10px;padding:16px;margin-bottom:16px;color:var(--haa-text)}',
+      '.haa-back .haa-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}',
+      '.haa-back .haa-lbl{font-size:11px;font-weight:700;color:var(--haa-muted);text-transform:uppercase;',
       'letter-spacing:.4px;display:block;margin-bottom:4px}',
-      '.haa-empty{text-align:center;color:#94a3b8;padding:28px;font-size:13px}',
-      '.haa-pill{display:inline-block;padding:2px 9px;border-radius:20px;font-size:11px;font-weight:700}',
+      '.haa-back .haa-empty{text-align:center;color:var(--haa-faint);padding:28px;font-size:13px}',
+      '.haa-back .haa-pill{display:inline-block;padding:2px 9px;border-radius:20px;font-size:11px;',
+      'font-weight:700}',
+      /* ── map ────────────────────────────────────────────────────────── */
+      '.haa-back .haa-tiles{filter:var(--haa-map-filter)}',
+      '.haa-back a{color:var(--haa-link)}',
     ].join('');
     document.head.appendChild(s);
   }
@@ -460,7 +536,7 @@
   function errorBanner(key) {
     var msg = state.errors && state.errors[key];
     if (!msg) return '';
-    return '<div style="background:#fef2f2;border:1px solid #fecaca;color:#b91c1c;' +
+    return '<div style="background:var(--haa-err-soft);border:1px solid var(--haa-err-line);color:var(--haa-err-fg);' +
       'border-radius:9px;padding:11px 14px;margin-bottom:14px;font-size:13px">' +
       '<strong>Could not load this list.</strong> ' + esc(msg) +
       ' — anything already submitted is still recorded; this is a display failure.' +
@@ -474,7 +550,7 @@
         '<td>' + esc(f.latitude) + ', ' + esc(f.longitude) + '</td>' +
         '<td>' + esc(f.radiusMeters || f.radius_meters || 0) + ' m</td>' +
         '<td><span class="haa-pill" style="background:' +
-        ((f.isActive === false) ? '#fee2e2;color:#b91c1c' : '#dcfce7;color:#166534') + '">' +
+        ((f.isActive === false) ? 'var(--haa-err-bg);color:var(--haa-err-fg)' : 'var(--haa-ok-bg);color:var(--haa-ok-fg)') + '">' +
         ((f.isActive === false) ? 'Inactive' : 'Active') + '</span></td>' +
         '<td style="text-align:right"><button class="haa-btn dgr" data-del-fence="' + f.id + '">Delete</button></td></tr>';
     }).join('');
@@ -490,7 +566,7 @@
       '<div style="margin-top:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' +
       '<button class="haa-btn" id="haa-f-add">Add location</button>' +
       '<button class="haa-btn sec" id="haa-f-here">Use my current position</button>' +
-      '<span style="font-size:12px;color:#64748b;">Place the centre precisely — a coordinate rounded to one ' +
+      '<span style="font-size:12px;color:var(--haa-muted);">Place the centre precisely — a coordinate rounded to one ' +
       'decimal place is 11&nbsp;km out.</span>' +
       '</div></div>' +
       (state.fences.length
@@ -566,7 +642,7 @@
                   ['4', 'Fri'], ['5', 'Sat'], ['6', 'Sun']];
 
   function describeArrangement(a) {
-    if (!a) return '<span style="color:#94a3b8">Not set</span>';
+    if (!a) return '<span style="color:var(--haa-faint)">Not set</span>';
     if (a.arrangement === 'remote') return 'Any day, anywhere';
     if (a.arrangement === 'onsite') return 'Office only';
     var days = (a.remoteWeekdays || []);
@@ -579,13 +655,13 @@
     }
     // The API refuses to create this, but a row predating that check, or one
     // written directly to the table, would otherwise render as a blank cell.
-    return '<span style="color:#b45309">Hybrid with no remote days allocated</span>';
+    return '<span style="color:var(--haa-warn-fg)">Hybrid with no remote days allocated</span>';
   }
 
   function arrangementPill(kind) {
-    var c = kind === 'remote' ? '#dbeafe;color:#1e40af'
-      : kind === 'hybrid' ? '#fef3c7;color:#b45309'
-      : '#e2e8f0;color:#334155';
+    var c = kind === 'remote' ? 'var(--haa-info-bg);color:var(--haa-info-fg)'
+      : kind === 'hybrid' ? 'var(--haa-warn-bg);color:var(--haa-warn-fg)'
+      : 'var(--haa-chip);color:var(--haa-text2)';
     return '<span class="haa-pill" style="background:' + c + '">' +
       esc((kind || 'onsite').charAt(0).toUpperCase() + (kind || 'onsite').slice(1)) + '</span>';
   }
@@ -609,7 +685,7 @@
     if (!state.roster.length) {
       return '<input class="haa-in" id="haa-wa-email" placeholder="person@company.com">' +
         (state.errors.roster
-          ? '<div style="font-size:11px;color:#b45309;margin-top:4px">Employee list ' +
+          ? '<div style="font-size:11px;color:var(--haa-warn-fg);margin-top:4px">Employee list ' +
             'unavailable — type the address exactly.</div>'
           : '');
     }
@@ -629,7 +705,7 @@
     var may = can('attendance.manage_arrangement');
     var rows = state.arrangements.map(function (a) {
       return '<tr><td>' + esc(a.employee || a.email) +
-        (a.employee ? '<div style="font-size:11px;color:#94a3b8">' + esc(a.email) + '</div>' : '') +
+        (a.employee ? '<div style="font-size:11px;color:var(--haa-faint)">' + esc(a.email) + '</div>' : '') +
         '</td>' +
         '<td>' + arrangementPill(a.arrangement) + '</td>' +
         '<td style="font-size:13px">' + describeArrangement(a) + '</td>' +
@@ -662,14 +738,14 @@
       // Hybrid-only controls. Hidden rather than disabled: an onsite employee
       // has no remote days, and showing greyed-out day boxes invites the
       // reading that they exist but are switched off.
-      '<div id="haa-wa-hybrid" style="display:none;border-top:1px solid #e2e8f0;padding-top:12px;margin-bottom:12px">' +
+      '<div id="haa-wa-hybrid" style="display:none;border-top:1px solid var(--haa-line);padding-top:12px;margin-bottom:12px">' +
       '<label class="haa-lbl">Fixed remote days</label>' +
       '<div style="margin-bottom:10px">' + dayBoxes + '</div>' +
       '<div class="haa-grid">' +
       '<div><label class="haa-lbl">…or days per week</label>' +
       '<input class="haa-in" id="haa-wa-perweek" type="number" min="0" max="7" value="0"></div>' +
       '</div>' +
-      '<div style="font-size:12px;color:#64748b;margin-top:8px">' +
+      '<div style="font-size:12px;color:var(--haa-muted);margin-top:8px">' +
       'Tick specific days for a team with fixed in-office days. Otherwise leave them ' +
       'unticked and set a number — the employee picks which days, up to that many a week. ' +
       'Ticked days win: the weekly number is ignored when any day is ticked.' +
@@ -678,7 +754,7 @@
       '<input class="haa-in" id="haa-wa-note" placeholder="Agreed with manager, reviewed in Jan"></div>' +
       '<div style="margin-top:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">' +
       '<button class="haa-btn" id="haa-wa-save">Save arrangement</button>' +
-      '<span style="font-size:12px;color:#64748b">Saving does not overwrite the current ' +
+      '<span style="font-size:12px;color:var(--haa-muted)">Saving does not overwrite the current ' +
       'arrangement — it ends it the day before this one starts, so past attendance stays ' +
       'judged by the rule that applied at the time.</span>' +
       '</div></div>';
@@ -712,7 +788,7 @@
       var confirmed = state.homes.filter(function (h) { return h.status === 'Approved'; }).length;
       return errorBanner('homes') +
         '<div class="haa-card"><div style="font-weight:700;font-size:14px;margin-bottom:6px">' +
-        'Home addresses</div><div style="font-size:13px;color:#64748b">' +
+        'Home addresses</div><div style="font-size:13px;color:var(--haa-muted)">' +
         (confirmed
           ? confirmed + ' confirmed. Nothing waiting.'
           : 'None registered yet. Work-from-home check-ins are recorded but stay ' +
@@ -725,13 +801,13 @@
       '<div style="display:flex;gap:16px;flex-wrap:wrap">' +
       pending.map(function (h) {
         var acc = h.capturedAccuracy;
-        return '<div style="border:1px solid #e2e8f0;border-radius:10px;padding:12px;max-width:400px">' +
+        return '<div style="border:1px solid var(--haa-line);border-radius:10px;padding:12px;max-width:400px">' +
           '<div style="font-weight:600;font-size:13px;margin-bottom:2px">' + esc(h.email) + '</div>' +
-          '<div style="font-size:12px;color:#64748b;margin-bottom:10px">' +
+          '<div style="font-size:12px;color:var(--haa-muted);margin-bottom:10px">' +
           'Captured at GPS ' + (acc ? '±' + Math.round(acc) + ' m' : 'unknown accuracy') +
           ' · ' + esc(h.radiusMeters) + ' m radius' +
           (acc && acc > 100
-            ? '<div style="color:#b45309;margin-top:3px">Captured from a poor fix — ' +
+            ? '<div style="color:var(--haa-warn-fg);margin-top:3px">Captured from a poor fix — ' +
               'check the map carefully before confirming.</div>'
             : '') +
           '</div>' +
@@ -741,7 +817,7 @@
             ? '<div style="margin-top:10px">' +
               '<button class="haa-btn" data-home-ok="' + h.id + '">Confirm</button> ' +
               '<button class="haa-btn dgr" data-home-no="' + h.id + '">Reject</button></div>'
-            : '<div style="font-size:12px;color:#64748b;margin-top:10px">You do not have ' +
+            : '<div style="font-size:12px;color:var(--haa-muted);margin-top:10px">You do not have ' +
               'permission to confirm home addresses.</div>') +
           '</div>';
       }).join('') +
@@ -784,16 +860,16 @@
       return '<div class="haa-card" style="display:flex;gap:18px;flex-wrap:wrap;align-items:flex-start">' +
         '<div style="flex:0 0 340px;max-width:100%">' + mapHtml + '</div>' +
         '<div style="flex:1;min-width:220px">' +
-        '<div style="font-weight:700;font-size:14px;color:#0f172a">' + esc(r.employee || r.email) + '</div>' +
-        '<div style="font-size:12px;color:#64748b;margin-bottom:10px">' + esc(r.email) + '</div>' +
-        '<div style="font-size:12px;color:#64748b">Checked in</div>' +
+        '<div style="font-weight:700;font-size:14px;color:var(--haa-text)">' + esc(r.employee || r.email) + '</div>' +
+        '<div style="font-size:12px;color:var(--haa-muted);margin-bottom:10px">' + esc(r.email) + '</div>' +
+        '<div style="font-size:12px;color:var(--haa-muted)">Checked in</div>' +
         '<div style="font-size:13px;margin-bottom:10px">' + esc(r.date || '') + ' at ' +
         esc((r.checkIn || '').slice(11, 16) || '—') + '</div>' +
-        '<div style="font-size:12px;color:#64748b">Reason given</div>' +
+        '<div style="font-size:12px;color:var(--haa-muted)">Reason given</div>' +
         '<div style="font-size:13px;margin-bottom:14px;white-space:pre-wrap">' +
         esc(r.reason || '—') + '</div>' +
         (hasPos ? '<a href="https://maps.google.com/?q=' + esc(r.latitude) + ',' + esc(r.longitude) +
-          '" target="_blank" rel="noopener" style="color:#2563eb;font-size:12px">Open in Google Maps</a><br><br>' : '') +
+          '" target="_blank" rel="noopener" style="color:var(--haa-link);font-size:12px">Open in Google Maps</a><br><br>' : '') +
         // Deciding is a separate grant from reading the queue: someone who can
         // open this panel (attendance.edit) is not necessarily trusted to clear
         // a check-in from outside the fence. Showing buttons the server would
@@ -801,7 +877,7 @@
         (can('attendance.approve_offsite')
           ? '<button class="haa-btn" data-ok="' + r.id + '">Approve</button> ' +
             '<button class="haa-btn dgr" data-no="' + r.id + '">Reject</button>'
-          : '<div style="font-size:12px;color:#64748b">You do not have permission ' +
+          : '<div style="font-size:12px;color:var(--haa-muted)">You do not have permission ' +
             'to approve or reject off-site check-ins.</div>') +
         '</div></div>';
     }).join('');
@@ -1100,23 +1176,28 @@
    * allowed in March?" is answerable only from the row that applied then. */
   function showArrangementHistory(email, rows) {
     var back = document.createElement('div');
-    back.setAttribute('style',
-      'position:fixed;inset:0;z-index:100001;background:rgba(15,23,42,0.55);' +
-      'display:flex;align-items:center;justify-content:center;padding:20px;');
+    // Same root class as the settings panel: this dialog renders .haa-tbl /
+    // .haa-empty / .haa-btn markup and reads the panel's colour tokens, and
+    // both are defined on .haa-back. As a bare div it got neither — no table
+    // styling, and every var() falling back to inherited app colours on a
+    // surface that is not the app's.
+    back.className = 'haa-back';
+    back.setAttribute('style', 'padding:20px');
     var body = rows.length ? rows.map(function (a) {
       return '<tr><td>' + esc(a.effectiveFrom || '—') + '</td>' +
         '<td>' + esc(a.effectiveTo || 'current') + '</td>' +
         '<td>' + arrangementPill(a.arrangement) + '</td>' +
         '<td style="font-size:13px">' + describeArrangement(a) + '</td>' +
-        '<td style="font-size:12px;color:#64748b">' + esc(a.notes || '') +
+        '<td style="font-size:12px;color:var(--haa-muted)">' + esc(a.notes || '') +
         (a.createdBy ? '<div>set by ' + esc(a.createdBy) + '</div>' : '') + '</td></tr>';
     }).join('') : '';
 
     back.innerHTML =
-      '<div style="background:#fff;border-radius:12px;padding:20px;max-width:760px;' +
-      'width:100%;max-height:80vh;overflow:auto;font-family:\'Segoe UI\',Arial,sans-serif">' +
+      '<div style="background:var(--haa-surface);color:var(--haa-text);border-radius:12px;' +
+      'padding:20px;max-width:760px;width:100%;max-height:80vh;overflow:auto;' +
+      'box-shadow:0 24px 70px rgba(0,0,0,.3);font-family:\'Segoe UI\',Arial,sans-serif">' +
       '<div style="font-weight:700;margin-bottom:4px">Work arrangement history</div>' +
-      '<div style="font-size:12px;color:#64748b;margin-bottom:14px">' + esc(email) + '</div>' +
+      '<div style="font-size:12px;color:var(--haa-muted);margin-bottom:14px">' + esc(email) + '</div>' +
       (body
         ? '<table class="haa-tbl"><thead><tr><th>From</th><th>Until</th><th>Arrangement</th>' +
           '<th>Remote entitlement</th><th>Note</th></tr></thead><tbody>' + body + '</tbody></table>'

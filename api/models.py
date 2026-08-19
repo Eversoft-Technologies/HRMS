@@ -7,6 +7,8 @@ from decimal import Decimal
 from django.db import models
 from django.utils import timezone
 
+from .timeutil import local_now
+
 
 class JobPost(models.Model):
     title = models.CharField(max_length=255)
@@ -78,7 +80,17 @@ class InterviewLink(models.Model):
     outcome = models.CharField(max_length=40, null=True, blank=True)
     email_sent = models.BooleanField(default=False)
     interview_type = models.CharField(max_length=100, default='Technical')
+    # Free text typed on the scheduling form — who will CONDUCT the interview
+    # ("HR Team", "Eva AI", a panel name). It is a label for the invitation
+    # email, not an identity, so it can never answer "whose numbers are these?".
     interviewer = models.CharField(max_length=255, default='', blank=True)
+    # Who SCHEDULED it: the signed-in user, resolved server-side from the
+    # X-User-Email header rather than the request body, so it cannot be spoofed
+    # by a client and cannot disagree with the session that made the call. This
+    # is what the KPI dashboard attributes an interview to. Indexed because
+    # every per-person KPI query filters or groups on it.
+    created_by_email = models.CharField(max_length=255, default='', blank=True, db_index=True)
+    created_by_name = models.CharField(max_length=255, default='', blank=True)
     duration = models.CharField(max_length=50, default='45 min')
     notes = models.TextField(null=True, blank=True)
     # Who last edited the candidate note (any user may edit) + when — shown in
@@ -97,6 +109,12 @@ class InterviewLink(models.Model):
     final_question_count = models.IntegerField(default=3)
     coding_difficulty = models.JSONField(null=True, blank=True)
     followup_sent = models.BooleanField(default=False)
+    # Who sent the outcome email, resolved server-side from the caller's
+    # identity. The mail goes out over a shared SMTP mailbox, so without this
+    # the row records that a candidate was told the outcome but not by whom.
+    followup_sent_by_email = models.CharField(max_length=255, default='', blank=True)
+    followup_sent_by_name = models.CharField(max_length=255, default='', blank=True)
+    followup_sent_at = models.DateTimeField(null=True, blank=True)
     invited_at = models.DateTimeField(null=True, blank=True)
     # Separate access tokens for candidate and recruiter (with configurable expiry)
     candidate_token = models.CharField(max_length=128, null=True, blank=True, db_index=True)
@@ -108,7 +126,15 @@ class InterviewLink(models.Model):
     # Resume and JD text stored for AI-enhanced question generation
     resume_text = models.TextField(null=True, blank=True)
     jd_text = models.TextField(null=True, blank=True)
-    created_at = models.DateTimeField(auto_now_add=True)
+    # Stamped on the business clock, not the host's. auto_now_add uses
+    # datetime.now(), which is the machine's local time — and the KPI dashboard
+    # buckets these rows into days and custom windows using local_today(),
+    # which is settings.TIME_ZONE. On a host whose clock differs from it (a
+    # developer on IST against TIME_ZONE=UTC) the two disagree for hours every
+    # night, and an interview scheduled in that gap was stamped "tomorrow"
+    # while the Today filter still asked for "today" — so it simply did not
+    # appear in its own report. See timeutil.local_now.
+    created_at = models.DateTimeField(default=local_now)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:

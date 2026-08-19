@@ -19,6 +19,10 @@
  * React owns the check-in card, so a MutationObserver re-applies everything
  * idempotently. Our cards are appended at the END of the grid (never inserted
  * between React's nodes) and arranged with CSS `order`, which React never sets.
+ * The haa- class prefix is shared with hrms-attendance-admin.js, whose rules are
+ * scoped to its own overlay root (.haa-back) for exactly that reason — keep any
+ * new rule on either side scoped so the two sheets cannot repaint each other.
+ *
  * Endpoints are AllowAny; identity travels in `email` + the X-User-Email header
  * hrms-actor.js attaches to fetches.
  */
@@ -67,6 +71,12 @@
   }
 
   /* ── styles ───────────────────────────────────────────────────────────── */
+  /* The sheet is scoped to .haa-scope — the three cards this file owns.
+   * hrms-attendance-admin.js uses the same haa- prefix for the Attendance
+   * Settings panel and both sheets are live on this page, so unscoped rules
+   * repainted each other: its .haa-tbl{background:#fff} whitened these dark
+   * cards' tables, and this .haa-tbl{display:flex} flattened the panel's real
+   * <table> rows. Neither sheet is global now. */
   function ensureStyle() {
     if (document.getElementById(ID.style)) return;
     var W = '#' + ID.wfh, A = '#' + ID.act, T = '#' + ID.team;
@@ -76,7 +86,7 @@
       '#' + ID.brk + '{margin-top:6px;font-size:12px;color:var(--text3);text-align:center;}',
       '#' + ID.ot + ' strong,#' + ID.brk + ' strong{color:var(--text);}',
       /* section titles (with optional trailing filter) */
-      '.haa-title{font-family:var(--font-d,inherit);font-size:14px;font-weight:700;color:var(--text);margin-bottom:12px;display:flex;align-items:center;justify-content:space-between;gap:10px;}',
+      '.haa-scope .haa-title{font-family:var(--font-d,inherit);font-size:14px;font-weight:700;color:var(--text);margin-bottom:12px;display:flex;align-items:center;justify-content:space-between;gap:10px;}',
       /* wfh form */
       W + ' .haa-form{display:flex;flex-direction:column;gap:9px;}',
       W + ' .haa-row{display:grid;grid-template-columns:1fr 1fr;gap:9px;}',
@@ -98,49 +108,56 @@
       W + ' .haa-stat-v{font-family:var(--font-d,inherit);font-size:22px;font-weight:800;color:var(--text);}',
       W + ' .haa-stat-l{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:var(--text3);}',
       /* lists */
-      '.haa-list-title{font-size:11px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.4px;margin:16px 0 8px;}',
-      '.haa-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;}',
-      '.haa-li{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:12px;color:var(--text2);background:var(--bg3);border:1px solid var(--border2);border-radius:8px;padding:8px 12px;}',
-      '.haa-li .haa-li-actions{display:flex;align-items:center;gap:8px;flex-shrink:0;}',
-      '.haa-li .haa-who{color:var(--text);font-weight:600;}',
-      '.haa-li .haa-sub{color:var(--text3);font-size:11px;}',
-      '.haa-empty{color:var(--text3);font-size:12px;padding:10px 2px;text-align:center;}',
-      '.haa-switch{background:var(--accent);color:#fff;border:none;border-radius:7px;padding:5px 10px;font-size:11px;font-weight:700;cursor:pointer;}',
-      '.haa-appr-btn{border:none;border-radius:7px;padding:5px 10px;font-size:11px;font-weight:700;cursor:pointer;color:#fff;}',
-      '.haa-appr-btn.approve{background:var(--success,#22d3a5);}',
-      '.haa-appr-btn.reject{background:var(--danger,#f75f4f);}',
-      '.haa-appr-btn:disabled{opacity:.55;cursor:not-allowed;}',
+      '.haa-scope .haa-list-title{font-size:11px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.4px;margin:16px 0 8px;}',
+      '.haa-scope .haa-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;}',
+      '.haa-scope .haa-li{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:12px;color:var(--text2);background:var(--bg3);border:1px solid var(--border2);border-radius:8px;padding:8px 12px;}',
+      '.haa-scope .haa-li .haa-li-actions{display:flex;align-items:center;gap:8px;flex-shrink:0;}',
+      '.haa-scope .haa-li .haa-who{color:var(--text);font-weight:600;}',
+      '.haa-scope .haa-li .haa-sub{color:var(--text3);font-size:11px;}',
+      '.haa-scope .haa-empty{color:var(--text2);font-size:12px;padding:14px 2px;text-align:center;}',
+      '.haa-scope .haa-switch{background:var(--accent);color:#fff;border:none;border-radius:7px;padding:5px 10px;font-size:11px;font-weight:700;cursor:pointer;}',
+      '.haa-scope .haa-appr-btn{border:none;border-radius:7px;padding:5px 10px;font-size:11px;font-weight:700;cursor:pointer;color:#fff;}',
+      '.haa-scope .haa-appr-btn.approve{background:var(--success,#22d3a5);}',
+      '.haa-scope .haa-appr-btn.reject{background:var(--danger,#f75f4f);}',
+      '.haa-scope .haa-appr-btn:disabled{opacity:.55;cursor:not-allowed;}',
       /* status pills */
-      '.haa-pill{flex-shrink:0;font-size:10.5px;font-weight:700;padding:2px 9px;border-radius:999px;text-transform:capitalize;white-space:nowrap;background:rgba(148,163,184,.16);color:var(--text2);}',
-      '.haa-pill.pending{background:rgba(247,201,79,.16);color:var(--warn,#f7c94f);}',
-      '.haa-pill.approved,.haa-pill.inoffice,.haa-pill.available{background:rgba(34,211,165,.16);color:var(--success,#22d3a5);}',
-      '.haa-pill.rejected,.haa-pill.absent,.haa-pill.busy,.haa-pill.donotdisturb{background:rgba(247,95,79,.16);color:var(--danger,#f75f4f);}',
+      '.haa-scope .haa-pill{flex-shrink:0;font-size:10.5px;font-weight:700;padding:2px 9px;border-radius:999px;text-transform:capitalize;white-space:nowrap;background:rgba(148,163,184,.16);color:var(--text2);}',
+      '.haa-scope .haa-pill.pending{background:rgba(247,201,79,.16);color:var(--warn,#f7c94f);}',
+      '.haa-scope .haa-pill.approved,.haa-scope .haa-pill.inoffice,.haa-scope .haa-pill.available{background:rgba(34,211,165,.16);color:var(--success,#22d3a5);}',
+      '.haa-scope .haa-pill.rejected,.haa-scope .haa-pill.absent,.haa-scope .haa-pill.busy,.haa-scope .haa-pill.donotdisturb{background:rgba(247,95,79,.16);color:var(--danger,#f75f4f);}',
       /* every break-type status renders as the amber "In Break" pill */
-      '.haa-pill.onbreak,.haa-pill.inbreak,.haa-pill.away,.haa-pill.coffeebreak{background:rgba(247,201,79,.16);color:var(--warn,#f7c94f);}',
-      '.haa-pill.remote,.haa-pill.wfh{background:rgba(79,142,247,.18);color:var(--accent,#4f8ef7);}',
-      '.haa-pill.travelling{background:rgba(6,182,212,.16);color:#06b6d4;}',
-      '.haa-pill.inameeting,.haa-pill.meeting{background:rgba(139,92,246,.18);color:#8b5cf6;}',
-      '.haa-pill.invisible{background:rgba(148,163,184,.16);color:var(--text3);}',
+      '.haa-scope .haa-pill.onbreak,.haa-scope .haa-pill.inbreak,.haa-scope .haa-pill.away,.haa-scope .haa-pill.coffeebreak{background:rgba(247,201,79,.16);color:var(--warn,#f7c94f);}',
+      '.haa-scope .haa-pill.remote,.haa-scope .haa-pill.wfh{background:rgba(79,142,247,.18);color:var(--accent,#4f8ef7);}',
+      '.haa-scope .haa-pill.travelling{background:rgba(6,182,212,.16);color:#06b6d4;}',
+      '.haa-scope .haa-pill.inameeting,.haa-scope .haa-pill.meeting{background:rgba(139,92,246,.18);color:#8b5cf6;}',
+      '.haa-scope .haa-pill.invisible{background:rgba(148,163,184,.16);color:var(--text3);}',
       /* filters */
-      '.haa-flt{background:var(--bg3);border:1px solid var(--border2);border-radius:8px;color:var(--text);font:inherit;font-size:11.5px;font-weight:600;padding:5px 8px;cursor:pointer;}',
-      '.haa-flt:focus{border-color:var(--accent);outline:none;}',
+      '.haa-scope .haa-flt{background:var(--bg3);border:1px solid var(--border2);border-radius:8px;color:var(--text);font:inherit;font-size:11.5px;font-weight:600;padding:5px 8px;cursor:pointer;}',
+      '.haa-scope .haa-flt:focus{border-color:var(--accent);outline:none;}',
       /* columned + scrollable tables (activity + team share the pattern) */
-      '.haa-tbl{display:flex;flex-direction:column;}',
-      '.haa-scroll{max-height:300px;overflow-y:auto;}',
-      '.haa-head,.haa-tr{display:grid;align-items:center;gap:12px;padding:8px 4px;}',
-      '.haa-head{position:sticky;top:0;background:var(--bg2);z-index:1;font-size:10px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--text3);border-bottom:1px solid var(--border2);}',
-      '.haa-tr{border-bottom:1px solid var(--border2);font-size:12.5px;color:var(--text2);}',
-      '.haa-tr:last-child{border-bottom:none;}',
+      '.haa-scope .haa-tbl{display:flex;flex-direction:column;background:var(--bg3);border:1px solid var(--border2);border-radius:10px;overflow:hidden;}',
+      '.haa-scope .haa-scroll{max-height:300px;overflow-y:auto;}',
+      '.haa-scope .haa-head,.haa-scope .haa-tr{display:grid;align-items:center;gap:12px;padding:8px 12px;}',
+      '.haa-scope .haa-head{position:sticky;top:0;background:var(--bg3);z-index:1;font-size:10px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--text3);border-bottom:1px solid var(--border2);}',
+      '.haa-scope .haa-tr{border-bottom:1px solid var(--border2);font-size:12.5px;color:var(--text2);}',
+      '.haa-scope .haa-tr:last-child{border-bottom:none;}',
       A + ' .haa-head,' + A + ' .haa-tr{grid-template-columns:1fr auto 1fr;}',
       A + ' .c-event{justify-self:center;text-align:center;}',
       A + ' .haa-dot{justify-self:end;}',
       T + ' .haa-head,' + T + ' .haa-tr{grid-template-columns:1fr 1fr 1fr;}',
       T + ' .c-status{justify-self:center;text-align:center;}',
-      '.haa-tr .c-nm,.haa-tr .c-ev{color:var(--text);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}',
-      '.haa-tr .c-loc{color:var(--text3);font-size:11px;font-weight:400;}',
-      '.haa-tr .c-tm{color:var(--text3);}',
-      '.haa-tr .c-since{color:var(--text3);text-align:right;font-size:11.5px;}',
-      '.haa-dot{width:9px;height:9px;border-radius:50%;justify-self:center;}',
+      '.haa-scope .haa-tr .c-nm,.haa-scope .haa-tr .c-ev{color:var(--text);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}',
+      T + ' .haa-tr .c-nm{display:flex;align-items:center;gap:8px;}',
+      '.haa-scope .haa-avwrap{position:relative;display:inline-flex;flex-shrink:0;}',
+      '.haa-scope .haa-av{width:26px;height:26px;border-radius:50%;display:flex;align-items:center;',
+      'justify-content:center;color:#fff;font-size:10.5px;font-weight:700;letter-spacing:.2px;}',
+      /* The dot itself is drawn by hrms-status.js; this only rings it in the
+         table's own colour so it reads as sitting on the avatar. */
+      '.haa-scope .haa-avwrap .hrms-presence-dot{width:9px;height:9px;border:2px solid var(--bg3);}',
+      '.haa-scope .haa-tr .c-loc{color:var(--text3);font-size:11px;font-weight:400;}',
+      '.haa-scope .haa-tr .c-tm{color:var(--text3);}',
+      '.haa-scope .haa-tr .c-since{color:var(--text3);text-align:right;font-size:11.5px;}',
+      '.haa-scope .haa-dot{width:9px;height:9px;border-radius:50%;justify-self:center;}',
       '@media(max-width:520px){' + W + ' .haa-row{grid-template-columns:1fr;}}'
     ].join('');
     var st = document.createElement('style');
@@ -166,7 +183,7 @@
   /* ── Work From Home card ──────────────────────────────────────────────── */
   function buildWfhCard() {
     var card = document.createElement('div');
-    card.id = ID.wfh; card.className = 'card';
+    card.id = ID.wfh; card.className = 'card haa-scope';
     card.innerHTML =
       '<div class="haa-title">Work From Home</div>' +
       '<div class="haa-wfh-stats">' +
@@ -198,7 +215,7 @@
   /* ── our Today's Activity Log card ────────────────────────────────────── */
   function buildActivityCard() {
     var card = document.createElement('div');
-    card.id = ID.act; card.className = 'card';
+    card.id = ID.act; card.className = 'card haa-scope';
     card.innerHTML =
       '<div class="haa-title">Today\'s Activity Log' +
         '<select class="haa-flt" id="haa-act-flt">' +
@@ -218,7 +235,7 @@
   /* ── our Team Status Now card ─────────────────────────────────────────── */
   function buildTeamCard() {
     var card = document.createElement('div');
-    card.id = ID.team; card.className = 'card';
+    card.id = ID.team; card.className = 'card haa-scope';
     card.innerHTML =
       '<div class="haa-title">Team Status Now' +
         '<select class="haa-flt" id="haa-team-flt">' +
@@ -314,6 +331,32 @@
     }).join('');
   }
 
+  /* A face for each row. Nobody here has uploaded a photo, so this draws the
+     same initials circle the rest of the app uses, coloured from the email so
+     one person keeps one colour wherever they appear. The wrapper carries
+     data-hrms-presence, which hrms-status.js paints a live dot onto: the row
+     already spells the status out, and the dot makes the panel scannable. */
+  function avatarInitials(name, email) {
+    var src = String(name || email || '').trim();
+    if (!src) return '?';
+    var parts = src.split(/[\s._-]+/).filter(Boolean);
+    var a = (parts[0] || '')[0] || '';
+    var b = (parts.length > 1 ? parts[parts.length - 1][0] : '') || '';
+    return (a + b).toUpperCase();
+  }
+  var AV_COLORS = ['#4f8ef7', '#7c5cfc', '#22d3a5', '#f7954f', '#f75f4f', '#06b6d4', '#8b5cf6', '#f7c94f'];
+  function avatarColor(key) {
+    var t = String(key || ''), h = 0;
+    for (var i = 0; i < t.length; i++) h = (h * 31 + t.charCodeAt(i)) >>> 0;
+    return AV_COLORS[h % AV_COLORS.length];
+  }
+  function avatarHtml(r) {
+    var em = String(r.email || '');
+    return '<span class="haa-avwrap"' + (em ? ' data-hrms-presence="' + esc(em) + '"' : '') + '>' +
+      '<span class="haa-av" style="background:' + avatarColor(em || r.name) + '">' +
+      esc(avatarInitials(r.name, em)) + '</span></span>';
+  }
+
   var teamData = [];
   function loadTeam() {
     api('/api/attendance/team')
@@ -332,10 +375,13 @@
     if (!rows.length) { l.innerHTML = '<div class="haa-empty">No one matches this filter.</div>'; return; }
     l.innerHTML = rows.map(function (r) {
       var status = String(r.status || 'Absent'), cls = status.toLowerCase().replace(/\s+/g, '');
-      return '<div class="haa-tr"><span class="c-nm">' + esc(r.name || r.email || '—') + '</span>' +
+      return '<div class="haa-tr"><span class="c-nm">' + avatarHtml(r) + esc(r.name || r.email || '—') + '</span>' +
         '<span class="c-status"><span class="haa-pill ' + esc(cls) + '">' + esc(status) + '</span></span>' +
         '<span class="c-since">' + esc(r.since || '—') + '</span></div>';
     }).join('');
+    // Every poll and every filter change replaces these nodes, so the dots are
+    // being painted onto brand-new elements each time.
+    if (window.__hrmsPresence) window.__hrmsPresence.paint();
   }
 
   function updateWfhCounts(rows) {

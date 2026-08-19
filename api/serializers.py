@@ -308,6 +308,16 @@ class InterviewLinkSerializer(serializers.ModelSerializer):
             'emailSent': bool(instance.email_sent),
             'interviewType': InterviewTypeField().to_representation(instance.interview_type),
             'interviewer': instance.interviewer,
+            # Who scheduled it. Server-set (never accepted from the payload),
+            # so it is safe to show as attribution and to key KPIs on.
+            'createdByEmail': instance.created_by_email or '',
+            'createdByName': instance.created_by_name or '',
+            # Who told the candidate their outcome, and when.
+            'followupSent': bool(instance.followup_sent),
+            'followupSentByEmail': instance.followup_sent_by_email or '',
+            'followupSentByName': instance.followup_sent_by_name or '',
+            'followupSentAt': (instance.followup_sent_at.strftime(DATETIME_FMT)
+                               if instance.followup_sent_at else None),
             'duration': instance.duration,
             'notes': instance.notes,
             'notesUpdatedBy': instance.notes_updated_by or '',

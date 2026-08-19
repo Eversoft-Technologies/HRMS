@@ -25,7 +25,8 @@ from datetime import datetime, time, timedelta
 from django.conf import settings
 from django.db import transaction
 from django.db.models import (
-    BooleanField, Case, Count, IntegerField, OuterRef, Q, Subquery, Value, When,
+    BooleanField, Case, CharField, Count, F, IntegerField, OuterRef, Q, Subquery,
+    Value, When,
 )
 from django.db.models.functions import Coalesce
 from django.http import HttpResponse, JsonResponse
@@ -178,6 +179,63 @@ def _resolve_recipient_email(request, fallback=None):
     if not email and fallback:
         email = norm_email(fallback)
     return email
+
+
+def _actor_identity(request):
+    """Who is performing this action — (email, display name).
+
+    Identity comes from the same X-User-Email header the rest of the API is
+    gated on, never from the request body, so a client cannot claim someone
+    else's interviews and inflate their numbers on the KPI dashboard. The name
+    is resolved from the account rather than trusted from the payload, so the
+    leaderboard cannot be split by someone typing their name differently.
+
+    Used for both scheduling an interview and sending its follow-up: the two
+    are different people often enough that recording only one of them leaves a
+    candidate's outcome email attributed to whoever booked the slot.
+    """
+    email = norm_email(
+        request.META.get('HTTP_X_USER_EMAIL')
+        or request.META.get('HTTP_X_ACTOR_EMAIL')
+        or ''
+    )
+    if not email:
+        # Body fallback matches _get_caller() in permissions.py, for callers
+        # that cannot set headers.
+        try:
+            email = norm_email(request.data.get('actorEmail') or '')
+        except Exception:
+            email = ''
+    if not email:
+        return '', ''
+    user = AppUser.objects.filter(email=email).first()
+    name = (user.full_name if user else '') or email.split('@')[0]
+    return email, name
+
+
+# The interview_links rows predating created_by_email have no creator recorded,
+# so the dashboard falls back to the free-text `interviewer` for them. Both the
+# filters and the group-by need to agree on that rule, hence one definition.
+CREATOR_KEY = Case(
+    When(~Q(created_by_email=''), then=F('created_by_email')),
+    default=F('interviewer'),
+    output_field=CharField(),
+)
+
+
+def _creator_q(value, also_name=''):
+    """Rows attributable to `value` — a creator email, or a legacy free-text
+    interviewer. `also_name` additionally matches legacy rows where the caller
+    typed their display name instead of their email."""
+    value = str(value or '').strip()
+    if not value:
+        return Q(pk__in=[])
+    q = Q(created_by_email__iexact=value)
+    legacy = Q(interviewer__iexact=value)
+    name = str(also_name or '').strip()
+    if name:
+        legacy = legacy | Q(interviewer__iexact=name)
+    return q | (Q(created_by_email='') & legacy)
 
 
 def create_notification(recipient, title, message, notification_type='info', link=''):
@@ -423,13 +481,26 @@ def _public_origin(request, body=None):
     """Base URL the candidate's link must point at.
 
     The request host is whatever the *recruiter's* browser hit — often
-    localhost — which produces a link no candidate can open. PUBLIC_BASE_URL
-    overrides it for real deployments.
+    localhost — which produces a link no candidate can open.
+
+    Two names have to be consulted because the project grew two. The mailer's
+    brand_logo_url() reads ``settings.HRMS_PUBLIC_URL``, which is the one the
+    deployment actually sets; this function only ever read ``PUBLIC_BASE_URL``,
+    which nothing sets. So the logo in an email resolved against the public
+    domain while the candidate's link in the same email resolved against the
+    recruiter's browser — and the interview_links rows still carry the evidence:
+    fourteen of them point at http://127.0.0.1:8000. Both names are honoured,
+    and the request host stays the last resort it was meant to be.
     """
     explicit = (body or {}).get('origin')
     if explicit:
         return str(explicit).rstrip('/')
     configured = os.environ.get('PUBLIC_BASE_URL', '').strip()
+    if not configured:
+        try:
+            configured = (getattr(settings, 'HRMS_PUBLIC_URL', '') or '').strip()
+        except Exception:
+            configured = ''
     if configured:
         return configured.rstrip('/')
     return _request_origin_from_meta(request)
@@ -518,7 +589,11 @@ def interviews(request):
     if not serializer.is_valid():
         return serializer_err(serializer)
     c_token, r_token, expiry = _generate_interview_tokens(interview_date, time)
-    serializer.save(candidate_token=c_token, recruiter_token=r_token, link_expires_at=expiry)
+    creator_email, creator_name = _actor_identity(request)
+    serializer.save(
+        candidate_token=c_token, recruiter_token=r_token, link_expires_at=expiry,
+        created_by_email=creator_email, created_by_name=creator_name,
+    )
     obj = serializer.instance
 
     # Deliver the tokenized link server-side. A mail failure must not discard an
@@ -747,9 +822,19 @@ def interview_send_followup(request):
         return err('Could not send the follow-up email: ' + result.get('error', 'unknown error'), 502)
 
     if obj:
+        sender_actor, sender_name = _actor_identity(request)
         obj.outcome = outcome
         obj.email_sent = True
-        obj.save(update_fields=['outcome', 'email_sent'])
+        # followup_sent existed on the model and was never written — the flag
+        # that says "this candidate has been told" was permanently False.
+        obj.followup_sent = True
+        obj.followup_sent_by_email = sender_actor
+        obj.followup_sent_by_name = sender_name
+        obj.followup_sent_at = local_now()
+        obj.save(update_fields=[
+            'outcome', 'email_sent', 'followup_sent',
+            'followup_sent_by_email', 'followup_sent_by_name', 'followup_sent_at',
+        ])
     if to_email:
         create_notification(
             to_email,
@@ -3135,6 +3220,22 @@ def attendance_events(request):
         at=now,
     )
 
+    # A location switch is a statement about where you are, and _team_status
+    # shows an explicit presence verbatim in preference to the location — so
+    # someone who picked "Available" this morning and then switched to Remote
+    # went on reading "Available" to the whole team, and the switch they just
+    # made was invisible. Clearing the label lets the new location speak.
+    #
+    # A break label is never cleared here: it is ended by break-end, which is
+    # also what accrues the elapsed minutes. Dropping it silently would lose
+    # that time from "Break taken today".
+    if event in ('remote-switch', 'office-switch'):
+        att = EmployeeAttendance.objects.filter(email=email, date=now.date()).first()
+        if att and att.presence and not _is_break_label(att.presence):
+            att.presence = ''
+            att.presence_at = now
+            att.save(update_fields=['presence', 'presence_at'])
+
     # Manage live presence & break duration
     if event in ('break-start', 'break-end'):
         att = EmployeeAttendance.objects.filter(email=email, date=now.date()).first()
@@ -4129,8 +4230,32 @@ def _fmt_duration(avg_seconds):
     return f'{sec}s'
 
 
-def _date_filter(qs, field, range_param):
-    """Filter a queryset by a date field based on the ?range= param."""
+def _parse_day(value):
+    """A ?from=/?to= date, or None. Anything unparseable is ignored rather than
+    rejected: a malformed date should widen the report, never 500 it."""
+    try:
+        return datetime.strptime(str(value or '')[:10], '%Y-%m-%d').date()
+    except (TypeError, ValueError):
+        return None
+
+
+def _date_filter(qs, field, range_param, start=None, end=None):
+    """Filter a queryset by a date field.
+
+    An explicit start/end wins over the named range, so ?from=&to= is a real
+    custom window and not a modifier layered on top of one. Both bounds are
+    inclusive and compared as calendar dates, which is what someone picking
+    "1st to 18th" in a date box means — a naive datetime >= comparison would
+    silently drop everything that happened on the 18th after midnight.
+    """
+    if start or end:
+        if start:
+            qs = qs.filter(**{f'{field}__date__gte': start})
+        if end:
+            qs = qs.filter(**{f'{field}__date__lte': end})
+        return qs
+    if range_param == 'day':
+        return qs.filter(**{f'{field}__date': local_today()})
     now = local_now()
     if range_param == 'week':
         cutoff = now - timedelta(days=7)
@@ -4143,19 +4268,111 @@ def _date_filter(qs, field, range_param):
     return qs.filter(**{f'{field}__gte': cutoff})
 
 
+_RANGE_LABELS = {
+    'all': 'All time',
+    'day': 'Today',
+    'week': 'Last 7 days',
+    'month': 'Last 30 days',
+    'quarter': 'Last 90 days',
+}
+
+
+def _period_label(range_param, start, end):
+    """What the report covers, in words — it is printed on the export, where
+    a file called "report.csv" with no period is not evidence of anything."""
+    if start and end:
+        return '%s to %s' % (start.isoformat(), end.isoformat())
+    if start:
+        return 'From %s' % start.isoformat()
+    if end:
+        return 'Up to %s' % end.isoformat()
+    return _RANGE_LABELS.get(range_param, 'All time')
+
+
+def _creator_names(keys):
+    """Map creator keys that are real accounts to their display name.
+
+    Keys that match no account are legacy free-text interviewer values and are
+    deliberately left out — the caller uses their absence to mark a row as
+    unattributed rather than inventing a person for it.
+    """
+    keys = [str(k or '').strip() for k in keys]
+    emails = [k for k in keys if '@' in k]
+    if not emails:
+        return {}
+    rows = AppUser.objects.filter(email__in=emails).values('email', 'full_name')
+    by_email = {norm_email(r['email']): (r['full_name'] or '') for r in rows}
+    out = {}
+    for k in keys:
+        hit = by_email.get(norm_email(k))
+        if hit is not None:
+            out[k] = hit or k.split('@')[0]
+    return out
+
+
+def _creator_label(key):
+    """One creator key as {email, name, attributed} for the response header."""
+    key = str(key or '').strip()
+    if not key:
+        return None
+    names = _creator_names([key])
+    if key in names:
+        return {'email': key, 'name': names[key], 'attributed': True}
+    return {'email': '', 'name': key, 'attributed': False}
+
+
+def _creator_options():
+    """Every person who has scheduled an interview, real accounts first.
+
+    Returned as {value, label, email, attributed} objects rather than bare
+    strings: the value is what ?interviewer= expects, the label is what a human
+    reads. Legacy free-text values are still offered (so old interviews stay
+    reachable) but are labelled as such.
+    """
+    keys = set()
+    for email, interviewer in InterviewLink.objects.values_list('created_by_email', 'interviewer'):
+        key = (email or '').strip() or (interviewer or '').strip()
+        if key:
+            keys.add(key)
+    names = _creator_names(keys)
+    opts = []
+    for key in keys:
+        attributed = key in names
+        opts.append({
+            'value': key,
+            'label': names.get(key, key) + ('' if attributed else '  (unattributed)'),
+            'email': key if attributed else '',
+            'attributed': attributed,
+        })
+    # Real users first, then legacy text, each alphabetical.
+    opts.sort(key=lambda o: (not o['attributed'], o['label'].lower()))
+    return opts
+
+
 @api_view(['GET'])
 @require_perm('recruitment.view')
 def recruitment_kpis(request):
     """
     Recruitment KPI dashboard data.
 
-    scope=me   → individual recruiter view (filtered by X-User-Email as interviewer)
-    scope=all  → admin view (requires admin role)
+    scope=me   → the caller's own numbers: interviews they scheduled, matched
+                 on created_by_email (legacy rows fall back to the free-text
+                 interviewer). Requires recruitment.kpi.view_own.
+    scope=all  → org-wide, plus the per-person leaderboard. ?interviewer=<email>
+                 narrows every figure to one person. Requires
+                 recruitment.kpi.view_org.
     range=week|month|quarter|all → time window
     """
     from .permissions import _user_has_perm
     scope = request.GET.get('scope', 'me')
     range_param = request.GET.get('range', 'all')
+    # A custom window is two dates, not a named range. Swapped bounds are a
+    # slip, not an error — reading them in the order given would return an
+    # empty report and look like "no activity".
+    d_from = _parse_day(request.GET.get('from'))
+    d_to = _parse_day(request.GET.get('to'))
+    if d_from and d_to and d_from > d_to:
+        d_from, d_to = d_to, d_from
     role_param = request.GET.get('role', '')
     interviewer_param = request.GET.get('interviewer', '')
     dept_param = request.GET.get('dept', '')
@@ -4189,7 +4406,13 @@ def recruitment_kpis(request):
 
     # Collect lists of all available options for filters (BEFORE filtering base querysets)
     all_roles = sorted(list(set([x for x in InterviewLink.objects.values_list('role', flat=True) if x])))
-    all_interviewers = sorted(list(set([x for x in InterviewLink.objects.values_list('interviewer', flat=True) if x])))
+    # One option per person who has actually scheduled something. The value is
+    # the creator's email (what the drill-down filters on); the label is their
+    # name, so two people called "HR Team" are no longer one row. Legacy rows
+    # with no creator fall back to their free-text interviewer, flagged so the
+    # dashboard can mark them as unattributed rather than pass them off as a
+    # user account.
+    all_interviewers = _creator_options()
     all_depts = sorted(list(set([x for x in JobPost.objects.values_list('dept', flat=True) if x])))
     all_interview_types = sorted(list(set([x for x in InterviewLink.objects.values_list('interview_type', flat=True) if x])))
     all_statuses = sorted(list(set([x for x in InterviewLink.objects.values_list('status', flat=True) if x])))
@@ -4204,19 +4427,26 @@ def recruitment_kpis(request):
     ir_qs = InterviewRecording.objects.all()
     jp_qs = JobPost.objects.all()
 
-    # Apply scope & interviewer filter
+    # Apply scope & interviewer filter.
+    #
+    # Both narrow to one person, and both go through _creator_q so "my numbers"
+    # and "that person's numbers" can never disagree: an interview counts as
+    # yours because you scheduled it, or — for rows created before the creator
+    # was recorded — because your email or name is the one typed in the
+    # interviewer box.
+    caller_name = (caller_user.full_name if caller_user else '') or ''
+    person_q = None
     if scope == 'me' and caller_email:
-        il_qs = il_qs.filter(interviewer__iexact=caller_email)
+        person_q = _creator_q(caller_email, caller_name)
+    elif scope == 'all' and interviewer_param:
+        person_q = _creator_q(interviewer_param)
+
+    if person_q is not None:
+        il_qs = il_qs.filter(person_q)
         # ResumeScore has no interviewer field — filter by role name via interviews
         roles_for_user = il_qs.values_list('role', flat=True).distinct()
         rs_qs = rs_qs.filter(role__in=roles_for_user)
         # InterviewRecording has no direct interviewer — use candidate_email match
-        emails_for_user = il_qs.values_list('email', flat=True).distinct()
-        ir_qs = ir_qs.filter(candidate_email__in=emails_for_user)
-    elif scope == 'all' and interviewer_param:
-        il_qs = il_qs.filter(interviewer__iexact=interviewer_param)
-        roles_for_user = il_qs.values_list('role', flat=True).distinct()
-        rs_qs = rs_qs.filter(role__in=roles_for_user)
         emails_for_user = il_qs.values_list('email', flat=True).distinct()
         ir_qs = ir_qs.filter(candidate_email__in=emails_for_user)
 
@@ -4250,10 +4480,10 @@ def recruitment_kpis(request):
         jp_qs = jp_qs.filter(type__iexact=job_type_param)
 
     # Apply time range to interview_links (created_at)
-    il_qs = _date_filter(il_qs, 'created_at', range_param)
-    rs_qs = _date_filter(rs_qs, 'created_at', range_param)
-    ir_qs = _date_filter(ir_qs, 'created_at', range_param)
-    jp_qs = _date_filter(jp_qs, 'created_at', range_param)
+    il_qs = _date_filter(il_qs, 'created_at', range_param, d_from, d_to)
+    rs_qs = _date_filter(rs_qs, 'created_at', range_param, d_from, d_to)
+    ir_qs = _date_filter(ir_qs, 'created_at', range_param, d_from, d_to)
+    jp_qs = _date_filter(jp_qs, 'created_at', range_param, d_from, d_to)
 
     # ── Pipeline KPIs ────────────────────────────────────────────────────
     total_interviews = il_qs.count()
@@ -4332,8 +4562,8 @@ def recruitment_kpis(request):
             .annotate(total=Count('id'), selected=Count('id', filter=Q(outcome='Selected')))
             .order_by('week')
         )
-        if scope == 'me' and caller_email:
-            weekly_rows = weekly_rows.filter(interviewer__iexact=caller_email)
+        if person_q is not None:
+            weekly_rows = weekly_rows.filter(person_q)
         for row in weekly_rows:
             weekly_trend.append({
                 'week': row['week'].strftime('%Y-%m-%d') if row['week'] else None,
@@ -4344,8 +4574,8 @@ def recruitment_kpis(request):
     # Monthly trend — last 12 months
     twelve_months_ago = local_now() - timedelta(days=365)
     monthly_rows_qs = InterviewLink.objects.filter(created_at__gte=twelve_months_ago)
-    if scope == 'me' and caller_email:
-        monthly_rows_qs = monthly_rows_qs.filter(interviewer__iexact=caller_email)
+    if person_q is not None:
+        monthly_rows_qs = monthly_rows_qs.filter(person_q)
     monthly_rows = (
         monthly_rows_qs
         .annotate(month=TruncMonth('created_at'))
@@ -4387,39 +4617,106 @@ def recruitment_kpis(request):
             'onsite': onsite_count,
         }
 
-        # Per-recruiter breakdown
+        # Per-person breakdown — grouped by who scheduled the interview, with
+        # legacy rows still counted under their typed interviewer so the
+        # leaderboard does not empty out on the day this shipped.
         recruiter_rows = (
             InterviewLink.objects.all()
-            if range_param == 'all'
-            else _date_filter(InterviewLink.objects.all(), 'created_at', range_param)
+            if range_param == 'all' and not (d_from or d_to)
+            else _date_filter(InterviewLink.objects.all(), 'created_at', range_param, d_from, d_to)
         )
+        # Blank keys are NOT dropped. An interview with neither a creator nor a
+        # typed interviewer is unattributed, not non-existent, and excluding it
+        # left the tab reading "No recruiter data found" while the same request
+        # reported a pipeline of 31 — two numbers from one queryset that could
+        # not both be true. It gets its own row instead, so the column still
+        # sums to the pipeline total and the gap is visible rather than hidden.
         per_recruiter = (
             recruiter_rows
-            .exclude(interviewer='')
-            .values('interviewer')
+            .annotate(creator=CREATOR_KEY)
+            .values('creator')
             .annotate(
                 total=Count('id'),
                 selected=Count('id', filter=Q(outcome='Selected')),
                 rejected=Count('id', filter=Q(outcome='Rejected')),
+                pending=Count('id', filter=Q(outcome__isnull=True)),
+                completed=Count('id', filter=Q(completed_at__isnull=False)),
+                invited=Count('id', filter=Q(email_sent=True)),
                 avg_score=Avg('score'),
+                last_at=Max('created_at'),
             )
-            .order_by('-total')[:20]
+            .order_by('-total')[:100]
         )
+        names = _creator_names([row['creator'] for row in per_recruiter])
         recruiter_stats = []
+        credited = set()
         for row in per_recruiter:
+            key = row['creator']
+            known = key in names
             recruiter_stats.append({
-                'interviewer': row['interviewer'],
+                # `interviewer` is the drill-down value the dashboard sends back
+                # as ?interviewer=, and the key the old response used — kept so
+                # a stale cached bundle keeps rendering.
+                'interviewer': key,
+                'email': key if known else '',
+                'name': names.get(key) or (key if key else 'Unattributed'),
+                'attributed': known,
+                # Nothing identifies the unattributed bucket, so there is no
+                # person to scope the dashboard to.
+                'drillable': bool(key),
                 'total': row['total'],
                 'selected': row['selected'],
                 'rejected': row['rejected'],
+                'pending': row['pending'],
+                'completed': row['completed'],
+                'invited': row['invited'],
                 'shortlistRate': _pct(row['selected'], row['total']),
                 'avgScore': round(float(row['avg_score']), 1) if row['avg_score'] else 0.0,
+                'lastAt': row['last_at'].strftime('%Y-%m-%d') if row['last_at'] else None,
             })
+            credited.add(norm_email(key))
+
+        # Everyone else gets a row of zeros. A report listing only people with
+        # activity cannot answer "who scheduled nothing this week", which is
+        # half of what a per-person report is opened for — and in a range with
+        # no activity at all it would show an empty table rather than a team.
+        for u in AppUser.objects.filter(status='active').values('email', 'full_name'):
+            em = norm_email(u['email'])
+            if not em or em in credited:
+                continue
+            credited.add(em)
+            recruiter_stats.append({
+                'interviewer': em,
+                'email': em,
+                'name': (u['full_name'] or '').strip() or em.split('@')[0],
+                'attributed': True,
+                'drillable': True,
+                'total': 0, 'selected': 0, 'rejected': 0, 'pending': 0,
+                'completed': 0, 'invited': 0,
+                'shortlistRate': 0.0, 'avgScore': 0.0, 'lastAt': None,
+            })
+
+        # Busiest people first, then the quiet ones by name, then whatever
+        # could not be credited to a person at all.
+        recruiter_stats.sort(key=lambda r: (
+            not r['attributed'], -r['total'], (r['name'] or '').lower()))
 
     # ── Assemble response ─────────────────────────────────────────────────
     response = {
         'scope': scope,
         'range': range_param,
+        'period': {
+            'range': range_param,
+            'from': d_from.isoformat() if d_from else None,
+            'to': d_to.isoformat() if d_to else None,
+            'label': _period_label(range_param, d_from, d_to),
+        },
+        # Who these numbers belong to, so the dashboard can title itself
+        # honestly instead of implying org-wide figures while filtered.
+        'viewing': _creator_label(interviewer_param) if (scope == 'all' and interviewer_param)
+        else ({'email': caller_email, 'name': caller_name or caller_email, 'attributed': True}
+              if scope == 'me' else None),
+        'canViewOrg': can_org,
         'filters': {
             'roles': all_roles,
             'interviewers': all_interviewers,

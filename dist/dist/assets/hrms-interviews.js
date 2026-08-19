@@ -55,6 +55,14 @@
     return ((parts[0] || '')[0] || '') + ((parts[1] || '')[0] || '');
   }
   function findById(id) { for (var i = 0; i < DATA.length; i++) if (DATA[i].id === id) return DATA[i]; return null; }
+  function findByEmail(email) {
+    var e = String(email || '').trim().toLowerCase();
+    if (!e) return null;
+    for (var i = 0; i < DATA.length; i++) {
+      if (String(DATA[i].email || '').trim().toLowerCase() === e) return DATA[i];
+    }
+    return null;
+  }
   function findByName(name) {
     var n = String(name || '').trim().toLowerCase();
     if (!n) return null;
@@ -228,6 +236,13 @@
       '.hrms-iv-note:hover{border-color:var(--accent);color:var(--accent);}',
       '.hrms-iv-note.has-note{color:var(--accent);border-color:var(--accent);}',
       '.hrms-iv-fu-note{margin-left:6px;}',
+      '.hrms-iv-fu-by{color:var(--text3);}',
+      '.hrms-iv-cb-nm{font-size:11px;color:var(--text);}',
+      '.hrms-iv-cb-no{font-size:11px;color:var(--text3);font-style:italic;}',
+      '.hrms-iv-asme{font-size:11px;color:var(--text3);margin-bottom:6px;}',
+      '.hrms-iv-copy{background:rgba(79,142,247,0.1);color:var(--accent);border:none;',
+      'border-radius:5px;padding:3px 9px;font-size:10px;font-family:inherit;cursor:pointer;}',
+      '.hrms-iv-copy:hover{background:rgba(79,142,247,0.2);}',
       '.hrms-iv-empty{font-size:12px;color:var(--text3);padding:12px 0;text-align:center;}',
       '.hrms-iv-pager{display:flex;align-items:center;justify-content:center;gap:10px;margin-top:10px;font-size:11.5px;color:var(--text3);}',
       '.hrms-iv-pager button{background:var(--bg3);border:1px solid var(--border2);border-radius:7px;color:var(--text);font-size:12px;padding:4px 10px;cursor:pointer;}',
@@ -311,6 +326,21 @@
       : (outcome === 'Waitlisted' || outcome === 'On Hold') ? 'orange' : 'blue';
   }
 
+  /* Who scheduled this interview, for the row's second line.
+   *
+   * The server records the creator (created_by_email) and resolves the display
+   * name from their account, so this is an identity rather than the free-text
+   * `interviewer` box, which names whoever will CONDUCT the interview and is
+   * usually left empty. Interviews created before the creator was recorded have
+   * neither, and get nothing rather than a guess — an invented name here would
+   * be indistinguishable from a real one. */
+  function scheduledBy(iv) {
+    var who = (iv.createdByName || '').trim()
+      || (iv.createdByEmail || '').split('@')[0].trim()
+      || (iv.interviewer || '').trim();
+    return who ? ' · by ' + esc(who) : '';
+  }
+
   function rowHtml(kind, iv) {
     var grad = kind === 'up' ? '135deg, var(--accent2), var(--accent)' : '135deg, var(--accent), var(--accent3)';
     var av = '<span class="hrms-iv-av" style="background:linear-gradient(' + grad + ')">' + esc(initialsOf(iv)) + '</span>';
@@ -320,14 +350,15 @@
         : '<span class="hrms-iv-when2">Not scheduled</span>';
       return '<div class="hrms-iv-row">' + av +
         '<div class="hrms-iv-main"><div class="hrms-iv-nm">' + esc(iv.name || '') + '</div>' +
-        '<div class="hrms-iv-sub">' + esc(iv.role || '') + '</div></div>' +
+        '<div class="hrms-iv-sub">' + esc(iv.role || '') + scheduledBy(iv) + '</div></div>' +
         '<div class="hrms-iv-right">' + right + '</div></div>';
     }
     var outcome = iv.outcome || 'Pending';
     var noteCls = 'hrms-iv-note' + (iv.notes ? ' has-note' : '');
     return '<div class="hrms-iv-row">' + av +
       '<div class="hrms-iv-main"><div class="hrms-iv-nm">' + esc(iv.name || '') + '</div>' +
-      '<div class="hrms-iv-sub">' + esc(iv.role || '') + (iv.interviewDate ? ' · ' + esc(iv.interviewDate) : '') + '</div></div>' +
+      '<div class="hrms-iv-sub">' + esc(iv.role || '') + (iv.interviewDate ? ' · ' + esc(iv.interviewDate) : '') +
+        scheduledBy(iv) + '</div></div>' +
       '<span class="badge ' + badgeClass(iv.outcome) + '">' + esc(outcome) + '</span>' +
       '<button class="' + noteCls + '" type="button" data-note="' + iv.id + '" title="' + (iv.notes ? 'Edit note' : 'Add note') + '">' + PENCIL + '</button>' +
       '</div>';
@@ -450,7 +481,212 @@
       var has = !!(iv && iv.notes);
       btn.classList.toggle('has-note', has);
       btn.title = has ? 'Edit note' : 'Add note';
+
+      // Who told this candidate their outcome. The mail leaves a shared
+      // mailbox, so the message itself does not say.
+      var sub = main && main.children[1];
+      if (sub) {
+        var line = sub.querySelector('.hrms-iv-fu-by');
+        var by = iv ? String(iv.followupSentByName || '').trim()
+          || String(iv.followupSentByEmail || '').split('@')[0].trim() : '';
+        if (by) {
+          if (!line) {
+            line = document.createElement('span');
+            line.className = 'hrms-iv-fu-by';
+            sub.appendChild(line);
+          }
+          line.textContent = ' · sent by ' + by;
+        } else if (line && line.parentNode) {
+          line.parentNode.removeChild(line);
+        }
+      }
     });
+  }
+
+  /* ── All Interview Links: a "Created By" column ─────────────────────────
+   *
+   * React owns this table and its source is not in this repo, so the column is
+   * grafted on: one <th> before Actions, one <td> per row. Rows are matched to
+   * /api/interviews by the candidate's email, which the first cell already
+   * prints under the name and which is unique per row — matching on the
+   * displayed name would tie the wrong recruiter to the row whenever the same
+   * candidate is interviewed twice.
+   *
+   * Everything is tagged so re-running after a React re-render is idempotent
+   * rather than additive; without that the header grows a column per repaint. */
+  function decorateLinksTable() {
+    var card = cardByTitle('All Interview Links');
+    if (!card) return;
+    var table = card.querySelector('table');
+    if (!table) return;
+
+    var headRow = table.querySelector('thead tr');
+    if (headRow && !headRow.querySelector('.hrms-iv-cb-h')) {
+      var th = document.createElement('th');
+      th.className = 'hrms-iv-cb-h';
+      th.textContent = 'Created By';
+      // Before Actions, so the buttons stay in the last column where the eye
+      // expects them.
+      headRow.insertBefore(th, headRow.lastElementChild);
+    }
+
+    // The Link column is found by its heading rather than a fixed index: this
+    // table's columns are React's, and one of them is ours.
+    var linkCol = -1;
+    if (headRow) {
+      for (var h = 0; h < headRow.cells.length; h++) {
+        if ((headRow.cells[h].textContent || '').trim().toLowerCase() === 'link') { linkCol = h; break; }
+      }
+    }
+
+    var rows = table.querySelectorAll('tbody tr');
+    Array.prototype.forEach.call(rows, function (tr) {
+      if (!tr.cells || tr.cells.length < 2) return;
+      var cell = tr.querySelector('.hrms-iv-cb');
+      if (!cell) {
+        cell = document.createElement('td');
+        cell.className = 'hrms-iv-cb';
+        tr.insertBefore(cell, tr.lastElementChild);
+      }
+      var iv = linkRowInterview(tr.cells[0].textContent);
+      fixLinkCell(tr, iv, linkCol);
+      var who = iv ? creatorOf(iv) : '';
+      cell.innerHTML = who
+        ? '<span class="hrms-iv-cb-nm">' + esc(who) + '</span>'
+        : '<span class="hrms-iv-cb-no">' + (loaded ? 'not recorded' : '…') + '</span>';
+    });
+  }
+
+  function fixLinkCell(tr, iv, linkCol) {
+    if (linkCol < 0 || !tr.cells[linkCol]) return;
+    var cell = tr.cells[linkCol];
+    var url = candidateLink(iv);
+    if (!url) return;                       // no token: nothing to offer
+    var text = (cell.textContent || '').trim().toLowerCase();
+    var stale = iv && isStaleAppLink(iv.link);
+    // Leave a real meeting link (Teams, Zoom) alone — that is a different link
+    // from the candidate portal, and React's own button copies it correctly.
+    if (text !== 'not generated' && !stale) return;
+    if (cell.querySelector('.hrms-iv-copy')) {
+      cell.querySelector('.hrms-iv-copy').setAttribute('data-copy', url);
+      return;
+    }
+    cell.innerHTML = '<button type="button" class="hrms-iv-copy" data-copy="' + esc(url) + '">Copy</button>';
+  }
+
+  /* Who scheduled the interview a table row is showing, from the text of its
+     candidate cell. Kept out of the DOM code so the part that can be wrong —
+     which row maps to which interview — is testable on its own. */
+  /* Which interview a table row is showing. */
+  function linkRowInterview(cellText) {
+    // The cell stacks the candidate's name over their email in two divs, so
+    // textContent runs them together with no separator at all
+    // ("srikanthsrikanth@cand.test"). Pulling out a token that merely contains
+    // an @ therefore yields the name glued to the address and matches nothing;
+    // the email has to be found as a substring instead.
+    var t = String(cellText || '').toLowerCase();
+    if (!t) return '';
+    var best = null, bestLen = 0;
+    for (var i = 0; i < DATA.length; i++) {
+      var em = String(DATA[i].email || '').trim().toLowerCase();
+      // Longest match wins: one candidate's address can be a tail of another's
+      // ("a@x.com" sits inside "ba@x.com"), and the shorter one would win a
+      // first-hit search on the wrong row.
+      if (em && em.length > bestLen && t.indexOf(em) !== -1) { best = DATA[i]; bestLen = em.length; }
+    }
+    return best;
+  }
+
+  function linkRowCreator(cellText) {
+    var iv = linkRowInterview(cellText);
+    return iv ? creatorOf(iv) : '';
+  }
+
+  /* The candidate's interview link.
+   *
+   * It is not a stored string — it is the tokenized URL the invitation email
+   * carries, and the token is on the row. Only interviews booked through a
+   * platform that generates a meeting URL ever filled `link` in, so every AI
+   * interview showed "Not generated" in this column while its candidate had a
+   * perfectly good link in their inbox.
+   *
+   * Built against the origin currently being browsed rather than a stored
+   * absolute URL: the ones that were stored are http://127.0.0.1:8000/... —
+   * whatever host the recruiter's browser happened to be on when the interview
+   * was created — and copying that to a candidate hands them a link to their
+   * own machine. */
+  function candidateLink(iv) {
+    var token = iv && String(iv.candidateToken || '').trim();
+    if (!token) return '';
+    return location.origin + '/interview-access?token=' + encodeURIComponent(token);
+  }
+
+  /* A stored link that points at this app on some *other* host is the same
+     mistake in a different shape, so it is rebased rather than trusted. */
+  function isStaleAppLink(link) {
+    var l = String(link || '');
+    if (!l || l.indexOf('://') === -1) return false;
+    if (l.indexOf(location.origin) === 0) return false;
+    return /\/(interview-access|recruiter)/i.test(l);
+  }
+
+  /* The scheduler's display name. Falls back to the email handle, then to the
+     free-text interviewer box; an interview created before the creator was
+     recorded shows nothing rather than a guess. */
+  function creatorOf(iv) {
+    return String(iv.createdByName || '').trim()
+      || String(iv.createdByEmail || '').split('@')[0].trim()
+      || String(iv.interviewer || '').trim();
+  }
+
+  /* Delegated once, on the document, because the table is React's and every
+     re-render replaces the buttons. */
+  var copyWired = false;
+  function wireCopy() {
+    if (copyWired) return;
+    copyWired = true;
+    document.addEventListener('click', function (e) {
+      var btn = e.target.closest && e.target.closest('.hrms-iv-copy');
+      if (!btn) return;
+      e.preventDefault(); e.stopPropagation();
+      var url = btn.getAttribute('data-copy') || '';
+      if (!url) return;
+      var done = function () {
+        var was = btn.textContent;
+        btn.textContent = 'Copied';
+        setTimeout(function () { btn.textContent = was; }, 1200);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(url).then(done, function () { window.prompt('Copy this link:', url); });
+      } else {
+        window.prompt('Copy this link:', url);
+      }
+    }, true);
+  }
+
+  /* ── the create form says who is scheduling ─────────────────────────────
+   *
+   * The form has no field for it and should not have one — the server takes
+   * the creator from the caller's identity, not the payload. This is the form
+   * telling you which identity that will be, so a shared machine or a stale
+   * session is visible before the interview is booked rather than after it is
+   * credited to the wrong person. */
+  function badgeCreateForm() {
+    var name = actorName() || actorEmail();
+    if (!name) return;
+    var buttons = document.querySelectorAll('button');
+    for (var i = 0; i < buttons.length; i++) {
+      var b = buttons[i];
+      // The toolbar button reads "+ Create Interview"; the submit inside the
+      // form is the bare label.
+      if ((b.textContent || '').replace(/\s+/g, ' ').trim() !== 'Create Interview') continue;
+      var host = b.parentElement;
+      if (!host || host.querySelector('.hrms-iv-asme')) continue;
+      var tag = document.createElement('div');
+      tag.className = 'hrms-iv-asme';
+      tag.textContent = 'Scheduling as ' + name;
+      host.insertBefore(tag, b);
+    }
   }
 
   /* ── note editor modal ────────────────────────────────────────────────── */
@@ -995,6 +1231,9 @@
     if (up) ensureReplaced(up, 'up');
     if (done) ensureReplaced(done, 'done');
     if (fu) enhanceFollowup();
+    decorateLinksTable();
+    wireCopy();
+    badgeCreateForm();
     enhanceEmailPreview();
     if ((up || done || fu) && !loaded && !loading) load(false);
   }

@@ -294,7 +294,7 @@
       // map is offered only when the position is precise enough to mean something.
       var mapBtn = (info.hasPosition && info.distance != null && info.fenceLat != null)
         ? '<button id="hrms-geo-map" style="margin-top:12px;padding:7px 14px;border-radius:7px;' +
-          'border:1px solid #cbd5e1;background:#fff;color:#334155;font-size:12px;font-weight:600;' +
+          'border:1px solid var(--border2,#cbd5e1);background:var(--bg3,#fff);color:var(--text,#334155);font-size:12px;font-weight:600;' +
           'cursor:pointer;">View on map</button>'
         : '';
       // The same dialog serves both refusals, and the difference matters: a
@@ -309,23 +309,24 @@
                             : 'e.g. Client visit in Bengaluru';
 
       back.innerHTML =
-        '<div style="background:#fff;border-radius:14px;max-width:460px;width:100%;' +
+        '<div style="background:var(--bg2,#fff);color:var(--text,#0f172a);border-radius:14px;max-width:460px;width:100%;' +
         'box-shadow:0 20px 60px rgba(0,0,0,0.25);overflow:hidden;">' +
         '<div style="padding:20px 24px 0;">' +
-        '<div style="font-size:17px;font-weight:800;color:#0f172a;margin-bottom:8px;">' +
+        '<div style="font-size:17px;font-weight:800;color:var(--text,#0f172a);margin-bottom:8px;">' +
         heading + '</div>' +
-        '<div style="font-size:13px;color:#475569;line-height:1.6;">' + explain +
+        '<div style="font-size:13px;color:var(--text2,#475569);line-height:1.6;">' + explain +
         '<br><br><strong>Your check-in will start once HR approves it.</strong>' +
         '</div>' + mapBtn +
         '<textarea id="hrms-geo-reason" rows="3" placeholder="' + hint + '" ' +
-        'style="width:100%;margin-top:14px;padding:10px 12px;border:1px solid #cbd5e1;' +
+        'style="width:100%;margin-top:14px;padding:10px 12px;border:1px solid var(--border2,#cbd5e1);' +
+        'background:var(--bg3,#fff);color:var(--text,#0f172a);' +
         'border-radius:8px;font-size:13px;font-family:inherit;resize:vertical;box-sizing:border-box;">' +
         '</textarea>' +
         '<div id="hrms-geo-err" style="color:#dc2626;font-size:12px;min-height:16px;margin-top:4px;"></div>' +
         '</div>' +
         '<div style="display:flex;gap:10px;justify-content:flex-end;padding:8px 24px 20px;">' +
-        '<button id="hrms-geo-cancel" style="padding:9px 18px;border-radius:8px;border:1px solid #e2e8f0;' +
-        'background:#fff;color:#334155;font-size:13px;font-weight:600;cursor:pointer;">Cancel</button>' +
+        '<button id="hrms-geo-cancel" style="padding:9px 18px;border-radius:8px;border:1px solid var(--border2,#e2e8f0);' +
+        'background:var(--bg3,#fff);color:var(--text,#334155);font-size:13px;font-weight:600;cursor:pointer;">Cancel</button>' +
         '<button id="hrms-geo-ok" style="padding:9px 20px;border-radius:8px;border:none;' +
         'background:#0f9d58;color:#fff;font-size:13px;font-weight:700;cursor:pointer;">' +
         'Submit for approval</button>' +
@@ -860,11 +861,11 @@
       'display:flex;align-items:center;justify-content:center;padding:20px;' +
       "font-family:'Segoe UI',Arial,sans-serif;");
     back.innerHTML =
-      '<div style="background:#fff;border-radius:14px;max-width:440px;width:100%;' +
+      '<div style="background:var(--bg2,#fff);color:var(--text,#0f172a);border-radius:14px;max-width:440px;width:100%;' +
       'box-shadow:0 20px 60px rgba(0,0,0,0.25);padding:22px 24px;">' +
-      '<div style="font-size:17px;font-weight:800;color:#0f172a;margin-bottom:8px;">' +
+      '<div style="font-size:17px;font-weight:800;color:var(--text,#0f172a);margin-bottom:8px;">' +
       'Register your home address?</div>' +
-      '<div style="font-size:13px;color:#475569;line-height:1.6;">' +
+      '<div style="font-size:13px;color:var(--text2,#475569);line-height:1.6;">' +
       'Your work-from-home days are recorded but cannot be confirmed, because we ' +
       'do not know where home is. Registering it once means future days confirm ' +
       'themselves.' +
@@ -872,11 +873,11 @@
       'confirms the location before it is used, and it is checked when you check ' +
       'in — not tracked during the day.' +
       '</div>' +
-      '<div id="hrms-home-status" style="font-size:12px;color:#64748b;min-height:18px;' +
+      '<div id="hrms-home-status" style="font-size:12px;color:var(--text3,#64748b);min-height:18px;' +
       'margin-top:12px;"></div>' +
       '<div style="display:flex;gap:10px;justify-content:flex-end;margin-top:6px;">' +
       '<button id="hrms-home-no" style="padding:9px 16px;border-radius:8px;' +
-      'border:1px solid #cbd5e1;background:#fff;color:#334155;font-size:13px;' +
+      'border:1px solid var(--border2,#cbd5e1);background:var(--bg3,#fff);color:var(--text,#334155);font-size:13px;' +
       'font-weight:600;cursor:pointer;">Not now</button>' +
       '<button id="hrms-home-go" style="padding:9px 16px;border-radius:8px;border:none;' +
       'background:#0f9d58;color:#fff;font-size:13px;font-weight:700;cursor:pointer;">' +
@@ -946,6 +947,10 @@
   }
 
   window.__hrmsCheckinAPI = {
+    /* The live, server-synced answer to "am I checked in?".
+       Published because the cache under hrms_checked_in is a first-paint hint
+       in a shape only this module knows, and readers were parsing it wrong. */
+    isCheckedIn: function () { return !!isCheckedIn; },
     /* Exposed so the attendance screen can offer "Set my home location".
        Resolves with the saved (Pending) record. */
     registerHome: registerHome,
