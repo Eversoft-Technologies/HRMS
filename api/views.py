@@ -3550,27 +3550,40 @@ def attendance_departure_policy(request):
         'warning_minutes': 5,
         'notify_employee': True,
     }
-    if request.method == 'GET':
-        obj = MasterDataSet.objects.filter(key=KEY).first()
-        if not obj or not isinstance(obj.options, dict):
-            return Response(default_policy)
-        return Response({**default_policy, **obj.options})
+    try:
+        if request.method == 'GET':
+            obj = MasterDataSet.objects.filter(key=KEY).first()
+            if not obj or not obj.options:
+                return Response(default_policy)
+            opts = obj.options
+            if isinstance(opts, str):
+                try:
+                    import json
+                    opts = json.loads(opts)
+                except Exception:
+                    opts = {}
+            if not isinstance(opts, dict):
+                opts = {}
+            return Response({**default_policy, **opts})
 
-    # POST
-    data = request.data or {}
-    obj, _ = MasterDataSet.objects.get_or_create(
-        key=KEY,
-        defaults={'label': 'Attendance Departure Policy', 'options': default_policy}
-    )
-    new_policy = {
-        'enabled': bool(data.get('enabled', True)),
-        'timeout_minutes': int(data.get('timeout_minutes', 15) or 15),
-        'warning_minutes': int(data.get('warning_minutes', 5) or 5),
-        'notify_employee': bool(data.get('notify_employee', True)),
-    }
-    obj.options = new_policy
-    obj.save()
-    return Response(new_policy)
+        # POST
+        data = request.data or {}
+        obj, _ = MasterDataSet.objects.get_or_create(
+            key=KEY,
+            defaults={'label': 'Attendance Departure Policy', 'options': default_policy}
+        )
+        new_policy = {
+            'enabled': bool(data.get('enabled', True)),
+            'timeout_minutes': int(data.get('timeout_minutes', 15) or 15),
+            'warning_minutes': int(data.get('warning_minutes', 5) or 5),
+            'notify_employee': bool(data.get('notify_employee', True)),
+        }
+        obj.options = new_policy
+        obj.save()
+        return Response(new_policy)
+    except Exception as exc:
+        logger.exception("Error in attendance_departure_policy: %s", exc)
+        return Response(default_policy)
 
 
 # --- Leave Management ------------------------------------------------------
