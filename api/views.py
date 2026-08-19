@@ -3402,91 +3402,140 @@ def attendance_map_feed(request):
       - fences: list of active office locations with coordinates, radius and headcount.
       - employees: live checked-in sessions today with latest coordinates, status, and device.
     """
-    today = local_now().date()
-    # 1. Company office fences
-    fences_qs = GeoFence.objects.filter(owner_email='')
-    fences_list = []
-    for f in fences_qs:
-        fences_list.append({
-            'id': f.id,
-            'name': f.name,
-            'latitude': f.latitude,
-            'longitude': f.longitude,
-            'radiusMeters': f.radius_meters,
-            'radius_meters': f.radius_meters,
+    try:
+        today = local_now().date()
+
+        # 1. Company office fences
+        fences_qs = GeoFence.objects.filter(owner_email='')
+        fences_list = []
+        for f in fences_qs:
+            try:
+                lat = float(f.latitude) if f.latitude is not None else None
+                lng = float(f.longitude) if f.longitude is not None else None
+            except (ValueError, TypeError):
+                lat, lng = None, None
+            if lat is not None and lng is not None:
+                fences_list.append({
+                    'id': f.id,
+                    'name': f.name or 'Office',
+                    'latitude': lat,
+                    'longitude': lng,
+                    'radiusMeters': int(f.radius_meters) if f.radius_meters else 200,
+                    'radius_meters': int(f.radius_meters) if f.radius_meters else 200,
+                    'activeCount': 0,
+                })
+
+        # 2. Profiles and App users metadata
+        user_map = {}
+        try:
+            for p in UserProfile.objects.all():
+                em = norm_email(p.email)
+                if em:
+                    user_map[em] = {
+                        'department': p.department or 'General',
+                        'role': p.designation or '',
+                        'name': f"{p.first_name} {p.last_name}".strip(),
+                    }
+        except Exception:
+            pass
+
+        try:
+            for u in AppUser.objects.all():
+                em = norm_email(u.email)
+                if em:
+                    if em not in user_map:
+                        user_map[em] = {
+                            'department': 'General',
+                            'role': u.role or '',
+                            'name': u.full_name or em.split('@')[0],
+                        }
+                    else:
+                        if not user_map[em]['name'] and u.full_name:
+                            user_map[em]['name'] = u.full_name
+                        if not user_map[em]['role'] and u.role:
+                            user_map[em]['role'] = u.role
+        except Exception:
+            pass
+
+        # 3. Today's attendance and latest events
+        today_atts = {norm_email(a.email): a for a in EmployeeAttendance.objects.filter(date=today)}
+        latest_events = {}
+        for ev in AttendanceEvent.objects.filter(date=today).order_by('at'):
+            latest_events[norm_email(ev.email)] = ev
+
+        employees_list = []
+        for email, att in today_atts.items():
+            if not _is_checked_in(att):
+                continue
+            ev = latest_events.get(email)
+            u_info = user_map.get(email, {})
+
+            raw_lat = att.location_lat if att.location_lat is not None else (ev.latitude if ev else None)
+            raw_lng = att.location_lng if att.location_lng is not None else (ev.longitude if ev else None)
+
+            try:
+                lat = float(raw_lat) if raw_lat is not None else None
+                lng = float(raw_lng) if raw_lng is not None else None
+            except (ValueError, TypeError):
+                lat, lng = None, None
+
+            # Fallback to office fence coordinates if verified on-site without raw GPS
+            is_simulated_coord = False
+            if (lat is None or lng is None) and att.geo_verified and fences_list:
+                lat = fences_list[0]['latitude']
+                lng = fences_list[0]['longitude']
+                is_simulated_coord = True
+
+            status_lbl, since_dt = _team_status(ev, att)
+            if att.location_status == 'Pending':
+                status_lbl = 'Pending Review'
+
+            employees_list.append({
+                'email': email,
+                'name': att.employee_name or u_info.get('name') or email.split('@')[0],
+                'department': u_info.get('department') or 'General',
+                'role': u_info.get('role') or '',
+                'latitude': lat,
+                'longitude': lng,
+                'accuracy': float(ev.accuracy) if ev and hasattr(ev, 'accuracy') and ev.accuracy is not None else None,
+                'status': status_lbl,
+                'geoVerified': bool(att.geo_verified),
+                'isWfh': bool(att.is_wfh),
+                'device': att.device or (getattr(ev, 'device', None) if ev else 'desktop') or 'desktop',
+                'checkIn': att.check_in.strftime('%I:%M %p') if att.check_in else '',
+                'checkInIso': att.check_in.isoformat() if att.check_in else '',
+                'locationReason': att.location_reason or '',
+                'locationStatus': att.location_status or '',
+                'isSimulatedCoord': is_simulated_coord,
+            })
+
+        # Count employees in each fence
+        for f in fences_list:
+            f_lat, f_lng, f_rad = f['latitude'], f['longitude'], f['radiusMeters']
+            cnt = 0
+            for emp in employees_list:
+                if emp['latitude'] is not None and emp['longitude'] is not None:
+                    try:
+                        d = _haversine_distance(float(emp['latitude']), float(emp['longitude']), float(f_lat), float(f_lng))
+                        if d <= f_rad + 30:
+                            cnt += 1
+                    except Exception:
+                        pass
+            f['activeCount'] = cnt
+
+        return Response({
+            'fences': fences_list,
+            'employees': employees_list,
+            'timestamp': local_now().isoformat(),
         })
-
-    # 2. App user metadata (departments, roles, avatars)
-    user_map = {}
-    for u in AppUser.objects.all():
-        user_map[norm_email(u.email)] = {
-            'department': u.department or 'General',
-            'role': u.role or '',
-            'name': u.full_name or u.name or '',
-        }
-
-    # 3. Today's attendance and latest events
-    today_atts = {norm_email(a.email): a for a in EmployeeAttendance.objects.filter(date=today)}
-    latest_events = {}
-    for ev in AttendanceEvent.objects.filter(date=today).order_by('at'):
-        latest_events[norm_email(ev.email)] = ev
-
-    employees_list = []
-    for email, att in today_atts.items():
-        if not _is_checked_in(att):
-            continue
-        ev = latest_events.get(email)
-        u_info = user_map.get(email, {})
-
-        lat = att.location_lat if att.location_lat is not None else (ev.latitude if ev else None)
-        lng = att.location_lng if att.location_lng is not None else (ev.longitude if ev else None)
-
-        # Fallback to office fence coordinates if verified on-site without raw GPS
-        is_simulated_coord = False
-        if (lat is None or lng is None) and att.geo_verified and fences_list:
-            lat = fences_list[0]['latitude']
-            lng = fences_list[0]['longitude']
-            is_simulated_coord = True
-
-        status_lbl, since_dt = _team_status(ev, att)
-        if att.location_status == 'Pending':
-            status_lbl = 'Pending Review'
-
-        employees_list.append({
-            'email': email,
-            'name': att.employee_name or u_info.get('name') or email.split('@')[0],
-            'department': u_info.get('department') or 'General',
-            'role': u_info.get('role') or '',
-            'latitude': lat,
-            'longitude': lng,
-            'accuracy': getattr(ev, 'accuracy', None) if ev else None,
-            'status': status_lbl,
-            'geoVerified': bool(att.geo_verified),
-            'isWfh': bool(att.is_wfh),
-            'device': att.device or (getattr(ev, 'device', None) if ev else 'desktop') or 'desktop',
-            'checkIn': att.check_in.strftime('%I:%M %p') if att.check_in else '',
-            'checkInIso': att.check_in.isoformat() if att.check_in else '',
-            'locationReason': att.location_reason or '',
-            'locationStatus': att.location_status or '',
-            'isSimulatedCoord': is_simulated_coord,
+    except Exception as exc:
+        logger.exception("Error in attendance_map_feed: %s", exc)
+        return Response({
+            'fences': [],
+            'employees': [],
+            'error': str(exc),
+            'timestamp': local_now().isoformat(),
         })
-
-    # Count employees in each fence
-    for f in fences_list:
-        f_lat, f_lng, f_rad = f['latitude'], f['longitude'], f['radiusMeters']
-        cnt = 0
-        for emp in employees_list:
-            if emp['latitude'] is not None and emp['longitude'] is not None:
-                d = _haversine_distance(emp['latitude'], emp['longitude'], f_lat, f_lng)
-                if d <= f_rad + 30:
-                    cnt += 1
-        f['activeCount'] = cnt
-
-    return Response({
-        'fences': fences_list,
-        'employees': employees_list,
-        'timestamp': local_now().isoformat(),
-    })
 
 
 # --- Leave Management ------------------------------------------------------
