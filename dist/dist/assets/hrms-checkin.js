@@ -404,8 +404,8 @@
         });
     }
 
-    // Only a check-in is location-checked; checking out never is.
-    return (checkedIn ? getPosition() : Promise.resolve(null))
+    // Only a check-in is location-checked when geofencing is enabled; checking out never is.
+    return (checkedIn && isGeofenceEnabled() ? getPosition() : Promise.resolve(null))
       .then(function (pos) {
         return post(pos || {}).then(function (r) {
           if (r.ok) return settle(r);
@@ -560,15 +560,11 @@
     return wrap;
   }
 
-  function isAttendanceSettingOn() {
-    return localStorage.getItem('hrms_attendance_enabled') !== 'false';
+  function isGeofenceEnabled() {
+    return localStorage.getItem('hrms_geofence_enabled') !== 'false';
   }
 
   function handleToggle(wrap, toggle, iconEl) {
-    if (!isAttendanceSettingOn()) {
-      notice('Attendance Disabled', 'Attendance tracking is currently turned OFF. Open your profile menu on the top-right and turn ON "Attendance Settings" to check in or out.');
-      return;
-    }
     isCheckedIn = !isCheckedIn;
 
     /* update device on check-in (re-detect each time so switching browsers
@@ -591,7 +587,7 @@
        to be put back, otherwise the widget claims they are working when the
        server has no record of it. */
     var attempted = isCheckedIn;
-    if (isCheckedIn) startGeoWatch(); else stopGeoWatch();
+    if (isCheckedIn && isGeofenceEnabled()) startGeoWatch(); else stopGeoWatch();
     syncAttendance(isCheckedIn, device).then(function (ok) {
       if (ok || isCheckedIn !== attempted) return;      // accepted, or toggled again meanwhile
       isCheckedIn = !attempted;
@@ -609,33 +605,24 @@
   function refreshUI(wrap, toggle, iconEl, device) {
     device = device || getCheckinDevice();
 
-    if (!isAttendanceSettingOn()) {
-      wrap.classList.add('hrms-att-disabled');
-      wrap.title = 'Attendance is turned OFF in profile settings (click top-right avatar to enable)';
-    } else {
-      wrap.classList.remove('hrms-att-disabled');
-    }
-
     if (isCheckedIn) {
       wrap.classList.add('ci-active');
       toggle.classList.add('ci-on');
       toggle.setAttribute('aria-pressed', 'true');
-      if (isAttendanceSettingOn()) wrap.title = 'Checked In — click to Check Out';
+      wrap.title = 'Checked In — click to Check Out';
     } else {
       wrap.classList.remove('ci-active');
       toggle.classList.remove('ci-on');
       toggle.setAttribute('aria-pressed', 'false');
-      if (isAttendanceSettingOn()) wrap.title = 'Click to Check In';
+      wrap.title = 'Click to Check In';
     }
 
     iconEl.innerHTML = deviceIcon(device);
   }
 
-  window.addEventListener('hrmsAttendanceSettingChange', function () {
-    var wrap = document.getElementById(WRAPPER_ID);
-    var toggle = document.getElementById(TOGGLE_ID);
-    var iconEl = wrap && wrap.querySelector('.hrms-ci-icon');
-    if (wrap && toggle && iconEl) refreshUI(wrap, toggle, iconEl, getCheckinDevice());
+  window.addEventListener('hrmsGeofenceSettingChange', function () {
+    if (!isGeofenceEnabled()) stopGeoWatch();
+    else if (isCheckedIn) startGeoWatch();
   });
 
   /* ── find insertion point (replace Settings gear OR insert after theme) ─ */

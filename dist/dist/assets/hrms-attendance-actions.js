@@ -564,21 +564,6 @@
     // Check-in toggled (topbar switch) → refresh totals + team status.
     window.addEventListener('hrmsCheckinToggle', function () { loadOvertime(); loadTeam(); });
     setInterval(function () { if (onCheckinPage() && document.getElementById(ID.team)) { loadTeam(); loadActivity(); loadOvertime(); } }, 30000);
-
-    /* Intercept checkin / checkout button clicks on page when attendance is disabled */
-    document.addEventListener('click', function (e) {
-      if (!onCheckinPage()) return;
-      var btn = e.target.closest && e.target.closest('button');
-      if (!btn) return;
-      var txt = (btn.textContent || '').trim().toLowerCase();
-      if ((txt === 'check in' || txt === 'check out' || txt.indexOf('check in') > -1 || txt.indexOf('check out') > -1) && !btn.id.includes('wfh')) {
-        if (localStorage.getItem('hrms_attendance_enabled') === 'false') {
-          e.preventDefault();
-          e.stopPropagation();
-          alert('Attendance tracking is currently turned OFF. Open your profile menu on the top-right and turn ON "Attendance Settings" to check in or out.');
-        }
-      }
-    }, true);
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
   else start();

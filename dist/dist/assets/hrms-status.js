@@ -471,24 +471,24 @@
     }
   });
 
-  /* ── inject Attendance Settings toggle in the right sidebar drawer ──── */
+  /* ── inject Geofence Settings toggle in the right sidebar drawer ──── */
   function ensureDrawerAttendanceSettings() {
     var drawer = document.querySelector('.hrms-drawer');
     if (!drawer) return;
     if (drawer.querySelector('.hrms-drawer-att-settings')) return;
 
-    var isEnabled = localStorage.getItem('hrms_attendance_enabled') !== 'false';
+    var isEnabled = localStorage.getItem('hrms_geofence_enabled') !== 'false';
 
     var sec = document.createElement('div');
     sec.className = 'hrms-drawer-sec hrms-drawer-att-settings';
     sec.innerHTML =
-      '<div class="hrms-drawer-section-lbl">ATTENDANCE SETTINGS</div>' +
+      '<div class="hrms-drawer-section-lbl">GEOFENCE SETTINGS</div>' +
       '<div class="hrms-drawer-att-card">' +
       '  <div class="hrms-drawer-att-info">' +
-      '    <div class="hrms-drawer-att-title">Attendance Tracking</div>' +
-      '    <div class="hrms-drawer-att-sub">Enable check-in, check-out & location verification</div>' +
+      '    <div class="hrms-drawer-att-title">Office Geofence</div>' +
+      '    <div class="hrms-drawer-att-sub">Validate GPS & enforce office perimeter on check-in</div>' +
       '  </div>' +
-      '  <label class="hrms-drawer-toggle" title="Toggle Attendance Setting">' +
+      '  <label class="hrms-drawer-toggle" title="Toggle Geofence Enforcement">' +
       '    <input type="checkbox" class="hrms-drawer-toggle-input"' + (isEnabled ? ' checked' : '') + '>' +
       '    <span class="hrms-drawer-toggle-slider"></span>' +
       '  </label>' +
@@ -500,11 +500,11 @@
     if (input) {
       input.addEventListener('change', function () {
         var on = input.checked;
-        localStorage.setItem('hrms_attendance_enabled', on ? 'true' : 'false');
-        window.dispatchEvent(new CustomEvent('hrmsAttendanceSettingChange', { detail: { enabled: on } }));
+        localStorage.setItem('hrms_geofence_enabled', on ? 'true' : 'false');
+        window.dispatchEvent(new CustomEvent('hrmsGeofenceSettingChange', { detail: { enabled: on } }));
         var toast = document.createElement('div');
         toast.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#1e293b;color:#fff;padding:10px 18px;border-radius:8px;font-size:13px;font-weight:600;z-index:999999;box-shadow:0 4px 14px rgba(0,0,0,0.3);display:flex;align-items:center;gap:8px;';
-        toast.innerHTML = (on ? '<span style="color:#10b981;">&#10003;</span> Attendance enabled' : '<span style="color:#f59e0b;">&#9888;</span> Attendance disabled');
+        toast.innerHTML = (on ? '<span style="color:#10b981;">&#10003;</span> Geofence enabled' : '<span style="color:#f59e0b;">&#9888;</span> Geofence bypassed');
         document.body.appendChild(toast);
         setTimeout(function () { if (toast.parentNode) toast.parentNode.removeChild(toast); }, 2400);
       });
