@@ -71,6 +71,11 @@ class Command(BaseCommand):
                 {'name': 'Create Employee/Tasks', 'code': 'employee.create', 'group': 'Employee Group'},
                 {'name': 'Edit Employee/Tasks', 'code': 'employee.edit', 'group': 'Employee Group'},
                 {'name': 'Delete Employee/Tasks', 'code': 'employee.delete', 'group': 'Employee Group'},
+                # Work Submissions scope. employee.view reaches the module;
+                # submission.view_all decides whether you see the whole queue or
+                # only what you filed yourself. Employee is deliberately left
+                # without it. Mirrors the KPI My View / Org View split above.
+                {'name': 'View All Submissions', 'code': 'submission.view_all', 'group': 'Employee Group'},
                 # Attendance
                 {'name': 'View Attendance Logs', 'code': 'attendance.view', 'group': 'Attendance Group'},
                 {'name': 'Create Attendance Log', 'code': 'attendance.create', 'group': 'Attendance Group'},
@@ -158,7 +163,8 @@ class Command(BaseCommand):
                 'HR Executive': [
                     'recruitment.view', 'recruitment.create', 'recruitment.edit',
                     'recruitment.kpi.view_own',
-                    'employee.view', 'attendance.view', 'leave.view', 'settings.view',
+                    'employee.view', 'submission.view_all',
+                    'attendance.view', 'leave.view', 'settings.view',
                     # HR Executive is the recruiter today: creates and edits the
                     # candidate, but cannot verify, approve, or touch payroll.
                     'onboarding.view', 'onboarding.create', 'onboarding.edit',
@@ -173,7 +179,8 @@ class Command(BaseCommand):
                     'onboarding.view', 'onboarding.create', 'onboarding.edit',
                 ],
                 'Manager': [
-                    'employee.view', 'attendance.view', 'leave.view', 'leave.action',
+                    'employee.view', 'submission.view_all',
+                    'attendance.view', 'leave.view', 'leave.action',
                     'settings.view',
                     'onboarding.view', 'onboarding.approve',
                 ],
