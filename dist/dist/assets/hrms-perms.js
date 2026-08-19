@@ -432,13 +432,19 @@
       var table = tables[t];
       var idx = actionColIndex(table);
       if (idx === -1) continue;
+      // Self-service controls share the Action column: an employee deleting
+      // their OWN pending leave request has a Delete button there even though
+      // the role lacks leave.action. Such buttons carry data-keepcol; when any
+      // is present the column must stay visible — the gated Approve/Reject
+      // buttons are still hidden individually via their data-perm tags.
+      var colHide = hide && !table.querySelector('[data-keepcol]');
       var headRow = table.querySelector('thead tr');
       var colCount = headRow ? headRow.children.length : 0;
       var rows = table.querySelectorAll('tr');
       for (var r = 0; r < rows.length; r++) {
         var cells = rows[r].children;
         if (colCount && cells.length !== colCount) continue; // skip colspan/empty-state rows
-        if (cells[idx]) cells[idx].style.display = hide ? 'none' : '';
+        if (cells[idx]) cells[idx].style.display = colHide ? 'none' : '';
       }
     }
   }

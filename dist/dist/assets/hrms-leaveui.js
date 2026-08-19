@@ -29,6 +29,9 @@
  *   body row; the expanded detail row stays a single colSpan=7 cell
  * - the approve button's visible text stays exactly "Approve"
  * - both action buttons keep data-perm="leave.approve" / "leave.reject"
+ * - the self-service Delete button keeps data-keepcol="1": that attribute is
+ *   what stops gateActionColumns() hiding the whole Action column for roles
+ *   without leave.action (an employee deleting their own pending request)
  * Also: POST /api/leave and PUT /api/leave/<id> send fromDate/toDate as raw
  * ISO yyyy-mm-dd, and sorting compares the raw ISO strings (dd-mm-yyyy is
  * display only).
@@ -53,12 +56,24 @@
        bare row id, and a correction id can collide with a leave id, which
        would expand a row in the other list at the same time. */
     const[isAp,sIsAp]=g.useState(!1),[cflt,scflt]=g.useState("Pending"),[crj,scrj]=g.useState(null),[crn,scrn]=g.useState(""),[cre,scre]=g.useState(""),[cexp,scexp]=g.useState(null);
+  /* pm — the caller's leave-relevant permission flags, null until
+     /api/me/permissions resolves: {sa: superAdmin, act: leave.action}.
+     Everything role-scoped on this page derives from it: act (or sa) means
+     "sees everyone's requests"; without it the list is scoped to the
+     signed-in email and Who's Out becomes My Upcoming Leave. Fails CLOSED —
+     a fetch error is treated as a plain employee, never as an admin. */
+  const[pm,spm]=g.useState(null);
 
   /* ---- session + fetch helpers ---- */
   var sess=function(){try{return JSON.parse(localStorage.getItem("hrms_session")||"{}")}catch(_){return{}}};
   var readJson=function(x){return x.json().then(function(j){return{ok:x.ok,j:j}},function(){return{ok:x.ok,j:null}})};
   var apiErr=function(j,fb){if(!j)return fb;var m=j.message||j.detail||j.error;if(!m){for(var k in j){if(Array.isArray(j[k])&&j[k].length){m=j[k][0];break}}}return m?String(m):fb};
-  var loadList=function(){sld(!0);return fetch("/api/leave").then(readJson).then(function(r){if(!r.ok||!Array.isArray(r.j))throw 0;sL(r.j);ser("");sld(!1)}).catch(function(){ser("Couldn't load leave requests.");sld(!1)})};
+  /* `all` mirrors loadCor's flag: truthy fetches every employee's requests,
+     falsy scopes to the signed-in user via ?email=. The server enforces the
+     same scoping for any caller without leave.action, so the param only keeps
+     the request honest — it is not the security boundary. loadAppr calls this
+     once permissions resolve, so the list is never fetched at the wrong scope. */
+  var loadList=function(all){var e=sess().email||"";sld(!0);return fetch(all||!e?"/api/leave":"/api/leave?email="+encodeURIComponent(e)).then(readJson).then(function(r){if(!r.ok||!Array.isArray(r.j))throw 0;sL(r.j);ser("");sld(!1)}).catch(function(){ser("Couldn't load leave requests.");sld(!1)})};
   var loadBal=function(){var e=sess().email||"";if(!e){sbal([]);return}fetch("/api/leave/balance?email="+encodeURIComponent(e)).then(readJson).then(function(r){sbal(r.ok&&r.j&&Array.isArray(r.j.balances)?r.j.balances:[])}).catch(function(){sbal([])})};
   /* Signed-in-user scoped, so it no-ops when logged out. Dropping ?email=
      returns EVERY employee's requests, which the API only serves to a caller
@@ -69,8 +84,11 @@
   var loadCor=function(all){var e=sess().email||"";if(!e){scor([]);return}fetch(all?"/api/attendance/corrections":"/api/attendance/corrections?email="+encodeURIComponent(e)).then(readJson).then(function(r){scor(r.ok&&Array.isArray(r.j)?r.j:[])}).catch(function(){scor([])})};
   /* Same approver test hrms-attendance-actions.js uses. Fails closed: any
      error, or no session, leaves the review queue hidden. */
-  var loadAppr=function(){var e=sess().email||"";if(!e){sIsAp(!1);return}fetch("/api/me/permissions?email="+encodeURIComponent(e)).then(readJson).then(function(r){var d=r.ok&&r.j?r.j:null,ok=!!(d&&(d.superAdmin===!0||(Array.isArray(d.permissions)&&d.permissions.indexOf("settings.manage")!==-1)));sIsAp(ok);if(ok)loadCor(!0)}).catch(function(){sIsAp(!1)})};
-  g.useEffect(function(){loadList();loadBal();loadCor(!1);loadAppr()},[]);
+  var loadAppr=function(){var e=sess().email||"";var asEmp=function(){sIsAp(!1);spm({sa:!1,act:!1});loadList(!1)};if(!e){asEmp();return}fetch("/api/me/permissions?email="+encodeURIComponent(e)).then(readJson).then(function(r){var d=r.ok&&r.j?r.j:null;if(!d){asEmp();return}var sa=d.superAdmin===!0,ps=Array.isArray(d.permissions)?d.permissions:[];var ok=!!(sa||ps.indexOf("settings.manage")!==-1);sIsAp(ok);if(ok)loadCor(!0);var act=sa||ps.indexOf("leave.action")!==-1;spm({sa:sa,act:act});loadList(act)}).catch(asEmp)};
+  /* loadList is NOT called here — loadAppr fires it at the right scope once
+     the caller's permissions are known, so an employee's browser never even
+     requests the unscoped list. */
+  g.useEffect(function(){loadBal();loadCor(!1);loadAppr()},[]);
   
   /* ---- date helpers ---- */
   var pad=function(v){return String(v).length>1?String(v):"0"+v};
@@ -123,6 +141,14 @@
   var vErr=function(){if(!fm.fromDate||!fm.toDate)return"Select both a from and a to date.";if(fm.toDate<fm.fromDate)return"To date cannot be earlier than from date.";return""};
   var submit=function(){var v=vErr();if(v){sfe(v);return}sb(!0);sfe("");var s=sess();var bd={email:s.email||"",employee:s.name||s.email||"",type:fm.type,fromDate:fm.fromDate,toDate:fm.toDate,reason:fm.reason};fetch("/api/leave",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(bd)}).then(readJson).then(function(r){if(!r.ok||!r.j||!r.j.id){sb(!1);sfe(apiErr(r.j,"Couldn't submit the request. Please try again."));return}sL(function(p){return[r.j].concat(p)});sb(!1);so(!1);sfe("");swr("");sf({type:"Casual Leave",fromDate:"",toDate:"",reason:""});loadBal()}).catch(function(){sb(!1);sfe("Couldn't reach the server. Please try again.")})};
   var setSt=function(id,st){var s=sess(),row=null;for(var i=0;i<L.length;i++){if(L[i].id===id){row=L[i];break}}var prev=row?row.status:"Pending";var revert=function(){sL(function(p){return p.map(function(z){return z.id===id?{...z,status:prev}:z})})};swr("");sL(function(p){return p.map(function(z){return z.id===id?{...z,status:st}:z})});fetch("/api/leave/"+id,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({status:st,approver:s.name||s.email||""})}).then(readJson).then(function(r){if(!r.ok){revert();swr(apiErr(r.j,"Couldn't update that request — the change was rolled back."));return}if(r.j&&r.j.id)sL(function(p){return p.map(function(z){return z.id===id?r.j:z})});loadBal()}).catch(function(){revert();swr("Couldn't reach the server — the change was rolled back.")})};
+
+  /* Delete a request — optimistic removal with restore on failure, the same
+     shape as setSt. The row object is re-prepended on failure rather than
+     spliced back in place: display order comes from the `rows` useMemo sort,
+     so insertion position doesn't matter. Backend rule: employees only — the
+     request's OWNER, while it is still Pending; approvers (Super Admin or
+     leave.action) are refused outright and Decline instead. */
+  var delRq=function(row){var id=row.id;swr("");sL(function(p){return p.filter(function(z){return z.id!==id})});fetch("/api/leave/"+id,{method:"DELETE"}).then(readJson).then(function(r){if(!r.ok){sL(function(p){return[row].concat(p)});swr(apiErr(r.j,"Couldn't delete that request — it was restored."));return}loadBal()}).catch(function(){sL(function(p){return[row].concat(p)});swr("Couldn't reach the server — the request was restored.")})};
 
   /* ---- missed clock-out: helpers, validation, submit ----
      The employee states the date, the time they actually left and why, and a
@@ -177,6 +203,15 @@
   var msubmit=function(){var v=mErr();if(v){smfe(v);return}smb(!0);smfe("");var s=sess();var bd={email:s.email||"",employee:s.name||s.email||"",attendanceDate:mfm.date,requestedCheckOut:mfm.date+" "+mfm.time+":00",reason:mfm.reason};fetch("/api/attendance/corrections",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(bd)}).then(readJson).then(function(r){if(!r.ok||!r.j||!r.j.id){smb(!1);smfe(apiErr(r.j,"Couldn't submit the request. Please try again."));return}scor(function(p){return[r.j].concat(p)});smb(!1);smo(!1);smfe("");smf({date:"",time:"",reason:""});scop(!0)}).catch(function(){smb(!1);smfe("Couldn't reach the server. Please try again.")})};
 
   /* ---- derived data: counts, absences, period windows ---- */
+  /* Role-scoped view flags, both off pm (null until permissions load):
+     pmAct — may approve/reject, so the list holds everyone's requests
+     empV  — the employee view: list scoped to self, Who's Out swapped for
+             My Upcoming Leave.
+     While pm is null both are false, matching hrms-perms' fail-open default
+     for layout (nothing hidden) — the DATA is still safe because loadList
+     waits for pm and the server scopes regardless. */
+  var myEmail=(sess().email||"").toLowerCase();
+  var pmAct=!!(pm&&(pm.sa||pm.act)),empV=!!(pm&&!pm.sa&&!pm.act);
   var byStatus=function(s){return L.filter(function(z){return z.status===s})};
   var dsum=function(a){return a.reduce(function(t,z){return t+(z.days||0)},0)};
   var pend=byStatus("Pending"),appr=byStatus("Approved"),rej=byStatus("Rejected");
@@ -195,6 +230,12 @@
   /* Memoised: five filtered+sorted passes over L. Without this every keystroke
      anywhere on the page — including inside a modal — rebuilt all of them. */
   var perLists=g.useMemo(function(){var o={};PERIODS.forEach(function(p){o[p.k]=outIn(p.d)});return o},[L,TODAY]);
+  /* My Upcoming Leave — the employee view's stand-in for Who's Out: their own
+     ongoing + future requests (Pending and Approved; Rejected is noise here),
+     soonest first. L is already scoped to the signed-in user in that view, so
+     no email filter is needed. */
+  var myUp=g.useMemo(function(){return L.filter(function(z){return z.status!=="Rejected"&&(z.toDate||"")>=TODAY}).slice().sort(function(a,b){return a.fromDate===b.fromDate?(a.id||0)-(b.id||0):a.fromDate<b.fromDate?-1:1})},[L,TODAY]);
+  var onLv=myUp.some(function(z){return z.status==="Approved"&&onDay(z,TODAY)});
   var curP=PERIODS[0];for(var pi=0;pi<PERIODS.length;pi++){if(PERIODS[pi].k===per){curP=PERIODS[pi];break}}
   var curList=perLists[curP.k];
   /* Leave-type split for the selected period, ordered by the same rule as the
@@ -303,7 +344,7 @@
         n.jsx("tr",{children:
             n.jsxs("td",{colSpan:7,style:msgSt,children:[
                   n.jsx("div",{style:{marginBottom:9,color:"var(--danger)"},children:er}),
-                  n.jsx("button",{className:"btn-sm",onClick:function(){loadList();loadBal()},children:"Retry"})]})},"er"));
+                  n.jsx("button",{className:"btn-sm",onClick:function(){loadList(pmAct);loadBal()},children:"Retry"})]})},"er"));
   else if(!L.length)body.push(
         n.jsx("tr",{children:
             n.jsxs("td",{colSpan:7,style:msgSt,children:[
@@ -315,7 +356,15 @@
             n.jsxs("td",{colSpan:7,style:msgSt,children:[
                   n.jsx("div",{style:{marginBottom:9},children:"No requests match this filter."}),
                   n.jsx("button",{className:"btn-sm",onClick:function(){sflt("All");sq("")},children:"Clear filters"})]})},"nomatch"));
-  else rows.forEach(function(e){var tm=tmeta(e.type);var live=onDay(e,TODAY);body.push(
+  else rows.forEach(function(e){var tm=tmeta(e.type);var live=onDay(e,TODAY);
+        /* Delete belongs to the employee view ONLY: the owner of a
+           still-Pending request, in a role without leave.action. Approvers
+           (Super Admin included) never see it — they Decline instead, which
+           keeps the history — and the API enforces exactly the same rule.
+           data-keepcol tells hrms-perms' gateActionColumns the Action column
+           still holds a usable control, so it must not hide the column even
+           when the role lacks leave.action. */
+        var own=(e.email||"").toLowerCase()===myEmail,showDel=empV&&own&&e.status==="Pending";body.push(
             n.jsxs("tr",{onClick:function(){sexp(exp===e.id?null:e.id)},style:{cursor:"pointer"},title:"Show reason, approver and applied date",children:[
                   n.jsx("td",{children:
                       n.jsxs("div",{style:{display:"flex",alignItems:"center",gap:9},children:[
@@ -338,9 +387,10 @@
                   n.jsx("td",{children:
                       n.jsx(Gn,{status:e.status})}),
                   n.jsx("td",{children:e.status==="Pending"?
-                      n.jsxs("div",{style:{display:"flex",gap:6},children:[
-                            n.jsx("button",{className:"btn-sm","data-perm":"leave.approve",style:{fontSize:11,padding:"2px 8px",color:"var(--success)"},onClick:function(ev){ev.stopPropagation();setSt(e.id,"Approved")},children:"Approve"}),
-                            n.jsx("button",{className:"btn-sm","data-perm":"leave.reject",style:{fontSize:11,padding:"2px 8px",color:"var(--danger)"},onClick:function(ev){ev.stopPropagation();scf(e)},children:"Decline"})]}):
+                      n.jsxs("div",{style:{display:"flex",gap:6,flexWrap:"wrap"},children:[e.status==="Pending"?
+                            n.jsx("button",{className:"btn-sm","data-perm":"leave.approve",style:{fontSize:11,padding:"2px 8px",color:"var(--success)"},onClick:function(ev){ev.stopPropagation();setSt(e.id,"Approved")},children:"Approve"}):null,e.status==="Pending"?
+                            n.jsx("button",{className:"btn-sm","data-perm":"leave.reject",style:{fontSize:11,padding:"2px 8px",color:"var(--danger)"},onClick:function(ev){ev.stopPropagation();scf(e)},children:"Decline"}):null,showDel?
+                            n.jsx("button",{className:"btn-sm","data-keepcol":"1",style:{fontSize:11,padding:"2px 8px",color:"var(--danger)"},onClick:function(ev){ev.stopPropagation();delRq(e)},children:"Delete"}):null]}):
                       n.jsx("span",{style:{fontSize:12,color:"var(--text3)"},children:"—"})})]},e.id));if(exp===e.id){var dot=function(on,col){return n.jsx("span",{style:{width:9,height:9,borderRadius:"50%",background:on?col:"var(--border2)",display:"inline-block",flex:"0 0 auto"}})};var decided=e.status==="Approved"||e.status==="Rejected";body.push(
               n.jsx("tr",{children:
                   n.jsx("td",{colSpan:7,style:{background:"var(--bg3)",padding:"14px 16px",borderLeft:"3px solid "+tm.v},children:
@@ -392,6 +442,27 @@
                 n.jsx("button",{className:"btn-sm",onClick:function(){openM()},children:"+ Missed Clock-Out"}),
                 n.jsx("button",{className:"btn-primary",onClick:function(){sfe("");so(!0)},children:"+ Apply Leave"})]}),
             n.jsxs("div",{style:{display:"flex",gap:14,flexWrap:"wrap",marginBottom:16,alignItems:"stretch"},children:[
+                  /* Who's Out is a team-visibility card — an employee's page is
+                     scoped to their own leave, so for them the same slot shows
+                     "My Upcoming Leave" (their ongoing + future requests)
+                     instead. Approvers keep Who's Out unchanged. */
+                  empV?n.jsxs("div",{className:"card",style:{flex:"3 1 520px",minWidth:0,background:"linear-gradient(135deg, var(--bg2) 0%, var(--bg3) 100%)"},children:[
+                        n.jsxs("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,flexWrap:"wrap",marginBottom:4},children:[
+                              n.jsx("div",{className:"card-title",style:{marginBottom:0,color:LBL},children:"My Upcoming Leave"}),
+                              n.jsxs("div",{style:{fontSize:12,color:LBL,marginLeft:"auto"},children:["Today is ",prettyD(TODAY)]})]}),
+                        n.jsx("div",{style:{fontSize:12.5,fontWeight:600,color:onLv?"var(--success)":LBL,marginTop:7},children:onLv?"You are on leave today.":myUp.length?"You have "+myUp.length+" upcoming "+(myUp.length===1?"request":"requests")+".":"No upcoming leave planned."}),!myUp.length?
+                        n.jsx("div",{style:{fontSize:12,color:LBL,marginTop:10},children:"Use + Apply Leave to plan your time off."}):
+                        /* Same fixed-height scroll box as Who's Out's expanded
+                           list, so a long plan can't stretch the row and drag
+                           the Holidays card down with it. */
+                        n.jsx("div",{tabIndex:0,role:"region","aria-label":"My upcoming leave — scrollable list",style:{maxHeight:LIST_MAX,overflowY:"auto",paddingRight:8,scrollbarWidth:"thin",scrollbarColor:"var(--border2) transparent",marginTop:13,display:"grid",gap:11},children:myUp.map(function(z){var utm=tmeta(z.type),ulive=z.status==="Approved"&&onDay(z,TODAY);return n.jsxs("div",{style:{display:"flex",alignItems:"center",gap:10,minWidth:0},children:[
+                              n.jsx("span",{style:{width:9,height:9,borderRadius:"50%",background:utm.v,display:"inline-block",flex:"0 0 auto"}}),
+                              n.jsxs("div",{style:{minWidth:0,flex:"1 1 auto"},children:[
+                                    n.jsxs("div",{style:{fontSize:12,fontWeight:600,color:"var(--text)",display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"},children:[shortR(z.fromDate,z.toDate),
+                                          n.jsxs("span",{style:{fontSize:11,color:LBL,fontWeight:400},children:["· ",z.days||0,(z.days||0)===1?" day":" days"]}),ulive?
+                                          n.jsx("span",{className:"badge green",style:{fontSize:10,padding:"1px 6px"},children:"Ongoing"}):null]}),
+                                    n.jsx("div",{style:{fontSize:11,color:LBL,marginTop:2},children:z.type||"Leave"})]}),
+                              n.jsx(Gn,{status:z.status})]},z.id)})})]}):
                   n.jsxs("div",{className:"card",style:{flex:"3 1 520px",minWidth:0,background:"linear-gradient(135deg, var(--bg2) 0%, var(--bg3) 100%)"},children:[
                         n.jsxs("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,flexWrap:"wrap",marginBottom:4},children:[
                               n.jsx("div",{className:"card-title",style:{marginBottom:0,color:LBL},children:"Who's Out"}),
