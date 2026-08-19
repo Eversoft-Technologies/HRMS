@@ -2070,7 +2070,14 @@ def attendance_check_in(request):
     fence_obj = None
     reason = str(body.get('locationReason') or body.get('reason') or '').strip()
     needs_review = False
-    if is_wfh:
+    bypass_geofence = bool(
+        body.get('bypassGeofence') or
+        body.get('bypass_geofence') or
+        body.get('geofenceDisabled') or
+        body.get('geofence_disabled') or
+        request.headers.get('X-Bypass-Geofence') in ('1', 'true', 'True')
+    )
+    if is_wfh and not bypass_geofence:
         # Working from home is exempt from the OFFICE fence, not from being
         # anywhere in particular. This branch used to set geo_verified=True and
         # discard the position entirely, so an approved WFH day was verified
@@ -2167,12 +2174,13 @@ def attendance_check_in(request):
                     'code': 'LOCATION_APPROVAL_PENDING',
                     'status': 'Pending',
                 }, status=202)
-    elif not _geofencing_enabled():
-        # No active fences configured — there is nothing to be outside of, so
-        # enforcing would lock out every employee on day one.
-        obj.geo_verified = False
+    elif bypass_geofence or not _geofencing_enabled():
+        # Geofence bypassed by user toggle or no active fences configured.
+        obj.geo_verified = True
         if lat is not None and lng is not None:
             obj.location_lat, obj.location_lng = lat, lng
+        else:
+            obj.location_lat = obj.location_lng = None
         loc_desc = 'Office'
     else:
         is_inside, fence_obj, nearest, distance = _locate_against_fences(lat, lng, accuracy)

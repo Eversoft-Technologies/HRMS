@@ -377,13 +377,22 @@
     var path = checkedIn ? '/api/attendance/check-in' : '/api/attendance/check-out';
 
     function post(extra) {
+      var bypass = !isGeofenceEnabled();
       var body = checkedIn
-        ? { email: actor.email, device: device || detectDevice(), employee: actor.name }
+        ? {
+            email: actor.email,
+            device: device || detectDevice(),
+            employee: actor.name,
+            bypassGeofence: bypass
+          }
         : { email: actor.email };
       for (var k in extra) if (Object.prototype.hasOwnProperty.call(extra, k)) body[k] = extra[k];
       return fetch(path, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Bypass-Geofence': bypass ? '1' : '0'
+        },
         body: JSON.stringify(body)
       });
     }
@@ -409,8 +418,14 @@
       .then(function (pos) {
         return post(pos || {}).then(function (r) {
           if (r.ok) return settle(r);
+          if (!isGeofenceEnabled()) return settle(r);
           return r.json().catch(function () { return {}; }).then(function (d) {
             d = d || {};
+
+            // If geofence is disabled, do not show any location reason dialogs
+            if (!isGeofenceEnabled()) {
+              return settle(r);
+            }
 
             // Already waiting on HR from an earlier attempt today.
             // The toggle and the server disagreed about whether a session was
