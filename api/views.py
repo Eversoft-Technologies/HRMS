@@ -3578,8 +3578,15 @@ def attendance_departure_policy(request):
 @require_perm({'GET': 'leave.view', 'POST': 'leave.create'}, or_self=True)
 def leave(request):
     if request.method == 'GET':
+        from .permissions import _get_caller, _is_super_admin, _user_has_perm
         qs = LeaveRequest.objects.all()
         email = norm_email(request.GET.get('email'))
+        # A caller who cannot action leave (approve/reject) only ever sees their
+        # own requests, whatever ?email= says — the frontend filter is cosmetic,
+        # this is the enforcement.
+        caller_email, caller = _get_caller(request)
+        if not (_is_super_admin(caller) or _user_has_perm(caller, 'leave.action')):
+            email = caller_email
         if email:
             qs = qs.filter(email=email)
         status_filter = request.GET.get('status')
@@ -3614,13 +3621,30 @@ def leave(request):
     return Response(serializer.data, status=201)
 
 
+# DELETE is intentionally absent from the decorator map: the decorator still
+# requires a resolvable, active caller, but the check happens in the view,
+# because deleting is a pure ownership rule that or_self cannot express (the
+# URL carries no email to compare).
 @api_view(['PUT', 'DELETE'])
-@require_perm({'PUT': 'leave.action', 'DELETE': 'leave.delete'})
+@require_perm({'PUT': 'leave.action'})
 def leave_detail(request, pk):
     obj = LeaveRequest.objects.filter(pk=pk).first()
     if not obj:
         return err('Leave request not found', 404)
     if request.method == 'DELETE':
+        from .permissions import _get_caller, _is_super_admin, _user_has_perm
+        caller_email, caller = _get_caller(request)
+        # Deleting is exclusively employee self-service: approvers — Super
+        # Admin or anyone holding leave.action — never delete, they Decline,
+        # which keeps the history. A plain employee may delete only their
+        # OWN still-Pending request.
+        if _is_super_admin(caller) or _user_has_perm(caller, 'leave.action'):
+            return err('Approvers cannot delete requests — decline them instead.', 403)
+        if norm_email(obj.email) != caller_email:
+            # 404, not 403 — don't confirm someone else's request id exists
+            return err('Leave request not found', 404)
+        if obj.status != 'Pending':
+            return err('Only pending requests can be deleted.', 403)
         obj.delete()
         return Response({'ok': True})
     serializer = LeaveRequestSerializer(obj, data=request.data, partial=True)
