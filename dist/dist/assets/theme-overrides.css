@@ -50,6 +50,18 @@ html[data-theme="light"] {
   --cal-weekend-dot: #ef8b3c;
 }
 
+/* Native control chrome follows the theme.
+
+   Scrollbars, <select> drop-downs, date pickers and the spin buttons on number
+   inputs are painted by the browser, not by us, and default to the light
+   scheme whatever the page does. In dark mode that produced light grey
+   scrollbars and a white calendar popup on dark fields. The root is the only
+   place worth saying this: `color-scheme` inherits, so every control below it
+   picks it up, and our own ::-webkit-scrollbar rules still win where we set
+   them. */
+html[data-theme="dark"]  { color-scheme: dark; }
+html[data-theme="light"] { color-scheme: light; }
+
 /* Light-mode scrollbar reads better with a muted thumb */
 html[data-theme="light"] ::-webkit-scrollbar-thumb {
   background: #c7d0e0;

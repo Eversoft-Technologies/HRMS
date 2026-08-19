@@ -61,6 +61,12 @@ from .models import (
     PayrollInformation,
     PayrollForm,
     CandidateFormSubmission,
+    EmployeeCompensation,
+    PayComponent,
+    EmployeePayComponent,
+    PayrollRun,
+    Payslip,
+    PayrollSetting,
 )
 
 # Datetime wire format used everywhere by the original API (naive, USE_TZ=False).
@@ -302,6 +308,16 @@ class InterviewLinkSerializer(serializers.ModelSerializer):
             'emailSent': bool(instance.email_sent),
             'interviewType': InterviewTypeField().to_representation(instance.interview_type),
             'interviewer': instance.interviewer,
+            # Who scheduled it. Server-set (never accepted from the payload),
+            # so it is safe to show as attribution and to key KPIs on.
+            'createdByEmail': instance.created_by_email or '',
+            'createdByName': instance.created_by_name or '',
+            # Who told the candidate their outcome, and when.
+            'followupSent': bool(instance.followup_sent),
+            'followupSentByEmail': instance.followup_sent_by_email or '',
+            'followupSentByName': instance.followup_sent_by_name or '',
+            'followupSentAt': (instance.followup_sent_at.strftime(DATETIME_FMT)
+                               if instance.followup_sent_at else None),
             'duration': instance.duration,
             'notes': instance.notes,
             'notesUpdatedBy': instance.notes_updated_by or '',
@@ -1731,6 +1747,48 @@ class CandidateFormSubmissionSerializer(serializers.ModelSerializer):
         return ret
 
 
+# ===========================================================================
+# Core Payroll Serializers
+# ===========================================================================
+
+class EmployeeCompensationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = EmployeeCompensation
+        fields = '__all__'
+
+
+class PayComponentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PayComponent
+        fields = '__all__'
+
+
+class EmployeePayComponentSerializer(serializers.ModelSerializer):
+    componentDetails = PayComponentSerializer(source='component', read_only=True)
+
+    class Meta:
+        model = EmployeePayComponent
+        fields = '__all__'
+
+
+class PayslipSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Payslip
+        fields = '__all__'
+
+
+class PayrollRunSerializer(serializers.ModelSerializer):
+    payslips = PayslipSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = PayrollRun
+        fields = '__all__'
+
+
+class PayrollSettingSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PayrollSetting
+        fields = '__all__'
 
 
 # ==========================================================================
@@ -1758,10 +1816,13 @@ class ChatMessageSerializer(serializers.ModelSerializer):
     message = serializers.SerializerMethodField()
     attachment_url = serializers.SerializerMethodField()
     age_seconds = serializers.SerializerMethodField()
+<<<<<<< HEAD
     # True only while a pin is still within its 30-day window. The frontend
     # shows the pinned strip based on this, so an expired pin disappears from
     # the UI even if the raw ``is_pinned`` flag hasn't been cleared yet.
     is_pin_active = serializers.SerializerMethodField()
+=======
+>>>>>>> fix/chat-admin-backfill
 
     class Meta:
         model = ChatMessage
@@ -1781,6 +1842,7 @@ class ChatMessageSerializer(serializers.ModelSerializer):
             "attachment_name",
             "attachment_type",
             "attachment_url",
+<<<<<<< HEAD
             "is_pinned",
             "is_pin_active",
             "pinned_by",
@@ -1805,6 +1867,10 @@ class ChatMessageSerializer(serializers.ModelSerializer):
         except Exception:
             return True
 
+=======
+        ]
+
+>>>>>>> fix/chat-admin-backfill
     def get_message(self, obj):
         # Hide the original text once a message is deleted.
         return "" if getattr(obj, "is_deleted", False) else obj.message
@@ -1855,4 +1921,7 @@ class ChatMeetingSerializer(serializers.ModelSerializer):
 
     def get_attendees_list(self, obj):
         raw = obj.attendees or ""
+<<<<<<< HEAD
         return [e.strip() for e in raw.split(",") if e.strip()]
+=======
+>>>>>>> fix/chat-admin-backfill
