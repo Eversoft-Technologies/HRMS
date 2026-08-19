@@ -851,3 +851,15 @@ div[style*="position: fixed"][style*="bottom: 80px"][style*="right: 28px"] {
   z-index: 100010 !important;
 }
 
+
+/* ============================================================
+   Official typography — use Arial across the whole app.
+   Both --font (body) and --font-d (display/headings) are
+   remapped, so every component that reads them switches at once.
+   ============================================================ */
+:root,
+html[data-theme="light"],
+html[data-theme="dark"] {
+  --font: Arial, "Helvetica Neue", Helvetica, "Segoe UI", system-ui, sans-serif !important;
+  --font-d: Arial, "Helvetica Neue", Helvetica, "Segoe UI", system-ui, sans-serif !important;
+}

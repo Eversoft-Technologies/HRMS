@@ -289,7 +289,7 @@
       "  --hcx-pattern:rgba(47,111,224,.06);",
       "  --hcx-glow1:rgba(47,111,224,.18);--hcx-glow2:rgba(124,92,252,.16);--hcx-glow3:rgba(22,184,148,.11);",
       "  --hcx-wash-a:rgba(255,255,255,.32);--hcx-wash-b:rgba(47,111,224,.06);",
-      "  --hcx-font:'DM Sans','Inter','Segoe UI',system-ui,sans-serif;",
+      "  --hcx-font:Arial,'Helvetica Neue',Helvetica,'Segoe UI',system-ui,sans-serif;",
       "  position:absolute;inset:0;display:flex;background:var(--hcx-bg);color:var(--hcx-text);",
       "  font-family:var(--hcx-font);-webkit-font-smoothing:antialiased;",
       "}",

@@ -252,7 +252,7 @@ class InterviewLinkSerializer(serializers.ModelSerializer):
     time = serializers.CharField(source='interview_time', required=False, allow_null=True, allow_blank=True)
     emailSent = serializers.BooleanField(source='email_sent', required=False, default=False)
     interviewType = InterviewTypeField(source='interview_type', required=False)
-    interviewQuestions = JSONStringField(source='interview_questions', required=False)
+    interviewQuestions = JSONStringField(source='interview_questions', required=False, allow_null=True)
     resumeText = serializers.CharField(source='resume_text', required=False, allow_blank=True, allow_null=True)
     jdText = serializers.CharField(source='jd_text', required=False, allow_blank=True, allow_null=True)
     techQuestionCount = serializers.IntegerField(source='tech_question_count', required=False)

@@ -170,7 +170,7 @@
     var badge = document.getElementById('hrms-notifications-badge');
     if (!badge) return;
     var n = Number(count || 0);
-    badge.textContent = String(n);
+    badge.textContent = n > 9 ? '9+' : String(n);
     badge.style.display = n > 0 ? 'inline-block' : 'none';
 
     var btn = document.getElementById(BUTTON_ID);
@@ -520,14 +520,16 @@
   }
 
   function injectWidget() {
-    var topbar = document.querySelector('.topbar') || document.querySelector('[class*="topbar" i]') || document.querySelector('header') || document.body;
-    if (!topbar) {
-      setTimeout(injectWidget, 500);
+    if (document.getElementById(BUTTON_ID)) return;
+    var topbar = document.querySelector('.topbar') || document.querySelector('[class*="topbar" i]') || document.querySelector('header');
+    var existing = findExistingBell();
+    // Wait for the app's real top-bar bell to render before enhancing it.
+    // Falling back to document.body too early creates a duplicate floating bell.
+    if ((!topbar || !existing) && (injectWidget._t = (injectWidget._t || 0) + 1) < 30) {
+      setTimeout(injectWidget, 400);
       return;
     }
-    if (document.getElementById(BUTTON_ID)) return;
-
-    var existing = findExistingBell();
+    if (!topbar) topbar = document.body;
     var btn;
     var badge;
     if (existing) {
