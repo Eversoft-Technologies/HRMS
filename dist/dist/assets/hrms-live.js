@@ -347,21 +347,93 @@
     // is a SPA, so we won't get a fresh page load after the user signs in.
     var btn = document.createElement("button");
     btn.id = "hrms-live-btn";
+    // Styled to sit inline in the topbar, where "Ask AI" used to be. The
+    // floating-pill styling is applied only if no topbar is found (see place()).
     css(btn, {
-      // Must stay below the app's message layer (z-index 999: toasts, modal
-      // backdrops, drawers). The success toast lands at bottom:80/right:28 —
-      // right under this button — so anything higher hides the message.
-      position: "fixed", right: "20px", bottom: "84px", zIndex: "998",
+      position: "static", zIndex: "998",
       background: "linear-gradient(135deg,#f43f5e,#a855f7)", color: "#fff",
-      border: "none", borderRadius: "30px", padding: "12px 18px", cursor: "pointer",
-      fontFamily: "'Segoe UI',Arial,sans-serif", fontWeight: "700", fontSize: "13px",
-      boxShadow: "0 8px 24px rgba(244,63,94,0.45)", alignItems: "center", gap: "8px",
+      border: "none", borderRadius: "999px", padding: "7px 10px", cursor: "pointer",
+      fontFamily: "'Segoe UI',Arial,sans-serif", fontWeight: "700", fontSize: "12px",
+      boxShadow: "0 2px 10px rgba(244,63,94,0.32)", alignItems: "center", gap: "7px",
+      whiteSpace: "nowrap", flex: "0 0 auto", lineHeight: "1",
       display: (session() && !onCandidatePage()) ? "flex" : "none"
     });
-    btn.innerHTML = '🔴 Live Interviews <span id="hrms-live-count" style="background:rgba(255,255,255,0.25);' +
+    btn.setAttribute("aria-label", "Live Interviews");
+    btn.title = "Live Interviews";
+    btn.innerHTML =
+      '<span class="hrms-live-ic" aria-hidden="true">\uD83D\uDD34</span>' +
+      '<span class="hrms-live-lbl">Live Interviews</span>' +
+      '<span id="hrms-live-count" style="background:rgba(255,255,255,0.25);' +
       'border-radius:10px;padding:1px 8px;font-size:11px;display:none;">0</span>';
+    /* Hover/focus reveal. Animating max-width rather than display keeps the
+       transition smooth and leaves the label readable by assistive tech. */
+    if (!document.getElementById("hrms-live-style")) {
+      var st = document.createElement("style");
+      st.id = "hrms-live-style";
+      st.textContent = [
+        "#hrms-live-btn .hrms-live-ic{line-height:1;flex:0 0 auto}",
+        "#hrms-live-btn .hrms-live-lbl{white-space:nowrap;overflow:hidden;",
+        "transition:max-width .26s cubic-bezier(.22,1,.36,1),opacity .2s ease,margin-left .26s cubic-bezier(.22,1,.36,1)}",
+        /* collapsed only when sitting in the topbar */
+        "#hrms-live-btn.hrms-live-mini .hrms-live-lbl{max-width:0;opacity:0;margin-left:0}",
+        "#hrms-live-btn.hrms-live-mini:hover .hrms-live-lbl,",
+        "#hrms-live-btn.hrms-live-mini:focus-visible .hrms-live-lbl{max-width:150px;opacity:1;margin-left:7px}",
+        "#hrms-live-btn.hrms-live-mini{transition:padding .26s cubic-bezier(.22,1,.36,1)}",
+        "#hrms-live-btn:focus-visible{outline:2px solid #fff;outline-offset:2px}",
+        "@media (prefers-reduced-motion:reduce){#hrms-live-btn .hrms-live-lbl,",
+        "#hrms-live-btn.hrms-live-mini{transition-duration:.001ms}}"
+      ].join("");
+      document.head.appendChild(st);
+    }
     btn.onclick = openMonitor;
-    document.body.appendChild(btn);
+
+    /* Put the button in the topbar, just before the notification bell — the
+       slot "Ask AI" used to occupy. React owns the topbar and may re-render
+       it, so this is re-run on mutation; because the element carries its own
+       handler, re-inserting the very same node restores it completely. */
+    function place() {
+      try {
+        /* A re-render can clone our node rather than move it, leaving a dead
+           copy that carries the id but no click handler. Drop any element with
+           our id that is not the element we own. */
+        var dupes = document.querySelectorAll("#hrms-live-btn");
+        for (var d = 0; d < dupes.length; d++) {
+          if (dupes[d] !== btn && dupes[d].parentNode) {
+            dupes[d].parentNode.removeChild(dupes[d]);
+          }
+        }
+        var bar = document.querySelector(".topbar");
+        if (!bar) {
+          // No topbar (candidate portal): keep the original floating pill.
+          if (btn.parentNode !== document.body) document.body.appendChild(btn);
+          btn.classList.remove("hrms-live-mini");   // standalone: keep the label
+          css(btn, {
+            position: "fixed", right: "20px", bottom: "84px",
+            borderRadius: "30px", padding: "12px 18px", fontSize: "13px",
+            boxShadow: "0 8px 24px rgba(244,63,94,0.45)"
+          });
+          return;
+        }
+        var bell = bar.querySelector('[title*="notif" i]');
+        if (btn.parentNode === bar && (!bell || btn.nextElementSibling === bell)) return;
+        css(btn, {
+          position: "static", right: "auto", bottom: "auto",
+          borderRadius: "999px", padding: "7px 10px", fontSize: "12px",
+          boxShadow: "0 2px 10px rgba(244,63,94,0.32)"
+        });
+        btn.classList.add("hrms-live-mini");   // collapse to the icon in the topbar
+        if (bell) bar.insertBefore(btn, bell);
+        else bar.appendChild(btn);
+      } catch (_) { /* never let placement break the page */ }
+    }
+    place();
+
+    var placeMo = new MutationObserver(function () {
+      placeMo.disconnect();
+      try { place(); } catch (_) {}
+      placeMo.observe(document.body, { childList: true, subtree: true });
+    });
+    placeMo.observe(document.body, { childList: true, subtree: true });
 
     async function tick(opts) {
       if (!session() || onCandidatePage()) { btn.style.display = "none"; return; }

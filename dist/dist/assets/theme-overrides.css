@@ -4,7 +4,8 @@
    We keep dark as the default and add a LIGHT palette that is
    applied when <html data-theme="light"> is set by the
    pre-paint script in index.html.
-   "system" resolves to light/dark via prefers-color-scheme.
+   The theme is always an explicit light or dark choice; there is no
+   "follow the OS" mode.
    ============================================================ */
   /* Calendar fill tokens — Leave Management holidays grid.
    Dark: low-alpha tint with the hue as text, so weekends don't swamp the card.
@@ -870,3 +871,262 @@ div[style*="position: fixed"][style*="bottom: 80px"][style*="right: 28px"] {
   z-index: 100010 !important;
 }
 
+
+/* ── Dashboard typography ─────────────────────────────────────────────────
+   Helvetica for the Dashboard display type — a system font, so nothing is
+   downloaded. Helvetica ships with macOS and iOS but NOT with Windows, where
+   the stack falls through to Arial (metrically near-identical, which is why
+   the substitution is unobtrusive). Liberation Sans covers most Linux. */
+.hrms-dash {
+  --font-d: "Helvetica Neue", Helvetica, Arial, "Liberation Sans", sans-serif;
+}
+/* Helvetica sets a touch loose at display sizes; a small negative tracking
+   keeps the figures tight. Sizing still matches Work Submissions. */
+.hrms-dash .stat-value {
+  font-size: 30px;
+  letter-spacing: -0.3px;
+}
+
+
+/* ── Dashboard: presentation and motion ───────────────────────────────────
+   Scoped to .hrms-dash. The bundle is untouched; deleting this block reverts
+   the Dashboard completely. */
+
+@keyframes hrms-dash-in {
+  from { opacity: 0; transform: translateY(10px); }
+}
+@keyframes hrms-dash-pop {
+  from { opacity: 0; transform: translateY(6px) scale(.985); }
+}
+@keyframes hrms-dash-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: .55; transform: scale(.82); }
+}
+
+/* --- entrance: KPIs, then charts, then lists -------------------------- */
+.hrms-dash .stat-card,
+.hrms-dash .card {
+  animation: hrms-dash-in .46s cubic-bezier(.22, 1, .36, 1) backwards;
+}
+.hrms-dash .stat-grid > *:nth-child(1) .stat-card,
+.hrms-dash .stat-grid > *:nth-child(1) { animation-delay: .02s; }
+.hrms-dash .stat-grid > *:nth-child(2) { animation-delay: .07s; }
+.hrms-dash .stat-grid > *:nth-child(3) { animation-delay: .12s; }
+.hrms-dash .stat-grid > *:nth-child(4) { animation-delay: .17s; }
+.hrms-dash > div:nth-of-type(2) .card { animation-delay: .22s; }
+.hrms-dash > div:nth-of-type(3) .card { animation-delay: .28s; }
+.hrms-dash > div:nth-of-type(4) .card { animation-delay: .34s; }
+.hrms-dash > div:nth-of-type(5) .card { animation-delay: .40s; }
+
+/* --- KPI cards: tinted wash + lift ------------------------------------ */
+.hrms-dash .stat-card {
+  transition: transform .2s cubic-bezier(.22, 1, .36, 1),
+              box-shadow .2s ease, border-color .2s ease;
+}
+.hrms-dash .stat-card::before { height: 3px; }
+.hrms-dash .stat-card.blue {
+  background: linear-gradient(158deg, color-mix(in srgb, var(--accent) 9%, var(--bg2)), var(--bg2) 62%);
+}
+.hrms-dash .stat-card.green {
+  background: linear-gradient(158deg, color-mix(in srgb, var(--accent3) 9%, var(--bg2)), var(--bg2) 62%);
+}
+.hrms-dash .stat-card.orange {
+  background: linear-gradient(158deg, color-mix(in srgb, var(--accent4) 9%, var(--bg2)), var(--bg2) 62%);
+}
+.hrms-dash .stat-card.purple {
+  background: linear-gradient(158deg, color-mix(in srgb, var(--accent2) 9%, var(--bg2)), var(--bg2) 62%);
+}
+.hrms-dash .stat-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 10px 26px rgba(12, 20, 40, .12);
+  border-color: color-mix(in srgb, var(--accent) 26%, var(--border2));
+}
+
+/* --- cards: quiet by default, responsive on approach ------------------ */
+.hrms-dash .card {
+  transition: transform .2s cubic-bezier(.22, 1, .36, 1),
+              box-shadow .2s ease, border-color .2s ease;
+}
+.hrms-dash .card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 26px rgba(12, 20, 40, .10);
+  border-color: color-mix(in srgb, var(--accent) 20%, var(--border2));
+}
+
+/* --- section titles get a gradient tick ------------------------------- */
+.hrms-dash .card-title {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.hrms-dash .card-title::before {
+  content: "";
+  width: 3px;
+  height: 12px;
+  border-radius: 2px;
+  flex: 0 0 auto;
+  background: linear-gradient(180deg, var(--accent), var(--accent2));
+}
+
+/* --- Today's Highlights: living timeline ------------------------------ */
+.hrms-dash .tl-item {
+  position: relative;
+  padding-left: 4px;
+  border-radius: 8px;
+  transition: background .18s ease, padding-left .18s ease;
+}
+.hrms-dash .tl-item:hover {
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  padding-left: 9px;
+}
+.hrms-dash .tl-dot {
+  box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 18%, transparent);
+  transition: box-shadow .18s ease, transform .18s ease;
+}
+/* the newest entry, i.e. the first .tl-item regardless of what precedes it in
+   the card (:first-child fails here — the card title comes first) */
+.hrms-dash .tl-item:not(.tl-item ~ .tl-item) .tl-dot {
+  animation: hrms-dash-pulse 2.2s ease-in-out infinite;
+}
+.hrms-dash .tl-item:hover .tl-dot { transform: scale(1.25); }
+
+/* --- Pending Actions + Employee Directory rows ------------------------ */
+.hrms-dash .av-row { transition: transform .18s ease; }
+.hrms-dash tbody tr { transition: background .16s ease; }
+.hrms-dash tbody tr:hover {
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+}
+.hrms-dash tbody tr:hover .av-row { transform: translateX(2px); }
+
+/* --- buttons: lift, press, and a visible focus ring ------------------- */
+.hrms-dash .btn-sm {
+  transition: background .16s ease, color .16s ease, border-color .16s ease,
+              transform .12s ease, box-shadow .16s ease;
+}
+.hrms-dash .btn-sm:hover {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  color: var(--accent);
+}
+.hrms-dash .btn-sm:active { transform: translateY(0) scale(.96); }
+.hrms-dash .btn-sm:focus-visible,
+.hrms-dash a:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* --- "View all →" links: the arrow leads --------------------------------- */
+.hrms-dash .card-title + * a,
+.hrms-dash a[href="#"] { transition: color .16s ease; }
+
+/* --- charts settle in after their card ---------------------------------- */
+.hrms-dash .card svg,
+.hrms-dash .card canvas {
+  animation: hrms-dash-pop .5s cubic-bezier(.22, 1, .36, 1) backwards;
+  animation-delay: .16s;
+}
+
+/* --- respect the OS setting --------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  .hrms-dash *,
+  .hrms-dash *::before,
+  .hrms-dash *::after {
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+  }
+}
+
+/* --- phones: no hover, so drop the lift and keep the entrance ----------- */
+@media (hover: none) {
+  .hrms-dash .stat-card:hover,
+  .hrms-dash .card:hover { transform: none; box-shadow: none; }
+}
+
+
+/* ── Dashboard: matching the Work Submissions treatment ───────────────────
+   Icons, table styling, badge dots and avatar response. Scoped to .hrms-dash;
+   the bundle is untouched, so deleting this block reverts it. */
+
+/* --- an icon per KPI, keyed off the colour class the card already has --- */
+.hrms-dash .stat-card::after {
+  content: "";
+  position: absolute;
+  top: 15px;
+  right: 15px;
+  width: 20px;
+  height: 20px;
+  background: currentColor;
+  opacity: .85;
+  transition: transform .2s cubic-bezier(.22, 1, .36, 1), opacity .2s ease;
+  -webkit-mask: var(--ico) center / contain no-repeat;
+          mask: var(--ico) center / contain no-repeat;
+}
+.hrms-dash .stat-card:hover::after { transform: scale(1.12); opacity: 1; }
+.hrms-dash .stat-card.blue   { --ico: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22black%22%20stroke-width%3D%221.9%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22M16%2020v-2a4%204%200%200%200-4-4H6a4%204%200%200%200-4%204v2%22%2F%3E%3Ccircle%20cx%3D%229%22%20cy%3D%227%22%20r%3D%224%22%2F%3E%3Cpath%20d%3D%22M22%2020v-2a4%204%200%200%200-3-3.87M16%203.13a4%204%200%200%201%200%207.75%22%2F%3E%3C%2Fsvg%3E");    color: var(--accent); }
+.hrms-dash .stat-card.purple { --ico: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22black%22%20stroke-width%3D%221.9%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22M3%207a2%202%200%200%201%202-2h13a2%202%200%200%201%202%202v10a2%202%200%200%201-2%202H5a2%202%200%200%201-2-2z%22%2F%3E%3Cpath%20d%3D%22M16%2012h4%22%2F%3E%3Cpath%20d%3D%22M3%209h17%22%2F%3E%3C%2Fsvg%3E");    color: var(--accent2); }
+.hrms-dash .stat-card.green  { --ico: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22black%22%20stroke-width%3D%221.9%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Crect%20x%3D%222%22%20y%3D%227%22%20width%3D%2220%22%20height%3D%2214%22%20rx%3D%222%22%2F%3E%3Cpath%20d%3D%22M8%207V5a2%202%200%200%201%202-2h4a2%202%200%200%201%202%202v2%22%2F%3E%3Cpath%20d%3D%22M2%2013h20%22%2F%3E%3C%2Fsvg%3E"); color: var(--accent3); }
+.hrms-dash .stat-card.orange { --ico: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22black%22%20stroke-width%3D%221.9%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Crect%20x%3D%223%22%20y%3D%225%22%20width%3D%2218%22%20height%3D%2216%22%20rx%3D%222%22%2F%3E%3Cpath%20d%3D%22M3%2010h18M8%203v4M16%203v4%22%2F%3E%3Cpath%20d%3D%22M9%2015l2%202%204-4%22%2F%3E%3C%2Fsvg%3E");  color: var(--accent4); }
+/* keep a long label clear of the icon */
+.hrms-dash .stat-label { padding-right: 26px; }
+
+/* --- tables: banded sticky header, and rows that respond ---------------- */
+.hrms-dash .card table { border-collapse: separate; border-spacing: 0; width: 100%; }
+.hrms-dash .card thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg3);
+  border-bottom: 1px solid var(--border2);
+  padding: 11px 12px;
+}
+.hrms-dash .card thead th:first-child { border-radius: 8px 0 0 8px; }
+.hrms-dash .card thead th:last-child  { border-radius: 0 8px 8px 0; }
+.hrms-dash .card tbody td { padding: 11px 12px; border-bottom: 1px solid var(--border2); }
+.hrms-dash .card tbody tr:last-child td { border-bottom: 0; }
+
+/* the rows are clickable, so give the pointer something to land on */
+.hrms-dash .card tbody tr:hover td:first-child {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+/* --- status badges get a leading dot, as on the submissions queue ------- */
+.hrms-dash .badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+.hrms-dash .badge::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: 0 0 auto;
+}
+
+/* --- avatars respond with their row ------------------------------------ */
+.hrms-dash .av {
+  border: 1px solid color-mix(in srgb, var(--accent) 26%, transparent);
+  transition: transform .18s ease, box-shadow .18s ease;
+}
+.hrms-dash tbody tr:hover .av,
+.hrms-dash .av-row:hover .av {
+  transform: scale(1.08);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+/* --- "Pending Actions" rows read as a list, not loose text -------------- */
+.hrms-dash .card .av-row {
+  padding: 7px 8px;
+  margin: 0 -8px;
+  border-radius: 8px;
+  transition: background .16s ease, transform .16s ease;
+}
+.hrms-dash .card .av-row:hover {
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+
+/* --- light theme: the header band wants a touch more contrast ----------- */
+html[data-theme="light"] .hrms-dash .card thead th { background: #eef0f5; }
