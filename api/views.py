@@ -23,7 +23,7 @@ import secrets
 from datetime import datetime, timedelta
 
 from django.conf import settings
-from django.db import transaction
+from django.db import connection, transaction
 from django.db.models import (
     BooleanField, Case, Count, IntegerField, OuterRef, Q, Subquery, Value, When,
 )
@@ -2486,23 +2486,45 @@ def submissions(request):
 
 
 @api_view(['PUT', 'DELETE'])
-@require_perm({'DELETE': 'employee.delete'})   # PUT is gated manually below
+# Both methods are gated manually below: PUT by the status being set, DELETE by
+# ownership. The empty map still refuses an unidentified caller — require_perm
+# enforces identity before it consults the map.
+@require_perm({})
 def submission_detail(request, pk):
     obj = WorkSubmission.objects.filter(pk=pk).first()
     if not obj:
         return err('Submission not found', 404)
     if request.method == 'DELETE':
+        # Two ways to delete. employee.delete removes anyone's submission at any
+        # stage (admin clean-up). Otherwise the submitter may withdraw their own,
+        # but only while it is still Pending — once a reviewer has picked it up
+        # or ruled on it, the record is part of the audit trail and stays.
+        allowed, caller_email, user = check_perm(request, 'employee.delete')
+        if not allowed:
+            own = bool(caller_email) and norm_email(obj.email) == caller_email
+            pending = str(obj.status or '').strip().lower() == 'pending'
+            if not own:
+                return err("You can only delete your own submissions.", 403)
+            if not pending:
+                return err(
+                    "This submission is already {}, so it can no longer be deleted.".format(
+                        (obj.status or 'in review').lower()),
+                    403,
+                )
         obj.delete()
         return Response({'ok': True})
 
-    # A PUT that approves/rejects the submission needs the single "action"
-    # permission (submission.action); any other edit needs employee.edit. This
-    # lets a reviewer approve OR reject without granting full edit rights.
+    # A PUT that moves the submission through review — into review, approved or
+    # rejected — needs the single "action" permission (submission.action); any
+    # other edit needs employee.edit. This lets a reviewer work the queue
+    # without granting full edit rights.
     status_val = str(request.data.get('status') or '').strip().lower()
     if status_val == 'approved':
         need, verb = 'submission.action', 'approve'
     elif status_val == 'rejected':
         need, verb = 'submission.action', 'reject'
+    elif status_val == 'in review':
+        need, verb = 'submission.action', 'review'
     else:
         need, verb = 'employee.edit', 'edit'
     allowed, caller_email, user = check_perm(request, need)

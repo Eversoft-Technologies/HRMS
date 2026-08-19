@@ -96,6 +96,13 @@
     var wrap = document.createElement('div');
     wrap.id        = WRAPPER_ID;
     wrap.className = 'hrms-ci-wrap' + (isCheckedIn ? ' ci-active' : '');
+    /* Gate the whole control — device icon and switch together — on the
+       permission that governs check-in. hrms-perms.js hides any [data-perm]
+       element the signed-in role lacks. Text-based gating cannot reach this
+       control: it is a role="switch" whose label lives in aria-label, so its
+       textContent is empty and the label matcher never fires. Fails open: if
+       permissions cannot be loaded, nothing is hidden. */
+    wrap.setAttribute('data-perm', 'attendance.checkinout');
     wrap.title     = isCheckedIn ? 'Checked In — click to Check Out' : 'Click to Check In';
 
     /* device icon badge */

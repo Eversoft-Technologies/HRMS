@@ -91,9 +91,15 @@
         'create interview generate link', 'schedule interview generate link'] },
     { route: '/recruit', perm: 'recruitment.edit', labels: [
         'generate meeting link', 'send interview invite via email', 'send invite now'] },
-    // Employee (tasks / submissions / employee list under HR)
+    // Employee (tasks / employee list under HR)
+    // "+ New Submission" is deliberately absent, for the same reason as
+    // "Apply Leave" below: submitting work is self-service. The API accepts a
+    // submission in the caller's own name via or_self, so gating the button
+    // behind employee.create hid it from Employee and Manager — the very people
+    // the module exists for — while employee.create really governs submitting
+    // on someone ELSE's behalf. Approve/Reject/Review stay gated.
     { route: null, perm: 'employee.create', labels: [
-        'create task', 'create new task', 'new task', 'new submission',
+        'create task', 'create new task', 'new task',
         'add employee', 'add new employee'] },
     // Work submissions review — buttons are labelled "Approve"/"Reject" on the
     // submissions page; scope to that route so we don't touch the Leave page's
