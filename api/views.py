@@ -574,6 +574,14 @@ def interviews(request):
         # otherwise a stale older interview (with an old createdAt) is picked and
         # the link is wrongly shown as expired.
         qs = InterviewLink.objects.all().order_by('-id')
+        need_tokens = [obj for obj in qs if not obj.candidate_token]
+        if need_tokens:
+            for obj in need_tokens:
+                c_tok, r_tok, exp = _generate_interview_tokens(obj.interview_date or '', obj.interview_time or '')
+                obj.candidate_token = c_tok
+                obj.recruiter_token = r_tok
+                obj.link_expires_at = exp
+                obj.save(update_fields=['candidate_token', 'recruiter_token', 'link_expires_at'])
         return Response(InterviewLinkSerializer(qs, many=True).data)
 
     body = request.data

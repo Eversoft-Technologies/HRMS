@@ -1142,3 +1142,104 @@ div[style*="position: fixed"][style*="bottom: 80px"][style*="right: 28px"] {
 
 /* --- light theme: the header band wants a touch more contrast ----------- */
 html[data-theme="light"] .hrms-dash .card thead th { background: #eef0f5; }
+
+/* ================================================================
+   UI Fix: Recruitment Toolbar Buttons (Filters & KPI Dashboard)
+   ================================================================ */
+.hrms-toolbar-btn,
+#hrms-kpi-btn,
+div:has(> #hrms-kpi-btn) button,
+.page-actions button:has(> svg),
+.topbar-actions button:has(> svg) {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 7px !important;
+  height: 36px !important;
+  min-height: 36px !important;
+  padding: 0 14px !important;
+  border-radius: 8px !important;
+  font-size: 13px !important;
+  font-weight: 600 !important;
+  border: 1px solid var(--border2, #cbd5e1) !important;
+  background: var(--bg2, #ffffff) !important;
+  color: var(--text, #0f172a) !important;
+  cursor: pointer !important;
+  transition: all 0.15s ease !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05) !important;
+  text-decoration: none !important;
+  line-height: normal !important;
+}
+
+html[data-theme="light"] .hrms-toolbar-btn,
+html[data-theme="light"] #hrms-kpi-btn,
+html[data-theme="light"] div:has(> #hrms-kpi-btn) button {
+  background: #ffffff !important;
+  border-color: #cbd5e1 !important;
+  color: #0f172a !important;
+}
+
+.hrms-toolbar-btn:hover,
+#hrms-kpi-btn:hover,
+div:has(> #hrms-kpi-btn) button:hover {
+  background: var(--bg3, #f1f5f9) !important;
+  border-color: var(--accent, #4f46e5) !important;
+  color: var(--accent, #4f46e5) !important;
+}
+
+.hrms-toolbar-btn svg,
+#hrms-kpi-btn svg,
+div:has(> #hrms-kpi-btn) button svg {
+  color: inherit !important;
+  stroke: currentColor !important;
+  flex-shrink: 0 !important;
+}
+
+/* ================================================================
+   UI Fix: User Profile Drawer / Popover Header & Presence Dot
+   ================================================================ */
+.hrms-drawer-head {
+  position: relative !important;
+  padding: 28px 20px 18px !important;
+}
+
+.hrms-drawer-av {
+  position: relative !important;
+  width: 84px !important;
+  height: 84px !important;
+  border-radius: 50% !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  overflow: visible !important;
+  margin: 0 auto 6px !important;
+  border: 3px solid var(--border2, #e2e8f0) !important;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.15) !important;
+}
+
+.hrms-drawer-av img {
+  width: 100% !important;
+  height: 100% !important;
+  border-radius: 50% !important;
+  object-fit: cover !important;
+  display: block !important;
+}
+
+.hrms-drawer-av .hrms-presence-dot {
+  position: absolute !important;
+  right: 2px !important;
+  bottom: 2px !important;
+  width: 18px !important;
+  height: 18px !important;
+  border-radius: 50% !important;
+  border: 3px solid var(--bg2, #1e293b) !important;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25) !important;
+  z-index: 5 !important;
+}
+
+/* Hide any orphaned status capsule in top-left of drawer header */
+.hrms-drawer-head > div:first-child:not(.hrms-drawer-av):not(.hrms-drawer-x),
+.hrms-drawer-head > span:first-child:not(.hrms-drawer-av) {
+  display: none !important;
+}
+

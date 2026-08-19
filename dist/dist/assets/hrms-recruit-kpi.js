@@ -1935,7 +1935,10 @@
   function findFiltersButton() {
     var buttons = document.querySelectorAll('button');
     for (var i = 0; i < buttons.length; i++) {
-      if (isFiltersButton(buttons[i])) return buttons[i];
+      if (isFiltersButton(buttons[i])) {
+        buttons[i].classList.add('hrms-toolbar-btn');
+        return buttons[i];
+      }
     }
     return null;
   }

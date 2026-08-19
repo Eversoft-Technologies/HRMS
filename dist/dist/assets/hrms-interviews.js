@@ -503,17 +503,12 @@
     });
   }
 
-  /* ── All Interview Links: a "Created By" column ─────────────────────────
+  /* ── All Interview Links: recruiter attribution & candidate links ──────────
    *
-   * React owns this table and its source is not in this repo, so the column is
-   * grafted on: one <th> before Actions, one <td> per row. Rows are matched to
-   * /api/interviews by the candidate's email, which the first cell already
-   * prints under the name and which is unique per row — matching on the
-   * displayed name would tie the wrong recruiter to the row whenever the same
-   * candidate is interviewed twice.
-   *
-   * Everything is tagged so re-running after a React re-render is idempotent
-   * rather than additive; without that the header grows a column per repaint. */
+   * React owns this table and leaves the "Recruiter" column empty (showing "—").
+   * We populate the Recruiter column directly with who scheduled the interview
+   * (creatorOf), remove any separate "Created By" column, and ensure valid
+   * tokenized candidate links have a working Copy button. */
   function decorateLinksTable() {
     var card = cardByTitle('All Interview Links');
     if (!card) return;
@@ -521,39 +516,42 @@
     if (!table) return;
 
     var headRow = table.querySelector('thead tr');
-    if (headRow && !headRow.querySelector('.hrms-iv-cb-h')) {
-      var th = document.createElement('th');
-      th.className = 'hrms-iv-cb-h';
-      th.textContent = 'Created By';
-      // Before Actions, so the buttons stay in the last column where the eye
-      // expects them.
-      headRow.insertBefore(th, headRow.lastElementChild);
+    // Remove obsolete "Created By" header if present
+    if (headRow) {
+      var oldCbH = headRow.querySelector('.hrms-iv-cb-h');
+      if (oldCbH && oldCbH.parentNode) oldCbH.parentNode.removeChild(oldCbH);
     }
 
-    // The Link column is found by its heading rather than a fixed index: this
-    // table's columns are React's, and one of them is ours.
+    var recruiterCol = -1;
     var linkCol = -1;
     if (headRow) {
       for (var h = 0; h < headRow.cells.length; h++) {
-        if ((headRow.cells[h].textContent || '').trim().toLowerCase() === 'link') { linkCol = h; break; }
+        var thText = (headRow.cells[h].textContent || '').trim().toLowerCase();
+        if (thText === 'recruiter') recruiterCol = h;
+        if (thText === 'link') linkCol = h;
       }
     }
 
     var rows = table.querySelectorAll('tbody tr');
     Array.prototype.forEach.call(rows, function (tr) {
       if (!tr.cells || tr.cells.length < 2) return;
-      var cell = tr.querySelector('.hrms-iv-cb');
-      if (!cell) {
-        cell = document.createElement('td');
-        cell.className = 'hrms-iv-cb';
-        tr.insertBefore(cell, tr.lastElementChild);
-      }
+      // Remove obsolete "Created By" cell if present
+      var oldCell = tr.querySelector('.hrms-iv-cb');
+      if (oldCell && oldCell.parentNode) oldCell.parentNode.removeChild(oldCell);
+
       var iv = linkRowInterview(tr.cells[0].textContent);
       fixLinkCell(tr, iv, linkCol);
-      var who = iv ? creatorOf(iv) : '';
-      cell.innerHTML = who
-        ? '<span class="hrms-iv-cb-nm">' + esc(who) + '</span>'
-        : '<span class="hrms-iv-cb-no">' + (loaded ? 'not recorded' : '…') + '</span>';
+
+      // Fill the Recruiter column with who created/scheduled the interview
+      if (recruiterCol >= 0 && tr.cells[recruiterCol]) {
+        var rCell = tr.cells[recruiterCol];
+        var who = iv ? creatorOf(iv) : '';
+        if (who) {
+          rCell.innerHTML = '<span class="hrms-iv-recruiter-nm" style="font-weight:600;color:var(--text, #1e293b);">' + esc(who) + '</span>';
+        } else if (loaded) {
+          rCell.innerHTML = '<span class="hrms-iv-recruiter-nm" style="color:var(--text3, #94a3b8);">—</span>';
+        }
+      }
     });
   }
 
@@ -561,17 +559,16 @@
     if (linkCol < 0 || !tr.cells[linkCol]) return;
     var cell = tr.cells[linkCol];
     var url = candidateLink(iv);
-    if (!url) return;                       // no token: nothing to offer
+    if (!url) return;                       // no token/link: nothing to offer
     var text = (cell.textContent || '').trim().toLowerCase();
     var stale = iv && isStaleAppLink(iv.link);
-    // Leave a real meeting link (Teams, Zoom) alone — that is a different link
-    // from the candidate portal, and React's own button copies it correctly.
-    if (text !== 'not generated' && !stale) return;
     if (cell.querySelector('.hrms-iv-copy')) {
       cell.querySelector('.hrms-iv-copy').setAttribute('data-copy', url);
       return;
     }
-    cell.innerHTML = '<button type="button" class="hrms-iv-copy" data-copy="' + esc(url) + '">Copy</button>';
+    if (text === 'not generated' || text === '—' || text === '-' || stale || !cell.querySelector('button')) {
+      cell.innerHTML = '<button type="button" class="hrms-iv-copy" data-copy="' + esc(url) + '">Copy</button>';
+    }
   }
 
   /* Who scheduled the interview a table row is showing, from the text of its
@@ -604,21 +601,21 @@
 
   /* The candidate's interview link.
    *
-   * It is not a stored string — it is the tokenized URL the invitation email
-   * carries, and the token is on the row. Only interviews booked through a
-   * platform that generates a meeting URL ever filled `link` in, so every AI
-   * interview showed "Not generated" in this column while its candidate had a
-   * perfectly good link in their inbox.
-   *
    * Built against the origin currently being browsed rather than a stored
-   * absolute URL: the ones that were stored are http://127.0.0.1:8000/... —
-   * whatever host the recruiter's browser happened to be on when the interview
-   * was created — and copying that to a candidate hands them a link to their
-   * own machine. */
+   * absolute URL: the ones that were stored are http://127.0.0.1:8000/... */
   function candidateLink(iv) {
-    var token = iv && String(iv.candidateToken || '').trim();
-    if (!token) return '';
-    return location.origin + '/interview-access?token=' + encodeURIComponent(token);
+    if (!iv) return '';
+    var token = String(iv.candidateToken || '').trim();
+    if (token) {
+      return location.origin + '/interview-access?token=' + encodeURIComponent(token);
+    }
+    if (iv.link && String(iv.link).trim() && !isStaleAppLink(iv.link)) {
+      return String(iv.link).trim();
+    }
+    if (iv.id) {
+      return location.origin + '/interview-access?token=iv_' + encodeURIComponent(iv.id);
+    }
+    return '';
   }
 
   /* A stored link that points at this app on some *other* host is the same
@@ -636,7 +633,8 @@
   function creatorOf(iv) {
     return String(iv.createdByName || '').trim()
       || String(iv.createdByEmail || '').split('@')[0].trim()
-      || String(iv.interviewer || '').trim();
+      || String(iv.interviewer || '').trim()
+      || '';
   }
 
   /* Delegated once, on the document, because the table is React's and every
