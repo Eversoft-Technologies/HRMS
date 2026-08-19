@@ -382,7 +382,7 @@ class EmployeeAttendance(models.Model):
     presence_at = models.DateTimeField(null=True, blank=True)
     worked_minutes = models.IntegerField(default=0)
     note = models.CharField(max_length=255, default='', blank=True)
-    # --- Advanced attendance fields (added via attendance_migrations.sql) ---
+    # --- Advanced attendance fields ---
     shift_id = models.IntegerField(null=True, blank=True)
     is_wfh = models.BooleanField(default=False)
     break_minutes = models.IntegerField(default=0)
@@ -504,8 +504,7 @@ class AttendanceEvent(models.Model):
 
 
 # ===========================================================================
-# Advanced Attendance Management — New models
-# attendance_migrations.sql creates the backing tables.
+# Advanced Attendance Management — Models
 # ===========================================================================
 
 class Shift(models.Model):
