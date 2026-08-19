@@ -98,6 +98,7 @@ urlpatterns = [
     path('attendance/analytics', views.attendance_analytics),
     path('attendance/geofence-check', views.attendance_geofence_check),
     path('attendance/location-reviews', views.attendance_location_reviews),
+    path('attendance/map-feed', views.attendance_map_feed),
     path('attendance/roster', views.attendance_roster),
     path('attendance/home-locations', views.attendance_home_locations),
     path('attendance/home-locations/review', views.attendance_home_location_review),

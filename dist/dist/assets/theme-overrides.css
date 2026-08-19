@@ -1353,4 +1353,54 @@ div:has(> #hrms-kpi-btn) button svg {
   cursor: not-allowed !important;
 }
 
+/* ================================================================
+   Interactive Admin Map & Heatmap (HR Attendance)
+   ================================================================ */
+.haa-map-tbtn {
+  padding: 5px 12px;
+  border-radius: 6px;
+  border: none;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  background: transparent;
+  color: var(--haa-muted, #64748b);
+  transition: all 0.15s ease;
+}
+.haa-map-tbtn.on {
+  background: var(--haa-accent, #4f46e5);
+  color: #ffffff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+.haa-map-chip {
+  padding: 5px 10px;
+  border-radius: 20px;
+  border: 1px solid var(--haa-line, #cbd5e1);
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  background: var(--haa-surface, #ffffff);
+  color: var(--haa-text, #0f172a);
+  transition: all 0.15s ease;
+}
+.haa-map-chip:hover {
+  border-color: var(--haa-accent, #4f46e5);
+}
+.haa-map-chip.on {
+  background: var(--haa-accent, #4f46e5);
+  border-color: var(--haa-accent, #4f46e5);
+  color: #ffffff;
+}
+.haa-map-cluster-bubble:hover {
+  transform: translate(-50%, -50%) scale(1.15) !important;
+}
+.haa-map-emp-pin:hover {
+  transform: translate(-50%, -50%) scale(1.18) !important;
+  z-index: 50 !important;
+}
+@keyframes haa-pop-in {
+  from { opacity: 0; transform: translate(-50%, -90%); }
+  to { opacity: 1; transform: translate(-50%, -100%); }
+}
+
 
