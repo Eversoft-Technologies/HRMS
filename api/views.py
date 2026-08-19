@@ -5216,11 +5216,7 @@ from .serializers import (  # noqa: E402
 # Rooms live in ``chat_rooms`` (is_group = 0 → direct 1:1, 1 → channel).
 # Membership is ``chat_members``; messages ``chat_messages``; scheduled
 # meetings ``chat_meetings`` (all managed outside Django — see
-<<<<<<< HEAD
-# chat_migrations.sql). Realtime delivery is handled by the Channels
-=======
 # migration 0045_chat_tables). Realtime delivery is handled by the Channels
->>>>>>> fix/chat-admin-backfill
 # WebSocket consumer; the POST endpoints below persist + broadcast so the
 # frontend has a REST fallback when the socket is unavailable.
 # ===========================================================================
@@ -5232,9 +5228,6 @@ CHAT_EDIT_WINDOW = timedelta(minutes=5)
 def _chat_now():
     # USE_TZ is False in this project, so store naive local datetimes to match
     # the rest of the tables.
-<<<<<<< HEAD
-    return datetime.now()
-=======
     #
     # local_now(), not datetime.now(): "local" has to mean the business
     # timezone, not whichever clock the host happens to run. cPanel runs UTC
@@ -5242,7 +5235,6 @@ def _chat_now():
     # message 5h30m behind the wall clock the sender saw — the same defect that
     # made check-ins land on the wrong side of midnight.
     return local_now()
->>>>>>> fix/chat-admin-backfill
 
 
 def _fmt_dt(dt):
@@ -5284,12 +5276,9 @@ def _broadcast_message(room_id, payload):
                 "attachment_name": payload.get("attachment_name"),
                 "attachment_type": payload.get("attachment_type"),
                 "attachment_url": payload.get("attachment_url"),
-<<<<<<< HEAD
                 "reply_to_id": payload.get("reply_to_id"),
                 "reply_to_sender": payload.get("reply_to_sender"),
                 "reply_to_text": payload.get("reply_to_text"),
-=======
->>>>>>> fix/chat-admin-backfill
             },
         )
     except Exception:
@@ -5553,12 +5542,9 @@ def chat_messages(request, room_id):
 
     if request.method == "GET":
         viewer = norm_email(request.GET.get("email") or request.headers.get("X-Actor-Email") or "")
-<<<<<<< HEAD
         # Drop any pins older than 30 days before serializing (backend-enforced
         # expiry — the frontend never has to police it).
         _expire_stale_pins(room_id)
-=======
->>>>>>> fix/chat-admin-backfill
         msgs = (
             ChatMessage.objects.filter(room_id=room_id)
             .select_related("room")
@@ -5596,7 +5582,6 @@ def chat_messages(request, room_id):
             return err("Could not save the attachment")
         att_data = None
 
-<<<<<<< HEAD
     # Reply: denormalise a short quote of the message being replied to, so the
     # quote renders without an extra lookup (and survives if the original goes).
     reply_to_id = None
@@ -5614,8 +5599,6 @@ def chat_messages(request, room_id):
             snippet = orig.message or (f"\U0001F4CE {orig.attachment_name}" if orig.attachment_name else "")
             reply_to_text = snippet[:300]
 
-=======
->>>>>>> fix/chat-admin-backfill
     now = _chat_now()
     msg = ChatMessage.objects.create(
         room=room,
@@ -5628,12 +5611,9 @@ def chat_messages(request, room_id):
         attachment_type=att_type,
         attachment_data=att_data,
         attachment_path=att_path,
-<<<<<<< HEAD
         reply_to_id=reply_to_id,
         reply_to_sender=reply_to_sender,
         reply_to_text=reply_to_text,
-=======
->>>>>>> fix/chat-admin-backfill
     )
     _broadcast_message(room_id, {
         "id": msg.id,
@@ -5644,12 +5624,9 @@ def chat_messages(request, room_id):
         "attachment_name": att_name,
         "attachment_type": att_type,
         "attachment_url": (f"/api/chat/attachment/{msg.id}" if att_path else ""),
-<<<<<<< HEAD
         "reply_to_id": reply_to_id,
         "reply_to_sender": reply_to_sender,
         "reply_to_text": reply_to_text,
-=======
->>>>>>> fix/chat-admin-backfill
     })
     return Response(ChatMessageSerializer(msg).data, status=201)
 
@@ -6110,7 +6087,6 @@ def chat_room_detail(request, room_id):
     ChatMeeting.objects.filter(room_id=room_id).delete()
     ChatMember.objects.filter(room_id=room_id).delete()
     room.delete()
-<<<<<<< HEAD
     return Response({"ok": True, "id": room_id})
 
 
@@ -6265,6 +6241,3 @@ def chat_translate(request):
     if not translated:
         return err("The translation came back empty. Please try again.", 502)
     return Response({"ok": True, "translated": translated, "target": lang})
-=======
-    return Response({"ok": True, "id": room_id})
->>>>>>> fix/chat-admin-backfill
