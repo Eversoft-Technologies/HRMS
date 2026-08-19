@@ -25,6 +25,7 @@
   var OVERLAY_ID = 'hrms-att-admin-overlay';
   var state = { tab: 'live_map', fences: [], shifts: [], assignments: [], reviews: [],
                 arrangements: [], roster: [], homes: [], mapFeed: { fences: [], employees: [] },
+                departurePolicy: { enabled: true, timeout_minutes: 15, warning_minutes: 5 },
                 mapMode: 'markers', mapFilter: 'all', deptFilter: 'all', busy: false, errors: {} };
 
   /* ── helpers ─────────────────────────────────────────────────────────── */
@@ -965,7 +966,8 @@
       grab('arrangements', '/api/attendance/arrangements'),
       grab('roster', '/api/attendance/roster'),
       grab('homes', '/api/attendance/home-locations'),
-      grab('mapFeed', '/api/attendance/map-feed')
+      grab('mapFeed', '/api/attendance/map-feed'),
+      grab('departurePolicy', '/api/attendance/departure-policy')
     ]).then(function (r) {
       state.fences = Array.isArray(r[0]) ? r[0] : [];
       state.shifts = Array.isArray(r[1]) ? r[1] : [];
@@ -975,6 +977,7 @@
       state.roster = Array.isArray(r[5]) ? r[5] : [];
       state.homes = Array.isArray(r[6]) ? r[6] : [];
       state.mapFeed = (r[7] && Array.isArray(r[7].employees)) ? r[7] : { fences: state.fences, employees: [] };
+      state.departurePolicy = (r[8] && typeof r[8].enabled === 'boolean') ? r[8] : (state.departurePolicy || { enabled: true, timeout_minutes: 15 });
       state.busy = false; render();
     });
   }
@@ -1025,7 +1028,43 @@
               label: f.name, width: 300, height: 200
             }) + '</div>';
           }).join('') + '</div>'
-        : '<div class="haa-empty">No office locations yet — geofencing stays off until you add one.</div>');
+        : '<div class="haa-empty">No office locations yet — geofencing stays off until you add one.</div>') +
+      '<div class="haa-card" style="margin-top:20px;border-top:2px solid var(--haa-accent,#4f46e5);">' +
+      '  <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:12px;">' +
+      '    <div>' +
+      '      <div style="font-weight:700;font-size:14px;color:var(--haa-text,#0f172a);">Auto Clock-Out on Geofence Departure</div>' +
+      '      <div style="font-size:12px;color:var(--haa-muted,#64748b);">Automatically clock out employees if they remain outside the office perimeter for extended periods.</div>' +
+      '    </div>' +
+      '    <label style="display:inline-flex;align-items:center;gap:8px;cursor:pointer;font-weight:600;font-size:13px;">' +
+      '      <input type="checkbox" id="haa-dep-enabled" ' + ((state.departurePolicy && state.departurePolicy.enabled) ? 'checked' : '') + ' style="width:16px;height:16px;cursor:pointer;">' +
+      '      <span>Enable Auto Clock-Out</span>' +
+      '    </label>' +
+      '  </div>' +
+      '  <div class="haa-grid" style="grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px;">' +
+      '    <div>' +
+      '      <label class="haa-lbl">Auto clock-out threshold</label>' +
+      '      <select class="haa-in" id="haa-dep-timeout">' +
+      '        <option value="10"' + (state.departurePolicy && state.departurePolicy.timeout_minutes == 10 ? ' selected' : '') + '>10 consecutive minutes outside fence</option>' +
+      '        <option value="15"' + (state.departurePolicy && state.departurePolicy.timeout_minutes == 15 ? ' selected' : '') + '>15 consecutive minutes outside fence (Recommended)</option>' +
+      '        <option value="20"' + (state.departurePolicy && state.departurePolicy.timeout_minutes == 20 ? ' selected' : '') + '>20 consecutive minutes outside fence</option>' +
+      '        <option value="30"' + (state.departurePolicy && state.departurePolicy.timeout_minutes == 30 ? ' selected' : '') + '>30 consecutive minutes outside fence</option>' +
+      '        <option value="45"' + (state.departurePolicy && state.departurePolicy.timeout_minutes == 45 ? ' selected' : '') + '>45 consecutive minutes outside fence</option>' +
+      '        <option value="60"' + (state.departurePolicy && state.departurePolicy.timeout_minutes == 60 ? ' selected' : '') + '>60 consecutive minutes outside fence</option>' +
+      '      </select>' +
+      '    </div>' +
+      '    <div>' +
+      '      <label class="haa-lbl">Early warning notice</label>' +
+      '      <select class="haa-in" id="haa-dep-warn">' +
+      '        <option value="5"' + (state.departurePolicy && state.departurePolicy.warning_minutes == 5 ? ' selected' : '') + '>Warn after 5 minutes outside fence</option>' +
+      '        <option value="10"' + (state.departurePolicy && state.departurePolicy.warning_minutes == 10 ? ' selected' : '') + '>Warn after 10 minutes outside fence</option>' +
+      '        <option value="0"' + (state.departurePolicy && state.departurePolicy.warning_minutes == 0 ? ' selected' : '') + '>No early warning</option>' +
+      '      </select>' +
+      '    </div>' +
+      '  </div>' +
+      '  <div style="display:flex;align-items:center;justify-content:flex-end;">' +
+      '    <button class="haa-btn" id="haa-dep-save">Save Departure Policy</button>' +
+      '  </div>' +
+      '</div>';
   }
 
   /* ── tab: shifts ─────────────────────────────────────────────────────── */
@@ -1448,6 +1487,29 @@
       }
     }
     var host = body.querySelector('#haa-picker');
+    var depSave = body.querySelector('#haa-dep-save');
+    if (depSave) {
+      depSave.onclick = function () {
+        var en = !!body.querySelector('#haa-dep-enabled').checked;
+        var to = parseInt(body.querySelector('#haa-dep-timeout').value, 10) || 15;
+        var wn = parseInt(body.querySelector('#haa-dep-warn').value, 10) || 5;
+        depSave.disabled = true;
+        depSave.textContent = 'Saving…';
+        api('/api/attendance/departure-policy', {
+          method: 'POST',
+          body: JSON.stringify({ enabled: en, timeout_minutes: to, warning_minutes: wn, notify_employee: true })
+        }).then(function (p) {
+          depSave.disabled = false;
+          depSave.textContent = 'Save Departure Policy';
+          state.departurePolicy = p;
+          toast('Geofence departure policy saved');
+        }).catch(function (e) {
+          depSave.disabled = false;
+          depSave.textContent = 'Save Departure Policy';
+          toast(e.message, true);
+        });
+      };
+    }
     if (host) {
       var latEl = body.querySelector('#haa-f-lat'), lngEl = body.querySelector('#haa-f-lng');
       // Seed from an existing fence so a second office starts near the first,

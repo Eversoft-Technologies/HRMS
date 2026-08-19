@@ -182,11 +182,22 @@
    *   - the fix's own accuracy widens the fence, exactly as check-in does
    *   - a poor fix (worse than the tolerance) is discarded, not acted on
    *   - never for someone working from home
-   *   - the employee is warned on the first miss, before anything happens
-   */
+  /* ── GPS watch & Auto Clock-Out on Geofence Departure ────────────────── */
   var GEO_WATCH_MS = 5 * 60 * 1000;      // sample every 5 minutes
-  var GEO_STRIKES = 2;                   // consecutive misses before acting
+  var departurePolicy = { enabled: true, timeout_minutes: 15, warning_minutes: 5 };
   var geoWatch = { timer: null, strikes: 0, warned: false };
+
+  function fetchDeparturePolicy() {
+    return fetch('/api/attendance/departure-policy')
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) {
+        if (d && typeof d.enabled === 'boolean') {
+          departurePolicy = d;
+        }
+        return departurePolicy;
+      })
+      .catch(function () { return departurePolicy; });
+  }
 
   function stopGeoWatch() {
     if (geoWatch.timer) clearInterval(geoWatch.timer);
@@ -196,17 +207,25 @@
   function startGeoWatch() {
     stopGeoWatch();
     if (!navigator.geolocation) return;
-    geoWatch.timer = setInterval(sampleGeo, GEO_WATCH_MS);
+    fetchDeparturePolicy().then(function (pol) {
+      if (pol.enabled === false) return;
+      geoWatch.timer = setInterval(sampleGeo, GEO_WATCH_MS);
+    });
   }
 
   function sampleGeo() {
     if (!isCheckedIn) { stopGeoWatch(); return; }
-    if (document.hidden) return;                    // timers are throttled anyway
+    if (document.hidden) return;
+    if (departurePolicy && departurePolicy.enabled === false) { stopGeoWatch(); return; }
+
     var actor = getActor();
     if (!actor.email) return;
 
+    var timeoutMinutes = (departurePolicy && departurePolicy.timeout_minutes) || 15;
+    var requiredStrikes = Math.max(2, Math.round(timeoutMinutes / 5));
+
     getPosition(GEO_WAIT_SAMPLE_MS).then(function (pos) {
-      if (!pos) return;                             // no fix: say nothing, do nothing
+      if (!pos) return;
       fetch('/api/attendance/geofence-check?latitude=' + pos.latitude +
             '&longitude=' + pos.longitude +
             (pos.accuracy ? '&accuracy=' + pos.accuracy : ''), {
@@ -218,27 +237,37 @@
           if (d.inside || d.uncertain) { geoWatch.strikes = 0; geoWatch.warned = false; return; }
 
           geoWatch.strikes++;
-          if (geoWatch.strikes === 1) {
+          var minutesAway = geoWatch.strikes * 5;
+          var minutesRemaining = Math.max(0, timeoutMinutes - minutesAway);
+
+          if (geoWatch.strikes < requiredStrikes) {
             geoWatch.warned = true;
-            notice('You have left the office area',
+            notice('Outside office perimeter (' + minutesAway + ' mins)',
               'You are about ' + Math.round(d.distance || 0) + ' m from ' +
-              (d.fence || 'the office') + '. If you stay away you will be checked out ' +
-              'automatically at the next check.');
+              (d.fence || 'the office') + '. You will be automatically clocked out in ' +
+              minutesRemaining + ' minutes if you do not return.');
             return;
           }
-          if (geoWatch.strikes >= GEO_STRIKES) autoCheckOut(d);
+
+          if (geoWatch.strikes >= requiredStrikes) {
+            autoCheckOut(d, timeoutMinutes);
+          }
         })
-        .catch(function () { /* a failed check must never close someone's day */ });
+        .catch(function () {});
     });
   }
 
-  function autoCheckOut(d) {
+  function autoCheckOut(d, timeoutMinutes) {
     stopGeoWatch();
     var actor = getActor();
     fetch('/api/attendance/check-out', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: actor.email, auto: 'geofence' })
+      body: JSON.stringify({
+        email: actor.email,
+        auto: 'geofence_departure',
+        outside_minutes: timeoutMinutes || 15
+      })
     })
       .then(function (r) { return r.ok ? r.json().catch(function () { return null; }) : null; })
       .then(function (record) {
@@ -251,8 +280,8 @@
           { detail: { checkedIn: false, device: getCheckinDevice() } }));
         window.dispatchEvent(new CustomEvent('hrmsAttendanceSynced',
           { detail: { checkedIn: false, record: record } }));
-        notice('Checked out automatically',
-          'You left ' + (d.fence || 'the office') + '. Check in again when you return.');
+        notice('Auto Clocked Out (Geofence Departure)',
+          'You were outside ' + (d.fence || 'the office') + ' for more than ' + (timeoutMinutes || 15) + ' consecutive minutes. Check in again upon return.');
       })
       .catch(function () {});
   }

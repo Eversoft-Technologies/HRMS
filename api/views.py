@@ -2413,10 +2413,11 @@ def attendance_check_out(request):
     # The browser can close a session when the employee leaves the geofence.
     # Stamping it keeps an auto-closed day distinguishable from one the person
     # ended themselves, which matters if they dispute the hours.
-    if str(body.get('auto') or '').lower() in ('1', 'true', 'yes', 'geofence'):
+    if str(body.get('auto') or '').lower() in ('1', 'true', 'yes', 'geofence', 'geofence_departure'):
         obj.auto_checkout_at = now
+        mins = body.get('outside_minutes') or 15
         if not obj.note:
-            obj.note = 'Auto checked out — left the office geofence'
+            obj.note = f'Auto checked out — outside office geofence for >{mins} minutes'
 
     # Calculations based on active shift
     shift = _get_active_shift(email, now.date())
@@ -2441,9 +2442,10 @@ def attendance_check_out(request):
 
     obj.save()
 
+    evt_name = 'auto-checkout-departure' if str(body.get('auto') or '').lower() in ('geofence', 'geofence_departure') else 'check-out'
     AttendanceEvent.objects.create(
         email=email, employee_name=obj.employee_name, date=now.date(),
-        event='check-out', location=loc_desc,
+        event=evt_name, location=loc_desc,
         latitude=lat, longitude=lng,
         geo_fence_id=fence_obj.id if fence_obj else None,
         at=now,
@@ -3536,6 +3538,39 @@ def attendance_map_feed(request):
             'error': str(exc),
             'timestamp': local_now().isoformat(),
         })
+
+
+@api_view(['GET', 'POST'])
+def attendance_departure_policy(request):
+    """Configuration for Auto Check-Out on Geofence Departure."""
+    KEY = 'attendance_departure_policy'
+    default_policy = {
+        'enabled': True,
+        'timeout_minutes': 15,
+        'warning_minutes': 5,
+        'notify_employee': True,
+    }
+    if request.method == 'GET':
+        obj = MasterDataSet.objects.filter(key=KEY).first()
+        if not obj or not isinstance(obj.options, dict):
+            return Response(default_policy)
+        return Response({**default_policy, **obj.options})
+
+    # POST
+    data = request.data or {}
+    obj, _ = MasterDataSet.objects.get_or_create(
+        key=KEY,
+        defaults={'label': 'Attendance Departure Policy', 'options': default_policy}
+    )
+    new_policy = {
+        'enabled': bool(data.get('enabled', True)),
+        'timeout_minutes': int(data.get('timeout_minutes', 15) or 15),
+        'warning_minutes': int(data.get('warning_minutes', 5) or 5),
+        'notify_employee': bool(data.get('notify_employee', True)),
+    }
+    obj.options = new_policy
+    obj.save()
+    return Response(new_policy)
 
 
 # --- Leave Management ------------------------------------------------------
