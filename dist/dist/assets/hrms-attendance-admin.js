@@ -863,9 +863,11 @@
     // and empty while real requests sat unseen.
     function grab(key, url) {
       return api(url).catch(function (e) {
-        state.errors[key] = e.message || 'Could not load';
+        if (key !== 'mapFeed') {
+          state.errors[key] = e.message || 'Could not load';
+        }
         console.warn('[hrms-attendance-admin]', url, e);
-        return [];
+        return key === 'mapFeed' ? { fences: state.fences || [], employees: [] } : [];
       });
     }
     return Promise.all([
@@ -885,7 +887,7 @@
       state.arrangements = Array.isArray(r[4]) ? r[4] : [];
       state.roster = Array.isArray(r[5]) ? r[5] : [];
       state.homes = Array.isArray(r[6]) ? r[6] : [];
-      state.mapFeed = r[7] && Array.isArray(r[7].employees) ? r[7] : { fences: state.fences, employees: [] };
+      state.mapFeed = (r[7] && Array.isArray(r[7].employees)) ? r[7] : { fences: state.fences, employees: [] };
       state.busy = false; render();
     });
   }
@@ -1260,7 +1262,7 @@
         return '<option value="' + esc(d) + '"' + (state.deptFilter === d ? ' selected' : '') + '>' + esc(d) + '</option>';
       }).join('');
 
-    return errorBanner('mapFeed') +
+    return '' +
       '<div class="haa-map-toolbar" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:12px;">' +
       '  <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">' +
       '    <div class="haa-map-btn-group" style="display:inline-flex;background:var(--haa-surface,#fff);border:1px solid var(--haa-line,#cbd5e1);border-radius:8px;padding:3px;">' +
