@@ -471,12 +471,53 @@
     }
   });
 
+  /* ── inject Attendance Settings toggle in the right sidebar drawer ──── */
+  function ensureDrawerAttendanceSettings() {
+    var drawer = document.querySelector('.hrms-drawer');
+    if (!drawer) return;
+    if (drawer.querySelector('.hrms-drawer-att-settings')) return;
+
+    var isEnabled = localStorage.getItem('hrms_attendance_enabled') !== 'false';
+
+    var sec = document.createElement('div');
+    sec.className = 'hrms-drawer-sec hrms-drawer-att-settings';
+    sec.innerHTML =
+      '<div class="hrms-drawer-section-lbl">ATTENDANCE SETTINGS</div>' +
+      '<div class="hrms-drawer-att-card">' +
+      '  <div class="hrms-drawer-att-info">' +
+      '    <div class="hrms-drawer-att-title">Attendance Tracking</div>' +
+      '    <div class="hrms-drawer-att-sub">Enable check-in, check-out & location verification</div>' +
+      '  </div>' +
+      '  <label class="hrms-drawer-toggle" title="Toggle Attendance Setting">' +
+      '    <input type="checkbox" class="hrms-drawer-toggle-input"' + (isEnabled ? ' checked' : '') + '>' +
+      '    <span class="hrms-drawer-toggle-slider"></span>' +
+      '  </label>' +
+      '</div>';
+
+    drawer.appendChild(sec);
+
+    var input = sec.querySelector('.hrms-drawer-toggle-input');
+    if (input) {
+      input.addEventListener('change', function () {
+        var on = input.checked;
+        localStorage.setItem('hrms_attendance_enabled', on ? 'true' : 'false');
+        window.dispatchEvent(new CustomEvent('hrmsAttendanceSettingChange', { detail: { enabled: on } }));
+        var toast = document.createElement('div');
+        toast.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#1e293b;color:#fff;padding:10px 18px;border-radius:8px;font-size:13px;font-weight:600;z-index:999999;box-shadow:0 4px 14px rgba(0,0,0,0.3);display:flex;align-items:center;gap:8px;';
+        toast.innerHTML = (on ? '<span style="color:#10b981;">&#10003;</span> Attendance enabled' : '<span style="color:#f59e0b;">&#9888;</span> Attendance disabled');
+        document.body.appendChild(toast);
+        setTimeout(function () { if (toast.parentNode) toast.parentNode.removeChild(toast); }, 2400);
+      });
+    }
+  }
+
   /* ── boot + observe React re-renders ─────────────────────────────────── */
   var _obsTimer = null;
   var _isPainting = false;
 
   function watch() {
     ensureBlock();
+    ensureDrawerAttendanceSettings();
     paintAvatarDots();
 
     var obs = new MutationObserver(function () {
@@ -486,8 +527,9 @@
         _obsTimer = null;
         _isPainting = true;
         try {
-          ensureBlock();       // re-inject if React re-rendered the profile page
-          paintAvatarDots();   // keep the avatar dot present after topbar re-renders
+          ensureBlock();                     // re-inject if React re-rendered the profile page
+          ensureDrawerAttendanceSettings();  // inject toggle into profile drawer when opened
+          paintAvatarDots();                 // keep the avatar dot present after topbar re-renders
         } finally {
           _isPainting = false;
         }

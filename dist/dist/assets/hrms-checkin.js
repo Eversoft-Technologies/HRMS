@@ -560,7 +560,15 @@
     return wrap;
   }
 
+  function isAttendanceSettingOn() {
+    return localStorage.getItem('hrms_attendance_enabled') !== 'false';
+  }
+
   function handleToggle(wrap, toggle, iconEl) {
+    if (!isAttendanceSettingOn()) {
+      notice('Attendance Disabled', 'Attendance tracking is currently turned OFF. Open your profile menu on the top-right and turn ON "Attendance Settings" to check in or out.');
+      return;
+    }
     isCheckedIn = !isCheckedIn;
 
     /* update device on check-in (re-detect each time so switching browsers
@@ -601,20 +609,34 @@
   function refreshUI(wrap, toggle, iconEl, device) {
     device = device || getCheckinDevice();
 
+    if (!isAttendanceSettingOn()) {
+      wrap.classList.add('hrms-att-disabled');
+      wrap.title = 'Attendance is turned OFF in profile settings (click top-right avatar to enable)';
+    } else {
+      wrap.classList.remove('hrms-att-disabled');
+    }
+
     if (isCheckedIn) {
       wrap.classList.add('ci-active');
       toggle.classList.add('ci-on');
       toggle.setAttribute('aria-pressed', 'true');
-      wrap.title = 'Checked In — click to Check Out';
+      if (isAttendanceSettingOn()) wrap.title = 'Checked In — click to Check Out';
     } else {
       wrap.classList.remove('ci-active');
       toggle.classList.remove('ci-on');
       toggle.setAttribute('aria-pressed', 'false');
-      wrap.title = 'Click to Check In';
+      if (isAttendanceSettingOn()) wrap.title = 'Click to Check In';
     }
 
     iconEl.innerHTML = deviceIcon(device);
   }
+
+  window.addEventListener('hrmsAttendanceSettingChange', function () {
+    var wrap = document.getElementById(WRAPPER_ID);
+    var toggle = document.getElementById(TOGGLE_ID);
+    var iconEl = wrap && wrap.querySelector('.hrms-ci-icon');
+    if (wrap && toggle && iconEl) refreshUI(wrap, toggle, iconEl, getCheckinDevice());
+  });
 
   /* ── find insertion point (replace Settings gear OR insert after theme) ─ */
   function findSettingsBtn(topbar) {

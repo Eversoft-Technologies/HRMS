@@ -1253,3 +1253,104 @@ div:has(> #hrms-kpi-btn) button svg {
   display: none !important;
 }
 
+/* ================================================================
+   Right Sidebar (Profile Drawer): Attendance Settings Toggle Switch
+   ================================================================ */
+.hrms-drawer-att-settings {
+  padding: 16px 20px 20px !important;
+  border-top: 1px solid var(--border2) !important;
+  border-bottom: none !important;
+  margin-top: 14px !important;
+  background: var(--bg3) !important;
+  border-radius: 12px !important;
+}
+
+.hrms-drawer-att-card {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 12px !important;
+  padding: 12px 14px !important;
+  background: var(--bg2) !important;
+  border: 1px solid var(--border2) !important;
+  border-radius: 10px !important;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06) !important;
+}
+
+.hrms-drawer-att-info {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 3px !important;
+  flex: 1 !important;
+}
+
+.hrms-drawer-att-title {
+  font-size: 13px !important;
+  font-weight: 600 !important;
+  color: var(--text) !important;
+}
+
+.hrms-drawer-att-sub {
+  font-size: 11px !important;
+  color: var(--text3) !important;
+  line-height: 1.35 !important;
+}
+
+/* Modern iOS-style toggle switch */
+.hrms-drawer-toggle {
+  position: relative !important;
+  display: inline-block !important;
+  width: 44px !important;
+  height: 24px !important;
+  flex-shrink: 0 !important;
+  cursor: pointer !important;
+  margin: 0 !important;
+}
+
+.hrms-drawer-toggle input {
+  opacity: 0 !important;
+  width: 0 !important;
+  height: 0 !important;
+  margin: 0 !important;
+  position: absolute !important;
+}
+
+.hrms-drawer-toggle-slider {
+  position: absolute !important;
+  cursor: pointer !important;
+  inset: 0 !important;
+  background-color: #94a3b8 !important;
+  transition: 0.22s ease !important;
+  border-radius: 24px !important;
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.2) !important;
+}
+
+.hrms-drawer-toggle-slider:before {
+  position: absolute !important;
+  content: "" !important;
+  height: 18px !important;
+  width: 18px !important;
+  left: 3px !important;
+  bottom: 3px !important;
+  background-color: #ffffff !important;
+  transition: 0.22s ease !important;
+  border-radius: 50% !important;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.25) !important;
+}
+
+.hrms-drawer-toggle input:checked + .hrms-drawer-toggle-slider {
+  background: linear-gradient(135deg, #10b981, #059669) !important;
+}
+
+.hrms-drawer-toggle input:checked + .hrms-drawer-toggle-slider:before {
+  transform: translateX(20px) !important;
+}
+
+/* Dim topbar checkin button when attendance is disabled */
+.hrms-ci-wrap.hrms-att-disabled {
+  opacity: 0.45 !important;
+  filter: grayscale(0.8) !important;
+  cursor: not-allowed !important;
+}
+
+
