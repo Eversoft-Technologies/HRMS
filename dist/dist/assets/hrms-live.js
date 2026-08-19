@@ -282,6 +282,7 @@
       // respects offline/backoff rather than repainting "none live" from a
       // request that never left the machine.
       if (window.HRMSNet && !window.HRMSNet.ready("live", opts || { background: false })) return;
+      if (window.HRMSNet) window.HRMSNet.begin("live");
       var r = await get("/api/live");
       if (window.HRMSNet) { if (r.status === 0) { window.HRMSNet.failed("live"); return; } window.HRMSNet.succeeded("live"); }
       var rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
@@ -441,6 +442,7 @@
       // already up (below) is never suppressed — dropping ICE/answer polls
       // mid-call would kill the session instead of just delaying a counter.
       if (window.HRMSNet && !window.HRMSNet.ready("live", opts)) return;
+      if (window.HRMSNet) window.HRMSNet.begin("live");
       var r = await get("/api/live");
       if (window.HRMSNet) { if (r.status === 0) window.HRMSNet.failed("live"); else window.HRMSNet.succeeded("live"); }
       var n = (r.ok && Array.isArray(r.data)) ? r.data.length : 0;
