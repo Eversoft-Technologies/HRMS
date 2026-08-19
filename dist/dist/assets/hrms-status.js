@@ -363,14 +363,16 @@
       if (dot && dot.parentNode) dot.parentNode.removeChild(dot);
       return;
     }
-    if (getComputedStyle(host).position === 'static') host.style.position = 'relative';
+    if (host.style.position !== 'relative' && getComputedStyle(host).position === 'static') {
+      host.style.position = 'relative';
+    }
     if (!dot) {
       dot = document.createElement('span');
       dot.className = 'hrms-presence-dot';
       host.appendChild(dot);
     }
-    dot.style.background = info.color;
-    dot.title = info.label;
+    if (dot.style.background !== info.color) dot.style.background = info.color;
+    if (dot.title !== info.label) dot.title = info.label;
   }
 
   /* Any element that names whose presence it wants: a dot on the avatar, and
@@ -385,8 +387,10 @@
       var info = presenceFor(el.getAttribute('data-hrms-presence-label'));
       // Nothing known about them: leave the element empty rather than assert
       // "Offline" about somebody the server has not spoken for.
-      el.textContent = info ? info.label : '';
-      el.style.color = info ? info.color : '';
+      var text = info ? info.label : '';
+      var col = info ? info.color : '';
+      if (el.textContent !== text) el.textContent = text;
+      if (el.style.color !== col) el.style.color = col;
     });
   }
 
@@ -398,7 +402,6 @@
     var avs = document.querySelectorAll('.topbar .av, .hrms-drawer-av');
     Array.prototype.forEach.call(avs, function (av) { setDot(av, mine); });
     paintTagged();
-    refreshPresence(false);
   }
 
   /* ── react to check-in changes (from topbar OR employee module) ──────── */
@@ -457,13 +460,26 @@
   });
 
   /* ── boot + observe React re-renders ─────────────────────────────────── */
+  var _obsTimer = null;
+  var _isPainting = false;
+
   function watch() {
     ensureBlock();
     paintAvatarDots();
 
     var obs = new MutationObserver(function () {
-      ensureBlock();       // re-inject if React re-rendered the profile page
-      paintAvatarDots();   // keep the avatar dot present after topbar re-renders
+      if (_isPainting) return;
+      if (_obsTimer) return;
+      _obsTimer = setTimeout(function () {
+        _obsTimer = null;
+        _isPainting = true;
+        try {
+          ensureBlock();       // re-inject if React re-rendered the profile page
+          paintAvatarDots();   // keep the avatar dot present after topbar re-renders
+        } finally {
+          _isPainting = false;
+        }
+      }, 60);
     });
     obs.observe(document.body, { childList: true, subtree: true });
 
