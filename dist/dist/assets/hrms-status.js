@@ -459,6 +459,18 @@
     }
   });
 
+  /* close the right-side profile drawer on cross button or backdrop click */
+  document.addEventListener('click', function (e) {
+    var closeBtn = e.target.closest && e.target.closest('.hrms-drawer-x');
+    var isBackdrop = e.target.classList && e.target.classList.contains('hrms-drawer-backdrop');
+    if (closeBtn || isBackdrop) {
+      var d = document.querySelector('.hrms-drawer');
+      var b = document.querySelector('.hrms-drawer-backdrop');
+      if (d) { d.style.display = 'none'; try { d.remove(); } catch (_) {} }
+      if (b) { b.style.display = 'none'; try { b.remove(); } catch (_) {} }
+    }
+  });
+
   /* ── boot + observe React re-renders ─────────────────────────────────── */
   var _obsTimer = null;
   var _isPainting = false;
