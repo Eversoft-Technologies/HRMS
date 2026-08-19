@@ -26,20 +26,7 @@ is untouched.
 
 ## Setup steps (run once)
 1. Install deps: `pip install -r requirements.txt`  (adds channels + daphne)
-<<<<<<< HEAD
-2. Create the chat tables — run all three, in order, against your DB:
-   ```
-   mysql -u <user> -p <db_name> < chat_migrations.sql
-   mysql -u <user> -p <db_name> < chat_migrations_v2.sql
-   mysql -u <user> -p <db_name> < chat_migrations_v3.sql
-   mysql -u <user> -p <db_name> < chat_migrations_v4.sql
-   mysql -u <user> -p <db_name> < chat_migrations_v5sql
-
-   ```
-   (All use `IF NOT EXISTS`, safe to re-run.)
-=======
 2. `python manage.py migrate` — creates the chat tables.
->>>>>>> fix/chat-admin-backfill
 3. Restart the server. With `daphne` installed, `python manage.py runserver`
    serves ASGI (so WebSockets work); in production run under daphne/uvicorn.
 
