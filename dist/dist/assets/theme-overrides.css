@@ -1404,3 +1404,120 @@ div:has(> #hrms-kpi-btn) button svg {
 }
 
 
+
+/* ============================================================
+   hrms-subs-language — the Work Submissions visual language,
+   applied to the shared components every other module is built from.
+
+   Work Submissions is styled entirely with inline styles (129 style
+   objects, zero classes), so no stylesheet drives its look and nothing
+   here can change that page. What this block does is reproduce its
+   visual language on the shared classes the OTHER modules use, so the
+   app reads as one product instead of two.
+
+   Scoped to .content — the page-content container — so the sidebar,
+   topbar and the rest of the app frame are untouched.
+
+   Deliberately NOT included: .card already matches (var(--bg2),
+   1px solid var(--border2), --radius: 12px), and .card-title is an
+   uppercase eyebrow that Work Submissions has no equivalent for, so
+   changing its 63 usages would be churn, not alignment.
+   ============================================================ */
+
+/* Table rhythm. Work Submissions uses a slightly larger, heavier header
+   with tighter tracking, and roomier cells: 12px 14px / 14px against the
+   base 10px 12px / 12px. */
+.content th {
+  padding: 12px 14px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: var(--text3);
+  border-bottom: 1px solid var(--border2);
+}
+.content td {
+  padding: 14px;
+  border-bottom: 1px solid var(--border2);
+}
+
+/* Status pills. The base .badge is a small flat chip; Work Submissions
+   uses a taller pill with a tinted fill and matching text, which is what
+   makes a status readable at a glance in a dense table. Only 11 usages
+   in the bundle and none in the sidebar, so this is safe to restyle. */
+.content .badge {
+  padding: 4px 12px;
+  font-size: 11.5px;
+  font-weight: 600;
+  border-radius: 8px;
+  gap: 6px;
+  border: 1px solid transparent;
+}
+.content .badge.green {
+  background: rgba(16, 185, 129, 0.12);
+  color: #10b981;
+  border-color: rgba(16, 185, 129, 0.30);
+}
+.content .badge.blue {
+  background: rgba(59, 130, 246, 0.12);
+  color: #3b82f6;
+  border-color: rgba(59, 130, 246, 0.30);
+}
+.content .badge.red, .content .badge.danger {
+  background: rgba(239, 68, 68, 0.12);
+  color: #ef4444;
+  border-color: rgba(239, 68, 68, 0.30);
+}
+.content .badge.amber, .content .badge.warn, .content .badge.orange {
+  background: rgba(217, 119, 6, 0.12);
+  color: #d97706;
+  border-color: rgba(217, 119, 6, 0.30);
+}
+/* An unmodified .badge — the neutral/"pending" case. */
+.content .badge:not(.green):not(.blue):not(.red):not(.danger):not(.amber):not(.warn):not(.orange) {
+  background: var(--bg3);
+  color: var(--text2);
+  border-color: var(--border2);
+}
+
+/* Primary action. Work Submissions gives it more presence: a wider hit
+   area, a rounder corner and a soft shadow in its own colour. */
+.content .btn-primary {
+  border-radius: 9px;
+  padding: 10px 20px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  box-shadow: 0 2px 6px rgba(37, 99, 235, 0.30);
+  transition: opacity .15s, box-shadow .15s, transform .15s;
+}
+.content .btn-primary:hover {
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.38);
+}
+.content .btn-primary:active { transform: translateY(1px); }
+
+/* Row-level actions: smaller and tighter than the base .btn-sm, matching
+   the Approve / Reject / Review buttons. */
+.content td .btn-sm {
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+/* Stat cards. The base grid is locked to 4 columns, which squeezes on a
+   laptop and overflows on a tablet. auto-fit reflows instead — the same
+   behaviour the Work Submissions cards have. */
+.content .stat-grid {
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+}
+
+/* Inputs pick up the same corner radius and an accent focus ring. */
+.content .input-field {
+  border-radius: 9px;
+  padding: 10px 14px;
+}
+.content .input-field:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+}

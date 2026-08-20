@@ -3820,6 +3820,13 @@ def task_detail(request, pk):
 def submissions(request):
     if request.method == 'GET':
         qs = WorkSubmission.objects.all()
+        # Reviewers see the whole queue; everyone else sees only what they filed
+        # themselves. Scoped here rather than in the UI so an Employee cannot
+        # widen it by passing ?email= for somebody else, or by calling the API
+        # directly. A caller with no resolvable identity gets nothing.
+        see_all, caller_email, _ = check_perm(request, 'submission.view_all')
+        if not see_all:
+            qs = qs.filter(email=caller_email or '')
         email = norm_email(request.GET.get('email'))
         if email:
             qs = qs.filter(email=email)
