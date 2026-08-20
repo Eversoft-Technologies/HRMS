@@ -3876,7 +3876,7 @@ from rest_framework.decorators import api_view  # noqa: E402,F811
 from rest_framework.response import Response  # noqa: E402,F811
 from .models import (  # noqa: E402,F811
     ChatRoom, ChatMember, ChatMessage, ChatMeeting,
-    AppUser, UserProfile, OnboardingCandidate,
+    AppUser, UserProfile, OnboardingCandidate, EmployeeAttendance,
 )
 from .serializers import (  # noqa: E402
     ChatRoomSerializer, ChatMemberSerializer,
@@ -4067,6 +4067,18 @@ def _contacts_directory(emails):
             "role": (u.role if u else "") or "",
             "status": (u.status if u else "active") or "active",
         }
+    # Online = the person has an open check-in for today (WFO / WFH / remote —
+    # any location counts). Offline otherwise.
+    try:
+        today = _chat_now().date()
+        for a in EmployeeAttendance.objects.filter(email__in=emails, date=today):
+            if a.check_in and (a.check_out is None or a.check_in > a.check_out):
+                if a.email in out:
+                    out[a.email]["online"] = True
+    except Exception:
+        pass
+    for e in out:
+        out[e].setdefault("online", False)
     return out
 
 
@@ -4210,16 +4222,34 @@ def chat_messages(request, room_id):
         # Drop any pins older than 30 days before serializing (backend-enforced
         # expiry — the frontend never has to police it).
         _expire_stale_pins(room_id)
-        msgs = (
+        msgs = list(
             ChatMessage.objects.filter(room_id=room_id)
             .select_related("room")
             .order_by("created_at")
         )
         data = ChatMessageSerializer(msgs, many=True).data
+
+        # Per-member read receipts. Record that the viewer has now read this
+        # room up to "now", then compute a `seen` flag for the viewer's OWN
+        # messages: in a channel it's Seen only once EVERY other member has read
+        # past it; in a 1:1 it's Seen once the other person has.
+        now = _chat_now()
+        members = list(ChatMember.objects.filter(room_id=room_id))
         if viewer:
+            ChatMember.objects.filter(room_id=room_id, employee_email=viewer).update(last_read_at=now)
             ChatMessage.objects.filter(room_id=room_id, is_read=False).exclude(
                 sender_email=viewer
             ).update(is_read=True)
+        reads = {}
+        for m in members:
+            reads[m.employee_email] = now if m.employee_email == viewer else m.last_read_at
+        for i, msg in enumerate(msgs):
+            seen = False
+            if viewer and msg.sender_email == viewer and not msg.is_deleted:
+                others = [reads.get(e) for e in reads if e != msg.sender_email]
+                if others:
+                    seen = all(r is not None and r >= msg.created_at for r in others)
+            data[i]["seen"] = seen
         return Response(data)
 
     # POST — persist + broadcast (REST fallback for the WebSocket). Supports an
@@ -4576,6 +4606,17 @@ def chat_contacts(request):
             if e not in cands:
                 cands[e] = c
 
+    # Presence: online = an open check-in for today (WFO / WFH / remote).
+    all_emails = list(set(au) | set(profs) | set(cands))
+    online_set = set()
+    try:
+        _today = _chat_now().date()
+        for _a in EmployeeAttendance.objects.filter(email__in=all_emails, date=_today):
+            if _a.check_in and (_a.check_out is None or _a.check_in > _a.check_out):
+                online_set.add(norm_email(_a.email))
+    except Exception:
+        pass
+
     out = []
     for e in (set(au) | set(profs) | set(cands)):
         if not e or (me and e == me):
@@ -4606,6 +4647,7 @@ def chat_contacts(request):
             "designation": desg or "",
             "role": (u.role if u else "") or "",
             "status": (u.status if u else "active") or "active",
+            "online": e in online_set,
         })
 
     out.sort(key=lambda x: x["name"].lower())

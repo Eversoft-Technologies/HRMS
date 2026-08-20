@@ -1240,6 +1240,10 @@ class ChatMember(models.Model):
     joined_at = models.DateTimeField()
     # Channel admins can add/remove members and manage other admins.
     is_admin = models.BooleanField(default=False)
+    # When this member last opened/read the room. Used to compute per-member
+    # read receipts — a channel message is "Seen" only once EVERY other member's
+    # last_read_at has passed the message's timestamp.
+    last_read_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         db_table = "chat_members"

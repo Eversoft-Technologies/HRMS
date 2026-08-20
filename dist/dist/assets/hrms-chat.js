@@ -56,6 +56,7 @@
     pendingFile: null, // { file, dataUrl } staged in the composer, sent on Send
     toolsOpen: false,  // composer "^" tools menu open?
     camStream: null,   // active getUserMedia stream while the camera is open
+    onlineByEmail: {}, // email -> true when that person is currently checked in
   };
 
   // ───────────────────────────────────────────── helpers: session / api
@@ -129,14 +130,27 @@
     return AVATAR_COLORS[h % AVATAR_COLORS.length];
   }
 
-  function avatarHTML(name, key, pic, cls) {
+  // Is this person currently online (checked in)? Falls back to false.
+  function isOnline(email) {
+    return !!(email && state.onlineByEmail[String(email).toLowerCase()]);
+  }
+
+  // Small presence dot rendered at the corner of an avatar.
+  function presenceDot(email) {
+    if (!email) return "";
+    return '<span class="hcx-dot ' + (isOnline(email) ? "on" : "off") +
+      '" title="' + (isOnline(email) ? "Online" : "Offline") + '"></span>';
+  }
+
+  function avatarHTML(name, key, pic, cls, email) {
     cls = cls || "";
+    var dot = presenceDot(email);
     if (pic) {
-      return '<span class="hcx-av ' + cls + '"><img src="' + esc(pic) + '" alt=""></span>';
+      return '<span class="hcx-av ' + cls + '"><img src="' + esc(pic) + '" alt="">' + dot + "</span>";
     }
     return (
       '<span class="hcx-av ' + cls + '" style="background:' + colorFor(key || name) + '">' +
-      esc(initials(name)) +
+      esc(initials(name)) + dot +
       "</span>"
     );
   }
@@ -343,11 +357,16 @@
       "#" + ROOT_ID + " .hcx-empty small{display:block;margin-top:4px;font-size:12px;opacity:.8;}",
 
       // avatar
-      "#" + ROOT_ID + " .hcx-av{width:42px;height:42px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-size:14px;font-weight:700;flex-shrink:0;overflow:hidden;}",
-      "#" + ROOT_ID + " .hcx-av img{width:100%;height:100%;object-fit:cover;}",
+      "#" + ROOT_ID + " .hcx-av{width:42px;height:42px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-size:14px;font-weight:700;flex-shrink:0;position:relative;}",
+      "#" + ROOT_ID + " .hcx-av img{width:100%;height:100%;object-fit:cover;border-radius:50%;display:block;}",
       "#" + ROOT_ID + " .hcx-av.sm{width:32px;height:32px;font-size:12px;}",
       "#" + ROOT_ID + " .hcx-av.lg{width:40px;height:40px;font-size:14px;}",
       "#" + ROOT_ID + " .hcx-av.ch{background:var(--hcx-sent)!important;}",
+      // Presence dot: green when checked-in (online), gray (#666) when offline.
+      "#" + ROOT_ID + " .hcx-dot{position:absolute;bottom:-1px;right:-1px;width:12px;height:12px;border-radius:50%;box-shadow:0 0 0 2px var(--hcx-surface);box-sizing:border-box;}",
+      "#" + ROOT_ID + " .hcx-dot.on{background:#22c55e;box-shadow:0 0 0 2px var(--hcx-surface),0 0 5px rgba(34,197,94,.85);}",
+      "#" + ROOT_ID + " .hcx-dot.off{background:#666;}",
+      "#" + ROOT_ID + " .hcx-av.sm .hcx-dot{width:10px;height:10px;}",
       "#" + ROOT_ID + " .hcx-av.ch svg{width:20px;height:20px;color:#fff;}",
 
       // main panel
@@ -651,6 +670,10 @@
 
     wireEvents(root);
     initResizer(root);
+    // Align the highlighted tab with the persisted state.tab. layoutHTML() always
+    // marks "Direct" active, so without this the highlight can disagree with the
+    // list content (e.g. showing Channels while "Direct" looks selected).
+    syncTabs();
     fitLayout();
     // Re-fit a few times while the shell (top bar) finishes mounting, and on
     // every window resize.
@@ -669,6 +692,9 @@
     // ordering and unread badges without needing a page refresh.
     if (state.roomsPollTimer) clearInterval(state.roomsPollTimer);
     state.roomsPollTimer = setInterval(refreshRooms, 5000);
+    // Keep presence (online dots + Online/Offline) live.
+    if (state.presenceTimer) clearInterval(state.presenceTimer);
+    state.presenceTimer = setInterval(refreshPresence, 20000);
     observeUnmount(page);
     state.booted = true;
   }
@@ -818,6 +844,8 @@
         state.pollTimer = null;
         if (state.roomsPollTimer) clearInterval(state.roomsPollTimer);
         state.roomsPollTimer = null;
+        if (state.presenceTimer) clearInterval(state.presenceTimer);
+        state.presenceTimer = null;
         if (state._fit) {
           window.removeEventListener("resize", state._fit);
           state._fit = null;
@@ -870,6 +898,11 @@
     apiGet("/api/chat/contacts?email=" + encodeURIComponent(state.me.email))
       .then(function (list) {
         state.contacts = Array.isArray(list) ? list : [];
+        rebuildOnlineMap();
+        // Paint the sidebar dots as soon as presence is known — don't wait for
+        // a poll or a hover/click to turn them green.
+        renderList();
+        refreshHeaderPresence();
       })
       .catch(function (e) {
         console.warn("[hcx] contacts load failed", e);
@@ -878,6 +911,53 @@
       .then(function () {
         state.loadingContacts = false;
       });
+  }
+
+  // Merge the latest contacts + open-room members into the email→online map.
+  // Merge (not replace) so opening a room never drops presence learned from the
+  // contacts list, and vice-versa.
+  function rebuildOnlineMap() {
+    var map = state.onlineByEmail || {};
+    (state.contacts || []).forEach(function (c) {
+      if (c && c.email) map[String(c.email).toLowerCase()] = !!c.online;
+    });
+    if (state.activeRoom && state.activeRoom.members) {
+      state.activeRoom.members.forEach(function (m) {
+        if (m && m.email && typeof m.online === "boolean") {
+          map[String(m.email).toLowerCase()] = m.online;
+        }
+      });
+    }
+    state.onlineByEmail = map;
+  }
+
+  // Periodically refresh presence so the dots + Online/Offline stay live.
+  function refreshPresence() {
+    apiGet("/api/chat/contacts?email=" + encodeURIComponent(state.me.email))
+      .then(function (list) {
+        if (!Array.isArray(list)) return;
+        state.contacts = list;
+        rebuildOnlineMap();
+        renderList();
+        refreshHeaderPresence();
+        // Refresh message avatars' dots too.
+        if (state.messages && state.messages.length) renderMessages();
+      })
+      .catch(function () {});
+  }
+
+  // Update just the header avatar dot + Online/Offline sub-line for a 1:1 chat.
+  function refreshHeaderPresence() {
+    var room = state.activeRoom;
+    if (!room || room.is_group || !state.root) return;
+    var hm = state.root.querySelector(".hcx-head .hcx-hm");
+    if (hm) hm.textContent = directSubline(room);
+    var dot = state.root.querySelector(".hcx-head .hcx-av .hcx-dot");
+    if (dot && room.other_email) {
+      var on = isOnline(room.other_email);
+      dot.className = "hcx-dot " + (on ? "on" : "off");
+      dot.title = on ? "Online" : "Offline";
+    }
   }
 
   function loadRooms() {
@@ -929,7 +1009,7 @@
         var name = r.display_name || r.name || "Chat";
         var av = isCh
           ? '<span class="hcx-av ch">' + ICON.hash + "</span>"
-          : avatarHTML(name, r.other_email || name, memberPic(r, r.other_email));
+          : avatarHTML(name, r.other_email || name, memberPic(r, r.other_email), "", r.other_email);
         var last = r.last_message
           ? (r.last_sender && r.last_sender === state.me.email ? "You: " : "") + r.last_message
           : isCh
@@ -972,8 +1052,12 @@
     closeCamera();
     if (state.listening) stopDictation();
 
+    // Keep the active tab consistent with the room being opened.
+    state.tab = room.is_group ? "channels" : "direct";
+    rebuildOnlineMap();
+
     renderConversation(room);
-    renderList();
+    syncTabs();
     if (state.root) state.root.classList.add("show-convo");
 
     loadMessages(room.id);
@@ -988,10 +1072,10 @@
     var name = room.display_name || room.name || "Chat";
     var sub = isCh
       ? (room.member_emails || []).length + " members"
-      : memberInfo(room, room.other_email);
+      : directSubline(room);
     var av = isCh
       ? '<span class="hcx-av lg ch">' + ICON.hash + "</span>"
-      : avatarHTML(name, room.other_email || name, memberPic(room, room.other_email), "lg");
+      : avatarHTML(name, room.other_email || name, memberPic(room, room.other_email), "lg", room.other_email);
 
     var membersBtn = isCh
       ? '<button class="hcx-hicon" data-act="members" title="Members">' + ICON.people + "</button>"
@@ -1050,6 +1134,13 @@
     if (m.designation) bits.push(m.designation);
     if (m.department) bits.push(m.department);
     return bits.length ? bits.join(" · ") : m.email;
+  }
+
+  // 1:1 header sub-line: contact info + live Online/Offline (from check-in).
+  function directSubline(room) {
+    var base = memberInfo(room, room.other_email);
+    var status = isOnline(room.other_email) ? "Online" : "Offline";
+    return base ? base + " · " + status : status;
   }
 
   // ───────────────────────────────────────────── messages
@@ -1152,7 +1243,7 @@
   function messageHTML(m, isCh, consecutive) {
     var sent = m.sender_email === state.me.email;
     var name = m.sender_name || (m.sender_email || "").split("@")[0];
-    var av = sent ? "" : avatarHTML(name, m.sender_email, "", "sm");
+    var av = sent ? "" : avatarHTML(name, m.sender_email, "", "sm", m.sender_email);
     var senderLabel = !sent && isCh && !consecutive ? '<div class="hcx-sender">' + esc(name) + "</div>" : "";
     var rowAttr = (m.id != null ? ' data-mid="' + m.id + '"' : "");
 
@@ -1180,10 +1271,11 @@
 
     var tick = "";
     if (sent) {
-      // Delivered → a single check. Seen → a Teams-style "eye" (with a subtle
-      // "Seen" label), instead of the old double tick.
-      tick = m.is_read
-        ? '<span class="hcx-seen" title="Seen">' + ICON.eye + "<span class='hcx-seen-t'>Seen</span></span>"
+      // Delivered → a single check. Seen → a Teams-style "eye" + "Seen".
+      // In a channel, `m.seen` is true ONLY once every other member has read
+      // it; in a 1:1, once the other person has. (Computed server-side.)
+      tick = m.seen
+        ? '<span class="hcx-seen" title="Seen by everyone">' + ICON.eye + "<span class='hcx-seen-t'>Seen</span></span>"
         : '<span class="hcx-tick">' + ICON.check1 + "</span>";
     }
     var editedLabel = m.edited ? '<span class="hcx-edited">edited</span>' : "";
@@ -2051,12 +2143,14 @@
               var cur = byId[String(m.id)];
               if (cur && (cur.is_deleted !== m.is_deleted || cur.edited !== m.edited ||
                           cur.message !== m.message || cur.is_read !== m.is_read ||
+                          cur.seen !== m.seen ||
                           cur.is_pinned !== m.is_pinned || cur.is_pin_active !== m.is_pin_active ||
                           cur.pinned_by !== m.pinned_by)) {
                 cur.is_deleted = m.is_deleted;
                 cur.edited = m.edited;
                 cur.message = m.message;
                 cur.is_read = m.is_read;
+                cur.seen = m.seen;
                 cur.is_pinned = m.is_pinned;
                 cur.is_pin_active = m.is_pin_active;
                 cur.pinned_by = m.pinned_by;
