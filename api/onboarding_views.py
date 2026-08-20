@@ -133,7 +133,7 @@ CANDIDATE_STATUSES = [
 # Documents. SSN plus one government photo ID are mandatory; the visa documents
 # only apply to non-citizens, so they stay optional here and are enforced (or
 # not) by the HR verification stage instead.
-DOC_TYPES = ['ssn', 'driver_license', 'state_id', 'visa', 'i94']
+DOC_TYPES = ['ssn', 'driver_license', 'state_id', 'visa', 'i94', 'passport']
 MANDATORY_DOC_TYPES = ['ssn']
 # Either of these satisfies the photo-ID requirement.
 PHOTO_ID_DOC_TYPES = ['driver_license', 'state_id']
@@ -767,7 +767,8 @@ def candidates(request):
         {'type': 'driver_license', 'label': 'Driver License', 'required': False, 'sendToCandidate': True},
         {'type': 'state_id', 'label': 'State ID', 'required': False, 'sendToCandidate': False},
         {'type': 'visa', 'label': 'Visa (Work Authorization)', 'required': False, 'sendToCandidate': True},
-        {'type': 'i94', 'label': 'I-94', 'required': False, 'sendToCandidate': True}
+        {'type': 'i94', 'label': 'I-94', 'required': False, 'sendToCandidate': True},
+        {'type': 'passport', 'label': 'Passport', 'required': False, 'sendToCandidate': True}
     ]
 
     actor = _actor(request)
@@ -1410,10 +1411,22 @@ def candidate_verification(request, pk):
     if not serializer.is_valid():
         return serializer_err(serializer)
 
+    now = datetime.now()
+    # requested_on is stamped once, when the check is first raised; completed_on
+    # only once HR has actually decided, so a Pending save leaves it empty.
+    extra = {}
+    if not (verification and verification.requested_on) and 'requestedOn' not in body:
+        extra['requested_on'] = now
+    if status_val in ('Approved', 'Rejected') and 'completedOn' not in body:
+        extra['completed_on'] = now
+    elif status_val == 'Pending' and 'completedOn' not in body:
+        extra['completed_on'] = None
+
     with transaction.atomic():
         verification = serializer.save(
             candidate=candidate, verified_by=actor, verified_at=local_now(),
             custom_verified=clean_custom_verified(body.get('customVerified'), candidate),
+            **extra,
         )
         if status_val == 'Approved':
             # HR signing off IS what closes the documents stage: an upload alone
@@ -1907,7 +1920,8 @@ def documents_list(request):
                 {'type': 'driver_license', 'label': 'Driver License', 'required': False, 'sendToCandidate': True},
                 {'type': 'state_id', 'label': 'State ID', 'required': False, 'sendToCandidate': False},
                 {'type': 'visa', 'label': 'Visa (Work Authorization)', 'required': False, 'sendToCandidate': True},
-                {'type': 'i94', 'label': 'I-94', 'required': False, 'sendToCandidate': True}
+                {'type': 'i94', 'label': 'I-94', 'required': False, 'sendToCandidate': True},
+                {'type': 'passport', 'label': 'Passport', 'required': False, 'sendToCandidate': True}
             ]
             
         docs_data = {}
@@ -1970,15 +1984,37 @@ def verifications_list(request):
         row = _who(c)
         missing = missing_mandatory_docs(c)
         row.update({
+            'verificationId': v.id if v else None,
+            'employeeId': (v.employee_id or '') if v else '',
+            'verificationType': (v.verification_type or '') if v else '',
+            'vendorName': (v.vendor_name or '') if v else '',
+            'requestedOn': v.requested_on.strftime('%Y-%m-%d %H:%M:%S') if (v and v.requested_on) else None,
+            'completedOn': v.completed_on.strftime('%Y-%m-%d %H:%M:%S') if (v and v.completed_on) else None,
+            'reportPath': (v.report_path or '') if v else '',
             'status': (v.status or 'Pending') if v else 'Pending',
             'ssnVerified': bool(v.ssn_verified) if v else False,
             'driverLicenseVerified': bool(v.driver_license_verified) if v else False,
             'stateIdVerified': bool(v.state_id_verified) if v else False,
             'visaVerified': bool(v.visa_verified) if v else False,
             'i94Verified': bool(v.i94_verified) if v else False,
+            'passportVerified': bool(v.passport_verified) if v else False,
+            'identityVerified': bool(v.identity_verified) if v else False,
+            'educationVerified': bool(v.education_verified) if v else False,
+            'employmentVerified': bool(v.employment_verified) if v else False,
+            'addressVerified': bool(v.address_verified) if v else False,
+            'criminalVerified': bool(v.criminal_verified) if v else False,
+            'referenceVerified': bool(v.reference_verified) if v else False,
             'checked': sum([
                 bool(v.ssn_verified), bool(v.driver_license_verified),
                 bool(v.state_id_verified), bool(v.visa_verified), bool(v.i94_verified),
+                bool(v.passport_verified),
+            ]) if v else 0,
+            # Counted separately from the documents: the two lists answer
+            # different questions, so a combined "8 / 12" would say nothing.
+            'backgroundChecked': sum([
+                bool(v.identity_verified), bool(v.education_verified),
+                bool(v.employment_verified), bool(v.address_verified),
+                bool(v.criminal_verified), bool(v.reference_verified),
             ]) if v else 0,
             'remarks': (v.remarks or '') if v else '',
             'verifiedBy': (v.verified_by or '') if v else '',
