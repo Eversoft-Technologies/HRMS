@@ -330,17 +330,33 @@
         lbl.className = 'haa-map-fence-badge';
         lbl.style.cssText = 'position:absolute;left:' + fx + 'px;top:' + (fy - 28) + 'px;transform:translate(-50%,-100%);' +
           'background:rgba(15,23,42,0.88);color:#fff;padding:4px 10px;border-radius:20px;font-size:11px;font-weight:700;' +
-          'border:1px solid #4f8ef7;box-shadow:0 4px 14px rgba(0,0,0,0.3);white-space:nowrap;pointer-events:auto;cursor:pointer;z-index:12;';
-        lbl.innerHTML = '🏢 ' + esc(f.name) + ' <span style="background:#4f8ef7;color:#fff;border-radius:10px;padding:1px 6px;margin-left:4px;font-size:10px;">' + (f.activeCount || 0) + ' on-site</span>';
+          'border:1px solid ' + (f.isHome ? '#8b5cf6' : '#4f8ef7') + ';box-shadow:0 4px 14px rgba(0,0,0,0.3);white-space:nowrap;pointer-events:auto;cursor:pointer;z-index:12;';
+
+        var onSiteEmpsInFence = employees.filter(function (emp) {
+          if (emp.latitude == null || emp.longitude == null) return false;
+          if (f.isHome) {
+            return emp.isWfh && emp.email === f.ownerEmail;
+          }
+          if (!emp.geoVerified || emp.isWfh) return false;
+          var d = haversine(emp.latitude, emp.longitude, f.latitude, f.longitude);
+          return d <= (Number(f.radiusMeters || f.radius_meters) || 200) + 60 || emp.isSimulatedCoord;
+        });
+
+        var countNum = (f.activeCount != null && f.activeCount > 0) ? f.activeCount : onSiteEmpsInFence.length;
+        var iconPrefix = f.isHome ? '🏠 ' : '🏢 ';
+        var labelSuffix = f.isHome ? ' remote' : ' on-site';
+        lbl.innerHTML = iconPrefix + esc(f.name) + ' <span style="background:' + (f.isHome ? '#8b5cf6' : '#4f8ef7') + ';color:#fff;border-radius:10px;padding:1px 6px;margin-left:4px;font-size:10px;">' + countNum + labelSuffix + '</span>';
+
         lbl.onclick = function (e) {
           e.stopPropagation();
           var fenceEmps = visibleEmps.filter(function (emp) {
             if (emp.latitude == null || emp.longitude == null) return false;
+            if (f.isHome) return emp.isWfh && emp.email === f.ownerEmail;
             var d = haversine(emp.latitude, emp.longitude, f.latitude, f.longitude);
-            return d <= (Number(f.radiusMeters || f.radius_meters) || 200) + 40;
+            return d <= (Number(f.radiusMeters || f.radius_meters) || 200) + 60 || emp.isSimulatedCoord;
           });
           if (fenceEmps.length > 0) {
-            showClusterPopover(fenceEmps, fx, fy - 10, '🏢 ' + f.name + ' (' + fenceEmps.length + ' on-site)');
+            showClusterPopover(fenceEmps, fx, fy - 10, iconPrefix + f.name + ' (' + fenceEmps.length + labelSuffix + ')');
           } else {
             st.lat = f.latitude;
             st.lng = f.longitude;
@@ -401,17 +417,23 @@
 
               var dotColor = emp.isWfh ? '#3b82f6' : (emp.status === 'Pending Review' ? '#f59e0b' : '#10b981');
               var initials = (emp.name || 'U').split(' ').map(function (w) { return w[0]; }).join('').toUpperCase().slice(0, 2);
+              var badgeIcon = emp.isWfh ? '🏠' : (emp.device === 'mobile' ? '📱' : '');
+
+              var picHtml = emp.profilePic
+                ? '<img src="' + esc(emp.profilePic) + '" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:50%;display:block;" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\';" />' +
+                  '<div style="display:none;width:100%;height:100%;align-items:center;justify-content:center;">' + esc(initials) + '</div>'
+                : esc(initials);
 
               var eMarker = document.createElement('div');
               eMarker.className = 'haa-map-emp-pin';
               eMarker.style.cssText = 'position:absolute;left:' + pinX + 'px;top:' + pinY + 'px;transform:translate(-50%,-50%);' +
                 'cursor:pointer;z-index:20;transition:transform 0.15s;';
               eMarker.innerHTML =
-                '<div style="width:34px;height:34px;border-radius:50%;background:' + dotColor + ';border:3px solid #fff;' +
-                'display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:12px;' +
+                '<div style="width:36px;height:36px;border-radius:50%;background:' + dotColor + ';border:3px solid #fff;' +
+                'display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:12px;overflow:hidden;' +
                 'box-shadow:0 4px 12px rgba(0,0,0,0.3);position:relative;" title="' + esc(emp.name) + ' (' + esc(emp.department) + ')">' +
-                esc(initials) +
-                (emp.device === 'mobile' ? '<span style="position:absolute;bottom:-3px;right:-3px;font-size:10px;">📱</span>' : '') +
+                picHtml +
+                (badgeIcon ? '<span style="position:absolute;bottom:-2px;right:-2px;font-size:10px;background:rgba(15,23,42,0.85);border-radius:50%;width:14px;height:14px;display:flex;align-items:center;justify-content:center;line-height:1;border:1px solid #fff;">' + badgeIcon + '</span>' : '') +
                 '</div>';
 
               eMarker.onclick = function (e) {
@@ -439,8 +461,12 @@
       var listHtml = members.map(function (emp, idx) {
         var statusColor = emp.isWfh ? '#3b82f6' : (emp.status === 'Pending Review' ? '#f59e0b' : '#10b981');
         var initials = (emp.name || 'U').split(' ').map(function (w) { return w[0]; }).join('').toUpperCase().slice(0, 2);
+        var avatarEl = emp.profilePic
+          ? '<img src="' + esc(emp.profilePic) + '" alt="" style="width:34px;height:34px;border-radius:50%;object-fit:cover;flex-shrink:0;margin-top:2px;border:2px solid ' + statusColor + ';" onerror="this.outerHTML=\'<div style=\\\'width:34px;height:34px;border-radius:50%;background:' + statusColor + ';color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px;flex-shrink:0;margin-top:2px;\\\'>' + esc(initials) + '</div>\';" />'
+          : '<div style="width:34px;height:34px;border-radius:50%;background:' + statusColor + ';color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px;flex-shrink:0;margin-top:2px;">' + esc(initials) + '</div>';
+
         return '<div class="haa-cluster-emp-row" data-cl-idx="' + idx + '" style="display:flex;align-items:flex-start;gap:10px;padding:10px 8px;border-bottom:1px solid var(--haa-line,#e2e8f0);border-radius:8px;cursor:pointer;transition:background 0.15s;">' +
-          '  <div style="width:34px;height:34px;border-radius:50%;background:' + statusColor + ';color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px;flex-shrink:0;margin-top:2px;">' + esc(initials) + '</div>' +
+          '  ' + avatarEl +
           '  <div style="flex:1;min-width:0;">' +
           '    <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;">' +
           '      <div style="font-weight:700;font-size:13px;color:var(--haa-text,#0f172a);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + esc(emp.name) + '</div>' +
@@ -500,6 +526,9 @@
 
       var statusColor = emp.isWfh ? '#3b82f6' : (emp.status === 'Pending Review' ? '#f59e0b' : '#10b981');
       var initials = (emp.name || 'U').split(' ').map(function (w) { return w[0]; }).join('').toUpperCase().slice(0, 2);
+      var popupAvatar = emp.profilePic
+        ? '<img src="' + esc(emp.profilePic) + '" alt="" style="width:40px;height:40px;border-radius:50%;object-fit:cover;border:2.5px solid ' + statusColor + ';box-shadow:0 2px 8px rgba(0,0,0,0.15);" onerror="this.outerHTML=\'<div style=\\\'width:38px;height:38px;border-radius:50%;background:' + statusColor + ';color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;\\\'>' + esc(initials) + '</div>\';" />'
+        : '<div style="width:38px;height:38px;border-radius:50%;background:' + statusColor + ';color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;">' + esc(initials) + '</div>';
 
       var backBtnHtml = clusterMembers && clusterMembers.length > 1
         ? '<button id="haa-pop-back" style="background:none;border:none;color:var(--haa-link,#4f46e5);font-size:12px;cursor:pointer;padding:0;font-weight:600;display:flex;align-items:center;gap:2px;">← Back to list</button>'
@@ -509,7 +538,7 @@
         (backBtnHtml ? '<div style="margin-bottom:8px;">' + backBtnHtml + '</div>' : '') +
         '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">' +
         '  <div style="display:flex;align-items:center;gap:10px;">' +
-        '    <div style="width:36px;height:36px;border-radius:50%;background:' + statusColor + ';color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;">' + esc(initials) + '</div>' +
+        '    ' + popupAvatar +
         '    <div>' +
         '      <div style="font-weight:700;font-size:14px;color:var(--haa-text);">' + esc(emp.name) + '</div>' +
         '      <div style="font-size:11px;color:var(--haa-muted);">' + esc(emp.department) + ' · ' + esc(emp.role || 'Staff') + '</div>' +
@@ -521,7 +550,7 @@
         '  <div><span style="color:var(--haa-muted);">Status:</span> <strong>' + esc(emp.status) + '</strong></div>' +
         '  <div><span style="color:var(--haa-muted);">Device:</span> ' + (emp.device === 'mobile' ? '📱 Mobile' : '💻 Desktop') + '</div>' +
         '  <div><span style="color:var(--haa-muted);">Checked in:</span> <strong>' + esc(emp.checkIn || '—') + '</strong></div>' +
-        '  <div><span style="color:var(--haa-muted);">GPS:</span> ' + (emp.accuracy ? '±' + Math.round(emp.accuracy) + ' m' : (emp.isSimulatedCoord ? 'Office Geo' : 'Verified')) + '</div>' +
+        '  <div><span style="color:var(--haa-muted);">GPS:</span> ' + (emp.accuracy ? '±' + Math.round(emp.accuracy) + ' m' : (emp.isSimulatedCoord ? (emp.isWfh ? 'Remote / WFH' : 'Office Geo') : 'Verified')) + '</div>' +
         '</div>' +
         (emp.locationReason ? '<div style="margin-top:8px;font-size:11px;color:var(--haa-warn-fg);background:rgba(245,158,11,0.1);padding:6px 8px;border-radius:6px;"><strong>Note:</strong> ' + esc(emp.locationReason) + '</div>' : '') +
         '<div style="margin-top:10px;display:flex;justify-content:flex-end;gap:6px;">' +
@@ -592,10 +621,23 @@
     };
     zoomWrap.querySelector('#haa-z-fit').onclick = function (e) {
       e.stopPropagation();
-      st.z = 13;
-      if (fences.length && fences[0].latitude) {
+      var pts = [];
+      fences.forEach(function (f) { if (f.latitude && f.longitude) pts.push([f.latitude, f.longitude]); });
+      visibleEmps.forEach(function (e) { if (e.latitude && e.longitude) pts.push([e.latitude, e.longitude]); });
+      if (pts.length) {
+        var minLat = 90, maxLat = -90, minLng = 180, maxLng = -180;
+        pts.forEach(function (p) {
+          minLat = Math.min(minLat, p[0]); maxLat = Math.max(maxLat, p[0]);
+          minLng = Math.min(minLng, p[1]); maxLng = Math.max(maxLng, p[1]);
+        });
+        st.lat = (minLat + maxLat) / 2;
+        st.lng = (minLng + maxLng) / 2;
+        var maxSpan = Math.max(maxLat - minLat, maxLng - minLng);
+        st.z = maxSpan < 0.03 ? 14 : maxSpan < 0.12 ? 12 : maxSpan < 0.6 ? 10 : maxSpan < 2.5 ? 8 : 6;
+      } else if (fences.length && fences[0].latitude) {
         st.lat = fences[0].latitude;
         st.lng = fences[0].longitude;
+        st.z = 13;
       }
       redraw();
     };
@@ -610,6 +652,22 @@
       },
       setFilter: function (flt) {
         statusFilter = state.mapFilter = flt;
+        // If focusing on remote or onsite, pan map to relevant employee if available
+        if (flt === 'wfh') {
+          var wfhEmp = employees.find(function (e) { return e.isWfh && e.latitude && e.longitude; });
+          if (wfhEmp) {
+            st.lat = wfhEmp.latitude;
+            st.lng = wfhEmp.longitude;
+            st.z = 14;
+          }
+        } else if (flt === 'onsite') {
+          var onsiteEmp = employees.find(function (e) { return !e.isWfh && e.geoVerified && e.latitude && e.longitude; });
+          if (onsiteEmp) {
+            st.lat = onsiteEmp.latitude;
+            st.lng = onsiteEmp.longitude;
+            st.z = 14;
+          }
+        }
         redraw();
       },
       setDept: function (dept) {

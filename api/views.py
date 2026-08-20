@@ -3407,7 +3407,7 @@ def attendance_map_feed(request):
     try:
         today = local_now().date()
 
-        # 1. Company office fences
+        # 1. Company office & home fences
         fences_qs = GeoFence.objects.filter(owner_email='')
         fences_list = []
         for f in fences_qs:
@@ -3424,10 +3424,32 @@ def attendance_map_feed(request):
                     'longitude': lng,
                     'radiusMeters': int(f.radius_meters) if f.radius_meters else 200,
                     'radius_meters': int(f.radius_meters) if f.radius_meters else 200,
+                    'isHome': False,
+                    'ownerEmail': '',
                     'activeCount': 0,
                 })
 
-        # 2. Profiles and App users metadata
+        # Include registered home fences for WFH/remote tracking
+        for hf in GeoFence.objects.exclude(owner_email=''):
+            try:
+                h_lat = float(hf.latitude) if hf.latitude is not None else None
+                h_lng = float(hf.longitude) if hf.longitude is not None else None
+            except (ValueError, TypeError):
+                h_lat, h_lng = None, None
+            if h_lat is not None and h_lng is not None:
+                fences_list.append({
+                    'id': hf.id,
+                    'name': hf.name or f"{hf.owner_email.split('@')[0]}'s Home",
+                    'latitude': h_lat,
+                    'longitude': h_lng,
+                    'radiusMeters': int(hf.radius_meters) if hf.radius_meters else 150,
+                    'radius_meters': int(hf.radius_meters) if hf.radius_meters else 150,
+                    'isHome': True,
+                    'ownerEmail': hf.owner_email,
+                    'activeCount': 0,
+                })
+
+        # 2. Profiles and App users metadata (including profile_pic)
         user_map = {}
         try:
             for p in UserProfile.objects.all():
@@ -3437,6 +3459,7 @@ def attendance_map_feed(request):
                         'department': p.department or 'General',
                         'role': p.designation or '',
                         'name': f"{p.first_name} {p.last_name}".strip(),
+                        'profilePic': p.profile_pic or '',
                     }
         except Exception:
             pass
@@ -3450,6 +3473,7 @@ def attendance_map_feed(request):
                             'department': 'General',
                             'role': u.role or '',
                             'name': u.full_name or em.split('@')[0],
+                            'profilePic': '',
                         }
                     else:
                         if not user_map[em]['name'] and u.full_name:
@@ -3481,11 +3505,30 @@ def attendance_map_feed(request):
             except (ValueError, TypeError):
                 lat, lng = None, None
 
-            # Fallback to office fence coordinates if verified on-site without raw GPS
             is_simulated_coord = False
-            if (lat is None or lng is None) and att.geo_verified and fences_list:
-                lat = fences_list[0]['latitude']
-                lng = fences_list[0]['longitude']
+            # Resolve coordinates for Remote / WFH users
+            if (lat is None or lng is None) and att.is_wfh:
+                home = home_fence_for(email)
+                if home and home.latitude is not None and home.longitude is not None:
+                    try:
+                        lat = float(home.latitude)
+                        lng = float(home.longitude)
+                        is_simulated_coord = True
+                    except (ValueError, TypeError):
+                        pass
+                elif fences_list:
+                    # Provide visual fallback near company location with slight offset
+                    office_fences = [f for f in fences_list if not f.get('isHome')]
+                    base_f = office_fences[0] if office_fences else fences_list[0]
+                    lat = base_f['latitude'] + 0.007
+                    lng = base_f['longitude'] + 0.007
+                    is_simulated_coord = True
+            # Fallback to office fence coordinates if verified on-site without raw GPS
+            elif (lat is None or lng is None) and att.geo_verified and fences_list:
+                office_fences = [f for f in fences_list if not f.get('isHome')]
+                base_f = office_fences[0] if office_fences else fences_list[0]
+                lat = base_f['latitude']
+                lng = base_f['longitude']
                 is_simulated_coord = True
 
             status_lbl, since_dt = _team_status(ev, att)
@@ -3497,6 +3540,7 @@ def attendance_map_feed(request):
                 'name': att.employee_name or u_info.get('name') or email.split('@')[0],
                 'department': u_info.get('department') or 'General',
                 'role': u_info.get('role') or '',
+                'profilePic': u_info.get('profilePic') or '',
                 'latitude': lat,
                 'longitude': lng,
                 'accuracy': float(ev.accuracy) if ev and hasattr(ev, 'accuracy') and ev.accuracy is not None else None,
@@ -3514,15 +3558,21 @@ def attendance_map_feed(request):
         # Count employees in each fence
         for f in fences_list:
             f_lat, f_lng, f_rad = f['latitude'], f['longitude'], f['radiusMeters']
+            is_home = f.get('isHome', False)
             cnt = 0
             for emp in employees_list:
                 if emp['latitude'] is not None and emp['longitude'] is not None:
-                    try:
-                        d = _haversine_distance(float(emp['latitude']), float(emp['longitude']), float(f_lat), float(f_lng))
-                        if d <= f_rad + 30:
+                    if is_home:
+                        if emp.get('isWfh') and emp.get('email') == f.get('ownerEmail'):
                             cnt += 1
-                    except Exception:
-                        pass
+                    else:
+                        if not emp.get('isWfh') and emp.get('geoVerified'):
+                            try:
+                                d = _haversine_distance(float(emp['latitude']), float(emp['longitude']), float(f_lat), float(f_lng))
+                                if d <= f_rad + 60 or emp.get('isSimulatedCoord'):
+                                    cnt += 1
+                            except Exception:
+                                pass
             f['activeCount'] = cnt
 
         return Response({
@@ -5969,7 +6019,6 @@ def chat_attachment(request, msg_id):
         full = os.path.normpath(os.path.join(_chat_media_root(), path))
         if full.startswith(os.path.normpath(_chat_media_root())) and os.path.exists(full):
             return _serve_file_range(request, full, ctype, name)
-        return err("Attachment not found", 404)
 
     # Base64-backed (older messages / fallback).
     if msg.attachment_data:
