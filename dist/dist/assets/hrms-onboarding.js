@@ -75,8 +75,8 @@
      handler to send {isCustom, label} and let the server derive the type. */
   var CUSTOM_DOC_VALUE = '__custom__';
   var MAX_DOC_LABEL = 120;   // mirrors MAX_CUSTOM_DOC_LABEL server-side
-  var EVERSOFT_ASSETS = ['Laptop', 'Monitor', 'Mouse', 'Keyboard', 'Dock', 'Bag', 'Headset'];
-  var ASSET_STATUSES = ['Assigned', 'Returned', 'Lost', 'Damaged'];
+  var EVERSOFT_ASSETS = ['Laptop', 'Monitor', 'Mouse', 'Keyboard', 'Dock', 'Bag', 'Headset','Office365','Email_ID','Software License','ID_Card','Desktop','Mobile'];
+  var ASSET_STATUSES = ['Assigned', 'Returned', 'Lost', 'Damaged','pending', 'Delivered'];
   var MAX_MB = 10;
   var ALLOWED_MIME = ['application/pdf', 'image/png', 'image/jpeg'];
   var PAGE_SIZES = [10, 15, 25, 50, 100];
