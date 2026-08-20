@@ -170,7 +170,7 @@
     var badge = document.getElementById('hrms-notifications-badge');
     if (!badge) return;
     var n = Number(count || 0);
-    badge.textContent = String(n);
+    badge.textContent = n > 9 ? '9+' : String(n);
     badge.style.display = n > 0 ? 'inline-block' : 'none';
 
     var btn = document.getElementById(BUTTON_ID);
@@ -321,14 +321,20 @@
     updateSelectAllControl();
   }
 
-  function fetchNotifications() {
+  function fetchNotifications(opts) {
     var email = actorEmail();
     if (!email) {
       setBadge(0);
       return;
     }
+    // Don't poll into a dead network — the request can only fail, and zeroing
+    // the badge on that failure would hide unread counts we already know about.
+    if (window.HRMSNet && !window.HRMSNet.ready('notifications', opts)) return;
     var headers = { 'X-User-Email': email };
-    fetch('/api/notifications?unreadOnly=true', { headers: headers })
+    var req = window.HRMSNet
+      ? window.HRMSNet.fetch('notifications', '/api/notifications?unreadOnly=true', { headers: headers })
+      : fetch('/api/notifications?unreadOnly=true', { headers: headers });
+    req
       .then(function (res) { return res.ok ? res.json() : []; })
       .then(function (items) {
         var count = Array.isArray(items) ? items.length : 0;
@@ -514,14 +520,16 @@
   }
 
   function injectWidget() {
-    var topbar = document.querySelector('.topbar') || document.querySelector('[class*="topbar" i]') || document.querySelector('header') || document.body;
-    if (!topbar) {
-      setTimeout(injectWidget, 500);
+    if (document.getElementById(BUTTON_ID)) return;
+    var topbar = document.querySelector('.topbar') || document.querySelector('[class*="topbar" i]') || document.querySelector('header');
+    var existing = findExistingBell();
+    // Wait for the app's real top-bar bell to render before enhancing it.
+    // Falling back to document.body too early creates a duplicate floating bell.
+    if ((!topbar || !existing) && (injectWidget._t = (injectWidget._t || 0) + 1) < 30) {
+      setTimeout(injectWidget, 400);
       return;
     }
-    if (document.getElementById(BUTTON_ID)) return;
-
-    var existing = findExistingBell();
+    if (!topbar) topbar = document.body;
     var btn;
     var badge;
     if (existing) {
@@ -586,8 +594,13 @@
       }
     });
 
-    fetchNotifications();
+    fetchNotifications({ background: false });
     setInterval(fetchNotifications, REFRESH_MS);
+    /* the interval is suppressed while hidden/offline — catch up on return */
+    document.addEventListener('visibilitychange', function () {
+      if (!document.hidden) fetchNotifications({ background: false });
+    });
+    window.addEventListener('hrmsNetOnline', function () { fetchNotifications({ background: false }); });
 
     setInterval(function () {
       var btn = document.getElementById(BUTTON_ID);

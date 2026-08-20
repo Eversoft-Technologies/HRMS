@@ -61,6 +61,12 @@ from .models import (
     PayrollInformation,
     PayrollForm,
     CandidateFormSubmission,
+    EmployeeCompensation,
+    PayComponent,
+    EmployeePayComponent,
+    PayrollRun,
+    Payslip,
+    PayrollSetting,
 )
 
 # Datetime wire format used everywhere by the original API (naive, USE_TZ=False).
@@ -252,7 +258,7 @@ class InterviewLinkSerializer(serializers.ModelSerializer):
     time = serializers.CharField(source='interview_time', required=False, allow_null=True, allow_blank=True)
     emailSent = serializers.BooleanField(source='email_sent', required=False, default=False)
     interviewType = InterviewTypeField(source='interview_type', required=False)
-    interviewQuestions = JSONStringField(source='interview_questions', required=False)
+    interviewQuestions = JSONStringField(source='interview_questions', required=False, allow_null=True)
     resumeText = serializers.CharField(source='resume_text', required=False, allow_blank=True, allow_null=True)
     jdText = serializers.CharField(source='jd_text', required=False, allow_blank=True, allow_null=True)
     techQuestionCount = serializers.IntegerField(source='tech_question_count', required=False)
@@ -302,6 +308,16 @@ class InterviewLinkSerializer(serializers.ModelSerializer):
             'emailSent': bool(instance.email_sent),
             'interviewType': InterviewTypeField().to_representation(instance.interview_type),
             'interviewer': instance.interviewer,
+            # Who scheduled it. Server-set (never accepted from the payload),
+            # so it is safe to show as attribution and to key KPIs on.
+            'createdByEmail': instance.created_by_email or '',
+            'createdByName': instance.created_by_name or '',
+            # Who told the candidate their outcome, and when.
+            'followupSent': bool(instance.followup_sent),
+            'followupSentByEmail': instance.followup_sent_by_email or '',
+            'followupSentByName': instance.followup_sent_by_name or '',
+            'followupSentAt': (instance.followup_sent_at.strftime(DATETIME_FMT)
+                               if instance.followup_sent_at else None),
             'duration': instance.duration,
             'notes': instance.notes,
             'notesUpdatedBy': instance.notes_updated_by or '',
@@ -449,6 +465,22 @@ class InterviewRecordingSerializer(serializers.ModelSerializer):
     def to_representation(self, instance):
         # ``_has_video`` / ``_has_recording`` are annotated by the list queryset
         # (which defers the heavy columns); fall back to the columns otherwise.
+        #
+        # The fallback MUST stay lazy. getattr(obj, name, default) evaluates its
+        # default eagerly, so `getattr(instance, '_has_video', instance.video_buffer)`
+        # read the deferred LONGBLOB on every row even when the annotation was
+        # present — one extra SELECT per row per column, pulling the whole video.
+        # Six recordings meant twelve blob queries and ~74 MB over the wire, which
+        # is what made GET /api/interview-recordings time out and 502 in production.
+        has_video = getattr(instance, '_has_video', None)
+        if has_video is None:                       # unannotated (detail view)
+            # True when either binary LONGBLOB *or* legacy base64 column has data.
+            has_video = (instance.video_buffer is not None
+                         or instance.recording_data is not None)
+        has_recording = getattr(instance, '_has_recording', None)
+        if has_recording is None:
+            has_recording = instance.recording_data is not None
+
         return {
             'id': instance.id,
             'candidateName': instance.candidate_name,
@@ -460,8 +492,8 @@ class InterviewRecordingSerializer(serializers.ModelSerializer):
             'techScore': instance.tech_score,
             'commScore': instance.comm_score,
             'integrityScore': instance.integrity_score,
-            'hasVideo': bool(getattr(instance, '_has_video', instance.video_buffer)),
-            'hasRecording': bool(getattr(instance, '_has_recording', instance.recording_data)),
+            'hasVideo': bool(has_video),
+            'hasRecording': bool(has_recording),
             'transcript': instance.transcript,
             'responses': safe_list(instance.responses),
             'createdAt': instance.created_at.strftime(DATETIME_FMT) if instance.created_at else None,
@@ -1348,6 +1380,16 @@ class OnboardingCandidateSerializer(serializers.ModelSerializer):
     lastName = serializers.CharField(source='last_name', required=False, allow_blank=True, default='')
     jobTitle = serializers.CharField(source='job_title', required=False, allow_blank=True, default='')
     joiningDate = serializers.DateField(source='joining_date', required=False, allow_null=True)
+    # candidate_code is server-generated (see onboarding_views.candidates) — never
+    # accepted from the client, so it is declared read-only here.
+    candidateCode = serializers.CharField(source='candidate_code', read_only=True)
+    # dob/gender/address/manager share the model field name, so NO source= (DRF
+    # forbids source equal to the field name and raises on bind otherwise).
+    dob = serializers.DateField(required=False, allow_null=True)
+    gender = serializers.CharField(required=False, allow_blank=True, default='')
+    address = serializers.CharField(required=False, allow_blank=True, default='')
+    manager = serializers.CharField(required=False, allow_blank=True, default='')
+    workLocation = serializers.CharField(source='work_location', required=False, allow_blank=True, default='')
     interviewId = serializers.PrimaryKeyRelatedField(
         source='interview', queryset=InterviewLink.objects.all(),
         required=False, allow_null=True,
@@ -1358,13 +1400,12 @@ class OnboardingCandidateSerializer(serializers.ModelSerializer):
     class Meta:
         model = OnboardingCandidate
         fields = [
-            'id', 'firstName', 'lastName', 'email', 'phone', 'client', 'vendor',
-            'recruiter', 'jobTitle', 'department', 'joiningDate', 'status', 'interviewId',
+            'id', 'candidateCode', 'firstName', 'lastName', 'email', 'phone',
+            'dob', 'gender', 'address', 'client', 'vendor', 'recruiter', 'jobTitle',
+            'department', 'manager', 'workLocation', 'joiningDate', 'status', 'interviewId',
             'portalToken', 'requestedDocs',
         ]
-
-
-        read_only_fields = ['id']
+        read_only_fields = ['id', 'candidateCode']
         extra_kwargs = {
             'phone': {'required': False, 'allow_blank': True, 'default': ''},
             'client': {'required': False, 'allow_blank': True, 'default': ''},
@@ -1383,16 +1424,22 @@ class OnboardingCandidateSerializer(serializers.ModelSerializer):
         ).strip()
         return {
             'id': instance.id,
+            'candidateCode': instance.candidate_code or '',
             'firstName': instance.first_name or '',
             'lastName': instance.last_name or '',
             'name': full_name,
             'email': instance.email or '',
             'phone': instance.phone or '',
+            'dob': instance.dob.strftime(DATE_FMT) if instance.dob else None,
+            'gender': instance.gender or '',
+            'address': instance.address or '',
             'client': instance.client or '',
             'vendor': instance.vendor or '',
             'recruiter': instance.recruiter or '',
             'jobTitle': instance.job_title or '',
             'department': instance.department or '',
+            'manager': instance.manager or '',
+            'workLocation': instance.work_location or '',
             'joiningDate': instance.joining_date.strftime(DATE_FMT) if instance.joining_date else None,
             'status': instance.status or 'Draft',
             'interviewId': instance.interview_id,
@@ -1732,3 +1779,169 @@ class CandidateFormSubmissionSerializer(serializers.ModelSerializer):
         return ret
 
 
+# ===========================================================================
+# Core Payroll Serializers
+# ===========================================================================
+
+class EmployeeCompensationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = EmployeeCompensation
+        fields = '__all__'
+
+
+class PayComponentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PayComponent
+        fields = '__all__'
+
+
+class EmployeePayComponentSerializer(serializers.ModelSerializer):
+    componentDetails = PayComponentSerializer(source='component', read_only=True)
+
+    class Meta:
+        model = EmployeePayComponent
+        fields = '__all__'
+
+
+class PayslipSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Payslip
+        fields = '__all__'
+
+
+class PayrollRunSerializer(serializers.ModelSerializer):
+    payslips = PayslipSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = PayrollRun
+        fields = '__all__'
+
+
+class PayrollSettingSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PayrollSetting
+        fields = '__all__'
+
+
+# ==========================================================================
+# Employee Chat serializers (appended by chat-module integration)
+# ==========================================================================
+from .models import ChatRoom, ChatMember, ChatMessage, ChatMeeting  # noqa: E402
+
+class ChatRoomSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ChatRoom
+        fields = "__all__"
+
+
+class ChatMemberSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ChatMember
+        fields = "__all__"
+
+
+class ChatMessageSerializer(serializers.ModelSerializer):
+    room_name = serializers.CharField(
+        source="room.name",
+        read_only=True,
+    )
+    message = serializers.SerializerMethodField()
+    attachment_url = serializers.SerializerMethodField()
+    age_seconds = serializers.SerializerMethodField()
+    # True only while a pin is still within its 30-day window. The frontend
+    # shows the pinned strip based on this, so an expired pin disappears from
+    # the UI even if the raw ``is_pinned`` flag hasn't been cleared yet.
+    is_pin_active = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ChatMessage
+        fields = [
+            "id",
+            "sender_email",
+            "sender_name",
+            "message",
+            "is_read",
+            "created_at",
+            "age_seconds",
+            "room",
+            "room_name",
+            "edited",
+            "edited_at",
+            "is_deleted",
+            "attachment_name",
+            "attachment_type",
+            "attachment_url",
+            "is_pinned",
+            "is_pin_active",
+            "pinned_by",
+            "pinned_at",
+            "pin_expires_at",
+            "reply_to_id",
+            "reply_to_sender",
+            "reply_to_text",
+        ]
+
+    def get_is_pin_active(self, obj):
+        # A pin counts as active while it's flagged and not past its expiry.
+        if not getattr(obj, "is_pinned", False):
+            return False
+        exp = getattr(obj, "pin_expires_at", None)
+        if not exp:
+            # Legacy pins created before expiry tracking never expire.
+            return True
+        try:
+            from datetime import datetime as _dt
+            return exp > _dt.now()
+        except Exception:
+            return True
+    def get_message(self, obj):
+        # Hide the original text once a message is deleted.
+        return "" if getattr(obj, "is_deleted", False) else obj.message
+
+    def get_age_seconds(self, obj):
+        # How long ago the message was sent, computed entirely server-side so
+        # it's immune to timezone differences between server and browser. The
+        # frontend uses this for correct time display and the edit window.
+        if not obj.created_at:
+            return None
+        try:
+            from datetime import datetime as _dt
+            return max(0, int((_dt.now() - obj.created_at).total_seconds()))
+        except Exception:
+            return None
+
+    def get_attachment_url(self, obj):
+        # Serve the file bytes on demand rather than shipping them in every
+        # message list. Empty when deleted or when there's no attachment.
+        if getattr(obj, "is_deleted", False):
+            return ""
+        if getattr(obj, "attachment_path", None) or obj.attachment_data:
+            return f"/api/chat/attachment/{obj.id}"
+        return ""
+
+
+class ChatMeetingSerializer(serializers.ModelSerializer):
+    room_name = serializers.CharField(source="room.name", read_only=True)
+    attendees_list = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ChatMeeting
+        fields = [
+            "id",
+            "room",
+            "room_name",
+            "title",
+            "description",
+            "scheduled_at",
+            "duration_minutes",
+            "created_by",
+            "created_by_name",
+            "join_url",
+            "attendees",
+            "attendees_list",
+            "created_at",
+        ]
+
+    def get_attendees_list(self, obj):
+        raw = obj.attendees or ""
+        return [e.strip() for e in raw.split(",") if e.strip()]

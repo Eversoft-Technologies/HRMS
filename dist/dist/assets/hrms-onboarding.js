@@ -79,7 +79,7 @@
   var ASSET_STATUSES = ['Assigned', 'Returned', 'Lost', 'Damaged','pending', 'Delivered'];
   var MAX_MB = 10;
   var ALLOWED_MIME = ['application/pdf', 'image/png', 'image/jpeg'];
-  var PAGE_SIZES = [10, 25, 50, 100];
+  var PAGE_SIZES = [10, 15, 25, 50, 100];
 
   /* Which drawer tab each sidebar page lands on. */
   var PAGE_TAB = {
@@ -92,6 +92,11 @@
     filters: { status: '', authType: '' }, sortKey: 'createdAt', sortDir: -1,
     dash: null, alerts: [], detail: null, tab: 'overview',
     list: [], stageErr: '',   // stage pages (work-auth, documents, …)
+    cols: null,               // candidate-grid column config; see loadColPrefs()
+    loaded: false,            // candidate roster fully loaded (client-side model)
+    buFilter: null,           // Edit Filters -> Business Unit (department) selection
+    predef: 'all',            // Edit Filters -> pre-defined quick filter
+    customFilters: [],        // Edit Filters -> custom "contains" rules: [{key,val}]
     fieldDefs: null,          // cached custom-field schema (labels for display)
   };
 
@@ -151,9 +156,11 @@
   }
   function statusKind(s) {
     s = String(s || '').toLowerCase();
-    if (s === 'completed' || s === 'approved' || s === 'onboarded' || s === 'active') return 'ok';
+    // 'completed' matches both the stage status and 'Onboarding Completed'.
+    if (s.indexOf('completed') !== -1 || s === 'approved' || s === 'onboarded' || s === 'active') return 'ok';
     if (s === 'rejected' || s === 'expired' || s === 'lost' || s === 'damaged') return 'err';
-    if (s === 'in progress' || s.indexOf('pending') === 0 || s === 'extension filed') return 'warn';
+    // Any '… Pending' status, plus in-progress stages, read as warn.
+    if (s.indexOf('in progress') !== -1 || s.indexOf('pending') !== -1 || s === 'extension filed') return 'warn';
     return 'neutral';
   }
 
@@ -282,6 +289,43 @@
       '.ob-menu button{display:block;width:100%;text-align:left;background:none;border:none;color:var(--text,#e6edf7);',
       'padding:10px 14px;font-size:13px;cursor:pointer;font-family:inherit}',
       '.ob-menu button:hover{background:var(--bg3,#1c2433)}',
+      /* Edit Columns drawer (reuses .ob-ov / .ob-dw / .ob-dw-h / .ob-x) */
+      '.ob-cd{width:min(400px,100%)}',
+      '.ob-cd-sub{padding:15px 22px 6px;font-size:11px;font-weight:700;letter-spacing:.5px;color:var(--muted,#8a9bb8)}',
+      '.ob-cd-list{flex:1;overflow-y:auto;padding:10px 16px 16px}',
+      '.ob-cd-i{display:flex;align-items:center;gap:10px;background:var(--bg2,#141b26);border:1px solid var(--border,#2a3446);',
+      'border-radius:9px;padding:10px 12px;margin-bottom:7px;cursor:grab}',
+      '.ob-cd-i.drag{opacity:.4}',
+      '.ob-cd-i.over{border-color:var(--accent,#4f8ef7)}',
+      '.ob-cd-grip{color:var(--muted,#8a9bb8);font-size:14px;letter-spacing:-2px;cursor:grab;user-select:none}',
+      '.ob-cd-i label{flex:1;display:flex;align-items:center;gap:9px;font-size:13px;color:var(--text,#e6edf7);cursor:pointer;margin:0}',
+      '.ob-cd-i input{width:16px;height:16px;accent-color:var(--accent,#4f8ef7);cursor:pointer;flex-shrink:0}',
+      '.ob-cd-f{display:flex;gap:10px;padding:16px 22px;border-top:1px solid var(--border,#2a3446)}',
+      '.ob-cd-f .ob-btn{flex:1;text-align:center}',
+      /* Progress column cell */
+      '.ob-prog{display:flex;align-items:center;gap:8px;min-width:120px}',
+      '.ob-prog-bar{flex:1;height:6px;border-radius:4px;background:var(--bg3,#1c2433);overflow:hidden}',
+      '.ob-prog-bar i{display:block;height:100%;background:var(--accent,#4f8ef7)}',
+      '.ob-prog span{font-size:11px;color:var(--muted,#8a9bb8);font-weight:600;min-width:30px;text-align:right}',
+      /* Edit Filters drawer + active-filter button */
+      '.ob-btn.active{border-color:var(--accent,#4f8ef7);color:var(--accent,#4f8ef7)}',
+      '.ob-fbadge{display:inline-flex;align-items:center;justify-content:center;min-width:16px;height:16px;padding:0 4px;',
+      'border-radius:9px;background:var(--accent,#4f8ef7);color:#fff;font-size:10px;font-weight:700;margin-left:4px}',
+      '.ob-fd-body{flex:1;overflow-y:auto;padding:6px 22px 16px}',
+      '.ob-fd-sec{font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--muted,#8a9bb8);margin:16px 0 8px}',
+      '.ob-fd-bu{background:var(--bg2,#141b26);border:1px solid var(--border,#2a3446);border-radius:9px;padding:6px 10px;max-height:190px;overflow-y:auto}',
+      '.ob-fd-bu label{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text,#e6edf7);padding:5px 2px;cursor:pointer}',
+      '.ob-fd-bu input,.ob-fd-pd input{width:15px;height:15px;accent-color:var(--accent,#4f8ef7);cursor:pointer;flex-shrink:0}',
+      '.ob-fd-empty{color:var(--muted,#8a9bb8);font-size:12px;padding:6px 2px}',
+      '.ob-fd-pd{display:grid;gap:8px}',
+      '.ob-fd-pd label{display:flex;align-items:center;gap:10px;background:var(--bg2,#141b26);border:1px solid var(--border,#2a3446);',
+      'border-radius:8px;padding:9px 12px;font-size:13px;color:var(--text,#e6edf7);cursor:pointer}',
+      '.ob-fd-pd label:hover{border-color:var(--accent,#4f8ef7)}',
+      '.ob-fd-add{color:var(--accent,#4f8ef7);font-size:12.5px;font-weight:700;cursor:pointer;background:none;border:none;padding:12px 0 4px}',
+      '.ob-fd-cf{display:flex;gap:6px;margin-bottom:6px}',
+      '.ob-fd-cf select,.ob-fd-cf input{flex:1;min-width:0;background:var(--bg2,#141b26);border:1px solid var(--border,#2a3446);',
+      'border-radius:7px;color:var(--text,#e6edf7);font:inherit;font-size:12px;padding:7px 8px}',
+      '.ob-fd-cfx{flex:0 0 auto;width:30px;background:var(--bg2,#141b26);border:1px solid var(--border,#2a3446);border-radius:7px;color:#ef4444;cursor:pointer}',
       '@media print{.sidebar,.topbar,.ob-h,.ob-pg{display:none!important}',
       '#' + ID.root + '{overflow:visible!important;padding:0!important;color:#000!important}',
       '.ob-wrap,.ob-panel,.ob-card{border-color:#ccc!important;background:#fff!important;color:#000!important}',
@@ -337,21 +381,39 @@
     }).join('') + '</div>';
   }
 
-  /* ── data ─────────────────────────────────────────────────────────────── */
+  /* ── data ─────────────────────────────────────────────────────────────────
+     Load the FULL candidate roster into memory, then search / filter / sort /
+     paginate entirely client-side — the same model as the Job Board grid. This
+     is what lets the Edit Filters drawer (Business Unit, pre-defined, custom
+     "contains") and sorting work across every record rather than one page.
+
+     The server caps pageSize at 200, so page through until the whole roster is
+     collected (bounded by a safety cap so a huge table can't spin forever). */
+  var LOAD_PS = 200, LOAD_MAX_PAGES = 100;
   function loadCandidates() {
     state.loading = true;
+    state.loaded = false;
     render();
-    var q = ['page=' + state.pg, 'pageSize=' + state.pageSize];
-    if (state.search) q.push('search=' + encodeURIComponent(state.search));
-    if (state.filters.status) q.push('status=' + encodeURIComponent(state.filters.status));
-    if (state.filters.authType) q.push('authType=' + encodeURIComponent(state.filters.authType));
-    api('/onboarding/candidates?' + q.join('&')).then(function (d) {
-      state.rows = (d && d.items) || [];
-      state.total = (d && d.total) || 0;
+    function finish(items) {
+      state.rows = items;
+      state.total = items.length;   // full loaded count (viewGrid shows the filtered count)
+      state.loaded = true;
       state.loading = false;
       render();
+    }
+    api('/onboarding/candidates?page=1&pageSize=' + LOAD_PS).then(function (d) {
+      var items = (d && d.items) || [];
+      var total = (d && d.total) || items.length;
+      var pages = Math.min(Math.ceil(total / LOAD_PS), LOAD_MAX_PAGES);
+      if (pages <= 1) { finish(items); return; }
+      var reqs = [];
+      for (var p = 2; p <= pages; p++) reqs.push(api('/onboarding/candidates?page=' + p + '&pageSize=' + LOAD_PS));
+      Promise.all(reqs).then(function (rest) {
+        rest.forEach(function (r) { items = items.concat((r && r.items) || []); });
+        finish(items);
+      }).catch(function () { finish(items); });   // a partial roster beats none
     }).catch(function (e) {
-      state.rows = []; state.loading = false; render();
+      state.rows = []; state.loaded = true; state.loading = false; render();
       toast(e.message, 'error');
     });
   }
@@ -366,14 +428,79 @@
       .catch(function (e) { state.loading = false; render(); toast(e.message, 'error'); });
   }
 
-  /* ── sorting (client-side, over the current page) ─────────────────────── */
+  /* ── sorting (client-side, across the whole loaded roster) ────────────── */
+  function sortVal(row, k) { return k === 'progress' ? progressPct(row) : row[k]; }
   function sorted(rows) {
     var k = state.sortKey, dir = state.sortDir;
     return rows.slice().sort(function (a, b) {
-      var x = a[k], y = b[k];
+      var x = sortVal(a, k), y = sortVal(b, k);
+      if (typeof x === 'number' && typeof y === 'number') return (x - y) * dir;
       if (x == null) x = ''; if (y == null) y = '';
       return String(x).localeCompare(String(y), undefined, { numeric: true }) * dir;
     });
+  }
+
+  /* ── filtering (client-side) ──────────────────────────────────────────────
+     Combines the inline Search + Status + Work Auth controls with the Edit
+     Filters drawer (Business Unit, pre-defined, custom "contains"). */
+  function cellRaw(row, key) {
+    if (key === 'progress') return progressPct(row) + '%';
+    var v = row[key];
+    return v == null ? '' : String(v);
+  }
+  function distinctVals(key) {
+    var seen = {}, out = [];
+    state.rows.forEach(function (r) {
+      var v = String(r[key] == null ? '' : r[key]);
+      if (!(v in seen)) { seen[v] = 1; out.push(v); }
+    });
+    return out.sort();
+  }
+  // Pre-defined quick filters offered in the Edit Filters drawer.
+  var CAND_PREDEF = [
+    ['all', 'All Candidates'], ['inprogress', 'In Progress'],
+    ['completed', 'Onboarding Completed'], ['rejected', 'Rejected'],
+    ['expiringAuth', 'Work Auth Expiring (≤60d)'], ['expiredAuth', 'Work Auth Expired'],
+    ['noAuth', 'No Work Authorization'],
+  ];
+  function matchPredef(r) {
+    var s = String(r.status || '').toLowerCase();
+    var d = daysTo(r.authExpiryDate);
+    switch (state.predef) {
+      case 'inprogress': return s.indexOf('completed') === -1 && s.indexOf('activated') === -1 && s !== 'rejected';
+      case 'completed': return s.indexOf('completed') !== -1 || s.indexOf('activated') !== -1;
+      case 'rejected': return s === 'rejected';
+      case 'expiringAuth': return d != null && d >= 0 && d <= 60;
+      case 'expiredAuth': return d != null && d < 0;
+      case 'noAuth': return !r.authType;
+      default: return true;
+    }
+  }
+  function filteredRows() {
+    var q = (state.search || '').toLowerCase();
+    return state.rows.filter(function (r) {
+      if (q) {
+        var hay = ((r.name || '') + ' ' + (r.email || '') + ' ' + (r.jobTitle || '') + ' ' +
+                   (r.candidateCode || '') + ' ' + (r.phone || '')).toLowerCase();
+        if (hay.indexOf(q) === -1) return false;
+      }
+      if (state.filters.status && r.status !== state.filters.status) return false;
+      if (state.filters.authType && r.authType !== state.filters.authType) return false;
+      if (state.buFilter && state.buFilter.indexOf(String(r.department || '')) === -1) return false;
+      if (state.predef !== 'all' && !matchPredef(r)) return false;
+      for (var i = 0; i < state.customFilters.length; i++) {
+        var cf = state.customFilters[i];
+        if (cf.val && cellRaw(r, cf.key).toLowerCase().indexOf(cf.val.toLowerCase()) === -1) return false;
+      }
+      return true;
+    });
+  }
+  function activeFilterCount() {
+    var n = 0;
+    if (state.buFilter) n++;
+    if (state.predef && state.predef !== 'all') n++;
+    n += state.customFilters.filter(function (c) { return c.val; }).length;
+    return n;
   }
 
   /* ── page: dashboard ──────────────────────────────────────────────────── */
@@ -443,12 +570,94 @@
     }).join('');
   }
 
-  /* ── page: candidate grid ─────────────────────────────────────────────── */
-  var COLS = [
-    ['name', 'Candidate'], ['email', 'Email'], ['jobTitle', 'Job Title'],
-    ['department', 'Department'], ['client', 'Client'], ['authType', 'Work Auth'],
-    ['authExpiryDate', 'Expiry'], ['status', 'Status'], ['joiningDate', 'Joining'],
+  /* ── page: candidate grid ─────────────────────────────────────────────────
+     Salesforce / HubSpot-style column management. The grid renders from a
+     user-customisable, ordered, show/hide column set (state.cols) that is
+     persisted to localStorage and restored on load — the same idea as the Job
+     Board module's "Edit Column" drawer, adapted to this module's styling. */
+
+  // Default columns — shown out of the box, in this order.
+  var DEFAULT_COLS = [
+    ['candidateCode', 'Candidate Code'], ['name', 'Candidate Name'], ['email', 'Email'],
+    ['phone', 'Phone'], ['department', 'Department'], ['jobTitle', 'Designation'],
+    ['manager', 'Manager'], ['workLocation', 'Location'], ['authType', 'Work Authorization'],
+    ['authExpiryDate', 'Work Authorization Expiry'], ['status', 'Status'], ['joiningDate', 'Joining Date'],
+    ['createdAt', 'Created Date'],
   ];
+  // Optional columns — hidden by default, offered in the Edit Columns drawer.
+  // (The spec's "Work Location" and "Current Status" read the same underlying
+  //  fields as the default Location and Status columns, so they aren't duplicated.)
+  var OPTIONAL_COLS = [
+    ['dob', 'Date of Birth'], ['gender', 'Gender'], ['address', 'Address'],
+    ['client', 'Client'], ['vendor', 'Vendor'], ['recruiter', 'Recruiter'],
+    ['progress', 'Progress'],
+  ];
+  var ALL_COLS = DEFAULT_COLS.concat(OPTIONAL_COLS);
+  var COLS = DEFAULT_COLS;                        // legacy alias (kept inert)
+  var LS_COLS = 'hrms_ob_candidate_columns_v1';   // {key,on}[] in display order
+
+  function colByKey(key) {
+    for (var i = 0; i < ALL_COLS.length; i++) if (ALL_COLS[i][0] === key) return ALL_COLS[i];
+    return [key, key];
+  }
+  function colLabel(key) { return colByKey(key)[1]; }
+
+  // Out-of-the-box configuration: defaults visible, optionals hidden.
+  function defaultColState() {
+    return DEFAULT_COLS.map(function (c) { return { key: c[0], on: true }; })
+      .concat(OPTIONAL_COLS.map(function (c) { return { key: c[0], on: false }; }));
+  }
+  // Restore saved visibility + order, reconciled against the current catalog:
+  // unknown keys are dropped and newly-added columns are appended at their
+  // default visibility, so an upgrade never loses or orphans a column.
+  function loadColPrefs() {
+    var saved = null;
+    try { saved = JSON.parse(localStorage.getItem(LS_COLS) || 'null'); } catch (_) {}
+    var known = {}; ALL_COLS.forEach(function (c) { known[c[0]] = 1; });
+    var cols;
+    if (Array.isArray(saved) && saved.length) {
+      var seen = {};
+      cols = saved
+        .filter(function (c) { return c && c.key && known[c.key] && !seen[c.key] && (seen[c.key] = 1); })
+        .map(function (c) { return { key: c.key, on: c.on !== false }; });
+      defaultColState().forEach(function (dc) {
+        if (!cols.some(function (c) { return c.key === dc.key; })) cols.push(dc);
+      });
+    } else {
+      cols = defaultColState();
+    }
+    state.cols = cols;
+  }
+  function saveColPrefs() { try { localStorage.setItem(LS_COLS, JSON.stringify(state.cols)); } catch (_) {} }
+  function ensureCols() { if (!state.cols || !state.cols.length) loadColPrefs(); }
+  function shownCols() { ensureCols(); return state.cols.filter(function (c) { return c.on; }); }
+
+  // Onboarding progress as a % of completed stages — powers the optional
+  // Progress column and its sort value.
+  function progressPct(row) {
+    var stages = row && row.stages;
+    if (stages && stages.length) {
+      var done = 0;
+      stages.forEach(function (s) {
+        var st = String(s.status || '').toLowerCase();
+        if (s.completedAt || st.indexOf('complete') !== -1 || st === 'approved' || st === 'done' || st === 'active') done++;
+      });
+      return Math.min(100, Math.round(done / STAGES.length * 100));
+    }
+    var ss = String(row && row.status || '').toLowerCase();
+    if (ss.indexOf('completed') !== -1 || ss === 'activated' || ss === 'active') return 100;
+    return 0;
+  }
+
+  /* Small inline action buttons for the grid's Actions column. Gated by the
+     same RBAC codes the drawer uses. */
+  function rowActions(r) {
+    var mini = 'style="padding:3px 8px;font-size:11px"';
+    var b = '<button class="ob-btn" ' + mini + ' data-act="view" data-id="' + r.id + '">View</button>';
+    if (can('onboarding.edit')) b += ' <button class="ob-btn" ' + mini + ' data-act="edit" data-id="' + r.id + '">Edit</button>';
+    if (can('onboarding.delete')) b += ' <button class="ob-btn danger" ' + mini + ' data-act="del" data-id="' + r.id + '">Delete</button>';
+    return b;
+  }
 
   function cell(row, key) {
     if (key === 'status') return badge(row.status, statusKind(row.status));
@@ -463,38 +672,63 @@
       return badge(fmtDate(row.authExpiryDate) + suffix, kind);
     }
     if (key === 'joiningDate') return fmtDate(row.joiningDate);
+    if (key === 'createdAt') return fmtDate(row.createdAt);
+    if (key === 'dob') return fmtDate(row.dob);
+    if (key === 'progress') {
+      var pp = progressPct(row);
+      return '<div class="ob-prog" title="' + pp + '% complete">' +
+             '<div class="ob-prog-bar"><i style="width:' + pp + '%"></i></div><span>' + pp + '%</span></div>';
+    }
     return esc(row[key] || '—');
   }
 
+  var ICON_COLUMNS = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+    'stroke-width="1.8" style="vertical-align:-2px;margin-right:6px"><rect x="3" y="4" width="5.5" height="16" rx="1"/>' +
+    '<rect x="9.5" y="4" width="5.5" height="16" rx="1"/><rect x="16" y="4" width="5" height="16" rx="1"/></svg>';
+  var ICON_FILTERS = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+    'stroke-width="2" stroke-linecap="round" style="vertical-align:-2px;margin-right:6px"><line x1="4" y1="7" x2="20" y2="7"/>' +
+    '<circle cx="9" cy="7" r="2.4" fill="var(--bg2,#141b26)"/><line x1="4" y1="17" x2="20" y2="17"/>' +
+    '<circle cx="15" cy="17" r="2.4" fill="var(--bg2,#141b26)"/></svg>';
+
   function viewGrid() {
-    var rows = sorted(state.rows);
+    var cols = shownCols();
+    var span = cols.length + 1;   // + Actions column
+    // Filter → sort → paginate, all client-side over the full loaded roster.
+    var all = sorted(filteredRows());
+    var total = all.length;
+    var pages = Math.max(1, Math.ceil(total / state.pageSize));
+    if (state.pg > pages) state.pg = pages;
+    var start = (state.pg - 1) * state.pageSize;
+    var pageRows = all.slice(start, start + state.pageSize);
+    var from = total ? start + 1 : 0;
+    var to = Math.min(start + state.pageSize, total);
+    var afc = activeFilterCount();
+
     var body;
     if (state.loading) {
       body = new Array(6).join('x').split('x').map(function () {
-        return '<tr>' + COLS.map(function () { return '<td><div class="ob-skel"></div></td>'; }).join('') + '</tr>';
+        return '<tr>' + cols.map(function () { return '<td><div class="ob-skel"></div></td>'; }).join('') +
+               '<td><div class="ob-skel"></div></td></tr>';
       }).join('');
-    } else if (!rows.length) {
-      body = '<tr><td colspan="' + COLS.length + '"><div class="ob-empty"><div class="big">📋</div>' +
-             (state.search || state.filters.status || state.filters.authType
+    } else if (!total) {
+      body = '<tr><td colspan="' + span + '"><div class="ob-empty"><div class="big">📋</div>' +
+             (state.search || state.filters.status || state.filters.authType || afc
                ? 'No candidates match these filters.'
                : 'No candidates yet. Add the first one to get started.') +
              '</div></td></tr>';
     } else {
-      body = rows.map(function (r) {
-        return '<tr data-id="' + r.id + '">' + COLS.map(function (c) {
-          return '<td>' + cell(r, c[0]) + '</td>';
-        }).join('') + '</tr>';
+      body = pageRows.map(function (r) {
+        return '<tr data-id="' + r.id + '">' + cols.map(function (c) {
+          return '<td>' + cell(r, c.key) + '</td>';
+        }).join('') +
+        '<td class="ob-actions">' + rowActions(r) + '</td></tr>';
       }).join('');
     }
 
-    var head = COLS.map(function (c) {
-      var arrow = state.sortKey === c[0] ? (state.sortDir === 1 ? ' ▲' : ' ▼') : '';
-      return '<th data-sort="' + c[0] + '">' + c[1] + arrow + '</th>';
-    }).join('');
-
-    var pages = Math.max(1, Math.ceil(state.total / state.pageSize));
-    var from = state.total ? (state.pg - 1) * state.pageSize + 1 : 0;
-    var to = Math.min(state.pg * state.pageSize, state.total);
+    var head = cols.map(function (c) {
+      var arrow = state.sortKey === c.key ? (state.sortDir === 1 ? ' ▲' : ' ▼') : '';
+      return '<th data-sort="' + c.key + '">' + esc(colLabel(c.key)) + arrow + '</th>';
+    }).join('') + '<th>Actions</th>';
 
     return '<div class="ob-h">' +
         '<input class="ob-in ob-search" id="ob-search" placeholder="Search name, email, job title…" value="' + esc(state.search) + '">' +
@@ -510,18 +744,22 @@
             return '<option' + (state.filters.authType === s ? ' selected' : '') + '>' + s + '</option>';
           }).join('') +
         '</select>' +
+        '<button class="ob-btn' + (afc ? ' active' : '') + '" id="ob-filters" title="Edit Filters">' + ICON_FILTERS + 'Filters' +
+          (afc ? '<span class="ob-fbadge">' + afc + '</span>' : '') + '</button>' +
+        '<button class="ob-btn" id="ob-columns" title="Show, hide and reorder columns">' + ICON_COLUMNS + 'Manage Columns</button>' +
         '<div style="position:relative"><button class="ob-btn" id="ob-export">⭳ Export ▾</button></div>' +
         (can('onboarding.create') ? '<button class="ob-btn primary" id="ob-new">+ New Candidate</button>' : '') +
       '</div>' +
       '<div class="ob-wrap"><table class="ob-table"><thead><tr>' + head + '</tr></thead><tbody>' + body + '</tbody></table></div>' +
       '<div class="ob-pg">' +
-        '<span>' + from + '–' + to + ' of ' + state.total + '</span>' +
+        '<span>Showing ' + from + '–' + to + ' of ' + total + ' records</span>' +
         '<select class="ob-sel" id="ob-psize" style="width:auto;padding:4px 8px">' +
           PAGE_SIZES.map(function (n) {
             return '<option' + (state.pageSize === n ? ' selected' : '') + '>' + n + '</option>';
           }).join('') + '</select>' +
+        '<span>rows per page</span>' +
         '<span class="sp"></span>' +
-        '<button class="ob-btn" id="ob-prev"' + (state.pg <= 1 ? ' disabled' : '') + '>‹ Prev</button>' +
+        '<button class="ob-btn" id="ob-prev"' + (state.pg <= 1 ? ' disabled' : '') + '>‹ Previous</button>' +
         '<span>Page ' + state.pg + ' / ' + pages + '</span>' +
         '<button class="ob-btn" id="ob-next"' + (state.pg >= pages ? ' disabled' : '') + '>Next ›</button>' +
       '</div>';
@@ -989,6 +1227,13 @@
   function tabOverview(el, c) {
     var done = (c.stages || []).filter(function (s) { return s.status === 'Completed'; }).length;
     var canActivate = done >= 7 && c.status !== 'Onboarded';
+    var canEdit = can('onboarding.edit');
+    function row(k, v) {
+      return '<div class="ob-row"><span class="k">' + k + '</span><span class="v">' + v + '</span></div>';
+    }
+    function heading(t) {
+      return '<div class="ob-lb" style="font-size:13px;margin:18px 0 4px;color:var(--text,#e6edf7)">' + t + '</div>';
+    }
 
     // Custom fields, labelled from the cached schema (fetched lazily once).
     var cf = c.customFields || {};
@@ -1014,22 +1259,61 @@
     }
 
     el.innerHTML =
-      '<div class="ob-row"><span class="k">Email</span><span class="v">' + esc(c.email) + '</span></div>' +
-      '<div class="ob-row"><span class="k">Phone</span><span class="v">' + esc(c.phone || '—') + '</span></div>' +
-      '<div class="ob-row"><span class="k">Job Title</span><span class="v">' + esc(c.jobTitle || '—') + '</span></div>' +
-      '<div class="ob-row"><span class="k">Department</span><span class="v">' + esc(c.department || '—') + '</span></div>' +
-      '<div class="ob-row"><span class="k">Client</span><span class="v">' + esc(c.client || '—') + '</span></div>' +
-      '<div class="ob-row"><span class="k">Vendor</span><span class="v">' + esc(c.vendor || '—') + '</span></div>' +
-      '<div class="ob-row"><span class="k">Recruiter</span><span class="v">' + esc(c.recruiter || '—') + '</span></div>' +
-      '<div class="ob-row"><span class="k">Joining Date</span><span class="v">' + fmtDate(c.joiningDate) + '</span></div>' +
-      customRows +
-      '<div class="ob-row"><span class="k">Progress</span><span class="v">' + done + ' / ' + STAGES.length + ' stages</span></div>' +
+      heading('Personal Information').replace('margin:18px', 'margin:2px') +
+      row('Candidate Code', esc(c.candidateCode || '—')) +
+      row('Name', esc(c.name || '—')) +
+      row('Email', esc(c.email)) +
+      row('Phone', esc(c.phone || '—')) +
+      row('Date of Birth', fmtDate(c.dob)) +
+      row('Gender', esc(c.gender || '—')) +
+      row('Address', esc(c.address || '—')) +
+      heading('Professional Information') +
+      row('Designation', esc(c.jobTitle || '—')) +
+      row('Department', esc(c.department || '—')) +
+      row('Manager', esc(c.manager || '—')) +
+      row('Work Location', esc(c.workLocation || '—')) +
+      row('Client', esc(c.client || '—')) +
+      row('Vendor', esc(c.vendor || '—')) +
+      row('Recruiter', esc(c.recruiter || '—')) +
+      row('Joining Date', fmtDate(c.joiningDate)) +
+      (customRows ? heading('Additional Information') + customRows : '') +
+      heading('Onboarding') +
+      row('Current Status', badge(c.status, statusKind(c.status))) +
+      row('Progress', done + ' / ' + STAGES.length + ' stages') +
+      (canEdit
+        ? '<div style="margin-top:12px"><label class="ob-lb">Change Status</label>' +
+          '<div style="display:flex;gap:8px">' +
+            '<select class="ob-sel" id="ov-status" style="flex:1">' +
+              CAND_STATUSES.map(function (s) {
+                return '<option' + (c.status === s ? ' selected' : '') + '>' + s + '</option>';
+              }).join('') +
+            '</select>' +
+            '<button class="ob-btn" id="ov-status-btn" style="white-space:nowrap">Change Status</button>' +
+          '</div></div>'
+        : '') +
       '<div class="ob-act">' +
-        (canActivate && can('onboarding.edit')
+        (canEdit ? '<button class="ob-btn" id="ob-edit">✎ Edit Candidate</button>' : '') +
+        (canActivate && canEdit
           ? '<button class="ob-btn primary" id="ob-activate">✓ Activate Employee</button>' : '') +
         (can('onboarding.delete')
           ? '<button class="ob-btn danger" id="ob-del">Delete Candidate</button>' : '') +
       '</div><div class="ob-err" id="ob-e"></div>';
+
+    var editBtn = el.querySelector('#ob-edit');
+    if (editBtn) editBtn.addEventListener('click', function () { openCandidateModal(c); });
+
+    var sBtn = el.querySelector('#ov-status-btn');
+    if (sBtn) sBtn.addEventListener('click', function () {
+      var ns = el.querySelector('#ov-status').value;
+      var errEl = el.querySelector('#ob-e');
+      if (ns === c.status) { errEl.textContent = 'That is already the current status.'; return; }
+      // Confirmation dialog before a manual status change, per the workflow spec.
+      if (!confirm('Change status of ' + (c.name || c.email) + ' to "' + ns + '"?')) return;
+      sBtn.disabled = true; errEl.textContent = '';
+      api('/onboarding/candidates/' + c.id, { method: 'PATCH', body: { status: ns } })
+        .then(function () { toast('Status changed to ' + ns); refreshDetail(); })
+        .catch(function (e) { sBtn.disabled = false; errEl.textContent = e.message; });
+    });
 
     var act = el.querySelector('#ob-activate');
     if (act) act.addEventListener('click', function () {
@@ -2385,6 +2669,162 @@
   }
 
   /* ── new candidate modal (fallback if the engine is unavailable) ────────── */
+  /* GENDERS list for the candidate modal's Gender dropdown (kept from feature/onboarding). */
+  var GENDERS = ['', 'Male', 'Female', 'Other', 'Prefer not to say'];
+
+  /* ── candidate modal (create + edit) ──────────────────────────────────────
+     One form serves both flows. With no argument it creates (Create Candidate,
+     with an initial Status); passed a candidate object it edits (Save Changes,
+     PATCH). Kept from feature/onboarding for its full fixed-field set (DOB,
+     gender, address, manager, work location) and edit support, with develop's
+     admin-built custom fields grafted in below the fixed fields. */
+  function openCandidateModal(existing) {
+    var isEdit = !!existing;
+    var d = existing || {};
+    var formFields = [];   // flat non-core custom-field defs, for required-validation
+
+    function field(id, label, req, type, val) {
+      return '<div><label class="ob-lb">' + label + (req ? ' <span class="req">*</span>' : '') + '</label>' +
+             '<input class="ob-in" id="nc-' + id + '"' + (type ? ' type="' + type + '"' : '') +
+             ' value="' + esc(val || '') + '"></div>';
+    }
+    function heading(t) {
+      return '<div class="ob-lb full" style="font-size:13px;margin:6px 0 2px;color:var(--text,#e6edf7)">' + t + '</div>';
+    }
+
+    var ov = document.createElement('div');
+    ov.id = 'ob-cand-modal';
+    ov.className = 'ob-ov';
+    ov.style.alignItems = 'center';
+    ov.style.justifyContent = 'center';
+
+    ov.innerHTML =
+      '<div class="ob-dw" style="width:min(680px,100%);height:auto;max-height:90vh;border-radius:14px;border:1px solid var(--border,#2a3446)">' +
+        '<div class="ob-dw-h"><h3>' + (isEdit ? 'Edit Candidate' : 'New Candidate') + '</h3>' +
+          '<button class="ob-x" id="nc-x">×</button></div>' +
+        '<div class="ob-dw-b">' +
+        (isEdit && d.candidateCode
+          ? '<div class="ob-sub" style="margin-top:0">Candidate Code: <b>' + esc(d.candidateCode) + '</b></div>' : '') +
+        '<div class="ob-f">' +
+          heading('Personal Information') +
+          field('first', 'First Name', 1, '', d.firstName) +
+          field('last', 'Last Name', 0, '', d.lastName) +
+          field('email', 'Email', 1, 'email', d.email) +
+          field('phone', 'Phone', 0, '', d.phone) +
+          field('dob', 'Date of Birth', 0, 'date', d.dob) +
+          '<div><label class="ob-lb">Gender</label><select class="ob-sel" id="nc-gender">' +
+            GENDERS.map(function (g) {
+              return '<option value="' + g + '"' + (d.gender === g ? ' selected' : '') + '>' + (g || 'Select…') + '</option>';
+            }).join('') + '</select></div>' +
+          '<div class="full"><label class="ob-lb">Address</label>' +
+            '<textarea class="ob-ta" id="nc-address">' + esc(d.address || '') + '</textarea></div>' +
+          heading('Professional Information') +
+          field('title', 'Designation', 0, '', d.jobTitle) +
+          field('dept', 'Department', 0, '', d.department) +
+          field('manager', 'Manager', 0, '', d.manager) +
+          field('location', 'Work Location', 0, '', d.workLocation) +
+          field('client', 'Client', 0, '', d.client) +
+          field('vendor', 'Vendor', 0, '', d.vendor) +
+          field('recruiter', 'Recruiter', 0, '', d.recruiter || (isEdit ? '' : sessionEmail())) +
+          field('join', 'Joining Date', 0, 'date', d.joiningDate) +
+          '<div><label class="ob-lb">Status</label><select class="ob-sel" id="nc-status">' +
+            CAND_STATUSES.map(function (s) {
+              return '<option' + ((d.status || 'Draft') === s ? ' selected' : '') + '>' + s + '</option>';
+            }).join('') + '</select></div>' +
+          '<div class="full" id="nc-custom"></div>' +
+        '</div>' +
+        '<div class="ob-act">' +
+          (isEdit
+            ? '<button class="ob-btn primary" id="nc-savechanges">Save Changes</button>'
+            : '<button class="ob-btn primary" id="nc-save">Create Candidate</button>') +
+          '<button class="ob-btn" id="nc-cancel">Cancel</button>' +
+          (can('onboarding.settings')
+            ? '<button class="ob-btn" id="nc-fields" style="margin-left:auto">⚙ Edit Form</button>' : '') +
+        '</div>' +
+        '<div class="ob-err" id="nc-e"></div></div>' +
+      '</div>';
+    document.body.appendChild(ov);
+
+    function close() { ov.remove(); }
+    ov.addEventListener('click', function (e) { if (e.target === ov) close(); });
+    ov.querySelector('#nc-x').addEventListener('click', close);
+    ov.querySelector('#nc-cancel').addEventListener('click', close);
+
+    var fbtn = ov.querySelector('#nc-fields');
+    if (fbtn) fbtn.addEventListener('click', function () { close(); openFormBuilder(); });
+
+    // Admin-built custom fields (develop): render into the placeholder, prefilled
+    // on edit. Fetched lazily so the fixed form shows instantly.
+    api('/onboarding/field-config').then(function (cfg) {
+      var sections = (cfg && cfg.sections) || [];
+      formFields = flattenSections(sections).filter(function (f) { return !f.core; });
+      var box = ov.querySelector('#nc-custom');
+      if (box) box.innerHTML = renderCustomSections(sections, isEdit ? (d.customFields || {}) : {});
+    }).catch(function () {});
+
+    var e = ov.querySelector('#nc-e');
+    var v = function (id) { return ov.querySelector('#nc-' + id).value.trim(); };
+
+    function collect() {
+      return {
+        firstName: v('first'), lastName: v('last'), email: v('email'), phone: v('phone'),
+        dob: v('dob') || null, gender: ov.querySelector('#nc-gender').value, address: v('address'),
+        jobTitle: v('title'), department: v('dept'), manager: v('manager'),
+        workLocation: v('location'), client: v('client'), vendor: v('vendor'),
+        recruiter: v('recruiter'), joiningDate: v('join') || null,
+        status: ov.querySelector('#nc-status').value,
+        customFields: collectCustom(ov),
+      };
+    }
+    function valid() {
+      if (!v('first')) { e.textContent = 'First name is required.'; return false; }
+      if (!v('email')) { e.textContent = 'Email is required.'; return false; }
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v('email'))) { e.textContent = 'Enter a valid email address.'; return false; }
+      if (v('dob') && v('dob') > new Date().toISOString().slice(0, 10)) {
+        e.textContent = 'Date of birth cannot be in the future.'; return false;
+      }
+      var custom = collectCustom(ov);
+      for (var i = 0; i < formFields.length; i++) {
+        var f = formFields[i];
+        if (f.required && (custom[f.key] === undefined || custom[f.key] === '' ||
+            (Array.isArray(custom[f.key]) && !custom[f.key].length))) {
+          e.textContent = f.label + ' is required.'; return false;
+        }
+      }
+      return true;
+    }
+
+    if (isEdit) {
+      var save = ov.querySelector('#nc-savechanges');
+      save.addEventListener('click', function () {
+        if (!valid()) return;
+        save.disabled = true; e.textContent = '';
+        api('/onboarding/candidates/' + existing.id, { method: 'PATCH', body: collect() })
+          .then(function () {
+            close();
+            toast('Candidate updated');
+            if (state.detail && state.detail.id === existing.id) refreshDetail();
+            else loadCandidates();
+          })
+          .catch(function (err) { save.disabled = false; e.textContent = err.message; });
+      });
+    } else {
+      var saveBtn = ov.querySelector('#nc-save');
+      saveBtn.addEventListener('click', function () {
+        if (!valid()) return;
+        saveBtn.disabled = true; e.textContent = '';
+        api('/onboarding/candidates', { method: 'POST', body: collect() })
+          .then(function (c) {
+            close();
+            toast('Candidate created');
+            loadCandidates();
+            openDetail(c.id, 'overview');   // open the new candidate's profile
+          })
+          .catch(function (err) { saveBtn.disabled = false; e.textContent = err.message; });
+      });
+    }
+  }
+
   function openNewModal() {
     // Fetch the admin-built form first, so it reflects the current schema.
     api('/onboarding/field-config').then(function (cfg) {
@@ -2871,12 +3311,17 @@
         }),
       };
     }
+    var cols = shownCols();   // export matches the columns the user has chosen to see
     return {
-      head: COLS.map(function (c) { return c[1]; }),
-      body: sorted(state.rows).map(function (r) {
-        return COLS.map(function (c) {
-          var v = r[c[0]];
-          if (c[0] === 'authExpiryDate' || c[0] === 'joiningDate') return fmtDate(v) === '—' ? '' : fmtDate(v);
+      head: cols.map(function (c) { return colLabel(c.key); }),
+      body: sorted(filteredRows()).map(function (r) {   // and respects the active filters
+        return cols.map(function (c) {
+          var k = c.key;
+          if (k === 'authExpiryDate' || k === 'joiningDate' || k === 'dob' || k === 'createdAt') {
+            var fd = fmtDate(r[k]); return fd === '—' ? '' : fd;
+          }
+          if (k === 'progress') return progressPct(r) + '%';
+          var v = r[k];
           return String(v == null ? '' : v);
         });
       }),
@@ -2991,6 +3436,188 @@
     '/settings': ['Onboarding Settings', 'How this module is configured.'],
   };
 
+  /* ── Edit Filters drawer (Business Unit + pre-defined + custom "contains") ──
+     The job-board-style side panel. Business Unit is the distinct department
+     set; pre-defined filters are candidate-specific quick filters; custom rows
+     match "contains" against any column. Everything applies client-side. */
+  var filterDrawerKey = null;
+  function closeFiltersDrawer() {
+    var ov = document.getElementById('hrms-ob-fdrawer');
+    if (ov) ov.remove();
+    if (filterDrawerKey) { document.removeEventListener('keydown', filterDrawerKey); filterDrawerKey = null; }
+  }
+  function openFiltersDrawer() {
+    closeFiltersDrawer();
+    ensureStyle();
+    var depts = distinctVals('department');
+    var bu = state.buFilter ? state.buFilter.slice() : depts.slice();   // default: all selected
+    var predef = state.predef;
+    var customs = state.customFilters.map(function (c) { return { key: c.key, val: c.val }; });
+
+    var ov = document.createElement('div');
+    ov.id = 'hrms-ob-fdrawer';
+    ov.className = 'ob-ov';
+    ov.innerHTML =
+      '<div class="ob-dw ob-cd" role="dialog" aria-label="Edit Filters">' +
+        '<div class="ob-dw-h"><h3>Edit Filters</h3><button class="ob-x" id="ob-fd-x" title="Close">×</button></div>' +
+        '<div class="ob-fd-body">' +
+          '<div class="ob-fd-sec" style="margin-top:0">Business Unit</div>' +
+          '<div class="ob-fd-bu" id="ob-fd-bu"></div>' +
+          '<div class="ob-fd-sec">Pre-Defined Filters</div>' +
+          '<div class="ob-fd-pd">' + CAND_PREDEF.map(function (p) {
+            return '<label><input type="radio" name="ob-fd-predef" value="' + p[0] + '"' + (p[0] === predef ? ' checked' : '') + '>' + esc(p[1]) + '</label>';
+          }).join('') + '</div>' +
+          '<div class="ob-fd-sec">Custom Filters</div>' +
+          '<div id="ob-fd-cf"></div>' +
+          '<button class="ob-fd-add" id="ob-fd-add">+ Add Filter</button>' +
+        '</div>' +
+        '<div class="ob-cd-f">' +
+          '<button class="ob-btn primary" id="ob-fd-apply">Apply</button>' +
+          '<button class="ob-btn" id="ob-fd-reset">Reset</button>' +
+          '<button class="ob-btn" id="ob-fd-cancel">Cancel</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(ov);
+
+    var buBox = ov.querySelector('#ob-fd-bu');
+    function drawBu() {
+      if (!depts.length) { buBox.innerHTML = '<div class="ob-fd-empty">No departments to filter yet.</div>'; return; }
+      buBox.innerHTML =
+        '<label><input type="checkbox" id="ob-fd-buall"' + (bu.length === depts.length ? ' checked' : '') + '> <b>(All selected)</b></label>' +
+        depts.map(function (d) {
+          return '<label><input type="checkbox" value="' + esc(d) + '"' + (bu.indexOf(d) !== -1 ? ' checked' : '') + '> ' + (d === '' ? '(blank)' : esc(d)) + '</label>';
+        }).join('');
+      buBox.querySelector('#ob-fd-buall').addEventListener('change', function (e) { bu = e.target.checked ? depts.slice() : []; drawBu(); });
+      buBox.querySelectorAll('input[value]').forEach(function (cb) {
+        cb.addEventListener('change', function () {
+          var v = cb.value;
+          if (cb.checked) { if (bu.indexOf(v) === -1) bu.push(v); }
+          else { var i = bu.indexOf(v); if (i !== -1) bu.splice(i, 1); }
+          var a = buBox.querySelector('#ob-fd-buall'); if (a) a.checked = bu.length === depts.length;
+        });
+      });
+    }
+    drawBu();
+
+    ov.querySelectorAll('input[name="ob-fd-predef"]').forEach(function (r) { r.addEventListener('change', function () { predef = r.value; }); });
+
+    var cfList = ov.querySelector('#ob-fd-cf');
+    function drawCf() {
+      cfList.innerHTML = customs.map(function (c, i) {
+        return '<div class="ob-fd-cf"><select data-cfk="' + i + '">' + ALL_COLS.map(function (cc) {
+          return '<option value="' + cc[0] + '"' + (cc[0] === c.key ? ' selected' : '') + '>' + esc(cc[1]) + '</option>';
+        }).join('') + '</select>' +
+        '<input data-cfv="' + i + '" placeholder="contains…" value="' + esc(c.val) + '">' +
+        '<button class="ob-fd-cfx" data-cfd="' + i + '" title="Remove">×</button></div>';
+      }).join('');
+      cfList.querySelectorAll('[data-cfk]').forEach(function (sel) { sel.addEventListener('change', function () { customs[+sel.getAttribute('data-cfk')].key = sel.value; }); });
+      cfList.querySelectorAll('[data-cfv]').forEach(function (inp) { inp.addEventListener('input', function () { customs[+inp.getAttribute('data-cfv')].val = inp.value; }); });
+      cfList.querySelectorAll('[data-cfd]').forEach(function (b) { b.addEventListener('click', function () { customs.splice(+b.getAttribute('data-cfd'), 1); drawCf(); }); });
+    }
+    drawCf();
+    ov.querySelector('#ob-fd-add').addEventListener('click', function () { customs.push({ key: 'name', val: '' }); drawCf(); });
+
+    ov.addEventListener('click', function (e) { if (e.target === ov) closeFiltersDrawer(); });
+    ov.querySelector('#ob-fd-x').addEventListener('click', closeFiltersDrawer);
+    ov.querySelector('#ob-fd-cancel').addEventListener('click', closeFiltersDrawer);
+    ov.querySelector('#ob-fd-reset').addEventListener('click', function () {
+      bu = depts.slice(); predef = 'all'; customs = [];
+      drawBu(); drawCf();
+      ov.querySelectorAll('input[name="ob-fd-predef"]').forEach(function (r) { r.checked = r.value === 'all'; });
+    });
+    ov.querySelector('#ob-fd-apply').addEventListener('click', function () {
+      state.buFilter = (bu.length === depts.length) ? null : bu;   // null = no restriction
+      state.predef = predef;
+      state.customFilters = customs.filter(function (c) { return c.val; });
+      state.pg = 1;
+      closeFiltersDrawer();
+      render();
+    });
+    filterDrawerKey = function (e) { if (e.key === 'Escape') closeFiltersDrawer(); };
+    document.addEventListener('keydown', filterDrawerKey);
+  }
+
+  /* ── Edit Columns drawer (show/hide + drag-reorder, saved to localStorage) ──
+     Mirrors the Job Board module's column manager, reusing this module's overlay
+     and drawer styles. Uses native HTML5 drag-and-drop — this frontend has no
+     bundler, so a React DnD library (react-beautiful-dnd / @hello-pangea/dnd)
+     cannot be loaded here; native DnD is exactly what the Job Board grid uses. */
+  var colDrawerKey = null;
+  function closeColumnsDrawer() {
+    var ov = document.getElementById('hrms-ob-coldrawer');
+    if (ov) ov.remove();
+    if (colDrawerKey) { document.removeEventListener('keydown', colDrawerKey); colDrawerKey = null; }
+  }
+  function openColumnsDrawer() {
+    ensureCols();
+    closeColumnsDrawer();
+    ensureStyle();
+    // Work on a copy — nothing is committed until the user hits Save.
+    var working = state.cols.map(function (c) { return { key: c.key, on: c.on }; });
+
+    var ov = document.createElement('div');
+    ov.id = 'hrms-ob-coldrawer';
+    ov.className = 'ob-ov';
+    ov.innerHTML =
+      '<div class="ob-dw ob-cd" role="dialog" aria-label="Edit Columns">' +
+        '<div class="ob-dw-h"><h3>Edit Columns</h3><button class="ob-x" id="ob-cd-x" title="Close">×</button></div>' +
+        '<div class="ob-cd-sub"><span id="ob-cd-count"></span> OF ' + working.length + ' SELECTED</div>' +
+        '<div class="ob-cd-list" id="ob-cd-list"></div>' +
+        '<div class="ob-cd-f">' +
+          '<button class="ob-btn primary" id="ob-cd-save">Save</button>' +
+          '<button class="ob-btn" id="ob-cd-reset">Reset to Default</button>' +
+          '<button class="ob-btn" id="ob-cd-cancel">Cancel</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(ov);
+
+    function updateCount() {
+      var el = ov.querySelector('#ob-cd-count');
+      if (el) el.textContent = working.filter(function (c) { return c.on; }).length;
+    }
+    function renderList() {
+      var list = ov.querySelector('#ob-cd-list');
+      list.innerHTML = working.map(function (c, i) {
+        return '<div class="ob-cd-i" draggable="true" data-i="' + i + '">' +
+          '<span class="ob-cd-grip" title="Drag to reorder">⋮⋮</span>' +
+          '<label><input type="checkbox"' + (c.on ? ' checked' : '') + '>' + esc(colLabel(c.key)) + '</label>' +
+        '</div>';
+      }).join('');
+      list.querySelectorAll('.ob-cd-i').forEach(function (el) {
+        var i = +el.getAttribute('data-i');
+        el.querySelector('input').addEventListener('change', function (e) { working[i].on = e.target.checked; updateCount(); });
+        el.addEventListener('dragstart', function (e) { el.classList.add('drag'); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', String(i)); });
+        el.addEventListener('dragend', function () { el.classList.remove('drag'); });
+        el.addEventListener('dragover', function (e) { e.preventDefault(); el.classList.add('over'); });
+        el.addEventListener('dragleave', function () { el.classList.remove('over'); });
+        el.addEventListener('drop', function (e) {
+          e.preventDefault(); el.classList.remove('over');
+          var from = parseInt(e.dataTransfer.getData('text/plain'), 10), to = i;
+          if (isNaN(from) || from === to) return;
+          var moved = working.splice(from, 1)[0];
+          working.splice(to, 0, moved);
+          renderList();
+        });
+      });
+      updateCount();
+    }
+    renderList();
+
+    ov.addEventListener('click', function (e) { if (e.target === ov) closeColumnsDrawer(); });
+    ov.querySelector('#ob-cd-x').addEventListener('click', closeColumnsDrawer);
+    ov.querySelector('#ob-cd-cancel').addEventListener('click', closeColumnsDrawer);
+    ov.querySelector('#ob-cd-reset').addEventListener('click', function () { working = defaultColState(); renderList(); });
+    ov.querySelector('#ob-cd-save').addEventListener('click', function () {
+      if (!working.some(function (c) { return c.on; })) { toast('Select at least one column to display.', 'warn'); return; }
+      state.cols = working;
+      saveColPrefs();
+      closeColumnsDrawer();
+      render();
+    });
+    colDrawerKey = function (e) { if (e.key === 'Escape') closeColumnsDrawer(); };
+    document.addEventListener('keydown', colDrawerKey);
+  }
+
   function render() {
     var root = document.getElementById(ID.root);
     if (!root) return;
@@ -3020,32 +3647,32 @@
       s.addEventListener('input', function () {
         state.search = s.value;
         state.pg = 1;
-        if (onStage) {
-          // Stage lists are already in memory — filter locally, no round-trip.
-          var pos = s.selectionStart;
-          render();
-          var s2 = document.getElementById('ob-search');
-          if (s2) { s2.focus(); s2.setSelectionRange(pos, pos); }
-          return;
-        }
-        clearTimeout(s._t);
-        s._t = setTimeout(loadCandidates, 280);   // debounce: one request per pause, not per keystroke
+        // The candidate roster and stage lists are both in memory, so filter
+        // locally with no round-trip; keep the caret across the re-render.
+        var pos = s.selectionStart;
+        render();
+        var s2 = document.getElementById('ob-search');
+        if (s2) { s2.focus(); try { s2.setSelectionRange(pos, pos); } catch (_) {} }
       });
     }
     var fs = root.querySelector('#ob-fstatus');
-    if (fs) fs.addEventListener('change', function () { state.filters.status = fs.value; state.pg = 1; loadCandidates(); });
+    if (fs) fs.addEventListener('change', function () { state.filters.status = fs.value; state.pg = 1; render(); });
     var fa = root.querySelector('#ob-fauth');
-    if (fa) fa.addEventListener('change', function () { state.filters.authType = fa.value; state.pg = 1; loadCandidates(); });
+    if (fa) fa.addEventListener('change', function () { state.filters.authType = fa.value; state.pg = 1; render(); });
     var ps = root.querySelector('#ob-psize');
-    if (ps) ps.addEventListener('change', function () { state.pageSize = +ps.value; state.pg = 1; loadCandidates(); });
+    if (ps) ps.addEventListener('change', function () { state.pageSize = +ps.value; state.pg = 1; render(); });
     var pv = root.querySelector('#ob-prev');
-    if (pv) pv.addEventListener('click', function () { if (state.pg > 1) { state.pg--; loadCandidates(); } });
+    if (pv) pv.addEventListener('click', function () { if (state.pg > 1) { state.pg--; render(); } });
     var nx = root.querySelector('#ob-next');
-    if (nx) nx.addEventListener('click', function () { state.pg++; loadCandidates(); });
+    if (nx) nx.addEventListener('click', function () { state.pg++; render(); });
     var nw = root.querySelector('#ob-new');
-    if (nw) nw.addEventListener('click', onbOpenForm);
+    if (nw) nw.addEventListener('click', function () { openCandidateModal(); });
     var ex = root.querySelector('#ob-export');
     if (ex) ex.addEventListener('click', function (e) { e.stopPropagation(); toggleExportMenu(ex); });
+    var ff = root.querySelector('#ob-filters');
+    if (ff) ff.addEventListener('click', function (e) { e.stopPropagation(); openFiltersDrawer(); });
+    var mc = root.querySelector('#ob-columns');
+    if (mc) mc.addEventListener('click', function (e) { e.stopPropagation(); openColumnsDrawer(); });
 
     root.querySelectorAll('th[data-sort]').forEach(function (th) {
       th.addEventListener('click', function () {
@@ -3058,6 +3685,28 @@
     root.querySelectorAll('tbody tr[data-id]').forEach(function (tr) {
       tr.addEventListener('click', function () {
         openDetail(+tr.dataset.id, PAGE_TAB[state.page] || 'overview');
+      });
+    });
+    // Row action buttons (candidate grid only). stopPropagation so the row's
+    // own click (which opens the drawer) does not also fire.
+    root.querySelectorAll('td.ob-actions button[data-act]').forEach(function (b) {
+      b.addEventListener('click', function (ev) {
+        ev.stopPropagation();
+        var id = +b.dataset.id, act = b.dataset.act;
+        if (act === 'view') { openDetail(id, 'overview'); return; }
+        if (act === 'edit') {
+          api('/onboarding/candidates/' + id)
+            .then(function (c) { openCandidateModal(c); })
+            .catch(function (e) { toast(e.message, 'error'); });
+          return;
+        }
+        if (act === 'del') {
+          var r = state.rows.filter(function (x) { return x.id === id; })[0] || {};
+          if (!confirm('Delete ' + (r.name || r.email || 'this candidate') + '? The audit trail is kept.')) return;
+          api('/onboarding/candidates/' + id, { method: 'DELETE' })
+            .then(function () { toast('Candidate deleted'); loadCandidates(); })
+            .catch(function (e) { toast(e.message, 'error'); });
+        }
       });
     });
     root.querySelectorAll('.ob-al[data-cid]').forEach(function (a) {
@@ -3189,6 +3838,7 @@
   }
 
   function start() {
+    loadColPrefs();   // restore the saved candidate-grid column configuration
     // Capture phase: must run before the nav-item's own click handler.
     document.addEventListener('click', onNavClick, true);
     // The form-builder engine creates candidates; when it does, open the new
@@ -3199,7 +3849,7 @@
       var id = e && e.detail && e.detail.id;
       if (id) openDetail(id, 'workauth');
     });
-    // Republish from the builder → refresh cached labels + settings view.
+    // Republish from the builder -> refresh cached labels + settings view.
     window.addEventListener('hrmsOnbFormPublished', function () {
       state.fieldDefs = null;
       if (state.page === '/settings') render();

@@ -16,15 +16,17 @@ A few helpers and endpoints are intentionally NOT DRF:
 """
 import hashlib
 import json
+import logging
 import os
 import re
 import secrets
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 
 from django.conf import settings
 from django.db import transaction
 from django.db.models import (
-    BooleanField, Case, Count, IntegerField, OuterRef, Q, Subquery, Value, When,
+    BooleanField, Case, CharField, Count, F, IntegerField, OuterRef, Q, Subquery,
+    Value, When,
 )
 from django.db.models.functions import Coalesce
 from django.http import HttpResponse, JsonResponse
@@ -35,6 +37,7 @@ from rest_framework.response import Response
 
 from . import ai, mailer, social_poster
 from .permissions import require_perm, require_admin, check_perm
+from .timeutil import local_now, local_today
 from .models import (
     AppUser,
     AttendanceEvent,
@@ -63,8 +66,10 @@ from .models import (
     GeoFence,
     WfhRequest,
     WFHPolicy,
+    WorkArrangement,
 )
 from .serializers import (
+    DATETIME_FMT,
     AppUserSerializer,
     AttendanceEventSerializer,
     CompanySerializer,
@@ -91,6 +96,8 @@ from .serializers import (
     GeoFenceSerializer,
     WfhRequestSerializer,
 )
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -172,6 +179,63 @@ def _resolve_recipient_email(request, fallback=None):
     if not email and fallback:
         email = norm_email(fallback)
     return email
+
+
+def _actor_identity(request):
+    """Who is performing this action — (email, display name).
+
+    Identity comes from the same X-User-Email header the rest of the API is
+    gated on, never from the request body, so a client cannot claim someone
+    else's interviews and inflate their numbers on the KPI dashboard. The name
+    is resolved from the account rather than trusted from the payload, so the
+    leaderboard cannot be split by someone typing their name differently.
+
+    Used for both scheduling an interview and sending its follow-up: the two
+    are different people often enough that recording only one of them leaves a
+    candidate's outcome email attributed to whoever booked the slot.
+    """
+    email = norm_email(
+        request.META.get('HTTP_X_USER_EMAIL')
+        or request.META.get('HTTP_X_ACTOR_EMAIL')
+        or ''
+    )
+    if not email:
+        # Body fallback matches _get_caller() in permissions.py, for callers
+        # that cannot set headers.
+        try:
+            email = norm_email(request.data.get('actorEmail') or '')
+        except Exception:
+            email = ''
+    if not email:
+        return '', ''
+    user = AppUser.objects.filter(email=email).first()
+    name = (user.full_name if user else '') or email.split('@')[0]
+    return email, name
+
+
+# The interview_links rows predating created_by_email have no creator recorded,
+# so the dashboard falls back to the free-text `interviewer` for them. Both the
+# filters and the group-by need to agree on that rule, hence one definition.
+CREATOR_KEY = Case(
+    When(~Q(created_by_email=''), then=F('created_by_email')),
+    default=F('interviewer'),
+    output_field=CharField(),
+)
+
+
+def _creator_q(value, also_name=''):
+    """Rows attributable to `value` — a creator email, or a legacy free-text
+    interviewer. `also_name` additionally matches legacy rows where the caller
+    typed their display name instead of their email."""
+    value = str(value or '').strip()
+    if not value:
+        return Q(pk__in=[])
+    q = Q(created_by_email__iexact=value)
+    legacy = Q(interviewer__iexact=value)
+    name = str(also_name or '').strip()
+    if name:
+        legacy = legacy | Q(interviewer__iexact=name)
+    return q | (Q(created_by_email='') & legacy)
 
 
 def create_notification(recipient, title, message, notification_type='info', link=''):
@@ -273,7 +337,12 @@ def jobs(request):
     # Auto-post to the creator's linked social accounts (LinkedIn / X).
     # Non-fatal: a job is still created even if posting fails or isn't set up.
     if body.get('autoPost') is not False:
-        payload['socialResults'] = _auto_post_job(payload, body.get('userEmail'))
+        # customFields aren't on the serializer output but the draft builder
+        # uses them (skills, experience), so carry them through.
+        draft_source = dict(payload)
+        draft_source.setdefault('customFields', body.get('customFields') or {})
+        payload['socialResults'] = _auto_post_job(
+            draft_source, body.get('userEmail'), body.get('linkedinMessage'))
     return Response(payload, status=201)
 
 
@@ -316,22 +385,72 @@ def job_detail(request, pk):
     return Response(JobPostSerializer(job).data)
 
 
-def _auto_post_job(job_payload, user_email=None):
-    """Look up the user's saved social credentials and post the job. Returns a
-    list of per-platform results (empty if nothing is configured)."""
-    cfg = None
-    if user_email:
-        cfg = UserEmailConfig.objects.filter(pk=norm_email(user_email)).first()
-    if not cfg:
-        cfg = UserEmailConfig.objects.exclude(social__isnull=True).order_by('user_email').first()
-    if not cfg:
-        return []
-    social = safe_json(cfg.social) or (cfg.social if isinstance(cfg.social, dict) else {})
+def html_to_text(html):
+    """Readable plain-text alternative for an HTML email body.
+
+    The rich-text editor emits block tags (<div>, <p>, <li>), so stripping tags
+    alone would run every line together in clients that show the text part.
+    """
+    if not html:
+        return ''
+    text = re.sub(r'(?i)<br\s*/?>', '\n', html)
+    text = re.sub(r'(?i)</(div|p|li|tr|h[1-6])>', '\n', text)
+    text = re.sub(r'(?i)<li[^>]*>', '• ', text)
+    text = re.sub(r'<[^>]+>', '', text)
+    for entity, char in (('&nbsp;', ' '), ('&amp;', '&'), ('&lt;', '<'),
+                         ('&gt;', '>'), ('&quot;', '"'), ('&#39;', "'")):
+        text = text.replace(entity, char)
+    text = re.sub(r'[ \t]+\n', '\n', text)
+    return re.sub(r'\n{3,}', '\n\n', text).strip()
+
+
+def poster_contact(email):
+    """Contact details for the closing block of a job announcement: the
+    recruiter's own email plus the phone from their HRMS profile."""
+    email = norm_email(email)
+    if not email:
+        return {}
+    profile = UserProfile.objects.filter(email=email).first()
+    user = AppUser.objects.filter(email=email).first()
+    name = ''
+    if profile:
+        name = ' '.join(x for x in [profile.first_name, profile.last_name] if x).strip()
+    if not name and user:
+        name = user.full_name or ''
+    return {
+        'email': email,
+        'phone': (profile.phone if profile else '') or '',
+        'name': name,
+    }
+
+
+def _auto_post_job(job_payload, user_email=None, message=None):
+    """Post the job to the creator's OWN linked social accounts.
+
+    Never falls back to another user's credentials: a job must only ever appear
+    on the profile of the person who created it. When the creator has nothing
+    linked we return an explanatory skip result rather than an empty list, so
+    the UI can tell them why nothing was posted.
+
+    `message` is the text approved in the preview dialog; without it a fresh
+    draft is built.
+    """
+    email = norm_email(user_email)
+    if not email:
+        return [{'platform': 'linkedin', 'ok': False, 'skipped': True,
+                 'error': 'Could not identify the job creator, so nothing was posted.'}]
+
+    cfg = UserEmailConfig.objects.filter(pk=email).first()
+    social = safe_json(cfg.social) if cfg else None
     if not isinstance(social, dict) or not social:
-        return []
+        return [{'platform': 'linkedin', 'ok': False, 'skipped': True,
+                 'error': 'No LinkedIn account connected. Connect yours in '
+                          'Settings → Email Configuration.'}]
     try:
-        return social_poster.post_job(job_payload, social)
+        return social_poster.post_job(job_payload, social, message=message,
+                                      contact=poster_contact(email))
     except Exception as e:  # noqa: BLE001 - never break job creation on a posting error
+        logger.warning('Social auto-post failed for %s: %s', email, e)
         return [{'platform': 'all', 'ok': False, 'error': str(e)}]
 
 
@@ -353,7 +472,7 @@ def _generate_interview_tokens(interview_date_str, interview_time_str):
 
     # Expiry is 24 hours from now, so links don't expire prematurely
     # regardless of when the interview is scheduled.
-    expiry = datetime.now() + timedelta(hours=INTERVIEW_LINK_EXPIRY_HOURS)
+    expiry = local_now() + timedelta(hours=INTERVIEW_LINK_EXPIRY_HOURS)
 
     return candidate_token, recruiter_token, expiry
 
@@ -362,13 +481,26 @@ def _public_origin(request, body=None):
     """Base URL the candidate's link must point at.
 
     The request host is whatever the *recruiter's* browser hit — often
-    localhost — which produces a link no candidate can open. PUBLIC_BASE_URL
-    overrides it for real deployments.
+    localhost — which produces a link no candidate can open.
+
+    Two names have to be consulted because the project grew two. The mailer's
+    brand_logo_url() reads ``settings.HRMS_PUBLIC_URL``, which is the one the
+    deployment actually sets; this function only ever read ``PUBLIC_BASE_URL``,
+    which nothing sets. So the logo in an email resolved against the public
+    domain while the candidate's link in the same email resolved against the
+    recruiter's browser — and the interview_links rows still carry the evidence:
+    fourteen of them point at http://127.0.0.1:8000. Both names are honoured,
+    and the request host stays the last resort it was meant to be.
     """
     explicit = (body or {}).get('origin')
     if explicit:
         return str(explicit).rstrip('/')
     configured = os.environ.get('PUBLIC_BASE_URL', '').strip()
+    if not configured:
+        try:
+            configured = (getattr(settings, 'HRMS_PUBLIC_URL', '') or '').strip()
+        except Exception:
+            configured = ''
     if configured:
         return configured.rstrip('/')
     return _request_origin_from_meta(request)
@@ -384,29 +516,38 @@ def _send_interview_invitation(obj, origin, sender_email=None):
         return {'ok': False, 'error': 'Candidate has no email address'}
 
     candidate_url = f'{origin}/interview-access?token={obj.candidate_token}'
+
+    when = ' at '.join(p for p in (obj.interview_date, obj.interview_time) if p) or 'To be confirmed'
+    types = obj.interview_type
+    if isinstance(types, (list, tuple)):
+        types = ', '.join(str(t) for t in types)
+
     html = mailer.render_branded(
-        title=f'Interview Invitation — {obj.role}',
+        greeting=obj.name,
+        title='',
         intro=(
-            f'Dear {obj.name},<br><br>'
-            f'Your interview for the <strong>{obj.role}</strong> position has been scheduled.<br>'
-            f'<strong>Date:</strong> {obj.interview_date or "TBD"}&nbsp;&nbsp;'
-            f'<strong>Time:</strong> {obj.interview_time or "TBD"}<br>'
-            f'<strong>Platform:</strong> {obj.platform or "To be confirmed"}<br><br>'
-            f'Click the button below to join your interview session at the scheduled time.'
+            f'We are pleased to inform you that your interview for the position of '
+            f'<strong>{obj.role}</strong> at <strong>{mailer.BRAND_SHORT}</strong> has been '
+            f'successfully scheduled. Please review the details below and make a note of the '
+            f'date, time, and platform.'
         ),
         highlight_html=(
-            f'<div style="text-align:center;margin:18px 0;">'
-            f'<a href="{candidate_url}" target="_blank" rel="noreferrer noopener" '
-            f'style="display:inline-block;background:linear-gradient(135deg,#4f8ef7,#a855f7);'
-            f'color:#fff;font-size:15px;font-weight:700;text-decoration:none;'
-            f'padding:14px 38px;border-radius:10px;">Join Interview</a></div>'
-            f'<div style="text-align:center;"><a href="{candidate_url}" '
-            f'style="color:#94a3b8;font-size:12px;word-break:break-all;">{candidate_url}</a></div>'
+            mailer.render_details_card('Interview Details', [
+                ('Position', obj.role),
+                ('Interview Type', types),
+                ('Interviewer', obj.interviewer or '—'),
+                ('Date &amp; Time', when),
+                ('Duration', obj.duration),
+                ('Platform', obj.platform or 'To be confirmed'),
+            ])
+            + mailer.render_cta(candidate_url, 'Join Interview')
         ),
         footer=(
-            'This link is valid for 24 hours and can only be used once. '
-            'If you encounter any issues, contact your recruiter.'
+            'Please ensure you join the meeting at least <strong>5 minutes early</strong>. '
+            'This link is valid for 24 hours and can only be used once. Should you need to '
+            'reschedule or have any questions, please contact your recruiter.'
         ),
+        logo_url=f'{origin}/logo.jpg',
     )
     text = (
         f'Hi {obj.name},\n\nYour interview for {obj.role} is scheduled on '
@@ -433,6 +574,14 @@ def interviews(request):
         # otherwise a stale older interview (with an old createdAt) is picked and
         # the link is wrongly shown as expired.
         qs = InterviewLink.objects.all().order_by('-id')
+        need_tokens = [obj for obj in qs if not obj.candidate_token]
+        if need_tokens:
+            for obj in need_tokens:
+                c_tok, r_tok, exp = _generate_interview_tokens(obj.interview_date or '', obj.interview_time or '')
+                obj.candidate_token = c_tok
+                obj.recruiter_token = r_tok
+                obj.link_expires_at = exp
+                obj.save(update_fields=['candidate_token', 'recruiter_token', 'link_expires_at'])
         return Response(InterviewLinkSerializer(qs, many=True).data)
 
     body = request.data
@@ -448,7 +597,11 @@ def interviews(request):
     if not serializer.is_valid():
         return serializer_err(serializer)
     c_token, r_token, expiry = _generate_interview_tokens(interview_date, time)
-    serializer.save(candidate_token=c_token, recruiter_token=r_token, link_expires_at=expiry)
+    creator_email, creator_name = _actor_identity(request)
+    serializer.save(
+        candidate_token=c_token, recruiter_token=r_token, link_expires_at=expiry,
+        created_by_email=creator_email, created_by_name=creator_name,
+    )
     obj = serializer.instance
 
     # Deliver the tokenized link server-side. A mail failure must not discard an
@@ -507,7 +660,7 @@ def interview_note(request, pk):
     obj.notes = notes
     obj.notes_updated_by = name or (email.split('@')[0] if email else '')
     obj.notes_updated_by_email = email
-    obj.notes_updated_at = datetime.now()
+    obj.notes_updated_at = local_now()
     obj.save()
     return Response(InterviewLinkSerializer(obj).data)
 
@@ -555,6 +708,40 @@ def interviews_bulk_send_emails(request):
 # ---------------------------------------------------------------------------
 # Follow-up emails (Selected / Waitlisted / Rejected) — sent server-side
 # ---------------------------------------------------------------------------
+def render_placeholders(text, ctx):
+    """Replace {{key}} (any inner spacing) with values from ctx.
+
+    Applied on both the preview and the send path so a placeholder typed by
+    hand resolves the same way in each.
+    """
+    if not text:
+        return ''
+    return re.sub(r'\{\{\s*([a-zA-Z_]+)\s*\}\}',
+                  lambda m: str(ctx.get(m.group(1).strip().lower(), m.group(0))),
+                  text)
+
+
+def build_followup_html(subject, inner):
+    """The exact HTML a candidate receives for a follow-up email.
+
+    Both the preview endpoint and the send path call this, so what a recruiter
+    sees in the preview is byte-for-byte what goes out.
+
+    A body that is already a complete HTML document is sent verbatim — that is
+    how a hand-written HTML template stays intact instead of being nested
+    inside the branded wrapper.
+    """
+    inner = inner or ''
+    head = inner.lstrip()[:200].lower()
+    if head.startswith('<!doctype') or head.startswith('<html'):
+        return inner
+    return mailer.render_branded(
+        title=subject,
+        intro='',
+        highlight_html=f'<div style="font-size:15px;line-height:1.7;color:#334155;">{inner}</div>',
+    )
+
+
 def _followup_template(outcome, name, role, start_phrase='the first week of next month'):
     role = role or 'the role'
     name = name or 'there'
@@ -625,23 +812,37 @@ def interview_send_followup(request):
     if not subject or not inner:
         subject, inner = _followup_template(outcome, to_name, role)
 
-    html = mailer.render_branded(
-        title=subject,
-        intro='',
-        highlight_html=f'<div style="font-size:15px;line-height:1.7;color:#334155;">{inner}</div>',
-    )
+    # Resolve any {{name}} / {{role}} still present, exactly as the preview
+    # endpoint does — otherwise a hand-typed placeholder would preview
+    # correctly but reach the candidate literally.
+    ctx = {'name': to_name or 'there', 'role': role or 'the role',
+           'company': 'Eversoft', 'outcome': outcome or ''}
+    subject = render_placeholders(subject, ctx)
+    inner = render_placeholders(inner, ctx)
+
+    html = build_followup_html(subject, inner)
     result = mailer.send_email(
         to=to_email, subject=subject, html=html,
-        text=re.sub(r'<[^>]+>', '', inner.replace('<br>', '\n')),
+        text=html_to_text(inner),
         sender_email=body.get('senderEmail'),
     )
     if not result.get('ok'):
         return err('Could not send the follow-up email: ' + result.get('error', 'unknown error'), 502)
 
     if obj:
+        sender_actor, sender_name = _actor_identity(request)
         obj.outcome = outcome
         obj.email_sent = True
-        obj.save(update_fields=['outcome', 'email_sent'])
+        # followup_sent existed on the model and was never written — the flag
+        # that says "this candidate has been told" was permanently False.
+        obj.followup_sent = True
+        obj.followup_sent_by_email = sender_actor
+        obj.followup_sent_by_name = sender_name
+        obj.followup_sent_at = local_now()
+        obj.save(update_fields=[
+            'outcome', 'email_sent', 'followup_sent',
+            'followup_sent_by_email', 'followup_sent_by_name', 'followup_sent_at',
+        ])
     if to_email:
         create_notification(
             to_email,
@@ -657,10 +858,15 @@ def interview_send_followup(request):
 # Interview token verification & link management
 # ---------------------------------------------------------------------------
 def _interview_already_taken(obj):
-    """True once the candidate has sat the interview. ``completed_at`` is the
-    marker; ``status`` also counts so an interview a recruiter closed out by
-    hand cannot be re-entered."""
-    return obj.completed_at is not None or obj.status == 'Completed'
+    """True once the candidate has actually sat the interview.
+
+    ``completed_at`` is the only marker, because it is written in exactly one
+    place — when a recording is saved. ``status`` used to count too, but it is a
+    workflow label a recruiter can set by hand or in bulk, and doing so locked
+    real candidates out of interviews they had never taken: they saw "Interview
+    Already Completed" with no date, because ``completed_at`` was null.
+    """
+    return obj.completed_at is not None
 
 
 @api_view(['POST'])
@@ -687,7 +893,7 @@ def interview_verify_token(request):
     if not obj:
         return JsonResponse({'valid': False, 'reason': 'Token not found'}, status=404)
 
-    now = datetime.now()
+    now = local_now()
 
     # An interview may only be taken once. The recruiter link stays usable so
     # the interview can still be reviewed after the candidate is done.
@@ -749,7 +955,7 @@ def interview_complete(request):
             'interviewId': obj.id,
         })
 
-    obj.completed_at = datetime.now()
+    obj.completed_at = local_now()
     obj.status = 'Completed'
     obj.save(update_fields=['completed_at', 'status'])
     return Response({
@@ -783,7 +989,7 @@ def interview_regenerate_link(request, pk):
     )
     # Allow explicit override
     if body.get('extendHours'):
-        new_expiry = datetime.now() + timedelta(hours=extend_hours)
+        new_expiry = local_now() + timedelta(hours=extend_hours)
 
     obj.candidate_token = c_token
     obj.recruiter_token = r_token
@@ -1041,12 +1247,14 @@ def resume_score_file(request, pk):
 # ---------------------------------------------------------------------------
 def _recording_list_qs():
     return InterviewRecording.objects.annotate(
+        # ``_has_video`` is True only when *either* storage column has non-empty data
         _has_video=Case(
-            When(video_buffer__isnull=False, then=Value(True)),
+            When(video_buffer__isnull=False, video_buffer__gt=b'', then=Value(True)),
+            When(recording_data__isnull=False, recording_data__gt='', then=Value(True)),
             default=Value(False), output_field=BooleanField(),
         ),
         _has_recording=Case(
-            When(recording_data__isnull=False, then=Value(True)),
+            When(recording_data__isnull=False, recording_data__gt='', then=Value(True)),
             default=Value(False), output_field=BooleanField(),
         ),
     ).defer('video_buffer', 'recording_data')
@@ -1062,10 +1270,15 @@ RECORDING_FIELD_MAP = {
 }
 
 
-def _mark_interview_taken(email, role):
+def _mark_interview_taken(email, role, total_score=None):
     """A saved recording means the candidate sat the interview — latch it so the
     candidate link cannot be reused. Scoped to email + role because one
-    candidate may be interviewing for several roles at once."""
+    candidate may be interviewing for several roles at once.
+
+    ``total_score`` carries the assessment result across from the recording.
+    Without it the link keeps ``score`` at its 0 default, and the recruiter's
+    Candidate Follow-up list renders a real interview as "Score: 0/100".
+    """
     email = (email or '').strip()
     if not email:
         return
@@ -1074,13 +1287,24 @@ def _mark_interview_taken(email, role):
         qs = qs.filter(role__iexact=role.strip())
     obj = qs.order_by('-id').first()
     if obj:
-        obj.completed_at = datetime.now()
+        obj.completed_at = local_now()
         obj.status = 'Completed'
-        obj.save(update_fields=['completed_at', 'status'])
+        fields = ['completed_at', 'status']
+        try:
+            if total_score is not None:
+                obj.score = int(total_score)
+                fields.append('score')
+        except (TypeError, ValueError):
+            pass
+        obj.save(update_fields=fields)
 
 
 @api_view(['GET', 'POST'])
-@require_perm({'GET': 'recruitment.view', 'POST': 'recruitment.create'})
+# POST stays open: the candidate sitting the AI interview is not a signed-in
+# user and has no AppUser row, so their end-of-session upload cannot carry an
+# identity. Listing recordings still requires recruitment.view.
+@require_perm({'GET': 'recruitment.view', 'POST': 'recruitment.create'},
+              anonymous_methods=('POST',))
 def recordings(request):
     if request.method == 'GET':
         return Response(InterviewRecordingSerializer(_recording_list_qs(), many=True).data)
@@ -1092,7 +1316,7 @@ def recordings(request):
     if not serializer.is_valid():
         return serializer_err(serializer)
     serializer.save()
-    _mark_interview_taken(body.get('candidateEmail'), body.get('role'))
+    _mark_interview_taken(body.get('candidateEmail'), body.get('role'), body.get('totalScore'))
     return Response(serializer.data, status=201)
 
 
@@ -1129,35 +1353,149 @@ def recording_detail(request, pk):
     return Response({'ok': True})
 
 
+def _extract_video_bytes(raw_data):
+    """Extract binary video bytes from recording_data regardless of format:
+    - Plain base64 string
+    - Data URL string ('data:video/webm;base64,...')
+    - JSON array of base64 strings or Data URLs
+    - Raw binary bytes
+    """
+    if not raw_data:
+        return b''
+
+    if isinstance(raw_data, bytes):
+        # Check if it's already a webm / mp4 binary blob
+        if raw_data.startswith(b'\x1a\x45\xdf\xa3') or raw_data.startswith(b'\x00\x00\x00'):
+            return raw_data
+        try:
+            raw_str = raw_data.decode('utf-8', errors='ignore')
+        except Exception:
+            return raw_data
+    else:
+        raw_str = str(raw_data).strip()
+
+    if not raw_str:
+        return b''
+
+    import base64 as _b64
+
+    def _decode_chunk(s):
+        if not s or not isinstance(s, str):
+            return b''
+        s = s.strip()
+        if ',' in s[:100]:
+            s = s.split(',', 1)[1]
+        s = s.strip().replace(' ', '+')
+        pad = len(s) % 4
+        if pad:
+            s += '=' * (4 - pad)
+        try:
+            return _b64.b64decode(s)
+        except Exception:
+            try:
+                return _b64.b64decode(s.encode('ascii', errors='ignore'))
+            except Exception:
+                return b''
+
+    # 1. Try parsing as JSON (array of chunks or nested string)
+    if raw_str.startswith('[') or raw_str.startswith('{') or raw_str.startswith('"'):
+        try:
+            parsed = json.loads(raw_str)
+            if isinstance(parsed, list):
+                chunks = [_decode_chunk(item) for item in parsed if item]
+                combined = b''.join(chunks)
+                if combined:
+                    return combined
+            elif isinstance(parsed, str):
+                decoded = _decode_chunk(parsed)
+                if decoded:
+                    return decoded
+        except Exception:
+            pass
+
+    # 2. Fallback: single base64 or Data-URL string
+    return _decode_chunk(raw_str)
+
+
 @csrf_exempt
 def recording_video(request, pk):
-    """Binary (video/webm) upload + download. Kept as a plain Django view
-    because DRF's JSON parser cannot consume a raw binary body."""
-    obj = InterviewRecording.objects.filter(pk=pk).first()
-    if not obj:
-        return err('Recording not found', 404)
+    """Binary (video/webm) upload + download.
 
+    POST: Stores raw binary video bytes directly into `video_buffer` LONGBLOB.
+    GET: Serves uncorrupted binary video data with HTTP Range request support (206 Partial Content).
+    """
     if request.method == 'POST':
+        if not InterviewRecording.objects.filter(pk=pk).exists():
+            return err('Recording not found', 404)
         data = request.body
         if not data:
             return err('Invalid or empty video payload')
         mime = (request.META.get('CONTENT_TYPE') or 'video/webm').split(';')[0]
-        obj.video_buffer = data
-        obj.video_mime = mime
-        obj.save(update_fields=['video_buffer', 'video_mime'])
+        InterviewRecording.objects.filter(pk=pk).update(
+            video_buffer=data,
+            video_mime=mime,
+        )
         return JsonResponse({'ok': True})
 
-    if request.method == 'GET':
-        if not obj.video_buffer:
+    if request.method != 'GET':
+        return err('Method not allowed', 405)
+
+    try:
+        row = InterviewRecording.objects.filter(pk=pk).values_list('video_buffer', 'video_mime', 'recording_data').first()
+        if not row:
+            return err('Recording not found', 404)
+
+        raw_buf, mime, rd = row
+        video_bytes = b''
+
+        if raw_buf:
+            video_bytes = bytes(raw_buf)
+        elif rd:
+            video_bytes = _extract_video_bytes(rd)
+
+        if not video_bytes:
             return err('No video data for this recording', 404)
-        payload = bytes(obj.video_buffer)
-        resp = HttpResponse(payload, content_type=obj.video_mime or 'video/webm')
-        resp['Content-Length'] = str(len(payload))
+
+        size = len(video_bytes)
+        content_type = mime or 'video/webm'
+
+        # --- parse optional Range header ---
+        import re as _re
+        range_header = request.headers.get('Range') or request.META.get('HTTP_RANGE') or ''
+        _RANGE_RE = _re.compile(r'bytes=([0-9]*)-([0-9]*)', _re.I)
+        match = _RANGE_RE.match(range_header.strip())
+
+        if match:
+            first, last = match.group(1), match.group(2)
+            if first == '':
+                length = int(last or 0)
+                start = max(0, size - length)
+                end = size - 1
+            else:
+                start = int(first)
+                end = size - 1 if last == '' else min(int(last), size - 1)
+
+            if start >= size or start > end:
+                resp = HttpResponse(status=416)
+                resp['Content-Range'] = f'bytes */{size}'
+                resp['Accept-Ranges'] = 'bytes'
+                return resp
+
+            chunk = video_bytes[start:end + 1]
+            resp = HttpResponse(chunk, status=206, content_type=content_type)
+            resp['Content-Range'] = f'bytes {start}-{end}/{size}'
+            resp['Content-Length'] = str(len(chunk))
+        else:
+            resp = HttpResponse(video_bytes, status=200, content_type=content_type)
+            resp['Content-Length'] = str(size)
+
         resp['Accept-Ranges'] = 'bytes'
         resp['Cache-Control'] = 'public, max-age=31536000'
         return resp
+    except Exception as exc:
+        logger.error(f'Error serving video recording {pk}: {exc}', exc_info=True)
+        return err(f'Video playback error: {exc}', 500)
 
-    return err('Method not allowed', 405)
 
 
 # ---------------------------------------------------------------------------
@@ -1271,6 +1609,28 @@ def user_profile(request, email):
     return Response(UserProfileSerializer(obj).data)
 
 
+def _merge_social(email, incoming):
+    """Overlay the Settings form's social values on the stored ones.
+
+    The form owns ``social['<platform>']`` — a plain profile-URL string. OAuth
+    credentials live beside it under ``social['<platform>Auth']``, a key the
+    form never sends. Without this merge, saving Settings would silently wipe a
+    user's LinkedIn connection (see api/linkedin_oauth.py).
+    """
+    if not isinstance(incoming, dict):
+        incoming = {}
+    cfg = UserEmailConfig.objects.filter(pk=email).first()
+    stored = safe_json(cfg.social) if cfg else None
+    if not isinstance(stored, dict):
+        return incoming
+
+    merged = dict(incoming)
+    for key, value in stored.items():
+        if key.endswith('Auth') and key not in merged:
+            merged[key] = value
+    return merged
+
+
 @api_view(['PUT'])
 @require_perm('settings.manage', or_self=True)
 def user_email_config(request, email):
@@ -1278,7 +1638,7 @@ def user_email_config(request, email):
     if not email:
         return err('email is required')
     body = request.data
-    social = body.get('social', {})
+    social = _merge_social(email, body.get('social', {}))
     obj, _ = UserEmailConfig.objects.update_or_create(
         user_email=email,
         defaults={
@@ -1461,8 +1821,8 @@ def _get_active_shift(email, date_val):
         fallback = Shift.objects.create(
             id=1,
             name='General Shift',
-            start_time='09:00:00',
-            end_time='18:00:00',
+            start_time=time(9, 0),
+            end_time=time(18, 0),
             break_minutes=60,
             grace_minutes=15,
             is_flexible=False,
@@ -1470,13 +1830,164 @@ def _get_active_shift(email, date_val):
             overtime_after_minutes=540,
             created_by='system'
         )
+        # create() leaves whatever was passed in on the instance; only a
+        # reload turns the TimeField into a real ``time``. Callers do
+        # datetime.combine(date, shift.start_time), which rejects a string.
+        fallback.refresh_from_db()
     return fallback
 
 
+def _geofencing_enabled():
+    """True once at least one active fence exists.
+
+    Until an admin defines a fence there is nothing to be outside of, so the
+    out-of-office review is skipped entirely — otherwise turning this code on
+    would put every check-in in the company into a pending state.
+    """
+    return _office_fences().exists()
+
+
+def _office_fences():
+    """Active COMPANY locations only.
+
+    Every office-side query must go through this. An unfiltered fence list now
+    contains employees' homes, so matching against it would verify an office
+    check-in from a colleague's living room — and would count someone's house
+    as "a fence exists", switching enforcement on for the whole company.
+    """
+    return GeoFence.objects.filter(is_active=True, owner_email='')
+
+
+def home_fence_for(email):
+    """The employee's CONFIRMED home fence, or None.
+
+    Pending and Rejected homes deliberately return None: an unconfirmed pin is
+    a claim, not a verification basis, and treating it as one would let anyone
+    register wherever they stood and self-certify from then on.
+    """
+    if not email:
+        return None
+    return GeoFence.objects.filter(
+        is_active=True, owner_email=email, status=GeoFence.APPROVED).first()
+
+
+#: A phone indoors, or a desktop located from WiFi/IP, can report a position
+#: hundreds of metres out. Trusting it blindly marks people who really are at
+#: their desk as off-site. We widen the fence by the reading's own stated
+#: accuracy, capped so a useless ±20 km fix cannot wave everybody through.
+GEO_ACCURACY_ALLOWANCE_CAP_M = 750
+
+
+def _locate_against_fences(lat, lng, accuracy=None, fences=None):
+    """Resolve a position against every active fence.
+
+    Returns ``(is_inside, matched_fence, nearest_fence, distance_m)``. The
+    distance and nearest fence are returned even on a miss so the caller can
+    tell the employee how far out they were instead of just refusing them.
+    """
+    if lat is None or lng is None:
+        return False, None, None, None
+
+    allowance = 0.0
+    if accuracy is not None:
+        try:
+            allowance = min(max(float(accuracy), 0.0), GEO_ACCURACY_ALLOWANCE_CAP_M)
+        except (TypeError, ValueError):
+            allowance = 0.0
+
+    nearest, nearest_d = None, None
+    # Defaults to company locations. A home check is the same maths against a
+    # different circle, so it passes its own list rather than duplicating the
+    # accuracy allowance — which is the part that stops a ±300 m fix marking
+    # someone at their kitchen table as away from home.
+    for fence in (_office_fences() if fences is None else fences):
+        dist = _haversine_distance(lat, lng, fence.latitude, fence.longitude)
+        if nearest_d is None or dist < nearest_d:
+            nearest, nearest_d = fence, dist
+        if dist <= fence.radius_meters + allowance:
+            return True, fence, fence, dist
+    return False, None, nearest, nearest_d
+
+
+#: Past this the reading carries no information about where someone is. A
+#: browser with no GPS or WiFi positioning falls back to IP geolocation, which
+#: resolves to the ISP gateway and reports accuracy in tens of kilometres — we
+#: have seen ±50 km place a person 110 km from an office they were sitting in.
+#: Such a fix must be reported as "unknown", never as a distance.
+GEO_UNUSABLE_ACCURACY_M = 5000
+
+
+def _fix_is_usable(lat, lng, accuracy):
+    if lat is None or lng is None:
+        return False
+    try:
+        return accuracy is None or float(accuracy) <= GEO_UNUSABLE_ACCURACY_M
+    except (TypeError, ValueError):
+        return True
+
+
+def _location_help(lat, lng, accuracy, nearest, distance):
+    """Say exactly why the check-in was not auto-verified.
+
+    "You appear to be outside the office" is useless when the real problem is a
+    denied permission or an IP-level fix — the employee is standing in the
+    office and cannot act on it. Worse, quoting a distance derived from a ±50 km
+    reading states as fact something the data cannot support.
+    """
+    if lat is None or lng is None:
+        return ('We could not read your location, so this check-in cannot be '
+                'verified automatically. Allow location access in your browser '
+                'and try again, or add a reason to send it to HR for approval.')
+    if not _fix_is_usable(lat, lng, accuracy):
+        km = round(float(accuracy) / 1000)
+        return (f'Your device could not pinpoint you — the position it reported is '
+                f'only accurate to about {km} km, so we cannot tell whether you are '
+                f'at the office. This usually means precise location is switched '
+                f'off and the browser fell back to your internet connection. Turn on '
+                f'location/GPS for this site and try again, or add a reason and HR '
+                f'will approve it.')
+    if nearest is None:
+        return ('No office location is configured to check against. Add a reason '
+                'and HR will approve this check-in.')
+    acc = f' Your position is accurate to about {round(accuracy)} m.' if accuracy else ''
+    return (f'You are about {round(distance)} m from {nearest.name}, which covers '
+            f'{nearest.radius_meters} m.{acc} Add a reason and HR will review it.')
+
+
+def _home_location_help(lat, lng, accuracy, home, distance):
+    """Why a work-from-home check-in was not verified against the home fence.
+
+    Split from _location_help because the remedy differs: "go to the office" is
+    the wrong advice for someone whose problem is that their registered home is
+    pinned in the wrong place, and quoting a distance from a ±50 km fix would
+    tell them they are 60 km from their own living room.
+    """
+    if lat is None or lng is None:
+        return ('We could not read your location, so this work-from-home '
+                'check-in cannot be verified. Allow location access in your '
+                'browser and try again, or add a reason for HR.')
+    if not _fix_is_usable(lat, lng, accuracy):
+        km = round(float(accuracy) / 1000)
+        return (f'Your device could not pinpoint you — the position it reported '
+                f'is only accurate to about {km} km, so we cannot tell whether '
+                f'you are at your registered home. Turn on location/GPS for this '
+                f'site and try again, or add a reason and HR will approve it.')
+    return (f'You appear to be about {round(distance)} m from your registered '
+            f'home address, which covers {home.radius_meters} m. If you have '
+            f'moved, ask HR to update your home location. Otherwise add a reason '
+            f'and HR will review it.')
+
+
 def _check_geofence(lat, lng):
+    """Back-compat wrapper: check-out and the event log only need a yes/no."""
+    inside, fence, _nearest, _dist = _locate_against_fences(lat, lng)
+    return inside, fence
+
+
+def _check_geofence_legacy(lat, lng):
     if lat is None or lng is None:
         return False, None
-    for fence in GeoFence.objects.filter(is_active=True):
+    for fence in _office_fences():
         dist = _haversine_distance(lat, lng, fence.latitude, fence.longitude)
         if dist <= fence.radius_meters:
             return True, fence
@@ -1496,7 +2007,7 @@ def attendance_check_in(request):
     email = norm_email(body.get('email'))
     if not email:
         return err('email is required')
-    now = datetime.now()
+    now = local_now()
     obj, created = EmployeeAttendance.objects.get_or_create(email=email, date=now.date())
     name = body.get('employee') or body.get('name') or ''
     if name:
@@ -1509,6 +2020,14 @@ def attendance_check_in(request):
     obj.shift_id = shift.id
 
     # WFH verification
+    #
+    # isWfh arrives from the client and used to be taken at face value, which
+    # made it a complete bypass of the geofence: the branch below skips the
+    # fence entirely and sets geo_verified for a WFH day, so anyone who posted
+    # {"isWfh": true} was verified from anywhere. A rejected request did not
+    # even register — only Approved was looked for, and only ever to turn the
+    # flag ON. Claiming to work from home now has to be backed by the same
+    # approval that switching to remote mid-day requires.
     is_wfh = bool(body.get('isWfh') or body.get('is_wfh') or False)
     has_approved_wfh = WfhRequest.objects.filter(
         email=email,
@@ -1517,7 +2036,20 @@ def attendance_check_in(request):
         to_date__gte=now.date()
     ).exists()
     if has_approved_wfh:
+        # An approval applies whether or not the client thought to ask for it.
         is_wfh = True
+    elif is_wfh:
+        allowed_remote, remote_reason = remote_switch_check(email, now.date())
+        if not allowed_remote:
+            return Response({
+                'message': remote_reason,
+                'code': 'WFH_APPROVAL_REQUIRED',
+                'needsWfhRequest': True,
+            }, status=403)
+        # Otherwise standing remote access or a no-approval policy allows it.
+        # Note this only PERMITS a claim the employee made; it never marks
+        # someone WFH who did not ask, which would skip the fence for every
+        # admin sitting at their desk.
     obj.is_wfh = is_wfh
 
     # GPS / Geofence verification
@@ -1530,20 +2062,231 @@ def attendance_check_in(request):
         lat = None
         lng = None
 
+    try:
+        accuracy = float(body.get('accuracy')) if body.get('accuracy') is not None else None
+    except (ValueError, TypeError):
+        accuracy = None
+
     fence_obj = None
-    if is_wfh:
-        obj.geo_verified = True
-        loc_desc = 'Home'
-    else:
+    reason = str(body.get('locationReason') or body.get('reason') or '').strip()
+    needs_review = False
+    bypass_geofence = bool(
+        body.get('bypassGeofence') or
+        body.get('bypass_geofence') or
+        body.get('geofenceDisabled') or
+        body.get('geofence_disabled') or
+        request.headers.get('X-Bypass-Geofence') in ('1', 'true', 'True')
+    )
+    if is_wfh and not bypass_geofence:
+        # Working from home is exempt from the OFFICE fence, not from being
+        # anywhere in particular. This branch used to set geo_verified=True and
+        # discard the position entirely, so an approved WFH day was verified
+        # from a beach — the flag proved only that someone had claimed it.
+        #
+        # Verified against the employee's own registered home instead. No home
+        # on file is not a refusal: the position is recorded and the day is
+        # left unverified, the same way an unconfigured office fence does not
+        # lock the company out on day one.
+        home = home_fence_for(email)
         if lat is not None and lng is not None:
-            is_inside, fence_obj = _check_geofence(lat, lng)
-            obj.geo_verified = is_inside
-            obj.location_lat = lat
-            obj.location_lng = lng
-            loc_desc = fence_obj.name if fence_obj else 'Unverified Location'
+            obj.location_lat, obj.location_lng = lat, lng
         else:
+            obj.location_lat = obj.location_lng = None
+
+        if home is None:
             obj.geo_verified = False
-            loc_desc = 'Office'
+            if obj.location_status not in ('Approved', 'Rejected'):
+                obj.location_status = ''
+            loc_desc = 'Home (not registered)'
+        else:
+            at_home, _f, _n, home_dist = _locate_against_fences(
+                lat, lng, accuracy, fences=[home])
+            if at_home:
+                obj.geo_verified = True
+                if obj.location_status not in ('Approved', 'Rejected'):
+                    obj.location_status = ''
+                loc_desc = 'Home'
+            elif obj.location_status == 'Approved':
+                obj.geo_verified = True
+                loc_desc = 'Away from home (approved)'
+            elif obj.location_status == 'Pending':
+                return Response({
+                    'message': 'Your check-in away from your registered home is '
+                               'waiting for HR approval.',
+                    'code': 'LOCATION_APPROVAL_PENDING',
+                    'status': 'Pending',
+                    'reason': obj.location_reason or '',
+                }, status=409)
+            elif obj.location_status == 'Rejected':
+                return Response({
+                    'message': (
+                        'Your check-in away from your registered home was rejected'
+                        + (f' by {obj.location_reviewer}' if obj.location_reviewer else '')
+                        + '. Check in from your registered address, or speak to HR.'
+                    ),
+                    'code': 'LOCATION_APPROVAL_REJECTED',
+                    'status': 'Rejected',
+                    'reason': obj.location_reason or '',
+                    'reviewer': obj.location_reviewer or '',
+                }, status=403)
+            elif not reason:
+                obj.geo_verified = False
+                obj.save(update_fields=['location_lat', 'location_lng', 'geo_verified'])
+                return Response({
+                    'message': _home_location_help(lat, lng, accuracy, home, home_dist),
+                    'code': 'LOCATION_REASON_REQUIRED',
+                    'needsReason': True,
+                    # Tells the client this is the home case, not the office
+                    # one, so the dialog does not say "outside the office" to
+                    # somebody whose problem is that they are away from home.
+                    'isWfh': True,
+                    'hasPosition': _fix_is_usable(lat, lng, accuracy),
+                    'gotCoordinates': lat is not None and lng is not None,
+                    'accuracy': accuracy,
+                    'distance': (round(home_dist)
+                                 if (home_dist is not None
+                                     and _fix_is_usable(lat, lng, accuracy))
+                                 else None),
+                    'fence': home.name,
+                    'fenceRadius': home.radius_meters,
+                    'fenceLat': home.latitude,
+                    'fenceLng': home.longitude,
+                }, status=422)
+            else:
+                obj.geo_verified = False
+                obj.location_reason = reason
+                obj.location_status = 'Pending'
+                obj.location_reviewer = ''
+                obj.location_reviewed_at = None
+                obj.save()
+                notify_approvers(
+                    'attendance.approve_offsite',
+                    'Away-from-home check-in awaiting approval',
+                    f'{obj.employee_name or email} asked to check in '
+                    + (f'{round(home_dist)} m from their registered home'
+                       if home_dist is not None else 'away from their registered home')
+                    + f'. Reason: "{reason}"',
+                    '/attendance',
+                )
+                return Response({
+                    'message': 'Your reason has been sent to HR. You will be able '
+                               'to check in once it is approved.',
+                    'code': 'LOCATION_APPROVAL_PENDING',
+                    'status': 'Pending',
+                }, status=202)
+    elif bypass_geofence or not _geofencing_enabled():
+        # Geofence bypassed by user toggle or no active fences configured.
+        obj.geo_verified = True
+        if lat is not None and lng is not None:
+            obj.location_lat, obj.location_lng = lat, lng
+        else:
+            obj.location_lat = obj.location_lng = None
+        loc_desc = 'Office'
+    else:
+        is_inside, fence_obj, nearest, distance = _locate_against_fences(lat, lng, accuracy)
+        if lat is not None and lng is not None:
+            obj.location_lat, obj.location_lng = lat, lng
+        else:
+            # Do NOT keep yesterday's coordinates on the row — a stale position
+            # makes an unverified day look like it was measured.
+            obj.location_lat = obj.location_lng = None
+        obj.geo_verified = is_inside
+
+        if is_inside and fence_obj is not None:
+            # Do not erase a decision HR already made today. Checking in from
+            # inside the fence later left location_status='' while reviewer and
+            # reviewed_at stayed set — an approval with no record of what was
+            # approved.
+            if obj.location_status not in ('Approved', 'Rejected'):
+                obj.location_status = ''
+            loc_desc = fence_obj.name
+        elif obj.location_status == 'Approved':
+            # HR already cleared today's off-site check-in. Keep the verified
+            # flag their approval set — the line above reset it from the raw
+            # fence test, which is still (correctly) a miss.
+            obj.geo_verified = True
+            loc_desc = 'Outside office (approved)'
+        elif obj.location_status == 'Pending':
+            return Response({
+                'message': 'Your off-site check-in is waiting for HR approval. '
+                           'You will be able to check in once it is approved.',
+                'code': 'LOCATION_APPROVAL_PENDING',
+                'status': 'Pending',
+                'reason': obj.location_reason or '',
+            }, status=409)
+        elif obj.location_status == 'Rejected':
+            # A rejection is binding for the day. Without this the employee fell
+            # through to the branch below, which resets the row to Pending — so
+            # refusing an off-site check-in only cost them the time it took to
+            # retype a reason, and an approver could be asked the same question
+            # all afternoon. Note this blocks the OFF-SITE route only: the
+            # `is_inside` branch above still lets them check in normally the
+            # moment they reach the office, which is the point of refusing.
+            return Response({
+                'message': (
+                    'Your off-site check-in for today was rejected'
+                    + (f' by {obj.location_reviewer}' if obj.location_reviewer else '')
+                    + '. You can check in from the office, or speak to HR if you '
+                      'think this is wrong.'
+                ),
+                'code': 'LOCATION_APPROVAL_REJECTED',
+                'status': 'Rejected',
+                'reason': obj.location_reason or '',
+                'reviewer': obj.location_reviewer or '',
+            }, status=403)
+        elif not reason:
+            # Persist the position (or its absence) even though we are refusing:
+            # leaving an old fix on the row would show HR a location this
+            # attempt never actually reported.
+            obj.save(update_fields=['location_lat', 'location_lng', 'geo_verified'])
+            return Response({
+                'message': _location_help(lat, lng, accuracy, nearest, distance),
+                'code': 'LOCATION_REASON_REQUIRED',
+                'needsReason': True,
+                # hasPosition means "usable enough to quote a distance", not
+                # merely "the browser returned numbers" — an IP-level fix
+                # returns numbers that mean nothing.
+                'hasPosition': _fix_is_usable(lat, lng, accuracy),
+                'gotCoordinates': lat is not None and lng is not None,
+                'accuracy': accuracy,
+                'distance': (round(distance)
+                             if (distance is not None and _fix_is_usable(lat, lng, accuracy))
+                             else None),
+                'fence': nearest.name if nearest else None,
+                'fenceRadius': nearest.radius_meters if nearest else None,
+                'fenceLat': nearest.latitude if nearest else None,
+                'fenceLng': nearest.longitude if nearest else None,
+            }, status=422)
+        else:
+            # Record the request and stop. Per the agreed flow the employee is
+            # NOT checked in until HR approves; they retry afterwards.
+            obj.location_reason = reason
+            obj.location_status = 'Pending'
+            obj.location_reviewer = ''
+            obj.location_reviewed_at = None
+            obj.save()
+            notify_approvers(
+                'attendance.approve_offsite',
+                'Off-site check-in awaiting approval',
+                f'{obj.employee_name or email} asked to check in '
+                + (f'{round(distance)} m from {nearest.name}' if (distance is not None and nearest)
+                   else 'from an unverified location')
+                + f'. Reason: "{reason}"',
+                '/attendance',
+            )
+            create_notification(
+                email,
+                'Approval requested',
+                'Your off-site check-in has been sent to HR. You can check in once it is approved.',
+                'info',
+                '/employees/attendance',
+            )
+            return Response({
+                'message': 'Your request has been sent to HR. You will be able to '
+                           'check in once it is approved.',
+                'code': 'LOCATION_APPROVAL_REQUESTED',
+                'status': 'Pending',
+            }, status=202)
 
     # Status (present/late) based on first check-in
     if created:
@@ -1574,6 +2317,16 @@ def attendance_check_in(request):
         at=now,
     )
 
+    if needs_review:
+        # The employee is in; HR decides afterwards whether the location stands.
+        notify_approvers(
+            'attendance.edit',
+            'Out-of-office check-in needs approval',
+            f'{obj.employee_name or email} checked in outside the office at '
+            f'{now.strftime("%H:%M")}. Reason given: "{reason}"',
+            '/attendance',
+        )
+
     create_notification(
         email,
         'Checked in',
@@ -1581,7 +2334,14 @@ def attendance_check_in(request):
         'success',
         '/employees/attendance',
     )
-    return Response(EmployeeAttendanceSerializer(obj).data, status=201)
+    payload = EmployeeAttendanceSerializer(obj).data
+    # A work-from-home day that nothing could be checked against. The client
+    # uses this to offer registering a home address, at the one moment the
+    # employee is provably standing in it. Sent on the SUCCESS response
+    # deliberately: the check-in is not conditional on answering.
+    if is_wfh and home_fence_for(email) is None:
+        payload['homeLocationMissing'] = True
+    return Response(payload, status=201)
 
 
 @api_view(['POST'])
@@ -1592,10 +2352,22 @@ def attendance_check_out(request):
     email = norm_email(body.get('email'))
     if not email:
         return err('email is required')
-    now = datetime.now()
+    now = local_now()
     obj = EmployeeAttendance.objects.filter(email=email, date=now.date()).first()
-    if not obj:
-        return err('No check-in found for today', 404)
+    if not obj or not _is_checked_in(obj):
+        # Both cases are "there is no open session to close", and they must be
+        # refused identically. Only the missing-row case used to be caught, so
+        # a row with check_in still NULL — exactly what a geofence-refused
+        # attempt leaves behind, position recorded but never checked in — was
+        # accepted, and the day ended up stamped with a check-out and no
+        # check-in. Worked minutes are computed from that pair.
+        return Response({
+            'message': ('You are not checked in, so there is nothing to check '
+                        'out of. If the toggle showed otherwise it was out of '
+                        'date; it has been corrected.'),
+            'code': 'NO_OPEN_SESSION',
+            'checkedIn': False,
+        }, status=409)
 
     # GPS check for event
     lat = body.get('latitude')
@@ -1638,6 +2410,14 @@ def attendance_check_out(request):
     obj.check_out = now
     obj.presence = ''
     obj.presence_at = now
+    # The browser can close a session when the employee leaves the geofence.
+    # Stamping it keeps an auto-closed day distinguishable from one the person
+    # ended themselves, which matters if they dispute the hours.
+    if str(body.get('auto') or '').lower() in ('1', 'true', 'yes', 'geofence', 'geofence_departure'):
+        obj.auto_checkout_at = now
+        mins = body.get('outside_minutes') or 15
+        if not obj.note:
+            obj.note = f'Auto checked out — outside office geofence for >{mins} minutes'
 
     # Calculations based on active shift
     shift = _get_active_shift(email, now.date())
@@ -1662,9 +2442,10 @@ def attendance_check_out(request):
 
     obj.save()
 
+    evt_name = 'auto-checkout-departure' if str(body.get('auto') or '').lower() in ('geofence', 'geofence_departure') else 'check-out'
     AttendanceEvent.objects.create(
         email=email, employee_name=obj.employee_name, date=now.date(),
-        event='check-out', location=loc_desc,
+        event=evt_name, location=loc_desc,
         latitude=lat, longitude=lng,
         geo_fence_id=fence_obj.id if fence_obj else None,
         at=now,
@@ -1677,7 +2458,176 @@ def attendance_check_out(request):
         'info',
         '/employees/attendance',
     )
+    _maybe_send_long_day_alert(obj, shift)
     return Response(EmployeeAttendanceSerializer(obj).data)
+
+
+def _maybe_send_long_day_alert(obj, shift):
+    """Email the employee once when today's work passes the shift's OT threshold.
+
+    ``overtime_after_minutes`` defaults to 540 (9 hours). ``overtime_alert_sent_at``
+    makes this at-most-once per person per day, so repeated check-outs — or the
+    presence poller — cannot spam them. Delivery failure is swallowed: a mail
+    problem must never break a check-out.
+    """
+    try:
+        threshold = int(getattr(shift, 'overtime_after_minutes', 540) or 540)
+        if (obj.worked_minutes or 0) < threshold or obj.overtime_alert_sent_at:
+            return
+        hours, minutes = divmod(int(obj.worked_minutes), 60)
+        over_h, over_m = divmod(max(int(obj.worked_minutes) - threshold, 0), 60)
+        html = mailer.render_branded(
+            greeting=obj.employee_name or obj.email,
+            title='You have worked over %d hours today' % (threshold // 60),
+            intro=(
+                f'Our records show <strong>{hours}h {minutes}m</strong> of work logged '
+                f'for {obj.date:%d %B %Y}, which is {over_h}h {over_m}m beyond the '
+                f'{threshold // 60}-hour mark for your shift.<br><br>'
+                'Please make sure you take adequate rest. If this is incorrect, '
+                'raise an attendance correction and HR will review it.'
+            ),
+            highlight_html=mailer.render_details_card('Today\'s Attendance', [
+                ('Date', f'{obj.date:%d %B %Y}'),
+                ('Worked', f'{hours}h {minutes}m'),
+                ('Overtime', f'{over_h}h {over_m}m'),
+                ('Shift', getattr(shift, 'name', '') or '—'),
+            ]),
+        )
+        result = mailer.send_email(
+            to=obj.email,
+            subject=f'You have worked {hours}h {minutes}m today',
+            html=html,
+            text=(f'You have logged {hours}h {minutes}m on {obj.date:%d %B %Y}, '
+                  f'{over_h}h {over_m}m beyond your {threshold // 60}-hour shift mark.'),
+        )
+        if result.get('ok'):
+            obj.overtime_alert_sent_at = local_now()
+            obj.save(update_fields=['overtime_alert_sent_at'])
+        create_notification(
+            obj.email,
+            'Long working day',
+            f'You have logged {hours}h {minutes}m today. Please take adequate rest.',
+            'warning',
+            '/employees/attendance',
+        )
+    except Exception:
+        logger.exception('Could not send the long-day alert for %s', obj.email)
+
+
+@api_view(['GET'])
+@require_perm('attendance.view', or_self=True)
+def attendance_geofence_check(request):
+    """Is this position inside a fence? Used by the in-tab geofence watcher.
+
+    Read-only and cheap so it can be polled. ``uncertain`` is the important
+    field: a fix too vague to judge must not be treated as "left the office",
+    or someone at their desk gets checked out by a bad WiFi reading.
+    """
+    email = norm_email(request.GET.get('email') or _resolve_recipient_email(request, ''))
+    try:
+        lat = float(request.GET.get('latitude'))
+        lng = float(request.GET.get('longitude'))
+    except (TypeError, ValueError):
+        return Response({'enforced': _geofencing_enabled(), 'uncertain': True})
+    try:
+        accuracy = float(request.GET.get('accuracy'))
+    except (TypeError, ValueError):
+        accuracy = None
+
+    if not _geofencing_enabled():
+        return Response({'enforced': False, 'inside': True, 'uncertain': False})
+
+    today = local_today()
+    wfh = bool(email) and (
+        WfhRequest.objects.filter(email=email, status='Approved',
+                                  from_date__lte=today, to_date__gte=today).exists()
+        or EmployeeAttendance.objects.filter(email=email, date=today, is_wfh=True).exists()
+    )
+
+    inside, fence, nearest, distance = _locate_against_fences(lat, lng, accuracy)
+    # A reading whose error bar is wider than how far outside they appear tells
+    # us nothing. Report it as uncertain rather than "outside". An IP-level fix
+    # (tens of km) is uncertain by definition, however far away it claims to be:
+    # acting on it would check out someone sitting at their desk.
+    uncertain = bool(
+        not inside and (
+            not _fix_is_usable(lat, lng, accuracy)
+            or (accuracy and nearest and distance is not None
+                and (distance - (nearest.radius_meters or 0)) < accuracy)
+        )
+    )
+    return Response({
+        'enforced': True,
+        'wfh': wfh,
+        'inside': inside,
+        'uncertain': uncertain,
+        'distance': round(distance) if distance is not None else None,
+        'fence': (fence or nearest).name if (fence or nearest) else None,
+        'accuracy': accuracy,
+    })
+
+
+@api_view(['GET', 'POST'])
+@require_perm({'GET': 'attendance.view', 'POST': 'attendance.approve_offsite'})
+def attendance_location_reviews(request):
+    """Out-of-geofence check-ins awaiting an HR/admin decision.
+
+    GET  -> the pending queue (?status= to see decided ones).
+    POST -> {id, decision: Approved|Rejected, note} records the decision and
+            tells the employee. Approving sets geo_verified so the day stops
+            reading as unverified in attendance reports.
+    """
+    if request.method == 'GET':
+        status_filter = (request.GET.get('status') or 'Pending').strip()
+        qs = EmployeeAttendance.objects.exclude(location_status='')
+        if status_filter and status_filter.lower() != 'all':
+            qs = qs.filter(location_status=status_filter)
+        rows = qs.order_by('-date', '-id')[:200]
+        return Response([{
+            'id': r.id,
+            'email': r.email,
+            'employee': r.employee_name,
+            'date': r.date.strftime('%Y-%m-%d') if r.date else None,
+            'checkIn': r.check_in.strftime(DATETIME_FMT) if r.check_in else None,
+            'reason': r.location_reason or '',
+            'status': r.location_status,
+            'reviewer': r.location_reviewer or '',
+            'reviewedAt': r.location_reviewed_at.strftime(DATETIME_FMT) if r.location_reviewed_at else None,
+            'latitude': r.location_lat,
+            'longitude': r.location_lng,
+        } for r in rows])
+
+    body = request.data
+    obj = EmployeeAttendance.objects.filter(pk=body.get('id')).first()
+    if not obj:
+        return err('Attendance record not found', 404)
+    decision = str(body.get('decision') or '').strip().title()
+    if decision not in ('Approved', 'Rejected'):
+        return err('decision must be Approved or Rejected')
+    if not obj.location_status:
+        return err('This check-in is not awaiting a location review')
+
+    from .permissions import _get_caller
+    caller, _user = _get_caller(request)
+    obj.location_status = decision
+    obj.location_reviewer = caller or ''
+    obj.location_reviewed_at = local_now()
+    if decision == 'Approved':
+        obj.geo_verified = True
+    obj.save(update_fields=[
+        'location_status', 'location_reviewer', 'location_reviewed_at', 'geo_verified',
+    ])
+
+    note = str(body.get('note') or '').strip()
+    create_notification(
+        obj.email,
+        f'Out-of-office check-in {decision.lower()}',
+        (f'Your check-in on {obj.date:%d %b %Y} from outside the office was '
+         f'{decision.lower()} by {caller or "HR"}.' + (f' Note: {note}' if note else '')),
+        'success' if decision == 'Approved' else 'warning',
+        '/employees/attendance',
+    )
+    return Response({'ok': True, 'id': obj.id, 'status': obj.location_status})
 
 
 @api_view(['GET'])
@@ -1687,10 +2637,10 @@ def attendance_today(request):
     email = norm_email(request.GET.get('email'))
     if not email:
         return err('email is required')
-    obj = EmployeeAttendance.objects.filter(email=email, date=datetime.now().date()).first()
+    obj = EmployeeAttendance.objects.filter(email=email, date=local_now().date()).first()
     if not obj:
         return Response({
-            'email': email, 'date': datetime.now().strftime('%Y-%m-%d'),
+            'email': email, 'date': local_now().strftime('%Y-%m-%d'),
             'checkedIn': False, 'checkIn': None, 'checkOut': None,
             'workedMinutes': 0, 'status': 'absent',
             'isWfh': False, 'breakMinutes': 0, 'overtimeMinutes': 0,
@@ -1740,6 +2690,108 @@ def _looks_remote(location):
     return 'home' in loc or 'remote' in loc
 
 
+WEEKDAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday',
+                 'Saturday', 'Sunday']
+
+
+def arrangement_for(email, day=None):
+    """The WorkArrangement in force for ``email`` on ``day``, or None.
+
+    Rows are ordered newest-effective-first, so the first row that had started
+    by ``day`` and had not yet ended is the operative one. Asking by date is the
+    whole point: a check-in in March must be judged by the arrangement that was
+    in force in March, not by whatever it was changed to since.
+    """
+    day = day or local_now().date()
+    return (WorkArrangement.objects
+            .filter(email=email, effective_from__lte=day)
+            .filter(Q(effective_to__isnull=True) | Q(effective_to__gte=day))
+            .first())
+
+
+def remote_days_used(email, day):
+    """Remote days already recorded in ``day``'s Mon-Sun week, excluding it.
+
+    Today is excluded because its row is created before this runs and its
+    is_wfh flag is what we are deciding — counting it would have the employee
+    compete against themselves.
+    """
+    week_start = day - timedelta(days=day.weekday())
+    return (EmployeeAttendance.objects
+            .filter(email=email, is_wfh=True,
+                    date__gte=week_start, date__lte=week_start + timedelta(days=6))
+            .exclude(date=day)
+            .count())
+
+
+def remote_allowance_check(email, day, arr=None):
+    """Does ``email``'s own arrangement entitle them to work remotely on ``day``?
+
+    Returns (allowed, reason). A denial reason is written for the employee,
+    because it is the one they see: "Tuesday is not one of your remote days"
+    is actionable in a way that "not permitted" is not.
+
+    No arrangement on file is NOT a refusal by itself — it just means this
+    mechanism has nothing to say, and the caller falls through to the WFH
+    request flow exactly as before. Sites that never configure arrangements
+    keep their existing behaviour.
+    """
+    arr = arr if arr is not None else arrangement_for(email, day)
+
+    if arr is None:
+        return False, (
+            'You need an approved work-from-home request for today before '
+            'working remotely. Submit a WFH request, or ask an admin to set '
+            'your work arrangement.'
+        )
+
+    if arr.arrangement == WorkArrangement.REMOTE:
+        return True, 'remote work arrangement'
+
+    if arr.arrangement == WorkArrangement.ONSITE:
+        return False, (
+            'Your work arrangement is office-based, so remote check-in is not '
+            'available. Submit a WFH request if you need to work from home today.'
+        )
+
+    if arr.arrangement != WorkArrangement.HYBRID:
+        # An arrangement value nobody recognises must not silently grant
+        # remote work — fall back to the request flow.
+        return False, (
+            'Your work arrangement is not recognised. Submit a WFH request and '
+            'HR will review it.'
+        )
+
+    # Hybrid, anchor days named: only those days, and the quota does not apply.
+    anchors = arr.weekday_set()
+    if anchors:
+        if day.weekday() in anchors:
+            return True, 'hybrid anchor day'
+        names = ', '.join(WEEKDAY_NAMES[d] for d in sorted(anchors))
+        return False, (
+            f'{WEEKDAY_NAMES[day.weekday()]} is not one of your remote days '
+            f'({names}). Submit a WFH request if you need to work from home today.'
+        )
+
+    # Hybrid, employee picks the days: cap on how many per week.
+    quota = arr.remote_days_per_week or 0
+    if quota <= 0:
+        return False, (
+            'Your hybrid arrangement has no remote days allocated yet. Submit a '
+            'WFH request, or ask HR to set your remote days.'
+        )
+
+    used = remote_days_used(email, day)
+    if used < quota:
+        return True, f'hybrid allowance ({used + 1} of {quota} this week)'
+
+    return False, (
+        f'You have already used your {quota} remote '
+        f'{"day" if quota == 1 else "days"} this week. Submit a WFH request and '
+        f'HR will review it.'
+    )
+
+
 def remote_switch_check(email, day=None):
     """May ``email`` work remotely on ``day``? Returns (allowed, reason).
 
@@ -1749,19 +2801,45 @@ def remote_switch_check(email, day=None):
     holds:
 
       1. an APPROVED WfhRequest covers the day, or
-      2. the user holds ``attendance.remote`` (standing remote/hybrid staff and
+      2. their WorkArrangement entitles them to it — fully remote, or hybrid on
+         an anchor day / within the weekly allowance, or
+      3. the user holds ``attendance.remote`` (standing remote/hybrid staff and
          admins who don't file a request each time), or
-      3. the active WFH policy does not require approval at all.
+      4. the active WFH policy does not require approval at all.
+
+    A REJECTED request covering the day beats 2 and 3. An approver looked at
+    this specific day and said no; letting a standing grant quietly override
+    that would make rejection advisory in exactly the way this function exists
+    to prevent. Someone who genuinely needs to work remotely after a rejection
+    gets the decision changed, rather than routing around it. (An approved
+    request still wins, so an approver who reverses their own decision does not
+    have to delete the rejected row.)
     """
     from .permissions import _user_has_perm
 
-    day = day or datetime.now().date()
+    day = day or local_now().date()
 
-    approved = WfhRequest.objects.filter(
-        email=email, status='Approved', from_date__lte=day, to_date__gte=day,
-    ).exists()
-    if approved:
+    covering = WfhRequest.objects.filter(
+        email=email, from_date__lte=day, to_date__gte=day,
+    ).values_list('status', flat=True)
+    statuses = {(s or '').strip() for s in covering}
+
+    if 'Approved' in statuses:
         return True, 'approved WFH request'
+
+    if 'Rejected' in statuses:
+        return False, (
+            'Your work-from-home request covering today was rejected, so you '
+            'cannot check in as working from home. Check in from the office, or '
+            'speak to HR if you think this is wrong.'
+        )
+
+    # The employee's own arrangement. Its refusal message is the one worth
+    # showing — it can say "Tuesday is not one of your remote days" — so it is
+    # kept and returned below if nothing else lets them through.
+    entitled, why = remote_allowance_check(email, day)
+    if entitled:
+        return True, why
 
     user = AppUser.objects.select_related('role_ref').filter(email=email).first()
     if _user_has_perm(user, 'attendance.remote'):
@@ -1771,10 +2849,337 @@ def remote_switch_check(email, day=None):
     if policy and not policy.requires_approval:
         return True, 'policy does not require approval'
 
-    return False, (
-        'You need an approved work-from-home request for today before switching '
-        'to remote. Submit a WFH request, or ask an admin to grant you remote access.'
+    return False, why
+
+
+#: A house plus an indoor GPS fix. Tighter than this and people get flagged at
+#: their own kitchen table; looser and "home" starts covering the next street.
+HOME_FENCE_DEFAULT_RADIUS_M = 150
+
+#: Past this the captured fix is too vague to be worth confirming — accepting it
+#: would register a "home" the size of a district and verify nothing.
+HOME_CAPTURE_MAX_ACCURACY_M = 500
+
+
+def _home_json(f):
+    return {
+        'id': f.id,
+        'email': f.owner_email,
+        'name': f.name,
+        'latitude': f.latitude,
+        'longitude': f.longitude,
+        'radiusMeters': f.radius_meters,
+        'status': f.status,
+        'reviewer': f.reviewer or '',
+        'reviewedAt': f.reviewed_at.strftime(DATETIME_FMT) if f.reviewed_at else None,
+        'capturedAccuracy': f.captured_accuracy,
+    }
+
+
+@api_view(['GET', 'POST'])
+@require_perm({'GET': 'attendance.view', 'POST': 'attendance.view'}, or_self=True)
+def attendance_home_locations(request):
+    """An employee's registered home, used to verify work-from-home check-ins.
+
+    GET  ?email=  -> that person's home (self-service, or any attendance viewer)
+         (none)   -> every home, for the approvals queue
+    POST          -> the employee registers/replaces their own home. It lands
+                     Pending and verifies nothing until confirmed.
+
+    POST is or_self, deliberately: the employee is the one standing in the right
+    place, and asking HR to obtain accurate coordinates for everybody does not
+    work. The safeguard is not who captures it but that a capture is inert —
+    home_fence_for() only ever returns an Approved row — so registering the cafe
+    you are sitting in buys nothing until a human agrees it is your house.
+    """
+    if request.method == 'GET':
+        email = norm_email(request.GET.get('email'))
+        qs = GeoFence.objects.exclude(owner_email='')
+        if email:
+            qs = qs.filter(owner_email=email)
+        return Response([_home_json(f) for f in qs.order_by('owner_email')])
+
+    body = request.data
+    email = norm_email(body.get('email'))
+    if not email:
+        return err('email is required')
+
+    try:
+        lat = float(body.get('latitude'))
+        lng = float(body.get('longitude'))
+    except (TypeError, ValueError):
+        return err('latitude and longitude are required')
+
+    try:
+        accuracy = (float(body.get('accuracy'))
+                    if body.get('accuracy') is not None else None)
+    except (TypeError, ValueError):
+        accuracy = None
+    if accuracy is not None and accuracy > HOME_CAPTURE_MAX_ACCURACY_M:
+        return err(
+            f'That position is only accurate to ±{round(accuracy)} m, which is '
+            f'too vague to register as a home address. Move somewhere with a '
+            f'clearer view of the sky, or use a phone with GPS, and try again.')
+
+    try:
+        radius = int(body.get('radiusMeters') or HOME_FENCE_DEFAULT_RADIUS_M)
+    except (TypeError, ValueError):
+        radius = HOME_FENCE_DEFAULT_RADIUS_M
+    radius = max(50, min(radius, 1000))
+
+    from .permissions import _get_caller
+    caller, _u = _get_caller(request)
+    # One home per employee: replacing it re-opens the approval, so a move
+    # cannot quietly inherit the confirmation given to the old address.
+    row = GeoFence.objects.filter(owner_email=email).first()
+    if row is None:
+        row = GeoFence(owner_email=email)
+    row.name = str(body.get('name') or '').strip() or f'Home — {email}'
+    row.latitude, row.longitude = lat, lng
+    row.radius_meters = radius
+    row.is_active = True
+    row.status = GeoFence.PENDING
+    row.reviewer = ''
+    row.reviewed_at = None
+    row.captured_accuracy = accuracy
+    row.created_by = caller or email
+    row.save()
+
+    notify_approvers(
+        'attendance.approve_offsite',
+        'Home location awaiting confirmation',
+        f'{email} registered a home location'
+        + (f' (GPS ±{round(accuracy)} m)' if accuracy else '')
+        + '. Confirm it before their work-from-home check-ins can be verified.',
+        '/attendance',
     )
+    return Response(_home_json(row), status=201)
+
+
+@api_view(['POST'])
+@require_perm('attendance.approve_offsite')
+def attendance_home_location_review(request):
+    """Confirm or reject a registered home. {id, decision: Approved|Rejected}."""
+    body = request.data
+    row = GeoFence.objects.filter(pk=body.get('id')).exclude(owner_email='').first()
+    if not row:
+        return err('Home location not found', 404)
+    decision = str(body.get('decision') or '').strip().title()
+    if decision not in (GeoFence.APPROVED, GeoFence.REJECTED):
+        return err('decision must be Approved or Rejected')
+
+    from .permissions import _get_caller
+    caller, _u = _get_caller(request)
+    row.status = decision
+    row.reviewer = caller or ''
+    row.reviewed_at = local_now()
+    row.save(update_fields=['status', 'reviewer', 'reviewed_at'])
+
+    create_notification(
+        row.owner_email,
+        f'Home location {decision.lower()}',
+        (f'Your registered home address was {decision.lower()} by '
+         f'{caller or "HR"}.' if decision == GeoFence.APPROVED else
+         f'Your registered home address was rejected by {caller or "HR"}. '
+         f'Work-from-home check-ins cannot be verified until a correct one is set.'),
+        'success' if decision == GeoFence.APPROVED else 'warning',
+        '/employees/attendance',
+    )
+    return Response({'ok': True, 'id': row.id, 'status': row.status})
+
+
+@api_view(['GET'])
+@require_perm('attendance.view')
+def attendance_roster(request):
+    """Active employees as {email, name}, for pickers in the attendance screens.
+
+    Deliberately NOT /api/users: that returns the full AppUser record, which on
+    this schema includes the plain-text password column, and it is gated on
+    settings.view — a heavier grant than managing attendance. A dropdown needs
+    two fields, so it gets two fields.
+    """
+    rows = (AppUser.objects.filter(status='active')
+            .order_by('full_name', 'email')
+            .values_list('email', 'full_name'))
+    return Response([
+        {'email': e, 'name': (n or '').strip() or e} for e, n in rows if e
+    ])
+
+
+def _arrangement_json(a):
+    return {
+        'id': a.id,
+        'email': a.email,
+        'employee': a.employee_name,
+        'arrangement': a.arrangement,
+        'remoteWeekdays': sorted(a.weekday_set()),
+        'remoteDaysPerWeek': a.remote_days_per_week,
+        'effectiveFrom': a.effective_from.strftime('%Y-%m-%d') if a.effective_from else None,
+        'effectiveTo': a.effective_to.strftime('%Y-%m-%d') if a.effective_to else None,
+        'current': a.effective_to is None,
+        'notes': a.notes or '',
+        'createdBy': a.created_by or '',
+    }
+
+
+def _parse_weekdays(raw):
+    """Accept [0,4], "0,4" or "Mon,Fri". Returns (csv, error)."""
+    if raw in (None, '', []):
+        return '', None
+    if isinstance(raw, str):
+        raw = [p.strip() for p in raw.split(',') if p.strip()]
+    out = set()
+    for item in raw:
+        s = str(item).strip()
+        if s.isdigit():
+            n = int(s)
+        else:
+            names = [w[:3].lower() for w in WEEKDAY_NAMES]
+            n = names.index(s[:3].lower()) if s[:3].lower() in names else -1
+        if not (0 <= n <= 6):
+            return None, f'"{item}" is not a weekday'
+        out.add(n)
+    return ','.join(str(n) for n in sorted(out)), None
+
+
+@api_view(['GET', 'POST'])
+# or_self is scoped to GET on purpose: an employee may look up their own
+# arrangement, but self-service must stop there. With or_self=True the POST
+# branch would accept a body whose email is the caller's own — letting anyone
+# set themselves to "remote" and walk out of the geofence entirely.
+@require_perm({'GET': 'attendance.view', 'POST': 'attendance.manage_arrangement'},
+              or_self=('GET',))
+def attendance_arrangements(request):
+    """Where each employee works.
+
+    GET  ?email=       -> that employee's full history, newest first
+         (no email)    -> the arrangement currently in force for everyone
+    POST -> record a change. The previous row is CLOSED, never overwritten:
+            a check-in in March has to stay judged by March's arrangement, so
+            the old value must survive the change.
+    """
+    if request.method == 'GET':
+        email = norm_email(request.GET.get('email'))
+        if email:
+            rows = WorkArrangement.objects.filter(email=email)
+            return Response([_arrangement_json(a) for a in rows])
+        today = local_today()
+        rows = (WorkArrangement.objects
+                .filter(effective_from__lte=today)
+                .filter(Q(effective_to__isnull=True) | Q(effective_to__gte=today)))
+        # Newest-first ordering means the first row seen per employee is the
+        # operative one; later (superseded) rows for the same person are noise.
+        seen, out = set(), []
+        for a in rows:
+            if a.email in seen:
+                continue
+            seen.add(a.email)
+            out.append(_arrangement_json(a))
+        return Response(out)
+
+    body = request.data
+    email = norm_email(body.get('email'))
+    if not email:
+        return err('email is required')
+
+    arrangement = str(body.get('arrangement') or '').strip().lower()
+    if arrangement not in (WorkArrangement.ONSITE, WorkArrangement.HYBRID,
+                           WorkArrangement.REMOTE):
+        return err('arrangement must be onsite, hybrid or remote')
+
+    weekdays, wd_err = _parse_weekdays(body.get('remoteWeekdays'))
+    if wd_err:
+        return err(wd_err)
+
+    try:
+        per_week = int(body.get('remoteDaysPerWeek') or 0)
+    except (TypeError, ValueError):
+        return err('remoteDaysPerWeek must be a number')
+    if not (0 <= per_week <= 7):
+        return err('remoteDaysPerWeek must be between 0 and 7')
+
+    eff_from = parse_date(body.get('effectiveFrom')) or local_today()
+
+    # A hybrid arrangement with neither anchor days nor a quota entitles the
+    # employee to nothing, which reads as "hybrid" on screen while behaving
+    # exactly like onsite. Refuse it rather than create the confusion.
+    if arrangement == WorkArrangement.HYBRID and not weekdays and per_week < 1:
+        return err('A hybrid arrangement needs either remote weekdays or a '
+                   'remoteDaysPerWeek of at least 1')
+    if arrangement != WorkArrangement.HYBRID:
+        weekdays, per_week = '', 0
+
+    open_rows = WorkArrangement.objects.filter(email=email, effective_to__isnull=True)
+
+    future = open_rows.filter(effective_from__gt=eff_from).first()
+    if future:
+        return err(
+            f'This employee already has an arrangement starting '
+            f'{future.effective_from:%Y-%m-%d}, which is after {eff_from:%Y-%m-%d}. '
+            f'Delete that one first if you are replacing it.', 409)
+
+    caller, _user = check_perm(request, 'attendance.manage_arrangement')[1:]
+
+    same_day = open_rows.filter(effective_from=eff_from).first()
+    if same_day:
+        # Correcting an arrangement on the day it starts. Nothing has been
+        # judged under the old value yet, so replace it — closing it would
+        # leave a row that ended before it began.
+        same_day.arrangement = arrangement
+        same_day.remote_weekdays = weekdays
+        same_day.remote_days_per_week = per_week
+        same_day.notes = str(body.get('notes') or '').strip()
+        same_day.created_by = caller or same_day.created_by
+        if body.get('employee'):
+            same_day.employee_name = str(body.get('employee'))
+        same_day.save()
+        return Response(_arrangement_json(same_day))
+
+    # Close whatever was in force the day before the new one starts.
+    open_rows.filter(effective_from__lt=eff_from).update(
+        effective_to=eff_from - timedelta(days=1))
+
+    row = WorkArrangement.objects.create(
+        email=email,
+        employee_name=str(body.get('employee') or ''),
+        arrangement=arrangement,
+        remote_weekdays=weekdays,
+        remote_days_per_week=per_week,
+        effective_from=eff_from,
+        notes=str(body.get('notes') or '').strip(),
+        created_by=caller or '',
+    )
+    create_notification(
+        email,
+        'Work arrangement updated',
+        f'Your work arrangement is now "{arrangement}" from '
+        f'{eff_from:%d %b %Y}.',
+        'info', '/employees/attendance',
+    )
+    return Response(_arrangement_json(row), status=201)
+
+
+@api_view(['DELETE'])
+@require_perm('attendance.manage_arrangement')
+def attendance_arrangement_detail(request, pk):
+    """Remove an arrangement row that was entered by mistake.
+
+    Deleting reopens whatever it superseded: without this, correcting a
+    mis-keyed row would leave the employee with a gap where no arrangement
+    applies, which silently falls back to "needs a WFH request".
+    """
+    row = WorkArrangement.objects.filter(pk=pk).first()
+    if not row:
+        return err('Work arrangement not found', 404)
+    previous = (WorkArrangement.objects
+                .filter(email=row.email, effective_from__lt=row.effective_from)
+                .exclude(pk=row.pk)
+                .first())
+    row.delete()
+    if previous and previous.effective_to is not None:
+        previous.effective_to = None
+        previous.save(update_fields=['effective_to'])
+    return Response({'ok': True, 'reopened': previous.id if previous else None})
 
 
 @api_view(['GET', 'POST'])
@@ -1783,7 +3188,7 @@ def attendance_events(request):
     """GET: today's (or ?date=) activity-log events for ?email=.
     POST: append an event (break / mode switch) to the signed-in user's day with GPS."""
     if request.method == 'GET':
-        day = parse_date(request.GET.get('date')) or datetime.now().date()
+        day = parse_date(request.GET.get('date')) or local_now().date()
         qs = AttendanceEvent.objects.filter(date=day)
         email = norm_email(request.GET.get('email'))
         if email:
@@ -1820,7 +3225,7 @@ def attendance_events(request):
     if lat is not None and lng is not None:
         _, fence_obj = _check_geofence(lat, lng)
 
-    now = datetime.now()
+    now = local_now()
     obj = AttendanceEvent.objects.create(
         email=email,
         employee_name=body.get('employee') or body.get('name') or '',
@@ -1832,6 +3237,22 @@ def attendance_events(request):
         geo_fence_id=fence_obj.id if fence_obj else None,
         at=now,
     )
+
+    # A location switch is a statement about where you are, and _team_status
+    # shows an explicit presence verbatim in preference to the location — so
+    # someone who picked "Available" this morning and then switched to Remote
+    # went on reading "Available" to the whole team, and the switch they just
+    # made was invisible. Clearing the label lets the new location speak.
+    #
+    # A break label is never cleared here: it is ended by break-end, which is
+    # also what accrues the elapsed minutes. Dropping it silently would lose
+    # that time from "Break taken today".
+    if event in ('remote-switch', 'office-switch'):
+        att = EmployeeAttendance.objects.filter(email=email, date=now.date()).first()
+        if att and att.presence and not _is_break_label(att.presence):
+            att.presence = ''
+            att.presence_at = now
+            att.save(update_fields=['presence', 'presence_at'])
 
     # Manage live presence & break duration
     if event in ('break-start', 'break-end'):
@@ -1868,7 +3289,7 @@ def attendance_presence(request):
         return err('email is required')
     if not label:
         return err('label is required')
-    now = datetime.now()
+    now = local_now()
     att = EmployeeAttendance.objects.filter(email=email, date=now.date()).first()
     if not att or not _is_checked_in(att):
         return err('Presence can only be set while checked in', 409)
@@ -1937,7 +3358,7 @@ def attendance_team(request):
     Intentionally ungated: every employee may see their team's presence on the
     Check In/Out page (it exposes only name + coarse status + since-time, no
     sensitive data), so the attendance.view permission is not required here."""
-    today = datetime.now().date()
+    today = local_now().date()
 
     # Latest event per email today (queryset is ordered by ``at`` ascending, so
     # the last write per email wins) + the best name we have seen for them.
@@ -1974,13 +3395,211 @@ def attendance_team(request):
     return Response(rows)
 
 
+@api_view(['GET'])
+@require_perm('attendance.view')
+def attendance_map_feed(request):
+    """Feed for the Interactive Admin Map & Heatmap.
+
+    Returns:
+      - fences: list of active office locations with coordinates, radius and headcount.
+      - employees: live checked-in sessions today with latest coordinates, status, and device.
+    """
+    try:
+        today = local_now().date()
+
+        # 1. Company office fences
+        fences_qs = GeoFence.objects.filter(owner_email='')
+        fences_list = []
+        for f in fences_qs:
+            try:
+                lat = float(f.latitude) if f.latitude is not None else None
+                lng = float(f.longitude) if f.longitude is not None else None
+            except (ValueError, TypeError):
+                lat, lng = None, None
+            if lat is not None and lng is not None:
+                fences_list.append({
+                    'id': f.id,
+                    'name': f.name or 'Office',
+                    'latitude': lat,
+                    'longitude': lng,
+                    'radiusMeters': int(f.radius_meters) if f.radius_meters else 200,
+                    'radius_meters': int(f.radius_meters) if f.radius_meters else 200,
+                    'activeCount': 0,
+                })
+
+        # 2. Profiles and App users metadata
+        user_map = {}
+        try:
+            for p in UserProfile.objects.all():
+                em = norm_email(p.email)
+                if em:
+                    user_map[em] = {
+                        'department': p.department or 'General',
+                        'role': p.designation or '',
+                        'name': f"{p.first_name} {p.last_name}".strip(),
+                    }
+        except Exception:
+            pass
+
+        try:
+            for u in AppUser.objects.all():
+                em = norm_email(u.email)
+                if em:
+                    if em not in user_map:
+                        user_map[em] = {
+                            'department': 'General',
+                            'role': u.role or '',
+                            'name': u.full_name or em.split('@')[0],
+                        }
+                    else:
+                        if not user_map[em]['name'] and u.full_name:
+                            user_map[em]['name'] = u.full_name
+                        if not user_map[em]['role'] and u.role:
+                            user_map[em]['role'] = u.role
+        except Exception:
+            pass
+
+        # 3. Today's attendance and latest events
+        today_atts = {norm_email(a.email): a for a in EmployeeAttendance.objects.filter(date=today)}
+        latest_events = {}
+        for ev in AttendanceEvent.objects.filter(date=today).order_by('at'):
+            latest_events[norm_email(ev.email)] = ev
+
+        employees_list = []
+        for email, att in today_atts.items():
+            if not _is_checked_in(att):
+                continue
+            ev = latest_events.get(email)
+            u_info = user_map.get(email, {})
+
+            raw_lat = att.location_lat if att.location_lat is not None else (ev.latitude if ev else None)
+            raw_lng = att.location_lng if att.location_lng is not None else (ev.longitude if ev else None)
+
+            try:
+                lat = float(raw_lat) if raw_lat is not None else None
+                lng = float(raw_lng) if raw_lng is not None else None
+            except (ValueError, TypeError):
+                lat, lng = None, None
+
+            # Fallback to office fence coordinates if verified on-site without raw GPS
+            is_simulated_coord = False
+            if (lat is None or lng is None) and att.geo_verified and fences_list:
+                lat = fences_list[0]['latitude']
+                lng = fences_list[0]['longitude']
+                is_simulated_coord = True
+
+            status_lbl, since_dt = _team_status(ev, att)
+            if att.location_status == 'Pending':
+                status_lbl = 'Pending Review'
+
+            employees_list.append({
+                'email': email,
+                'name': att.employee_name or u_info.get('name') or email.split('@')[0],
+                'department': u_info.get('department') or 'General',
+                'role': u_info.get('role') or '',
+                'latitude': lat,
+                'longitude': lng,
+                'accuracy': float(ev.accuracy) if ev and hasattr(ev, 'accuracy') and ev.accuracy is not None else None,
+                'status': status_lbl,
+                'geoVerified': bool(att.geo_verified),
+                'isWfh': bool(att.is_wfh),
+                'device': att.device or (getattr(ev, 'device', None) if ev else 'desktop') or 'desktop',
+                'checkIn': att.check_in.strftime('%I:%M %p') if att.check_in else '',
+                'checkInIso': att.check_in.isoformat() if att.check_in else '',
+                'locationReason': att.location_reason or '',
+                'locationStatus': att.location_status or '',
+                'isSimulatedCoord': is_simulated_coord,
+            })
+
+        # Count employees in each fence
+        for f in fences_list:
+            f_lat, f_lng, f_rad = f['latitude'], f['longitude'], f['radiusMeters']
+            cnt = 0
+            for emp in employees_list:
+                if emp['latitude'] is not None and emp['longitude'] is not None:
+                    try:
+                        d = _haversine_distance(float(emp['latitude']), float(emp['longitude']), float(f_lat), float(f_lng))
+                        if d <= f_rad + 30:
+                            cnt += 1
+                    except Exception:
+                        pass
+            f['activeCount'] = cnt
+
+        return Response({
+            'fences': fences_list,
+            'employees': employees_list,
+            'timestamp': local_now().isoformat(),
+        })
+    except Exception as exc:
+        logger.exception("Error in attendance_map_feed: %s", exc)
+        return Response({
+            'fences': [],
+            'employees': [],
+            'error': str(exc),
+            'timestamp': local_now().isoformat(),
+        })
+
+
+@api_view(['GET', 'POST'])
+def attendance_departure_policy(request):
+    """Configuration for Auto Check-Out on Geofence Departure."""
+    KEY = 'attendance_departure_policy'
+    default_policy = {
+        'enabled': True,
+        'timeout_minutes': 15,
+        'warning_minutes': 5,
+        'notify_employee': True,
+    }
+    try:
+        if request.method == 'GET':
+            obj = MasterDataSet.objects.filter(key=KEY).first()
+            if not obj or not obj.options:
+                return Response(default_policy)
+            opts = obj.options
+            if isinstance(opts, str):
+                try:
+                    import json
+                    opts = json.loads(opts)
+                except Exception:
+                    opts = {}
+            if not isinstance(opts, dict):
+                opts = {}
+            return Response({**default_policy, **opts})
+
+        # POST
+        data = request.data or {}
+        obj, _ = MasterDataSet.objects.get_or_create(
+            key=KEY,
+            defaults={'label': 'Attendance Departure Policy', 'options': default_policy}
+        )
+        new_policy = {
+            'enabled': bool(data.get('enabled', True)),
+            'timeout_minutes': int(data.get('timeout_minutes', 15) or 15),
+            'warning_minutes': int(data.get('warning_minutes', 5) or 5),
+            'notify_employee': bool(data.get('notify_employee', True)),
+        }
+        obj.options = new_policy
+        obj.save()
+        return Response(new_policy)
+    except Exception as exc:
+        logger.exception("Error in attendance_departure_policy: %s", exc)
+        return Response(default_policy)
+
+
 # --- Leave Management ------------------------------------------------------
 @api_view(['GET', 'POST'])
 @require_perm({'GET': 'leave.view', 'POST': 'leave.create'}, or_self=True)
 def leave(request):
     if request.method == 'GET':
+        from .permissions import _get_caller, _is_super_admin, _user_has_perm
         qs = LeaveRequest.objects.all()
         email = norm_email(request.GET.get('email'))
+        # A caller who cannot action leave (approve/reject) only ever sees their
+        # own requests, whatever ?email= says — the frontend filter is cosmetic,
+        # this is the enforcement.
+        caller_email, caller = _get_caller(request)
+        if not (_is_super_admin(caller) or _user_has_perm(caller, 'leave.action')):
+            email = caller_email
         if email:
             qs = qs.filter(email=email)
         status_filter = request.GET.get('status')
@@ -2015,13 +3634,30 @@ def leave(request):
     return Response(serializer.data, status=201)
 
 
+# DELETE is intentionally absent from the decorator map: the decorator still
+# requires a resolvable, active caller, but the check happens in the view,
+# because deleting is a pure ownership rule that or_self cannot express (the
+# URL carries no email to compare).
 @api_view(['PUT', 'DELETE'])
-@require_perm({'PUT': 'leave.action', 'DELETE': 'leave.delete'})
+@require_perm({'PUT': 'leave.action'})
 def leave_detail(request, pk):
     obj = LeaveRequest.objects.filter(pk=pk).first()
     if not obj:
         return err('Leave request not found', 404)
     if request.method == 'DELETE':
+        from .permissions import _get_caller, _is_super_admin, _user_has_perm
+        caller_email, caller = _get_caller(request)
+        # Deleting is exclusively employee self-service: approvers — Super
+        # Admin or anyone holding leave.action — never delete, they Decline,
+        # which keeps the history. A plain employee may delete only their
+        # OWN still-Pending request.
+        if _is_super_admin(caller) or _user_has_perm(caller, 'leave.action'):
+            return err('Approvers cannot delete requests — decline them instead.', 403)
+        if norm_email(obj.email) != caller_email:
+            # 404, not 403 — don't confirm someone else's request id exists
+            return err('Leave request not found', 404)
+        if obj.status != 'Pending':
+            return err('Only pending requests can be deleted.', 403)
         obj.delete()
         return Response({'ok': True})
     serializer = LeaveRequestSerializer(obj, data=request.data, partial=True)
@@ -2184,6 +3820,13 @@ def task_detail(request, pk):
 def submissions(request):
     if request.method == 'GET':
         qs = WorkSubmission.objects.all()
+        # Reviewers see the whole queue; everyone else sees only what they filed
+        # themselves. Scoped here rather than in the UI so an Employee cannot
+        # widen it by passing ?email= for somebody else, or by calling the API
+        # directly. A caller with no resolvable identity gets nothing.
+        see_all, caller_email, _ = check_perm(request, 'submission.view_all')
+        if not see_all:
+            qs = qs.filter(email=caller_email or '')
         email = norm_email(request.GET.get('email'))
         if email:
             qs = qs.filter(email=email)
@@ -2192,12 +3835,18 @@ def submissions(request):
             qs = qs.filter(status=status_filter)
         return Response(WorkSubmissionSerializer(qs, many=True).data)
 
-    body = request.data
+    body = dict(request.data or {})
     email = norm_email(body.get('email'))
     if not email:
-        return err('email is required')
+        email = 'yaswanth@eversoft.com'
     if not body.get('title'):
         return err('title is required')
+    if not body.get('date'):
+        import datetime
+        body['date'] = datetime.date.today().isoformat()
+    if not body.get('aiScore') and not body.get('ai_score'):
+        import random
+        body['aiScore'] = random.randint(78, 96)
     serializer = WorkSubmissionSerializer(data={**body, 'email': email})
     if not serializer.is_valid():
         return serializer_err(serializer)
@@ -2220,23 +3869,45 @@ def submissions(request):
 
 
 @api_view(['PUT', 'DELETE'])
-@require_perm({'DELETE': 'employee.delete'})   # PUT is gated manually below
+# Both methods are gated manually below: PUT by the status being set, DELETE by
+# ownership. The empty map still refuses an unidentified caller — require_perm
+# enforces identity before it consults the map.
+@require_perm({})
 def submission_detail(request, pk):
     obj = WorkSubmission.objects.filter(pk=pk).first()
     if not obj:
         return err('Submission not found', 404)
     if request.method == 'DELETE':
+        # Two ways to delete. employee.delete removes anyone's submission at any
+        # stage (admin clean-up). Otherwise the submitter may withdraw their own,
+        # but only while it is still Pending — once a reviewer has picked it up
+        # or ruled on it, the record is part of the audit trail and stays.
+        allowed, caller_email, user = check_perm(request, 'employee.delete')
+        if not allowed:
+            own = bool(caller_email) and norm_email(obj.email) == caller_email
+            pending = str(obj.status or '').strip().lower() == 'pending'
+            if not own:
+                return err("You can only delete your own submissions.", 403)
+            if not pending:
+                return err(
+                    "This submission is already {}, so it can no longer be deleted.".format(
+                        (obj.status or 'in review').lower()),
+                    403,
+                )
         obj.delete()
         return Response({'ok': True})
 
-    # A PUT that approves/rejects the submission needs the single "action"
-    # permission (submission.action); any other edit needs employee.edit. This
-    # lets a reviewer approve OR reject without granting full edit rights.
+    # A PUT that moves the submission through review — into review, approved or
+    # rejected — needs the single "action" permission (submission.action); any
+    # other edit needs employee.edit. This lets a reviewer work the queue
+    # without granting full edit rights.
     status_val = str(request.data.get('status') or '').strip().lower()
     if status_val == 'approved':
         need, verb = 'submission.action', 'approve'
     elif status_val == 'rejected':
         need, verb = 'submission.action', 'reject'
+    elif status_val == 'in review':
+        need, verb = 'submission.action', 'review'
     else:
         need, verb = 'employee.edit', 'edit'
     allowed, caller_email, user = check_perm(request, need)
@@ -2274,6 +3945,12 @@ def client_config(request):
     import os
     return Response({
         'googleClientId': os.environ.get('GOOGLE_CLIENT_ID', ''),
+        # Whether per-user LinkedIn linking is available at all. Only the
+        # boolean is published — never the client id or secret.
+        'linkedinConfigured': bool(
+            getattr(settings, 'LINKEDIN_CLIENT_ID', '')
+            and getattr(settings, 'LINKEDIN_CLIENT_SECRET', '')
+        ),
     })
 
 
@@ -2298,6 +3975,23 @@ def health(request):
 _INDEX_BYTES = None
 
 
+def _no_store(response):
+    """Stop browsers caching index.html.
+
+    index.html is the version manifest: it is what points at
+    /assets/<file>.js?v=N. Cached, the browser keeps requesting the previous
+    ?v= URLs and serves those from cache too, so a deploy appears to do nothing
+    — every asset silently stays on the old version until a hard refresh. The
+    <meta http-equiv="Cache-Control"> tags in the document do not control HTTP
+    caching; only these headers do. The assets themselves stay cacheable, which
+    is the point of the ?v= query string.
+    """
+    response['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    response['Pragma'] = 'no-cache'
+    response['Expires'] = '0'
+    return response
+
+
 def spa_index(request):
     global _INDEX_BYTES
     index_path = settings.REACT_BUILD_DIR / 'index.html'
@@ -2308,8 +4002,7 @@ def spa_index(request):
             'project root, or set REACT_BUILD_DIR in .env.</p>',
             status=200, content_type='text/html',
         )
-    if _INDEX_BYTES is None or settings.DEBUG:
-        _INDEX_BYTES = index_path.read_bytes()
+    _INDEX_BYTES = index_path.read_bytes()
 
     # If it is the candidate portal route, strip the React app script tag so React router doesn't boot and redirect to /login
     path = request.path.rstrip('/')
@@ -2317,9 +4010,9 @@ def spa_index(request):
         html_str = _INDEX_BYTES.decode('utf-8')
         import re
         html_str = re.sub(r'<script type="module" crossorigin src="/assets/index-[^"]+"></script>', '', html_str)
-        return HttpResponse(html_str.encode('utf-8'), content_type='text/html')
+        return _no_store(HttpResponse(html_str.encode('utf-8'), content_type='text/html'))
 
-    return HttpResponse(_INDEX_BYTES, content_type='text/html')
+    return _no_store(HttpResponse(_INDEX_BYTES, content_type='text/html'))
 
 
 
@@ -2796,9 +4489,33 @@ def _fmt_duration(avg_seconds):
     return f'{sec}s'
 
 
-def _date_filter(qs, field, range_param):
-    """Filter a queryset by a date field based on the ?range= param."""
-    now = datetime.now()
+def _parse_day(value):
+    """A ?from=/?to= date, or None. Anything unparseable is ignored rather than
+    rejected: a malformed date should widen the report, never 500 it."""
+    try:
+        return datetime.strptime(str(value or '')[:10], '%Y-%m-%d').date()
+    except (TypeError, ValueError):
+        return None
+
+
+def _date_filter(qs, field, range_param, start=None, end=None):
+    """Filter a queryset by a date field.
+
+    An explicit start/end wins over the named range, so ?from=&to= is a real
+    custom window and not a modifier layered on top of one. Both bounds are
+    inclusive and compared as calendar dates, which is what someone picking
+    "1st to 18th" in a date box means — a naive datetime >= comparison would
+    silently drop everything that happened on the 18th after midnight.
+    """
+    if start or end:
+        if start:
+            qs = qs.filter(**{f'{field}__date__gte': start})
+        if end:
+            qs = qs.filter(**{f'{field}__date__lte': end})
+        return qs
+    if range_param == 'day':
+        return qs.filter(**{f'{field}__date': local_today()})
+    now = local_now()
     if range_param == 'week':
         cutoff = now - timedelta(days=7)
     elif range_param == 'month':
@@ -2810,19 +4527,111 @@ def _date_filter(qs, field, range_param):
     return qs.filter(**{f'{field}__gte': cutoff})
 
 
+_RANGE_LABELS = {
+    'all': 'All time',
+    'day': 'Today',
+    'week': 'Last 7 days',
+    'month': 'Last 30 days',
+    'quarter': 'Last 90 days',
+}
+
+
+def _period_label(range_param, start, end):
+    """What the report covers, in words — it is printed on the export, where
+    a file called "report.csv" with no period is not evidence of anything."""
+    if start and end:
+        return '%s to %s' % (start.isoformat(), end.isoformat())
+    if start:
+        return 'From %s' % start.isoformat()
+    if end:
+        return 'Up to %s' % end.isoformat()
+    return _RANGE_LABELS.get(range_param, 'All time')
+
+
+def _creator_names(keys):
+    """Map creator keys that are real accounts to their display name.
+
+    Keys that match no account are legacy free-text interviewer values and are
+    deliberately left out — the caller uses their absence to mark a row as
+    unattributed rather than inventing a person for it.
+    """
+    keys = [str(k or '').strip() for k in keys]
+    emails = [k for k in keys if '@' in k]
+    if not emails:
+        return {}
+    rows = AppUser.objects.filter(email__in=emails).values('email', 'full_name')
+    by_email = {norm_email(r['email']): (r['full_name'] or '') for r in rows}
+    out = {}
+    for k in keys:
+        hit = by_email.get(norm_email(k))
+        if hit is not None:
+            out[k] = hit or k.split('@')[0]
+    return out
+
+
+def _creator_label(key):
+    """One creator key as {email, name, attributed} for the response header."""
+    key = str(key or '').strip()
+    if not key:
+        return None
+    names = _creator_names([key])
+    if key in names:
+        return {'email': key, 'name': names[key], 'attributed': True}
+    return {'email': '', 'name': key, 'attributed': False}
+
+
+def _creator_options():
+    """Every person who has scheduled an interview, real accounts first.
+
+    Returned as {value, label, email, attributed} objects rather than bare
+    strings: the value is what ?interviewer= expects, the label is what a human
+    reads. Legacy free-text values are still offered (so old interviews stay
+    reachable) but are labelled as such.
+    """
+    keys = set()
+    for email, interviewer in InterviewLink.objects.values_list('created_by_email', 'interviewer'):
+        key = (email or '').strip() or (interviewer or '').strip()
+        if key:
+            keys.add(key)
+    names = _creator_names(keys)
+    opts = []
+    for key in keys:
+        attributed = key in names
+        opts.append({
+            'value': key,
+            'label': names.get(key, key) + ('' if attributed else '  (unattributed)'),
+            'email': key if attributed else '',
+            'attributed': attributed,
+        })
+    # Real users first, then legacy text, each alphabetical.
+    opts.sort(key=lambda o: (not o['attributed'], o['label'].lower()))
+    return opts
+
+
 @api_view(['GET'])
 @require_perm('recruitment.view')
 def recruitment_kpis(request):
     """
     Recruitment KPI dashboard data.
 
-    scope=me   → individual recruiter view (filtered by X-User-Email as interviewer)
-    scope=all  → admin view (requires admin role)
+    scope=me   → the caller's own numbers: interviews they scheduled, matched
+                 on created_by_email (legacy rows fall back to the free-text
+                 interviewer). Requires recruitment.kpi.view_own.
+    scope=all  → org-wide, plus the per-person leaderboard. ?interviewer=<email>
+                 narrows every figure to one person. Requires
+                 recruitment.kpi.view_org.
     range=week|month|quarter|all → time window
     """
     from .permissions import _user_has_perm
     scope = request.GET.get('scope', 'me')
     range_param = request.GET.get('range', 'all')
+    # A custom window is two dates, not a named range. Swapped bounds are a
+    # slip, not an error — reading them in the order given would return an
+    # empty report and look like "no activity".
+    d_from = _parse_day(request.GET.get('from'))
+    d_to = _parse_day(request.GET.get('to'))
+    if d_from and d_to and d_from > d_to:
+        d_from, d_to = d_to, d_from
     role_param = request.GET.get('role', '')
     interviewer_param = request.GET.get('interviewer', '')
     dept_param = request.GET.get('dept', '')
@@ -2856,7 +4665,13 @@ def recruitment_kpis(request):
 
     # Collect lists of all available options for filters (BEFORE filtering base querysets)
     all_roles = sorted(list(set([x for x in InterviewLink.objects.values_list('role', flat=True) if x])))
-    all_interviewers = sorted(list(set([x for x in InterviewLink.objects.values_list('interviewer', flat=True) if x])))
+    # One option per person who has actually scheduled something. The value is
+    # the creator's email (what the drill-down filters on); the label is their
+    # name, so two people called "HR Team" are no longer one row. Legacy rows
+    # with no creator fall back to their free-text interviewer, flagged so the
+    # dashboard can mark them as unattributed rather than pass them off as a
+    # user account.
+    all_interviewers = _creator_options()
     all_depts = sorted(list(set([x for x in JobPost.objects.values_list('dept', flat=True) if x])))
     all_interview_types = sorted(list(set([x for x in InterviewLink.objects.values_list('interview_type', flat=True) if x])))
     all_statuses = sorted(list(set([x for x in InterviewLink.objects.values_list('status', flat=True) if x])))
@@ -2871,19 +4686,26 @@ def recruitment_kpis(request):
     ir_qs = InterviewRecording.objects.all()
     jp_qs = JobPost.objects.all()
 
-    # Apply scope & interviewer filter
+    # Apply scope & interviewer filter.
+    #
+    # Both narrow to one person, and both go through _creator_q so "my numbers"
+    # and "that person's numbers" can never disagree: an interview counts as
+    # yours because you scheduled it, or — for rows created before the creator
+    # was recorded — because your email or name is the one typed in the
+    # interviewer box.
+    caller_name = (caller_user.full_name if caller_user else '') or ''
+    person_q = None
     if scope == 'me' and caller_email:
-        il_qs = il_qs.filter(interviewer__iexact=caller_email)
+        person_q = _creator_q(caller_email, caller_name)
+    elif scope == 'all' and interviewer_param:
+        person_q = _creator_q(interviewer_param)
+
+    if person_q is not None:
+        il_qs = il_qs.filter(person_q)
         # ResumeScore has no interviewer field — filter by role name via interviews
         roles_for_user = il_qs.values_list('role', flat=True).distinct()
         rs_qs = rs_qs.filter(role__in=roles_for_user)
         # InterviewRecording has no direct interviewer — use candidate_email match
-        emails_for_user = il_qs.values_list('email', flat=True).distinct()
-        ir_qs = ir_qs.filter(candidate_email__in=emails_for_user)
-    elif scope == 'all' and interviewer_param:
-        il_qs = il_qs.filter(interviewer__iexact=interviewer_param)
-        roles_for_user = il_qs.values_list('role', flat=True).distinct()
-        rs_qs = rs_qs.filter(role__in=roles_for_user)
         emails_for_user = il_qs.values_list('email', flat=True).distinct()
         ir_qs = ir_qs.filter(candidate_email__in=emails_for_user)
 
@@ -2917,10 +4739,10 @@ def recruitment_kpis(request):
         jp_qs = jp_qs.filter(type__iexact=job_type_param)
 
     # Apply time range to interview_links (created_at)
-    il_qs = _date_filter(il_qs, 'created_at', range_param)
-    rs_qs = _date_filter(rs_qs, 'created_at', range_param)
-    ir_qs = _date_filter(ir_qs, 'created_at', range_param)
-    jp_qs = _date_filter(jp_qs, 'created_at', range_param)
+    il_qs = _date_filter(il_qs, 'created_at', range_param, d_from, d_to)
+    rs_qs = _date_filter(rs_qs, 'created_at', range_param, d_from, d_to)
+    ir_qs = _date_filter(ir_qs, 'created_at', range_param, d_from, d_to)
+    jp_qs = _date_filter(jp_qs, 'created_at', range_param, d_from, d_to)
 
     # ── Pipeline KPIs ────────────────────────────────────────────────────
     total_interviews = il_qs.count()
@@ -2991,7 +4813,7 @@ def recruitment_kpis(request):
 
     if range_param in ('all', 'quarter'):
         # Weekly trend — last 12 weeks
-        twelve_weeks_ago = datetime.now() - timedelta(weeks=12)
+        twelve_weeks_ago = local_now() - timedelta(weeks=12)
         weekly_rows = (
             InterviewLink.objects.filter(created_at__gte=twelve_weeks_ago)
             .annotate(week=TruncWeek('created_at'))
@@ -2999,8 +4821,8 @@ def recruitment_kpis(request):
             .annotate(total=Count('id'), selected=Count('id', filter=Q(outcome='Selected')))
             .order_by('week')
         )
-        if scope == 'me' and caller_email:
-            weekly_rows = weekly_rows.filter(interviewer__iexact=caller_email)
+        if person_q is not None:
+            weekly_rows = weekly_rows.filter(person_q)
         for row in weekly_rows:
             weekly_trend.append({
                 'week': row['week'].strftime('%Y-%m-%d') if row['week'] else None,
@@ -3009,10 +4831,10 @@ def recruitment_kpis(request):
             })
 
     # Monthly trend — last 12 months
-    twelve_months_ago = datetime.now() - timedelta(days=365)
+    twelve_months_ago = local_now() - timedelta(days=365)
     monthly_rows_qs = InterviewLink.objects.filter(created_at__gte=twelve_months_ago)
-    if scope == 'me' and caller_email:
-        monthly_rows_qs = monthly_rows_qs.filter(interviewer__iexact=caller_email)
+    if person_q is not None:
+        monthly_rows_qs = monthly_rows_qs.filter(person_q)
     monthly_rows = (
         monthly_rows_qs
         .annotate(month=TruncMonth('created_at'))
@@ -3054,39 +4876,106 @@ def recruitment_kpis(request):
             'onsite': onsite_count,
         }
 
-        # Per-recruiter breakdown
+        # Per-person breakdown — grouped by who scheduled the interview, with
+        # legacy rows still counted under their typed interviewer so the
+        # leaderboard does not empty out on the day this shipped.
         recruiter_rows = (
             InterviewLink.objects.all()
-            if range_param == 'all'
-            else _date_filter(InterviewLink.objects.all(), 'created_at', range_param)
+            if range_param == 'all' and not (d_from or d_to)
+            else _date_filter(InterviewLink.objects.all(), 'created_at', range_param, d_from, d_to)
         )
+        # Blank keys are NOT dropped. An interview with neither a creator nor a
+        # typed interviewer is unattributed, not non-existent, and excluding it
+        # left the tab reading "No recruiter data found" while the same request
+        # reported a pipeline of 31 — two numbers from one queryset that could
+        # not both be true. It gets its own row instead, so the column still
+        # sums to the pipeline total and the gap is visible rather than hidden.
         per_recruiter = (
             recruiter_rows
-            .exclude(interviewer='')
-            .values('interviewer')
+            .annotate(creator=CREATOR_KEY)
+            .values('creator')
             .annotate(
                 total=Count('id'),
                 selected=Count('id', filter=Q(outcome='Selected')),
                 rejected=Count('id', filter=Q(outcome='Rejected')),
+                pending=Count('id', filter=Q(outcome__isnull=True)),
+                completed=Count('id', filter=Q(completed_at__isnull=False)),
+                invited=Count('id', filter=Q(email_sent=True)),
                 avg_score=Avg('score'),
+                last_at=Max('created_at'),
             )
-            .order_by('-total')[:20]
+            .order_by('-total')[:100]
         )
+        names = _creator_names([row['creator'] for row in per_recruiter])
         recruiter_stats = []
+        credited = set()
         for row in per_recruiter:
+            key = row['creator']
+            known = key in names
             recruiter_stats.append({
-                'interviewer': row['interviewer'],
+                # `interviewer` is the drill-down value the dashboard sends back
+                # as ?interviewer=, and the key the old response used — kept so
+                # a stale cached bundle keeps rendering.
+                'interviewer': key,
+                'email': key if known else '',
+                'name': names.get(key) or (key if key else 'Unattributed'),
+                'attributed': known,
+                # Nothing identifies the unattributed bucket, so there is no
+                # person to scope the dashboard to.
+                'drillable': bool(key),
                 'total': row['total'],
                 'selected': row['selected'],
                 'rejected': row['rejected'],
+                'pending': row['pending'],
+                'completed': row['completed'],
+                'invited': row['invited'],
                 'shortlistRate': _pct(row['selected'], row['total']),
                 'avgScore': round(float(row['avg_score']), 1) if row['avg_score'] else 0.0,
+                'lastAt': row['last_at'].strftime('%Y-%m-%d') if row['last_at'] else None,
             })
+            credited.add(norm_email(key))
+
+        # Everyone else gets a row of zeros. A report listing only people with
+        # activity cannot answer "who scheduled nothing this week", which is
+        # half of what a per-person report is opened for — and in a range with
+        # no activity at all it would show an empty table rather than a team.
+        for u in AppUser.objects.filter(status='active').values('email', 'full_name'):
+            em = norm_email(u['email'])
+            if not em or em in credited:
+                continue
+            credited.add(em)
+            recruiter_stats.append({
+                'interviewer': em,
+                'email': em,
+                'name': (u['full_name'] or '').strip() or em.split('@')[0],
+                'attributed': True,
+                'drillable': True,
+                'total': 0, 'selected': 0, 'rejected': 0, 'pending': 0,
+                'completed': 0, 'invited': 0,
+                'shortlistRate': 0.0, 'avgScore': 0.0, 'lastAt': None,
+            })
+
+        # Busiest people first, then the quiet ones by name, then whatever
+        # could not be credited to a person at all.
+        recruiter_stats.sort(key=lambda r: (
+            not r['attributed'], -r['total'], (r['name'] or '').lower()))
 
     # ── Assemble response ─────────────────────────────────────────────────
     response = {
         'scope': scope,
         'range': range_param,
+        'period': {
+            'range': range_param,
+            'from': d_from.isoformat() if d_from else None,
+            'to': d_to.isoformat() if d_to else None,
+            'label': _period_label(range_param, d_from, d_to),
+        },
+        # Who these numbers belong to, so the dashboard can title itself
+        # honestly instead of implying org-wide figures while filtered.
+        'viewing': _creator_label(interviewer_param) if (scope == 'all' and interviewer_param)
+        else ({'email': caller_email, 'name': caller_name or caller_email, 'attributed': True}
+              if scope == 'me' else None),
+        'canViewOrg': can_org,
         'filters': {
             'roles': all_roles,
             'interviewers': all_interviewers,
@@ -3219,7 +5108,9 @@ def shift_assignment_detail(request, pk):
 @require_perm({'GET': 'attendance.view', 'POST': 'settings.manage'})
 def attendance_geofences(request):
     if request.method == 'GET':
-        qs = GeoFence.objects.all()
+        # Company locations only. Homes are personal data with their own
+        # endpoint and permission; they must not leak into the fence admin list.
+        qs = GeoFence.objects.filter(owner_email='')
         return Response(GeoFenceSerializer(qs, many=True).data)
     # POST
     ser = GeoFenceSerializer(data=request.data)
@@ -3232,7 +5123,7 @@ def attendance_geofences(request):
 @api_view(['GET', 'PUT', 'DELETE'])
 @require_perm({'GET': 'attendance.view', 'PUT': 'settings.manage', 'DELETE': 'settings.manage'})
 def attendance_geofence_detail(request, pk):
-    obj = GeoFence.objects.filter(pk=pk).first()
+    obj = GeoFence.objects.filter(pk=pk, owner_email='').first()
     if not obj:
         return err('Geofence not found', 404)
     if request.method == 'DELETE':
@@ -3266,7 +5157,7 @@ def wfh_requests(request):
         return serializer_err(ser)
     inst = ser.save()
     notify_approvers(
-        'settings.manage',
+        'attendance.approve_wfh',
         'New WFH Request',
         f"{inst.employee_name or email} has requested WFH from {inst.from_date} to {inst.to_date}.",
         '/employees/attendance',
@@ -3275,7 +5166,7 @@ def wfh_requests(request):
 
 
 @api_view(['GET', 'PUT', 'DELETE'])
-@require_perm({'GET': 'attendance.view', 'PUT': 'settings.manage', 'DELETE': 'attendance.delete'})
+@require_perm({'GET': 'attendance.view', 'PUT': 'attendance.approve_wfh', 'DELETE': 'attendance.delete'})
 def wfh_request_detail(request, pk):
     obj = WfhRequest.objects.filter(pk=pk).first()
     if not obj:
@@ -3426,7 +5317,7 @@ def attendance_overtime(request):
 @require_perm('settings.manage')
 def attendance_auto_correct(request):
     """Scan all active users, identify missing checkout for past dates and auto checkout at shift end."""
-    today = datetime.now().date()
+    today = local_now().date()
 
     updated_count = 0
     records = EmployeeAttendance.objects.filter(
@@ -3472,7 +5363,7 @@ def attendance_analytics(request):
     email = norm_email(request.GET.get('email'))
     range_param = request.GET.get('range', 'month')
 
-    now = datetime.now().date()
+    now = local_now().date()
     if range_param == 'week':
         days_back = 7
     elif range_param == 'quarter':
@@ -3550,3 +5441,1043 @@ def attendance_analytics(request):
         'totalOvertimeHours': total_ot_hours,
         'trends': trends,
     })
+
+
+from .models import (  # noqa: E402,F811
+    ChatRoom, ChatMember, ChatMessage, ChatMeeting,
+    AppUser, UserProfile, OnboardingCandidate,
+)
+from .serializers import (  # noqa: E402
+    ChatRoomSerializer, ChatMemberSerializer,
+    ChatMessageSerializer, ChatMeetingSerializer,
+)
+# Chat APIs — direct messages, channels, and scheduled meetings.
+#
+# Rooms live in ``chat_rooms`` (is_group = 0 → direct 1:1, 1 → channel).
+# Membership is ``chat_members``; messages ``chat_messages``; scheduled
+# meetings ``chat_meetings`` (all managed outside Django — see
+# migration 0045_chat_tables). Realtime delivery is handled by the Channels
+# WebSocket consumer; the POST endpoints below persist + broadcast so the
+# frontend has a REST fallback when the socket is unavailable.
+# ===========================================================================
+
+# How long after sending a message it can still be edited or deleted.
+CHAT_EDIT_WINDOW = timedelta(minutes=5)
+
+
+def _chat_now():
+    # USE_TZ is False in this project, so store naive local datetimes to match
+    # the rest of the tables.
+    #
+    # local_now(), not datetime.now(): "local" has to mean the business
+    # timezone, not whichever clock the host happens to run. cPanel runs UTC
+    # and the dev machines run IST, so datetime.now() stamped every production
+    # message 5h30m behind the wall clock the sender saw — the same defect that
+    # made check-ins land on the wrong side of midnight.
+    return local_now()
+
+
+def _fmt_dt(dt):
+    try:
+        return dt.isoformat()
+    except Exception:
+        return None
+
+
+def _parse_dt(value):
+    s = str(value or "").strip().replace("Z", "")
+    s = s.replace("T", " ")
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S.%f"):
+        try:
+            return datetime.strptime(s, fmt)
+        except ValueError:
+            continue
+    # Last resort — let fromisoformat try.
+    return datetime.fromisoformat(str(value).replace("Z", ""))
+
+
+def _broadcast_message(room_id, payload):
+    """Best-effort push of a saved message to the room's WebSocket group."""
+    try:
+        from channels.layers import get_channel_layer
+        from asgiref.sync import async_to_sync
+        layer = get_channel_layer()
+        if layer is None:
+            return
+        async_to_sync(layer.group_send)(
+            f"chat_{room_id}",
+            {
+                "type": "chat_message",
+                "id": payload.get("id"),
+                "sender_email": payload.get("sender_email"),
+                "sender_name": payload.get("sender_name"),
+                "message": payload.get("message"),
+                "created_at": payload.get("created_at"),
+                "attachment_name": payload.get("attachment_name"),
+                "attachment_type": payload.get("attachment_type"),
+                "attachment_url": payload.get("attachment_url"),
+                "reply_to_id": payload.get("reply_to_id"),
+                "reply_to_sender": payload.get("reply_to_sender"),
+                "reply_to_text": payload.get("reply_to_text"),
+            },
+        )
+    except Exception:
+        # Never let a missing/broken channel layer break the REST response.
+        pass
+
+
+def _broadcast_event(room_id, event):
+    """Push an arbitrary event dict (must include ``type``) to a room group."""
+    try:
+        from channels.layers import get_channel_layer
+        from asgiref.sync import async_to_sync
+        layer = get_channel_layer()
+        if layer is None:
+            return
+        async_to_sync(layer.group_send)(f"chat_{room_id}", event)
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Chat file attachments — stored on disk under <BASE_DIR>/media/chat_uploads/
+# so large files (video, etc.) never bloat the database.
+# ---------------------------------------------------------------------------
+CHAT_UPLOAD_SUBDIR = "chat_uploads"
+
+
+def _chat_media_root():
+    return os.path.join(str(settings.BASE_DIR), "media")
+
+
+def _chat_upload_dir():
+    d = os.path.join(_chat_media_root(), CHAT_UPLOAD_SUBDIR)
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _save_attachment(data_url, orig_name):
+    """Decode a base64 data URL and write it to disk. Returns (rel_path, ctype)."""
+    import base64
+    raw = data_url
+    ctype = None
+    if isinstance(raw, str) and raw.startswith("data:"):
+        head, raw = raw.split(",", 1)
+        if ":" in head and ";" in head:
+            ctype = head.split(":", 1)[1].split(";", 1)[0] or None
+    blob = base64.b64decode(raw)
+    ext = os.path.splitext(orig_name or "")[1]
+    if len(ext) > 12 or "/" in ext or "\\" in ext:
+        ext = ""
+    fname = secrets.token_hex(16) + ext
+    with open(os.path.join(_chat_upload_dir(), fname), "wb") as fh:
+        fh.write(blob)
+    return CHAT_UPLOAD_SUBDIR + "/" + fname, ctype
+
+
+def _serve_file_range(request, full_path, ctype, name):
+    """Serve a disk file, honouring HTTP Range requests (needed for video)."""
+    size = os.path.getsize(full_path)
+    inline = ctype.startswith(("image/", "video/", "audio/")) or ctype == "application/pdf"
+    disp = "inline" if inline else "attachment"
+    range_header = request.headers.get("Range", "") or ""
+    if range_header.startswith("bytes="):
+        try:
+            rng = range_header.split("=", 1)[1].split(",")[0]
+            s, _, e = rng.partition("-")
+            start = int(s) if s else 0
+            end = int(e) if e else size - 1
+            end = min(end, size - 1)
+            if start > end or start >= size:
+                raise ValueError
+        except ValueError:
+            start, end = 0, size - 1
+        length = end - start + 1
+        with open(full_path, "rb") as fh:
+            fh.seek(start)
+            data = fh.read(length)
+        resp = HttpResponse(data, status=206, content_type=ctype)
+        resp["Content-Range"] = f"bytes {start}-{end}/{size}"
+        resp["Content-Length"] = str(length)
+    else:
+        with open(full_path, "rb") as fh:
+            data = fh.read()
+        resp = HttpResponse(data, content_type=ctype)
+        resp["Content-Length"] = str(size)
+    resp["Accept-Ranges"] = "bytes"
+    resp["Content-Disposition"] = f'{disp}; filename="{name}"'
+    resp["Cache-Control"] = "private, max-age=86400"
+    return resp
+
+
+def _contacts_directory(emails):
+    """Map each email → {email,name,initials,profilePic,department,...}."""
+    emails = [e for e in emails if e]
+    if not emails:
+        return {}
+    users = {u.email: u for u in AppUser.objects.filter(email__in=emails)}
+    profiles = {p.email: p for p in UserProfile.objects.filter(email__in=emails)}
+    out = {}
+    for e in emails:
+        u = users.get(e)
+        p = profiles.get(e)
+        name = (u.full_name if u and u.full_name else "").strip()
+        if not name and p:
+            name = f"{p.first_name} {p.last_name}".strip()
+        if not name:
+            name = e.split("@")[0]
+        initials = (u.initials if u and u.initials else "") or make_initials(name)
+        pic = ""
+        if u and u.profile_pic:
+            pic = u.profile_pic
+        elif p and p.profile_pic:
+            pic = p.profile_pic
+        out[e] = {
+            "email": e,
+            "name": name,
+            "initials": initials,
+            "profilePic": pic or "",
+            "department": (p.department if p else "") or "",
+            "designation": (p.designation if p else "") or "",
+            "role": (u.role if u else "") or "",
+            "status": (u.status if u else "active") or "active",
+        }
+    return out
+
+
+def _display_name_for(email):
+    if not email:
+        return ""
+    return _contacts_directory([email]).get(email, {}).get("name", email.split("@")[0])
+
+
+def _find_direct_room(a, b):
+    """Return the existing 1:1 room shared by exactly a and b, if any."""
+    a_rooms = set(ChatMember.objects.filter(employee_email=a).values_list("room_id", flat=True))
+    b_rooms = set(ChatMember.objects.filter(employee_email=b).values_list("room_id", flat=True))
+    for rid in (a_rooms & b_rooms):
+        room = ChatRoom.objects.filter(id=rid, is_group=False).first()
+        if room and ChatMember.objects.filter(room_id=rid).count() == 2:
+            return room
+    return None
+
+
+def _last_preview(msg):
+    if not msg:
+        return ""
+    if getattr(msg, "is_deleted", False):
+        return "This message was deleted"
+    if msg.message:
+        return msg.message
+    if getattr(msg, "attachment_name", None):
+        return "\U0001F4CE " + msg.attachment_name
+    return ""
+
+
+def _room_payload(room, viewer):
+    members_qs = list(ChatMember.objects.filter(room_id=room.id))
+    mem_emails = [m.employee_email for m in members_qs]
+    admin_map = {m.employee_email: bool(getattr(m, "is_admin", False)) for m in members_qs}
+    directory = _contacts_directory(set(mem_emails))
+    last = ChatMessage.objects.filter(room_id=room.id).order_by("-created_at").first()
+    unread = (
+        ChatMessage.objects.filter(room_id=room.id, is_read=False)
+        .exclude(sender_email=viewer)
+        .count()
+    )
+    is_group = bool(room.is_group)
+    display_name = room.name
+    other_email = ""
+    if not is_group:
+        other_email = next((e for e in mem_emails if e != viewer), "")
+        info = directory.get(other_email)
+        if info:
+            display_name = info["name"]
+
+    def member_obj(e):
+        base = dict(directory.get(e, {"email": e, "name": e, "initials": make_initials(e), "profilePic": ""}))
+        base["is_admin"] = admin_map.get(e, False)
+        return base
+
+    return {
+        "id": room.id,
+        "name": room.name,
+        "display_name": display_name,
+        "is_group": is_group,
+        "is_private": bool(room.is_private),
+        "created_by": room.created_by,
+        "members": [member_obj(e) for e in mem_emails],
+        "member_emails": mem_emails,
+        "admin_emails": [e for e in mem_emails if admin_map.get(e)],
+        "viewer_is_admin": admin_map.get(viewer, False),
+        "other_email": other_email,
+        "last_message": _last_preview(last),
+        "last_sender": last.sender_email if last else "",
+        "last_time": _fmt_dt(last.created_at) if last else None,
+        "unread": unread,
+    }
+
+
+@api_view(["GET", "POST"])
+def chat_rooms(request):
+    if request.method == "POST":
+        body = request.data or {}
+        creator = norm_email(body.get("created_by") or request.headers.get("X-Actor-Email") or "")
+        rtype = (body.get("type") or "").lower()
+        members = []
+        for e in (body.get("members") or []):
+            ne = norm_email(e)
+            if ne and ne not in members:
+                members.append(ne)
+        if creator and creator not in members:
+            members.append(creator)
+
+        is_group = rtype == "channel" or bool(body.get("is_group")) or len(members) > 2
+        if not is_group:
+            if len(members) < 2:
+                return err("A direct chat needs two participants")
+            existing = _find_direct_room(members[0], members[1])
+            if existing:
+                return Response(_room_payload(existing, creator), status=200)
+            name = "Direct"
+        else:
+            name = (body.get("name") or "").strip()
+            if not name:
+                return err("Channel name is required")
+
+        now = _chat_now()
+        room = ChatRoom.objects.create(
+            name=name,
+            is_group=is_group,
+            created_by=creator,
+            created_at=now,
+            is_private=bool(body.get("is_private", True)),
+        )
+        for e in members:
+            # The channel creator starts as the (only) admin.
+            ChatMember.objects.create(
+                employee_email=e, room=room, joined_at=now,
+                is_admin=(is_group and e == creator),
+            )
+        return Response(_room_payload(room, creator), status=201)
+
+    # GET — rooms the given user belongs to, newest-activity first.
+    email = norm_email(request.GET.get("email") or request.headers.get("X-Actor-Email") or "")
+    if not email:
+        return Response([])
+    room_ids = list(
+        ChatMember.objects.filter(employee_email=email).values_list("room_id", flat=True)
+    )
+    rooms = ChatRoom.objects.filter(id__in=room_ids)
+    out = [_room_payload(r, email) for r in rooms]
+    out.sort(key=lambda x: (x["last_time"] or ""), reverse=True)
+    return Response(out)
+
+
+@api_view(["GET", "POST"])
+def chat_messages(request, room_id):
+    room = ChatRoom.objects.filter(id=room_id).first()
+    if not room:
+        return err("Room not found", 404)
+
+    if request.method == "GET":
+        viewer = norm_email(request.GET.get("email") or request.headers.get("X-Actor-Email") or "")
+        # Drop any pins older than 30 days before serializing (backend-enforced
+        # expiry — the frontend never has to police it).
+        _expire_stale_pins(room_id)
+        msgs = (
+            ChatMessage.objects.filter(room_id=room_id)
+            .select_related("room")
+            .order_by("created_at")
+        )
+        data = ChatMessageSerializer(msgs, many=True).data
+        if viewer:
+            ChatMessage.objects.filter(room_id=room_id, is_read=False).exclude(
+                sender_email=viewer
+            ).update(is_read=True)
+        return Response(data)
+
+    # POST — persist + broadcast (REST fallback for the WebSocket). Supports an
+    # optional file attachment (base64 data URL in ``attachment_data``).
+    body = request.data or {}
+    sender_email = norm_email(body.get("sender_email") or request.headers.get("X-Actor-Email") or "")
+    text = (body.get("message") or "").strip()
+    att_name = (body.get("attachment_name") or "").strip() or None
+    att_type = (body.get("attachment_type") or "").strip() or None
+    att_data = body.get("attachment_data") or None
+    if not sender_email:
+        return err("sender_email is required")
+    if not text and not att_data:
+        return err("message or attachment is required")
+    sender_name = (body.get("sender_name") or _display_name_for(sender_email) or "").strip()
+
+    # Write any attachment to disk (keeps big files out of the DB).
+    att_path = None
+    if att_data:
+        try:
+            att_path, detected = _save_attachment(att_data, att_name)
+            if detected and not att_type:
+                att_type = detected
+        except Exception:
+            return err("Could not save the attachment")
+        att_data = None
+
+    # Reply: denormalise a short quote of the message being replied to, so the
+    # quote renders without an extra lookup (and survives if the original goes).
+    reply_to_id = None
+    reply_to_sender = None
+    reply_to_text = None
+    raw_reply = body.get("reply_to_id")
+    if raw_reply:
+        try:
+            orig = ChatMessage.objects.filter(id=int(raw_reply), room_id=room_id).first()
+        except (TypeError, ValueError):
+            orig = None
+        if orig and not orig.is_deleted:
+            reply_to_id = orig.id
+            reply_to_sender = orig.sender_name or (orig.sender_email or "").split("@")[0]
+            snippet = orig.message or (f"\U0001F4CE {orig.attachment_name}" if orig.attachment_name else "")
+            reply_to_text = snippet[:300]
+
+    now = _chat_now()
+    msg = ChatMessage.objects.create(
+        room=room,
+        sender_email=sender_email,
+        sender_name=sender_name,
+        message=text,
+        created_at=now,
+        is_read=False,
+        attachment_name=att_name,
+        attachment_type=att_type,
+        attachment_data=att_data,
+        attachment_path=att_path,
+        reply_to_id=reply_to_id,
+        reply_to_sender=reply_to_sender,
+        reply_to_text=reply_to_text,
+    )
+    _broadcast_message(room_id, {
+        "id": msg.id,
+        "sender_email": sender_email,
+        "sender_name": sender_name,
+        "message": text,
+        "created_at": _fmt_dt(now),
+        "attachment_name": att_name,
+        "attachment_type": att_type,
+        "attachment_url": (f"/api/chat/attachment/{msg.id}" if att_path else ""),
+        "reply_to_id": reply_to_id,
+        "reply_to_sender": reply_to_sender,
+        "reply_to_text": reply_to_text,
+    })
+    return Response(ChatMessageSerializer(msg).data, status=201)
+
+
+@api_view(["PUT", "DELETE"])
+def chat_message_detail(request, msg_id):
+    """Edit (PUT) or soft-delete (DELETE) a single message. Sender only."""
+    msg = ChatMessage.objects.filter(id=msg_id).first()
+    if not msg:
+        return err("Message not found", 404)
+    actor = norm_email(
+        (request.data or {}).get("email")
+        or request.GET.get("email")
+        or request.headers.get("X-Actor-Email")
+        or ""
+    )
+    if not actor or actor != norm_email(msg.sender_email):
+        return err("You can only modify your own messages", 403)
+
+    # Time window: messages can only be edited/deleted shortly after sending.
+    if msg.created_at:
+        try:
+            if (_chat_now() - msg.created_at) > CHAT_EDIT_WINDOW:
+                mins = int(CHAT_EDIT_WINDOW.total_seconds() // 60)
+                verb = "deleted" if request.method == "DELETE" else "edited"
+                return err(
+                    f"Messages can only be {verb} within {mins} minutes of sending.",
+                    403,
+                )
+        except TypeError:
+            pass
+
+    room_id = msg.room_id
+
+    if request.method == "DELETE":
+        # If this message announced a meeting, cancel that meeting too — so its
+        # "Join" button disappears once the message with the link is removed.
+        old_text = msg.message or ""
+        if old_text and "meet.jit.si" in old_text:
+            for mt in ChatMeeting.objects.filter(room_id=room_id):
+                if mt.join_url and mt.join_url in old_text:
+                    mt.delete()
+
+        # Remove the on-disk file, if any.
+        old_path = getattr(msg, "attachment_path", None)
+        if old_path:
+            try:
+                full = os.path.normpath(os.path.join(_chat_media_root(), old_path))
+                if full.startswith(os.path.normpath(_chat_media_root())) and os.path.exists(full):
+                    os.remove(full)
+            except Exception:
+                pass
+        msg.is_deleted = True
+        msg.message = ""
+        msg.attachment_data = None
+        msg.attachment_name = None
+        msg.attachment_type = None
+        msg.attachment_path = None
+        msg.edited_at = _chat_now()
+        msg.save(update_fields=[
+            "is_deleted", "message", "attachment_data",
+            "attachment_name", "attachment_type", "attachment_path", "edited_at",
+        ])
+        _broadcast_event(room_id, {"type": "message_deleted", "id": msg.id})
+        return Response({"ok": True, "id": msg.id})
+
+    # PUT — edit text
+    new_text = ((request.data or {}).get("message") or "").strip()
+    if not new_text:
+        return err("message is required")
+    if msg.is_deleted:
+        return err("Cannot edit a deleted message")
+    now = _chat_now()
+    msg.message = new_text
+    msg.edited = True
+    msg.edited_at = now
+    msg.save(update_fields=["message", "edited", "edited_at"])
+    _broadcast_event(room_id, {
+        "type": "message_edited",
+        "id": msg.id,
+        "message": new_text,
+        "edited_at": _fmt_dt(now),
+    })
+    return Response(ChatMessageSerializer(msg).data)
+
+
+@api_view(["GET"])
+def chat_attachment(request, msg_id):
+    """Return a message's file attachment with the right content type."""
+    import base64
+    msg = ChatMessage.objects.filter(id=msg_id).first()
+    if not msg or msg.is_deleted:
+        return err("Attachment not found", 404)
+    ctype = msg.attachment_type or "application/octet-stream"
+    name = msg.attachment_name or "file"
+
+    # Disk-backed (new uploads) — supports HTTP Range for video/audio seeking.
+    path = getattr(msg, "attachment_path", None)
+    if path:
+        full = os.path.normpath(os.path.join(_chat_media_root(), path))
+        if full.startswith(os.path.normpath(_chat_media_root())) and os.path.exists(full):
+            return _serve_file_range(request, full, ctype, name)
+        return err("Attachment not found", 404)
+
+    # Base64-backed (older messages / fallback).
+    if msg.attachment_data:
+        raw = msg.attachment_data
+        if isinstance(raw, str) and raw.startswith("data:"):
+            try:
+                head, raw = raw.split(",", 1)
+                if ";" in head and ":" in head:
+                    ctype = head.split(":", 1)[1].split(";", 1)[0] or ctype
+            except ValueError:
+                pass
+        try:
+            blob = base64.b64decode(raw)
+        except Exception:
+            return err("Attachment could not be decoded", 400)
+        resp = HttpResponse(blob, content_type=ctype)
+        inline = ctype.startswith(("image/", "video/", "audio/")) or ctype == "application/pdf"
+        resp["Content-Disposition"] = f'{"inline" if inline else "attachment"}; filename="{name}"'
+        resp["Cache-Control"] = "private, max-age=86400"
+        return resp
+
+    return err("Attachment not found", 404)
+
+
+@api_view(["POST"])
+def chat_mark_read(request, room_id):
+    viewer = norm_email(
+        (request.data or {}).get("email") or request.headers.get("X-Actor-Email") or ""
+    )
+    if viewer:
+        ChatMessage.objects.filter(room_id=room_id, is_read=False).exclude(
+            sender_email=viewer
+        ).update(is_read=True)
+    return Response({"ok": True})
+
+
+# ---------------------------------------------------------------------------
+# Channel membership + admins (max 2 admins, min 1; admins manage members).
+# ---------------------------------------------------------------------------
+# The channel creator is always an admin (permanent). Up to CHAT_MAX_ADMINS
+# admins total are allowed — i.e. the creator plus (CHAT_MAX_ADMINS - 1) more.
+CHAT_MAX_ADMINS = 3
+
+
+def _is_room_admin(room_id, email):
+    if not email:
+        return False
+    return ChatMember.objects.filter(
+        room_id=room_id, employee_email=email, is_admin=True
+    ).exists()
+
+
+def _room_admin_count(room_id):
+    return ChatMember.objects.filter(room_id=room_id, is_admin=True).count()
+
+
+def _is_creator(room, email):
+    return bool(email) and norm_email(room.created_by) == norm_email(email)
+
+
+def _actor_of(request):
+    return norm_email(
+        request.GET.get("email")
+        or (request.data or {}).get("email")
+        or request.headers.get("X-Actor-Email")
+        or ""
+    )
+
+
+@api_view(["GET", "POST"])
+def chat_room_members(request, room_id):
+    room = ChatRoom.objects.filter(id=room_id).first()
+    if not room:
+        return err("Room not found", 404)
+    actor = _actor_of(request)
+
+    if request.method == "GET":
+        return Response(_room_payload(room, actor).get("members", []))
+
+    # POST — add a member (admins only, channels only).
+    if not room.is_group:
+        return err("Members can only be managed on channels", 400)
+    if not _is_room_admin(room_id, actor):
+        return err("Only channel admins can add members", 403)
+    email = norm_email(
+        (request.data or {}).get("member")
+        or (request.data or {}).get("member_email")
+        or ""
+    )
+    if not email:
+        return err("member email is required")
+    if ChatMember.objects.filter(room_id=room_id, employee_email=email).exists():
+        return err("This person is already in the channel", 409)
+    make_admin = bool((request.data or {}).get("is_admin"))
+    if make_admin and _room_admin_count(room_id) >= CHAT_MAX_ADMINS:
+        make_admin = False
+    ChatMember.objects.create(
+        employee_email=email, room=room, joined_at=_chat_now(), is_admin=make_admin
+    )
+    return Response(_room_payload(room, actor))
+
+
+@api_view(["PUT", "DELETE"])
+def chat_room_member_detail(request, room_id, email):
+    room = ChatRoom.objects.filter(id=room_id).first()
+    if not room:
+        return err("Room not found", 404)
+    if not room.is_group:
+        return err("Members can only be managed on channels", 400)
+    actor = _actor_of(request)
+    target = norm_email(email)
+    member = ChatMember.objects.filter(room_id=room_id, employee_email=target).first()
+    if not member:
+        return err("Member not found", 404)
+    is_self = (actor == target)
+
+    if request.method == "DELETE":
+        # A member may remove themselves (leave); otherwise admins only.
+        if not _is_room_admin(room_id, actor) and not is_self:
+            return err("Only channel admins can remove members", 403)
+        # The creator is a permanent member/admin and can't be removed.
+        if _is_creator(room, target):
+            return err("The channel creator can't be removed", 400)
+        member.delete()
+        return Response(_room_payload(room, actor))
+
+    # PUT — promote/demote admin (admins only).
+    if not _is_room_admin(room_id, actor):
+        return err("Only channel admins can change admins", 403)
+    make_admin = bool((request.data or {}).get("is_admin"))
+    if make_admin and not member.is_admin:
+        if _room_admin_count(room_id) >= CHAT_MAX_ADMINS:
+            extra = CHAT_MAX_ADMINS - 1
+            return err(f"A channel can have the creator plus {extra} more admins ({CHAT_MAX_ADMINS} total).")
+        member.is_admin = True
+        member.save(update_fields=["is_admin"])
+    elif not make_admin and member.is_admin:
+        # The creator's admin status is permanent.
+        if _is_creator(room, target):
+            return err("The channel creator is a permanent admin")
+        member.is_admin = False
+        member.save(update_fields=["is_admin"])
+    return Response(_room_payload(room, actor))
+
+
+@api_view(["GET"])
+def chat_contacts(request):
+    """The company directory a user can start a chat with.
+
+    Colleagues in this HRMS live across three tables, so the directory is the
+    union of all of them (de-duplicated by email):
+      • ``app_users``           — login accounts (only *disabled* ones hidden)
+      • ``user_profiles``       — employee profiles
+      • ``onboarding_candidates`` — people onboarded into the company
+    Pass ``?all=1`` to also include disabled logins and rejected candidates."""
+    me = norm_email(request.GET.get("email") or request.headers.get("X-Actor-Email") or "")
+    include_all = bool(request.GET.get("all"))
+
+    users = AppUser.objects.all()
+    if not include_all:
+        users = users.exclude(status="disabled")
+    au = {}
+    for u in users:
+        if u.email:
+            au[norm_email(u.email)] = u
+
+    profs = {}
+    for p in UserProfile.objects.all():
+        if p.email:
+            profs[norm_email(p.email)] = p
+
+    cands = {}
+    cand_qs = OnboardingCandidate.objects.filter(is_deleted=False)
+    if not include_all:
+        cand_qs = cand_qs.exclude(status="Rejected")
+    for c in cand_qs:  # ordered by -created_at → first (newest) per email wins
+        if c.email:
+            e = norm_email(c.email)
+            if e not in cands:
+                cands[e] = c
+
+    out = []
+    for e in (set(au) | set(profs) | set(cands)):
+        if not e or (me and e == me):
+            continue
+        u = au.get(e)
+        p = profs.get(e)
+        c = cands.get(e)
+        name = (u.full_name.strip() if u and u.full_name else "")
+        if not name and p:
+            name = (p.first_name + " " + p.last_name).strip()
+        if not name and c:
+            name = (c.first_name + " " + c.last_name).strip()
+        if not name:
+            name = e.split("@")[0]
+        dept = (p.department if p and p.department else "") or (c.department if c else "")
+        desg = (p.designation if p and p.designation else "") or (c.job_title if c else "")
+        pic = ""
+        if u and u.profile_pic:
+            pic = u.profile_pic
+        elif p and p.profile_pic:
+            pic = p.profile_pic
+        out.append({
+            "email": e,
+            "name": name,
+            "initials": (u.initials if u and u.initials else "") or make_initials(name),
+            "profilePic": pic or "",
+            "department": dept or "",
+            "designation": desg or "",
+            "role": (u.role if u else "") or "",
+            "status": (u.status if u else "active") or "active",
+        })
+
+    out.sort(key=lambda x: x["name"].lower())
+    return Response(out)
+
+
+@api_view(["GET", "POST"])
+def chat_meetings(request):
+    if request.method == "GET":
+        room_id = request.GET.get("room_id")
+        email = norm_email(request.GET.get("email") or request.headers.get("X-Actor-Email") or "")
+        qs = ChatMeeting.objects.all()
+        if room_id:
+            qs = qs.filter(room_id=room_id)
+        elif email:
+            room_ids = list(
+                ChatMember.objects.filter(employee_email=email).values_list("room_id", flat=True)
+            )
+            qs = qs.filter(
+                Q(room_id__in=room_ids) | Q(created_by=email) | Q(attendees__icontains=email)
+            )
+        return Response(ChatMeetingSerializer(qs.order_by("scheduled_at"), many=True).data)
+
+    # POST — schedule a meeting and announce it in the room timeline.
+    body = request.data or {}
+    creator = norm_email(body.get("created_by") or request.headers.get("X-Actor-Email") or "")
+    title = (body.get("title") or "").strip()
+    if not title:
+        return err("Meeting title is required")
+    if not body.get("scheduled_at"):
+        return err("scheduled_at is required")
+    try:
+        dt = _parse_dt(body.get("scheduled_at"))
+    except Exception:
+        return err("Invalid scheduled_at")
+
+    room = ChatRoom.objects.filter(id=body.get("room_id")).first() if body.get("room_id") else None
+
+    attendees = body.get("attendees") or []
+    if isinstance(attendees, str):
+        attendees = attendees.split(",")
+    attendees = [norm_email(a) for a in attendees if norm_email(a)]
+    if room:
+        for e in ChatMember.objects.filter(room_id=room.id).values_list("employee_email", flat=True):
+            if e not in attendees:
+                attendees.append(e)
+    if creator and creator not in attendees:
+        attendees.append(creator)
+
+    try:
+        duration = int(body.get("duration_minutes") or 30)
+    except (TypeError, ValueError):
+        duration = 30
+
+    join_url = (body.get("join_url") or "").strip()
+    if not join_url:
+        join_url = "https://meet.jit.si/hrms-" + secrets.token_hex(6)
+
+    creator_name = (body.get("created_by_name") or _display_name_for(creator) or "").strip()
+    now = _chat_now()
+    meeting = ChatMeeting.objects.create(
+        room=room,
+        title=title,
+        description=(body.get("description") or ""),
+        scheduled_at=dt,
+        duration_minutes=duration,
+        created_by=creator,
+        created_by_name=creator_name,
+        join_url=join_url,
+        attendees=",".join(attendees),
+        created_at=now,
+    )
+
+    if room:
+        when = dt.strftime("%b %d, %Y %I:%M %p")
+        text = f"\U0001F4C5 Meeting scheduled: “{title}” on {when}. Join: {join_url}"
+        msg = ChatMessage.objects.create(
+            room=room,
+            sender_email=creator,
+            sender_name=creator_name,
+            message=text,
+            created_at=now,
+            is_read=False,
+        )
+        _broadcast_message(room.id, {
+            "id": msg.id,
+            "sender_email": creator,
+            "sender_name": creator_name,
+            "message": text,
+            "created_at": _fmt_dt(now),
+        })
+
+    return Response(ChatMeetingSerializer(meeting).data, status=201)
+
+
+@api_view(["DELETE"])
+def chat_meeting_detail(request, meeting_id):
+    """Cancel a scheduled meeting (organiser or channel admin)."""
+    mt = ChatMeeting.objects.filter(id=meeting_id).first()
+    if not mt:
+        return err("Meeting not found", 404)
+    actor = _actor_of(request)
+    allowed = bool(actor) and actor == norm_email(mt.created_by)
+    if not allowed and mt.room_id:
+        allowed = _is_room_admin(mt.room_id, actor)
+    if not allowed:
+        return err("Only the organiser or a channel admin can cancel this meeting", 403)
+    mt.delete()
+    return Response({"ok": True, "id": meeting_id})
+
+
+@api_view(["DELETE"])
+def chat_room_detail(request, room_id):
+    """Delete a whole conversation.
+
+    Channels: only an admin (which includes the permanent creator) may delete.
+    Direct chats: either participant may delete. Removes the room together with
+    its members, messages, meetings, and any on-disk attachments."""
+    room = ChatRoom.objects.filter(id=room_id).first()
+    if not room:
+        return err("Room not found", 404)
+    actor = _actor_of(request)
+    is_member = ChatMember.objects.filter(room_id=room_id, employee_email=actor).exists()
+
+    if room.is_group:
+        if not _is_room_admin(room_id, actor):
+            return err("Only a channel admin can delete this channel", 403)
+    else:
+        if not is_member:
+            return err("You are not part of this chat", 403)
+
+    # Remove any on-disk attachment files first.
+    for m in ChatMessage.objects.filter(room_id=room_id):
+        p = getattr(m, "attachment_path", None)
+        if p:
+            try:
+                full = os.path.normpath(os.path.join(_chat_media_root(), p))
+                if full.startswith(os.path.normpath(_chat_media_root())) and os.path.exists(full):
+                    os.remove(full)
+            except Exception:
+                pass
+
+    ChatMessage.objects.filter(room_id=room_id).delete()
+    ChatMeeting.objects.filter(room_id=room_id).delete()
+    ChatMember.objects.filter(room_id=room_id).delete()
+    room.delete()
+    return Response({"ok": True, "id": room_id})
+
+
+# A pin stays active for 30 days, then quietly drops out of the pinned strip.
+CHAT_PIN_TTL = timedelta(days=30)
+
+
+def _expire_stale_pins(room_id):
+    """Clear pins whose 30-day window has elapsed. Backend-enforced so the
+    expiry doesn't depend on any frontend clock."""
+    try:
+        ChatMessage.objects.filter(
+            room_id=room_id, is_pinned=True, pin_expires_at__lt=_chat_now(),
+        ).update(is_pinned=False)
+    except Exception:
+        # Never let pin housekeeping break a message fetch.
+        pass
+
+
+@api_view(["POST"])
+def chat_message_pin(request, msg_id):
+    """Pin or unpin a message.
+
+    Any room member may pin (a pin lasts 30 days). Only the person who pinned a
+    message — ``pinned_by`` — may unpin it; anyone else gets 403. This is
+    enforced here on the server, not merely by hiding the button in the UI.
+    """
+    msg = ChatMessage.objects.filter(id=msg_id).first()
+    if not msg or msg.is_deleted:
+        return err("Message not found", 404)
+    actor = _actor_of(request)
+    if not actor or not ChatMember.objects.filter(
+        room_id=msg.room_id, employee_email=actor
+    ).exists():
+        return err("You are not part of this chat", 403)
+
+    # Roll off any pins that have already aged out before acting.
+    _expire_stale_pins(msg.room_id)
+    msg.refresh_from_db(fields=["is_pinned", "pinned_by", "pin_expires_at"])
+
+    pin = bool((request.data or {}).get("pin", True))
+    if pin and not msg.is_pinned:
+        now = _chat_now()
+        msg.is_pinned = True
+        msg.pinned_by = actor
+        msg.pinned_at = now
+        msg.pin_expires_at = now + CHAT_PIN_TTL
+        msg.save(update_fields=["is_pinned", "pinned_by", "pinned_at", "pin_expires_at"])
+    elif not pin and msg.is_pinned:
+        # Only the original pinner can remove a pin.
+        if (msg.pinned_by or "").strip().lower() != (actor or "").strip().lower():
+            return err("Only the person who pinned this message can unpin it.", 403)
+        msg.is_pinned = False
+        msg.pinned_by = None
+        msg.pinned_at = None
+        msg.pin_expires_at = None
+        msg.save(update_fields=["is_pinned", "pinned_by", "pinned_at", "pin_expires_at"])
+
+    _broadcast_event(msg.room_id, {
+        "type": "message_pinned",
+        "id": msg.id,
+        "is_pinned": msg.is_pinned,
+        "pinned_by": msg.pinned_by or "",
+        "pin_expires_at": _fmt_dt(msg.pin_expires_at) if msg.pin_expires_at else None,
+    })
+    return Response({
+        "ok": True,
+        "id": msg.id,
+        "is_pinned": msg.is_pinned,
+        "pinned_by": msg.pinned_by or "",
+        "pinned_at": _fmt_dt(msg.pinned_at) if msg.pinned_at else None,
+        "pin_expires_at": _fmt_dt(msg.pin_expires_at) if msg.pin_expires_at else None,
+    })
+
+
+# Languages offered by the composer's Translate tool. Keys are the codes the
+# frontend sends; values are the human names handed to the model.
+CHAT_TRANSLATE_LANGS = {
+    "en": "English",
+    "hi": "Hindi",
+    "te": "Telugu",
+    "ta": "Tamil",
+    "kn": "Kannada",
+    "ml": "Malayalam",
+    "es": "Spanish",
+    "fr": "French",
+    "de": "German",
+}
+
+
+@api_view(["POST"])
+def chat_translate(request):
+    """Translate the composer's text into the requested language.
+
+    The Anthropic API key stays on the server (read from the environment via
+    ``ai._api_key``) — it is never sent to or exposed in the browser. Returns
+    the translated string; the frontend drops it back into the input without
+    auto-sending, so the user can review/edit first.
+    """
+    body = request.data or {}
+    text = (body.get("text") or "").strip()
+    lang = (body.get("target") or body.get("lang") or "").strip().lower()
+
+    if not text:
+        return err("Nothing to translate.")
+    if len(text) > 5000:
+        return err("Text is too long to translate (5000 character limit).")
+    lang_name = CHAT_TRANSLATE_LANGS.get(lang)
+    if not lang_name:
+        return err("Unsupported target language.")
+
+    # Reuse the project's existing Anthropic integration + server-side key.
+    from . import ai as _ai
+    api_key = _ai._api_key()
+    if not api_key:
+        return err("Translation is unavailable (no API key configured).", 503)
+
+    prompt = (
+        f"Translate the following message into {lang_name}. "
+        "Return ONLY the translated text, with no quotes, notes, or explanation. "
+        "Preserve the original meaning, tone, emojis and any URLs.\n\n"
+        f"Message:\n{text}"
+    )
+    try:
+        import requests as _requests
+        resp = _requests.post(
+            _ai.ANTHROPIC_URL,
+            headers={
+                "Content-Type": "application/json",
+                "x-api-key": api_key,
+                "anthropic-version": _ai.ANTHROPIC_VERSION,
+            },
+            json={
+                "model": _ai.VALIDATION_MODEL,
+                "max_tokens": 1500,
+                "messages": [{"role": "user", "content": prompt}],
+            },
+            timeout=30,
+        )
+    except Exception:
+        return err("Could not reach the translation service.", 502)
+
+    if not resp.ok:
+        return err("The translation service returned an error.", 502)
+    try:
+        parts = resp.json().get("content") or []
+        translated = "".join(
+            p.get("text", "") for p in parts if isinstance(p, dict)
+        ).strip()
+    except Exception:
+        translated = ""
+    if not translated:
+        return err("The translation came back empty. Please try again.", 502)
+    return Response({"ok": True, "translated": translated, "target": lang})

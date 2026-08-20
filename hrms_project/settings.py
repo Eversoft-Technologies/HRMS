@@ -53,6 +53,8 @@ CSRF_TRUSTED_ORIGINS = [
 # Keep the project minimal: no admin/auth/sessions tables are created in the
 # user's MySQL database — only the 8 application tables.
 INSTALLED_APPS = [
+    'daphne',
+    'channels',
     'corsheaders',
     # 'django.contrib.auth'
     
@@ -150,6 +152,22 @@ HRMS_PUBLIC_URL = os.environ.get('HRMS_PUBLIC_URL', '').rstrip('/')
 
 
 # ---------------------------------------------------------------------------
+# LinkedIn OAuth — lets each recruiter link their OWN LinkedIn account so new
+# jobs are auto-posted to their profile (see api/linkedin_oauth.py).
+#
+# Create an app at https://www.linkedin.com/developers/apps and request both
+# the "Sign In with LinkedIn using OpenID Connect" and "Share on LinkedIn"
+# products, then add the redirect URL below under the app's Auth tab.
+# When these are blank the feature stays dormant and the UI says so.
+# ---------------------------------------------------------------------------
+LINKEDIN_CLIENT_ID = os.environ.get('LINKEDIN_CLIENT_ID', '')
+LINKEDIN_CLIENT_SECRET = os.environ.get('LINKEDIN_CLIENT_SECRET', '')
+LINKEDIN_REDIRECT_URI = os.environ.get('LINKEDIN_REDIRECT_URI', '') or (
+    HRMS_PUBLIC_URL + '/api/auth/linkedin/callback' if HRMS_PUBLIC_URL else ''
+)
+
+
+# ---------------------------------------------------------------------------
 # Static files + React build
 # ---------------------------------------------------------------------------
 STATIC_URL = '/static/'
@@ -188,4 +206,10 @@ LOGGING = {
     'disable_existing_loggers': False,
     'handlers': {'console': {'class': 'logging.StreamHandler'}},
     'root': {'handlers': ['console'], 'level': 'INFO'},
+}
+
+
+# Channels (WebSocket) layer for Employee Chat realtime.
+CHANNEL_LAYERS = {
+    "default": {"BACKEND": "channels.layers.InMemoryChannelLayer"},
 }

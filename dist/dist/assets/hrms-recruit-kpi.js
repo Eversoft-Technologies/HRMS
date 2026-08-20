@@ -20,6 +20,11 @@
     range:           'all',
     role:            '',
     interviewer:     '',
+    teamQuery:       '',   // Team Performance search box (client-side, not a filter)
+    from:            '',   // custom window, inclusive, YYYY-MM-DD
+    to:              '',
+    teamActiveOnly:  false,
+    teamAttr:        '',   // '' | credited | uncredited
     dept:            '',
     
     // Tab-specific interactive filters
@@ -54,6 +59,21 @@
   function canOrg() { return can('recruitment.kpi.view_org'); }
   function canOwn() { return can('recruitment.kpi.view_own') || canOrg(); }
 
+  /* Filter options arrive in two shapes: plain strings (role, department,
+     status...) and {value,label} objects (the recruiter list, whose value is
+     the creator's email and whose label is their name). One accessor pair so
+     every <select> renders either, and so a bundle cached from before the
+     server started sending objects still works. */
+  function optVal(o) { return (o && typeof o === 'object') ? (o.value || '') : (o || ''); }
+  function optLabel(o) { return (o && typeof o === 'object') ? (o.label || o.value || '') : (o || ''); }
+
+  /* A leaderboard row's display name. `name` is the account's full name;
+     legacy rows have only the free text that was typed into the interviewer
+     box, and `interviewer` is all there is. */
+  function personName(r) {
+    return r.name || String(r.interviewer || '').split('@')[0] || '—';
+  }
+
   /* ── API helper ───────────────────────────────────────────────────────── */
   function api(path, opts) {
     opts = opts || {};
@@ -86,6 +106,12 @@
     if (state.source) url += '&source=' + encodeURIComponent(state.source);
     if (state.verdict) url += '&verdict=' + encodeURIComponent(state.verdict);
     if (state.job_type) url += '&job_type=' + encodeURIComponent(state.job_type);
+    // Only meaningful with range=custom, but sent whenever set so the server
+    // stays the single authority on what the window means.
+    if (state.range === 'custom') {
+      if (state.from) url += '&from=' + encodeURIComponent(state.from);
+      if (state.to) url += '&to=' + encodeURIComponent(state.to);
+    }
 
     return api(url);
   }
@@ -229,6 +255,28 @@
       '.kpi-tbl td{padding:10px 12px;border-bottom:1px solid var(--border,#e5e7eb);color:var(--text1,#111)}',
       '.kpi-tbl tr:last-child td{border-bottom:none}',
       '.kpi-tbl tr:hover td{background:var(--hover,#f8fafc)}',
+      '.kpi-hint{font-size:11.5px;color:var(--text2,#64748b);margin:-6px 0 12px}',
+      '.kpi-person-row{cursor:pointer}',
+      '.kpi-person-sub{font-size:11px;color:var(--text2,#64748b);margin-top:2px}',
+      '.kpi-unattributed{font-style:italic;opacity:.75}',
+      '.kpi-team-bar{display:flex;align-items:center;gap:12px;margin:0 0 12px}',
+      '.kpi-search{flex:0 1 320px;padding:7px 11px;border-radius:8px;font-size:12.5px;',
+      'font-family:inherit;border:1.5px solid var(--border,#e5e7eb);',
+      'background:var(--bg3,#fff);color:var(--text1,#111)}',
+      '.kpi-search::placeholder{color:var(--text3,#94a3b8)}',
+      '.kpi-search:focus{outline:none;border-color:var(--accent,#6366f1)}',
+      '.kpi-toggle{display:inline-flex;align-items:center;gap:6px;font-size:12px;',
+      'color:var(--text2,#64748b);cursor:pointer;white-space:nowrap}',
+      '.kpi-dl{display:inline-flex;align-items:center;gap:6px;padding:7px 13px;border-radius:8px;',
+      'border:1.5px solid var(--border,#e5e7eb);background:var(--bg3,#fff);color:var(--text1,#111);',
+      'font-size:12.5px;font-weight:600;font-family:inherit;cursor:pointer;white-space:nowrap}',
+      '.kpi-dl:hover{border-color:var(--accent,#6366f1);color:var(--accent,#6366f1)}',
+      '.kpi-dl-lbl{font-size:12px;color:var(--text2,#64748b);white-space:nowrap}',
+      '.kpi-date{padding:6px 10px;border-radius:8px;font-size:12.5px;font-family:inherit;',
+      'border:1.5px solid var(--border,#e5e7eb);background:var(--bg3,#fff);color:var(--text1,#111)}',
+      '.kpi-date:focus{outline:none;border-color:var(--accent,#6366f1)}',
+      '.kpi-period{font-size:11.5px;font-weight:600;color:var(--text2,#64748b);',
+      'border:1px solid var(--border,#e5e7eb);border-radius:999px;padding:2px 10px;margin-left:8px}',
       /* loading */
       '.kpi-loading{display:flex;align-items:center;justify-content:center;height:240px;color:var(--text3,#888);font-size:14px;font-weight:500}',
       /* empty */
@@ -238,7 +286,10 @@
       '@media(max-width:768px){.kpi-two{grid-template-columns:1fr}.kpi-cards{grid-template-columns:repeat(2,1fr)}}',
       '.chart-wrapper{background:var(--bg2,#f8fafc);border:1px solid var(--border,#e5e7eb);border-radius:12px;padding:16px;box-sizing:border-box}',
       /* trigger button */
-      '#hrms-kpi-btn{display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border-radius:8px;border:1.5px solid var(--border,#e5e7eb);background:var(--card,#fff);color:var(--text1,#111);font-size:13px;font-weight:600;cursor:pointer;transition:.15s;white-space:nowrap}',
+      /* --card and --text1 are names this app's palette never defined, so the pill
+         always fell through to the #fff/#111 fallbacks and rendered light on the
+         dark pages it mounts on. Use the tokens that do exist. */
+      '#hrms-kpi-btn{display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border-radius:8px;border:1px solid var(--border2,#e5e7eb);background:var(--bg3,#fff);color:var(--text,#111);font-size:13px;font-weight:600;cursor:pointer;transition:.15s;white-space:nowrap}',
       '#hrms-kpi-btn:hover{background:var(--accent,#6366f1);color:#fff;border-color:var(--accent,#6366f1)}',
     ].join('\n');
     document.head.appendChild(s);
@@ -299,13 +350,34 @@
   }
 
   /* ── overall "Edit Filters" drawer (matches the Job Board's) ──────────── */
-  var RANGE_LABELS = { all: 'All Time', week: 'This Week', month: 'This Month', quarter: 'Last 90 Days' };
-  var FILTER_KEYS = ['scope', 'range', 'role', 'dept', 'interviewer', 'interview_type', 'status', 'outcome', 'source', 'verdict', 'job_type'];
+  var RANGE_LABELS = { all: 'All Time', day: 'Today', week: 'This Week',
+                       month: 'This Month', quarter: 'Last 90 Days', custom: 'Custom' };
+  var RANGE_OPTS = [['all', 'All Time'], ['day', 'Today'], ['week', 'This Week'],
+                    ['month', 'This Month'], ['quarter', 'Last 90 Days'], ['custom', 'Custom range…']];
+
+  /* What the loaded report actually covers. The server decides this — it
+     parses the dates and corrects a back-to-front pair — so the label is
+     read back rather than recomputed here, or an export could be stamped
+     with a period the figures do not come from. */
+  function periodLabel() {
+    var p = state.data && state.data.period;
+    if (p && p.label) return p.label;
+    return RANGE_LABELS[state.range] || 'All Time';
+  }
+  var FILTER_KEYS = ['scope', 'range', 'from', 'to', 'role', 'dept', 'interviewer', 'interview_type', 'status', 'outcome', 'source', 'verdict', 'job_type'];
   function filterSummary() {
     var parts = [];
     if (canOrg()) parts.push(state.scope === 'all' ? 'Org View' : 'My View');
-    parts.push(RANGE_LABELS[state.range] || 'All Time');
-    var extra = ['role', 'dept', 'interviewer', 'interview_type', 'status', 'outcome', 'source', 'verdict', 'job_type'].filter(function (k) { return state[k]; }).length;
+    parts.push(periodLabel());
+    // Naming the person beats "1 filter": scoped-to-one-recruiter numbers read
+    // as org-wide totals otherwise.
+    var viewing = state.interviewer && state.data && state.data.viewing;
+    if (viewing) parts.push(viewing.name || state.interviewer);
+    var skip = viewing ? ['role', 'dept', 'interview_type', 'status', 'outcome', 'source', 'verdict', 'job_type']
+                       : ['role', 'dept', 'interviewer', 'interview_type', 'status', 'outcome', 'source', 'verdict', 'job_type'];
+    // `from`/`to` are the period, already spelled out above — counting them as
+    // filters would read "Custom · 2 filters" for one choice.
+    var extra = skip.filter(function (k) { return state[k]; }).length;
     if (extra) parts.push(extra + ' filter' + (extra > 1 ? 's' : ''));
     return parts.join('  ·  ');
   }
@@ -330,18 +402,25 @@
   function openKpiFilters() {
     closeKpiFilters();
     var work = {}; FILTER_KEYS.forEach(function (k) { work[k] = state[k] || ''; });
-    var ranges = [['all', 'All Time'], ['week', 'This Week'], ['month', 'This Month'], ['quarter', 'Last 90 Days']];
+    var ranges = RANGE_OPTS;
     var scopeSec = canOrg()
       ? '<div class="kpi-fd-sec" style="margin-top:0">View</div><div class="kpi-fd-pd">' +
           '<label><input type="radio" name="kpi-fd-scope" value="me"' + (work.scope === 'me' ? ' checked' : '') + '>My View</label>' +
           '<label><input type="radio" name="kpi-fd-scope" value="all"' + (work.scope === 'all' ? ' checked' : '') + '>Org View</label></div>'
       : '';
     var rangeSec = '<div class="kpi-fd-sec"' + (canOrg() ? '' : ' style="margin-top:0"') + '>Time Range</div><div class="kpi-fd-pd">' +
-      ranges.map(function (r) { return '<label><input type="radio" name="kpi-fd-range" value="' + r[0] + '"' + (work.range === r[0] ? ' checked' : '') + '>' + r[1] + '</label>'; }).join('') + '</div>';
+      ranges.map(function (r) { return '<label><input type="radio" name="kpi-fd-range" value="' + r[0] + '"' + (work.range === r[0] ? ' checked' : '') + '>' + r[1] + '</label>'; }).join('') +
+      '<div id="kpi-fd-dates" style="display:' + (work.range === 'custom' ? 'flex' : 'none') + ';gap:8px;margin-top:8px">' +
+        '<label style="flex:1">From<input type="date" class="kpi-fd-date" data-fk="from" value="' + esc(work.from || '') + '"></label>' +
+        '<label style="flex:1">To<input type="date" class="kpi-fd-date" data-fk="to" value="' + esc(work.to || '') + '"></label>' +
+      '</div></div>';
     var defs = activeFilterDefs();
     var filtSec = defs.length ? ('<div class="kpi-fd-sec">Filters</div>' + defs.map(function (d) {
       return '<div class="kpi-fd-fl">' + d.label + '</div><select class="kpi-fd-sel" data-fk="' + d.key + '"><option value="">' + d.all + '</option>' +
-        d.opts.map(function (o) { return '<option value="' + esc(o) + '"' + (work[d.key] === o ? ' selected' : '') + '>' + esc(o) + '</option>'; }).join('') + '</select>';
+        d.opts.map(function (o) {
+          var v = optVal(o);
+          return '<option value="' + esc(v) + '"' + (work[d.key] === v ? ' selected' : '') + '>' + esc(optLabel(o)) + '</option>';
+        }).join('') + '</select>';
     }).join('')) : '';
     var ov = document.createElement('div'); ov.id = 'kpi-fd-overlay'; ov.className = 'kpi-fd-overlay';
     var dr = document.createElement('div'); dr.className = 'kpi-fd';
@@ -351,7 +430,16 @@
       '<div class="kpi-fd-f"><button class="kpi-fd-btn primary" id="kpi-fd-apply">Apply</button><button class="kpi-fd-btn ghost" id="kpi-fd-cancel">Cancel</button></div>';
     ov.appendChild(dr); document.body.appendChild(ov);
     dr.querySelectorAll('input[name="kpi-fd-scope"]').forEach(function (r) { r.addEventListener('change', function () { work.scope = r.value; }); });
-    dr.querySelectorAll('input[name="kpi-fd-range"]').forEach(function (r) { r.addEventListener('change', function () { work.range = r.value; }); });
+    dr.querySelectorAll('input[name="kpi-fd-range"]').forEach(function (r) {
+      r.addEventListener('change', function () {
+        work.range = r.value;
+        var box = dr.querySelector('#kpi-fd-dates');
+        if (box) box.style.display = (r.value === 'custom') ? 'flex' : 'none';
+      });
+    });
+    dr.querySelectorAll('.kpi-fd-date').forEach(function (i) {
+      i.addEventListener('change', function () { work[i.getAttribute('data-fk')] = i.value; });
+    });
     dr.querySelectorAll('select[data-fk]').forEach(function (s) { s.addEventListener('change', function () { work[s.getAttribute('data-fk')] = s.value; }); });
     ov.addEventListener('click', function (e) { if (e.target === ov) closeKpiFilters(); });
     dr.querySelector('#kpi-fd-x').addEventListener('click', closeKpiFilters);
@@ -405,6 +493,7 @@
       if (act === 'editfilters') { openKpiFilters(); return; }
       if (act === 'tab') {
         state.tab = el.getAttribute('data-tab');
+        state.teamQuery = '';
         
         // Reset tab-specific filters to keep switching clean
         state.interview_type = '';
@@ -415,6 +504,21 @@
         state.job_type = '';
 
         updateTabs();
+        buildShell();
+        loadAndRender();
+        return;
+      }
+      if (act === 'team-download') { downloadTeamCsv(); return; }
+      if (act === 'team-clear-dates') {
+        state.from = ''; state.to = ''; state.range = 'all';
+        buildShell(); loadAndRender();
+        return;
+      }
+      if (act === 'drill-recruiter') {
+        // Same path the Recruiter filter takes, so the drill-down and the
+        // dropdown can never show different numbers for the same person.
+        state.interviewer = el.getAttribute('data-val') || '';
+        state.tab = 'overview';
         buildShell();
         loadAndRender();
         return;
@@ -432,6 +536,24 @@
       }
     };
 
+    o.oninput = function (e) {
+      if (e.target.getAttribute('data-kact') !== 'team-search') return;
+      state.teamQuery = e.target.value;
+      // Redraw the table in place and put the caret back where it was: this is
+      // a local filter over rows already in hand, so it must not feel like a
+      // reload or the search box loses focus on every keystroke.
+      var caret = e.target.selectionStart;
+      // renderBody() redraws only when the TAB changed, so it would skip this;
+      // rebuild the team body directly (setBody also disposes the old chart
+      // before its canvas is replaced).
+      if (!state.data) return;
+      setBody(renderTeam(state.data));
+      initTeamCharts(state.data);
+      addChartFilters();
+      var again = document.getElementById('kpi-team-q');
+      if (again) { again.focus(); try { again.setSelectionRange(caret, caret); } catch (_) {} }
+    };
+
     o.onchange = function (e) {
       var act = e.target.getAttribute('data-kact');
       if (!act) return;
@@ -441,6 +563,23 @@
         state.role = e.target.value;
       } else if (act === 'filter-dept') {
         state.dept = e.target.value;
+      } else if (act === 'team-from' || act === 'team-to') {
+        // Picking either date switches the report to a custom window; clearing
+        // both returns it to All Time rather than leaving a half-open range
+        // that reads as "custom" but filters nothing.
+        state[act === 'team-from' ? 'from' : 'to'] = e.target.value;
+        state.range = (state.from || state.to) ? 'custom' : 'all';
+        buildShell(); loadAndRender();
+        return;
+      } else if (act === 'team-attr') {
+        state.teamAttr = e.target.value;
+        if (state.data) { setBody(renderTeam(state.data)); initTeamCharts(state.data); addChartFilters(); }
+        return;
+      } else if (act === 'team-active') {
+        // A local view switch over rows already loaded, like the search box.
+        state.teamActiveOnly = !!e.target.checked;
+        if (state.data) { setBody(renderTeam(state.data)); initTeamCharts(state.data); addChartFilters(); }
+        return;
       } else if (act === 'filter-interviewer') {
         state.interviewer = e.target.value;
       } else if (act === 'filter-type') {
@@ -509,7 +648,8 @@
         html += '<select class="kpi-filter-select" data-kact="filter-interviewer" id="kpi-interviewer-sel">';
         html += '<option value="">All Recruiters</option>';
         (filters.interviewers || []).forEach(function (intv) {
-          html += '<option value="' + esc(intv) + '"' + (state.interviewer === intv ? ' selected' : '') + '>' + esc(intv) + '</option>';
+          var v = optVal(intv);
+          html += '<option value="' + esc(v) + '"' + (state.interviewer === v ? ' selected' : '') + '>' + esc(optLabel(intv)) + '</option>';
         });
         html += '</select>';
       }
@@ -582,6 +722,11 @@
       }
       state.data = r.data;
       populateFilters();
+      // The toolbar summary is built before the fetch, so it cannot know who
+      // is being viewed until the response names them. Re-render it here or a
+      // drill-down keeps reading "1 filter" over one person's numbers.
+      var sum = document.getElementById("kpi-filter-summary");
+      if (sum) sum.textContent = filterSummary();
       var lbl = document.getElementById('kpi-refresh-lbl');
       if (lbl) lbl.textContent = 'Updated ' + new Date().toLocaleTimeString();
       renderBody();
@@ -1473,24 +1618,190 @@
   }
 
   /* ── Team Performance ─────────────────────────────────────────────────── */
+
+  /* Rows matching the tab's search box. Name and email both count, because an
+     admin looking for a colleague may know either. */
+  var ATTR_OPTS = [['', 'Everyone'], ['credited', 'Credited only'], ['uncredited', 'Not credited']];
+
+  function teamRows(d) {
+    var stats = (d && d.recruiterStats) || [];
+    var q = (state.teamQuery || '').trim().toLowerCase();
+    return stats.filter(function (r) {
+      if (state.teamActiveOnly && !r.total) return false;
+      if (state.teamAttr === 'credited' && !r.attributed) return false;
+      if (state.teamAttr === 'uncredited' && r.attributed) return false;
+      if (!q) return true;
+      return (personName(r) + ' ' + (r.email || '')).toLowerCase().indexOf(q) !== -1;
+    });
+  }
+
+  /* CSV of exactly what the table is showing.
+
+     Built from rows already in hand rather than a second request, so the file
+     cannot disagree with the screen it was downloaded from — and it carries
+     the period and the filters in its first lines, because a spreadsheet that
+     does not say what it covers is not evidence of anything. */
+  function teamCsv() {
+    var d = state.data || {};
+    var rows = teamRows(d);
+    var cell = function (v) {
+      v = (v == null) ? '' : String(v);
+      // A leading =, +, - or @ is executed as a formula by Excel and Sheets.
+      if (/^[=+\-@]/.test(v)) v = "'" + v;
+      return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
+    };
+    var line = function (cells) { return cells.map(cell).join(','); };
+
+    var meta = [
+      line(['Recruitment per-person report']),
+      line(['Period', periodLabel()]),
+      line(['View', state.scope === 'all' ? 'Org' : 'My view']),
+    ];
+    if (state.teamQuery) meta.push(line(['Search', state.teamQuery]));
+    if (state.teamActiveOnly) meta.push(line(['Showing', 'people with activity only']));
+    if (state.teamAttr) meta.push(line(['Attribution', state.teamAttr === 'credited'
+      ? 'credited interviews only' : 'uncredited interviews only']));
+    if (state.role) meta.push(line(['Role', state.role]));
+    if (state.dept) meta.push(line(['Department', state.dept]));
+    meta.push(line(['People', rows.length]));
+    meta.push('');
+
+    var head = ['Person', 'Email', 'Scheduled', 'Invited', 'Completed', 'Selected',
+                'Rejected', 'Awaiting outcome', 'Shortlist rate %', 'Avg score',
+                'Last scheduled', 'Attribution'];
+    var body = rows.map(function (r) {
+      return line([
+        personName(r), r.email || '', r.total, r.invited, r.completed, r.selected,
+        r.rejected, r.pending, r.shortlistRate, r.avgScore, r.lastAt || '',
+        r.attributed ? 'credited' : 'not credited',
+      ]);
+    });
+    return meta.concat([line(head)]).concat(body).join('\r\n');
+  }
+
+  function downloadTeamCsv() {
+    var stamp = periodLabel().replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase();
+    var name = 'recruiter-report-' + (stamp || 'all-time') + '.csv';
+    // A BOM so Excel opens UTF-8 names correctly instead of mojibake.
+    var blob = new Blob(['\ufeff' + teamCsv()], { type: 'text/csv;charset=utf-8;' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url; a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    // Revoking immediately can cancel the download in some browsers.
+    setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+  }
+
   function renderTeam(d) {
     var stats = d.recruiterStats;
     if (!stats) return '<div class="kpi-empty">Team data not available. Switch to Org View.</div>';
-    if (stats.length === 0) return '<div class="kpi-empty">No recruiter data found.</div>';
 
-    var html = '<div class="kpi-section"><div class="kpi-section-title">Recruiter Leaderboard (Top 20)</div>' +
-      '<div style="overflow-x:auto"><table class="kpi-tbl">' +
-      '<thead><tr><th>#</th><th>Recruiter</th><th>Total</th><th>Selected</th><th>Rejected</th><th>Shortlist Rate</th><th>Avg Score</th></tr></thead><tbody>';
+    var rows = teamRows(d);
+    // Credited means credited WITH something. Every account is listed now, so
+    // counting rows that merely have an owner would report a fully credited
+    // team while every figure on the row is zero.
+    var attributed = stats.filter(function (r) { return r.attributed && r.total > 0; }).length;
 
-    stats.forEach(function (r, i) {
+    // An empty tab has two very different causes, and saying "no data" for both
+    // sends an admin looking for a bug that is not there.
+    if (stats.length === 0) {
+      return '<div class="kpi-empty">No interviews in this time range.</div>';
+    }
+    if (attributed === 0) {
+      var unattributed = stats.reduce(function (n, r) { return n + (r.attributed ? 0 : r.total); }, 0);
+      var head = '<div class="kpi-section"><div class="kpi-section-title">Nobody is credited yet</div>' +
+        '<div class="kpi-hint">' + unattributed + ' interview' + (unattributed === 1 ? '' : 's') +
+        ' in this range were scheduled before the creator was recorded, so there is ' +
+        'nobody to attribute them to. Interviews scheduled from now on are credited to ' +
+        'whoever schedules them and appear here.</div></div>';
+      return head + teamTable(rows, stats);
+    }
+
+    return teamTable(rows, stats) +
+      '<div class="kpi-section" style="margin-top:24px;">' +
+        '<div class="chart-wrapper">' +
+          '<div class="kpi-section-title">Recruiter Activity Comparison</div>' +
+          '<div style="position:relative;height:240px;"><canvas id="chart-team-activity"></canvas></div>' +
+        '</div>' +
+      '</div>' + teamTotals(stats);
+  }
+
+  function teamTable(rows, stats) {
+    var q = (state.teamQuery || '').trim();
+    var counted = q
+      ? '<span class="kpi-hint" style="margin:0">Showing ' + rows.length + ' of ' + stats.length + '</span>'
+      : '';
+
+    var html = '<div class="kpi-section">' +
+      '<div class="kpi-section-title">Per-person report <span class="kpi-period">' +
+      esc(periodLabel()) + '</span></div>' +
+      '<div class="kpi-hint">Credited to whoever scheduled the interview. Select a row to scope ' +
+      'the whole dashboard to that person. Change the period under Edit Filters — ' +
+      'today, this week, this month, or a custom range.</div>' +
+      '<div class="kpi-team-bar">' +
+        '<input class="kpi-search" id="kpi-team-q" data-kact="team-search" type="search" ' +
+        'placeholder="Search a person by name or email…" value="' + esc(q) + '">' +
+        '<select class="kpi-filter-select" data-kact="team-attr" title="Attribution">' +
+          ATTR_OPTS.map(function (o) {
+            return '<option value="' + o[0] + '"' + (state.teamAttr === o[0] ? ' selected' : '') +
+              '>' + o[1] + '</option>';
+          }).join('') +
+        '</select>' +
+        '<label class="kpi-toggle"><input type="checkbox" data-kact="team-active"' +
+        (state.teamActiveOnly ? ' checked' : '') + '>With activity only</label>' +
+        counted +
+      '</div>' +
+      // The period lives in Edit Filters too, but an export is asked for by
+      // date far more often than the whole dashboard is re-scoped — so the
+      // dates sit on the thing being exported.
+      '<div class="kpi-team-bar">' +
+        '<span class="kpi-dl-lbl">Report period</span>' +
+        '<input type="date" class="kpi-date" data-kact="team-from" title="From" value="' +
+        esc(state.from || '') + '">' +
+        '<span class="kpi-dl-lbl">to</span>' +
+        '<input type="date" class="kpi-date" data-kact="team-to" title="To" value="' +
+        esc(state.to || '') + '">' +
+        ((state.from || state.to)
+          ? '<button class="kpi-dl" data-kact="team-clear-dates" type="button">Clear</button>'
+          : '') +
+        '<button class="kpi-dl" data-kact="team-download" type="button" ' +
+        'title="Download this report as CSV">⭳ Download CSV</button>' +
+      '</div>';
+
+    if (!rows.length) {
+      return html + '<div class="kpi-empty">Nobody matches “' + esc(q) + '”.</div></div>';
+    }
+
+    html += '<div style="overflow-x:auto"><table class="kpi-tbl">' +
+      '<thead><tr><th>#</th><th>Person</th><th>Scheduled</th><th>Invited</th><th>Completed</th>' +
+      '<th>Selected</th><th>Rejected</th><th>Awaiting outcome</th><th>Shortlist Rate</th>' +
+      '<th>Avg Score</th><th>Last scheduled</th></tr></thead><tbody>';
+
+    rows.forEach(function (r, i) {
       var rate = r.shortlistRate || 0;
       var barColor = rate >= 50 ? '#10b981' : rate >= 25 ? '#f59e0b' : '#ef4444';
-      html += '<tr>' +
+      // Three different rows can appear here, and conflating them would let a
+      // typed string pass for a colleague: a real account, a legacy free-text
+      // interviewer, and the bucket for interviews credited to nobody.
+      var sub = r.attributed
+        ? '<div class="kpi-person-sub">' + esc(r.email || '') + '</div>'
+        : (r.drillable === false
+            ? '<div class="kpi-person-sub kpi-unattributed">no creator recorded</div>'
+            : '<div class="kpi-person-sub kpi-unattributed">unattributed — typed interviewer</div>');
+      var drill = (r.drillable === false)
+        ? ''
+        : ' class="kpi-person-row" data-kact="drill-recruiter" data-val="' + esc(r.interviewer) + '"';
+      html += '<tr' + drill + '>' +
         '<td style="color:var(--text3,#888);font-weight:700">' + (i+1) + '</td>' +
-        '<td><div style="font-weight:600">' + esc(r.interviewer) + '</div></td>' +
-        '<td>' + r.total + '</td>' +
+        '<td><div style="font-weight:600">' + esc(personName(r)) + '</div>' + sub + '</td>' +
+        '<td style="font-weight:700">' + r.total + '</td>' +
+        '<td>' + (r.invited == null ? '—' : r.invited) + '</td>' +
+        '<td>' + (r.completed == null ? '—' : r.completed) + '</td>' +
         '<td><span style="color:#10b981;font-weight:700">' + r.selected + '</span></td>' +
         '<td><span style="color:#ef4444">' + r.rejected + '</span></td>' +
+        '<td>' + (r.pending == null ? '—' : r.pending) + '</td>' +
         '<td>' +
           '<div style="display:flex;align-items:center;gap:8px">' +
             '<div style="width:60px;background:var(--border,#e5e7eb);border-radius:4px;height:5px"><div style="width:' + Math.min(100, rate) + '%;background:' + barColor + ';border-radius:4px;height:5px"></div></div>' +
@@ -1498,38 +1809,36 @@
           '</div>' +
         '</td>' +
         '<td>' + score(r.avgScore) + '</td>' +
+        '<td style="color:var(--text2,#64748b)">' + esc(r.lastAt || '—') + '</td>' +
       '</tr>';
     });
     html += '</tbody></table></div></div>';
+    return html;
+  }
 
-    html += '<div class="kpi-section" style="margin-top:24px;">' +
-      '<div class="chart-wrapper">' +
-        '<div class="kpi-section-title">Recruiter Activity Comparison</div>' +
-        '<div style="position:relative;height:240px;"><canvas id="chart-team-activity"></canvas></div>' +
-      '</div>' +
-    '</div>';
-
+  function teamTotals(stats) {
     var totalInterviews = stats.reduce(function (s, r) { return s + r.total; }, 0);
     var totalSelected   = stats.reduce(function (s, r) { return s + r.selected; }, 0);
+    var people = stats.filter(function (r) { return r.attributed && r.total > 0; }).length;
     var orgRate = totalInterviews > 0 ? (totalSelected / totalInterviews * 100).toFixed(1) : '0.0';
-    html += '<div class="kpi-cards" style="margin-top:20px">' +
-      kpiCard('Recruiters Active', stats.length, '', 'blue') +
+    return '<div class="kpi-cards" style="margin-top:20px">' +
+      kpiCard('People Credited', people, '', 'blue') +
       kpiCard('Org Shortlist Rate', orgRate + '%', '', 'green') +
-      kpiCard('Total by Team', totalInterviews, '', 'indigo') +
+      kpiCard('Total Scheduled', totalInterviews, '', 'indigo') +
       kpiCard('Total Selected', totalSelected, 'across team', 'green') +
     '</div>';
-
-    return html;
   }
 
   function initTeamCharts(d) {
     if (!window.Chart) return;
     var colors = getThemeColors();
-    var stats = d.recruiterStats || [];
+    // Same rows the table is showing — a chart plotting everybody while the
+    // table shows one search hit is two answers to one question.
+    var stats = teamRows(d).filter(function (r) { return r.attributed; });
 
     var c1 = state.charts.find(function(c) { return c.canvas.id === 'chart-team-activity'; });
     if (c1 && stats.length > 0) {
-      c1.data.labels = stats.map(function(x){ return x.interviewer.split('@')[0]; });
+      c1.data.labels = stats.map(personName);
       c1.data.datasets[0].data = stats.map(function(x){return x.total;});
       c1.data.datasets[1].data = stats.map(function(x){return x.selected;});
       c1.update();
@@ -1539,9 +1848,7 @@
         var chart = new Chart(ctx, {
           type: 'bar',
           data: {
-            labels: stats.map(function(x){
-              return x.interviewer.split('@')[0];
-            }),
+            labels: stats.map(personName),
             datasets: [
               {
                 label: 'Total Interviews',
@@ -1574,21 +1881,16 @@
       if (document.getElementById(OVERLAY_ID)) close();
       return;
     }
-    if (existing) return;
-    var selectors = [
-      '[data-route*="recruit"] .page-header',
-      '[class*="recruit"] .page-actions',
-      '[class*="recruit"] .topbar-actions',
-      '.page-header .page-actions',
-      '.page-header',
-      '.topbar',
-    ];
-    var target = null;
-    for (var i = 0; i < selectors.length; i++) {
-      target = document.querySelector(selectors[i]);
-      if (target) break;
+    if (existing) {
+      // React mounts the Filters toolbar after our first pass, so a button that
+      // landed in the fallback spot has to be moved once its real home appears.
+      // isHomed() is O(1) — findFiltersButton() walks every button on the page
+      // and this runs on DOM mutations.
+      if (isHomed(existing)) return;
+      var home = findFiltersButton();
+      if (home && home.parentNode) home.parentNode.insertBefore(existing, home.nextSibling);
+      return;
     }
-    if (!target) return;
 
     injectStyle();
     var btn = document.createElement('button');
@@ -1598,7 +1900,54 @@
       e.stopPropagation();
       if (document.getElementById(OVERLAY_ID)) close(); else open();
     });
-    target.appendChild(btn);
+
+    // Preferred home: immediately after the page's own "Filters" button, so the
+    // dashboard opens from the toolbar it belongs to rather than the global
+    // topbar (where it sat next to the avatar on every recruitment screen).
+    var filters = findFiltersButton();
+    if (filters && filters.parentNode) {
+      filters.parentNode.insertBefore(btn, filters.nextSibling);
+      return;
+    }
+
+    // Fallback for screens that render no Filters control.
+    var selectors = [
+      '[data-route*="recruit"] .page-header',
+      '[class*="recruit"] .page-actions',
+      '[class*="recruit"] .topbar-actions',
+      '.page-header .page-actions',
+      '.page-header',
+    ];
+    for (var i = 0; i < selectors.length; i++) {
+      var target = document.querySelector(selectors[i]);
+      if (target) { target.appendChild(btn); return; }
+    }
+  }
+
+  /* The Filters control is rendered by the React bundle with no stable class or
+     id, so match it on its label. The bundle prefixes the text with a
+     non-breaking space ( Filters), hence the whitespace normalisation. */
+  function isFiltersButton(el) {
+    return !!el && el.id !== BTN_ID &&
+      (el.textContent || '').replace(/\s+/g, ' ').trim() === 'Filters';
+  }
+
+  function findFiltersButton() {
+    var buttons = document.querySelectorAll('button');
+    for (var i = 0; i < buttons.length; i++) {
+      if (isFiltersButton(buttons[i])) {
+        buttons[i].classList.add('hrms-toolbar-btn');
+        return buttons[i];
+      }
+    }
+    return null;
+  }
+
+  /* Already sitting right after Filters? Determined from the actual sibling
+     rather than a flag set once, so a React re-render that swaps the Filters
+     node out is detected and corrected on the next pass. */
+  function isHomed(btn) {
+    return !!btn && isFiltersButton(btn.previousElementSibling);
   }
 
   window.__hrmsOpenRecruitKPI = open;
@@ -1641,8 +1990,16 @@
         setTimeout(tryMount, 300);
       }
     }, 500);
+    // Re-run while the button is missing OR still parked in the fallback spot —
+    // the Filters toolbar mounts after we do, and only a later pass can move the
+    // button next to it. Trailing-debounced so a React render storm costs one
+    // pass per frame, and injectButton() early-returns once it is settled.
+    var pending = false;
     var obs = new MutationObserver(function () {
-      if (!document.getElementById(BTN_ID)) tryMount();
+      if (isHomed(document.getElementById(BTN_ID))) return;
+      if (pending) return;
+      pending = true;
+      requestAnimationFrame(function () { pending = false; tryMount(); });
     });
     obs.observe(document.body, { childList: true, subtree: true });
   }

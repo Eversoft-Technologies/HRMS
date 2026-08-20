@@ -91,9 +91,15 @@
         'create interview generate link', 'schedule interview generate link'] },
     { route: '/recruit', perm: 'recruitment.edit', labels: [
         'generate meeting link', 'send interview invite via email', 'send invite now'] },
-    // Employee (tasks / submissions / employee list under HR)
+    // Employee (tasks / employee list under HR)
+    // "+ New Submission" is deliberately absent, for the same reason as
+    // "Apply Leave" below: submitting work is self-service. The API accepts a
+    // submission in the caller's own name via or_self, so gating the button
+    // behind employee.create hid it from Employee and Manager — the very people
+    // the module exists for — while employee.create really governs submitting
+    // on someone ELSE's behalf. Approve/Reject/Review stay gated.
     { route: null, perm: 'employee.create', labels: [
-        'create task', 'create new task', 'new task', 'new submission',
+        'create task', 'create new task', 'new task',
         'add employee', 'add new employee'] },
     // Work submissions review — buttons are labelled "Approve"/"Reject" on the
     // submissions page; scope to that route so we don't touch the Leave page's
@@ -432,13 +438,19 @@
       var table = tables[t];
       var idx = actionColIndex(table);
       if (idx === -1) continue;
+      // Self-service controls share the Action column: an employee deleting
+      // their OWN pending leave request has a Delete button there even though
+      // the role lacks leave.action. Such buttons carry data-keepcol; when any
+      // is present the column must stay visible — the gated Approve/Reject
+      // buttons are still hidden individually via their data-perm tags.
+      var colHide = hide && !table.querySelector('[data-keepcol]');
       var headRow = table.querySelector('thead tr');
       var colCount = headRow ? headRow.children.length : 0;
       var rows = table.querySelectorAll('tr');
       for (var r = 0; r < rows.length; r++) {
         var cells = rows[r].children;
         if (colCount && cells.length !== colCount) continue; // skip colspan/empty-state rows
-        if (cells[idx]) cells[idx].style.display = hide ? 'none' : '';
+        if (cells[idx]) cells[idx].style.display = colHide ? 'none' : '';
       }
     }
   }
@@ -468,12 +480,18 @@
   }
 
   /* ── load the effective permissions for the signed-in user ─────────────── */
-  function refresh() {
+  function refresh(opts) {
     var em = sessionEmail();
     if (!em) { known = false; applyPerms(); return; }
+    // Skip the poll entirely while offline or backing off: a request we know
+    // will fail only costs a console error, and the catch below would drop us
+    // to the unenforced state for no reason. Keeping the last known permission
+    // set through a connection blip is both quieter and safer.
+    if (window.HRMSNet && !window.HRMSNet.ready('perms', opts)) return;
     var hdrs = {};
     try { hdrs['X-User-Email'] = em; } catch (_) {}
-    fetch('/api/me/permissions?email=' + encodeURIComponent(em), { headers: hdrs })
+    (window.HRMSNet ? window.HRMSNet.fetch('perms', '/api/me/permissions?email=' + encodeURIComponent(em), { headers: hdrs })
+                    : fetch('/api/me/permissions?email=' + encodeURIComponent(em), { headers: hdrs }))
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (d) {
         if (d && Array.isArray(d.permissions)) {
@@ -514,28 +532,33 @@
     if (em !== curEmail) {
       curEmail = em;
       set = new Set(); known = false;
-      if (em) refresh(); else { try { localStorage.removeItem('hrms_permissions'); } catch (_) {} applyPerms(); }
+      if (em) refresh({ background: false }); else { try { localStorage.removeItem('hrms_permissions'); } catch (_) {} applyPerms(); }
     }
   }, 2000);
   /* pick up permission changes made by an admin without a full re-login */
   setInterval(refresh, 10000);
+  /* a hidden tab stops polling, so re-sync the moment it is looked at again */
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden) refresh({ background: false });
+  });
+  window.addEventListener('hrmsNetOnline', function () { refresh({ background: false }); });
   /* cross-tab: another tab logged in/out or perms changed */
   window.addEventListener('storage', function (e) {
     if (e.key === 'hrms_session' || e.key === 'hrms_permissions') {
-      set = new Set(); known = false; curEmail = sessionEmail(); applyPerms(); refresh();
+      set = new Set(); known = false; curEmail = sessionEmail(); applyPerms(); refresh({ background: false });
     }
   });
   /* SPA route change → re-apply gating/guard immediately, and re-pull the live
      permission set so an admin's edits take effect on the very next navigation
      (not just on the 10s poll). */
-  function onRouteChange() { scheduleApply(); applyRouteGuard(); refresh(); }
+  function onRouteChange() { scheduleApply(); applyRouteGuard(); refresh({ background: false }); }
   var _push = history.pushState;
   history.pushState = function () { _push.apply(history, arguments); onRouteChange(); };
   window.addEventListener('popstate', onRouteChange);
   /* allow other scripts to force a reload of permissions */
-  window.__hrmsRefreshPerms = refresh;
+  window.__hrmsRefreshPerms = function () { refresh({ background: false }); };
 
-  refresh();
+  refresh({ background: false });
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', watch);
   else watch();
 
