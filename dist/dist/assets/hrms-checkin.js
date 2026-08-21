@@ -40,18 +40,24 @@
    */
   function cachedState() {
     try {
-      var c = JSON.parse(localStorage.getItem(STORAGE_STATE) || 'null');
-      if (!c || typeof c !== 'object') return false;   // legacy 'true'/'false': distrust
-      if (c.email !== sessionEmail()) return false;
-      if (c.date !== todayStamp()) return false;
+      var raw = localStorage.getItem(STORAGE_STATE);
+      if (!raw) return false;
+      if (raw === 'true') return true;
+      if (raw === 'false') return false;
+      var c = JSON.parse(raw);
+      if (!c || typeof c !== 'object') return false;
+      var curEmail = sessionEmail();
+      if (c.email && curEmail && c.email.toLowerCase() !== curEmail.toLowerCase()) return false;
+      if (c.date && c.date !== todayStamp()) return false;
       return !!c.checkedIn;
     } catch (_) { return false; }
   }
 
   function rememberState(v) {
     try {
+      var boolVal = !!v;
       localStorage.setItem(STORAGE_STATE, JSON.stringify({
-        email: sessionEmail(), date: todayStamp(), checkedIn: !!v
+        email: sessionEmail(), date: todayStamp(), checkedIn: boolVal
       }));
     } catch (_) {}
   }
@@ -950,8 +956,6 @@
     function shut() { if (back.parentNode) back.parentNode.removeChild(back); }
 
     back.querySelector('#hrms-home-no').onclick = function () {
-      // Remembered, so someone who works from home daily is not asked daily.
-      // Clearing site data resets it, which is the intended escape hatch.
       localStorage.setItem(STORAGE_HOME_ASKED, '1');
       shut();
     };
@@ -975,15 +979,12 @@
 
   function registerHome(onProgress) {
     var actor = getActor();
-    if (!actor.email) return Promise.reject(new Error('You are not signed in'));
-    if (!navigator.geolocation) return Promise.reject(new Error('This browser has no geolocation'));
+    if (!actor.email) return Promise.reject(new Error('Sign in first'));
 
     return getPosition(GEO_WAIT_CHECKIN_MS, onProgress).then(function (pos) {
       if (!pos) throw new Error('Could not read your position. Allow location ' +
                                 'access and try again from your home.');
       if (pos.accuracy > HOME_TARGET_ACCURACY_M * 4) {
-        // Refuse here rather than let the server do it, so the message can say
-        // what to change instead of just reporting a number back.
         throw new Error('Your position is only accurate to ±' +
           Math.round(pos.accuracy) + ' m — too vague to register as a home ' +
           'address. Try near a window or outside, ideally on a phone with GPS.');
@@ -1007,12 +1008,7 @@
   }
 
   window.__hrmsCheckinAPI = {
-    /* The live, server-synced answer to "am I checked in?".
-       Published because the cache under hrms_checked_in is a first-paint hint
-       in a shape only this module knows, and readers were parsing it wrong. */
     isCheckedIn: function () { return !!isCheckedIn; },
-    /* Exposed so the attendance screen can offer "Set my home location".
-       Resolves with the saved (Pending) record. */
     registerHome: registerHome,
     toggle: function (device) {
       if (device) localStorage.setItem(STORAGE_DEVICE, device);
@@ -1025,6 +1021,7 @@
     },
     setState: function (state, device) {
       isCheckedIn = !!state;
+      rememberState(isCheckedIn);
       if (device) localStorage.setItem(STORAGE_DEVICE, device);
       var wrap   = document.getElementById(WRAPPER_ID);
       var toggle = document.getElementById(TOGGLE_ID);
@@ -1032,35 +1029,28 @@
         var iconEl = wrap.querySelector('.hrms-ci-icon');
         refreshUI(wrap, toggle, iconEl, device);
       }
+      paintState();
     },
     getState: function () {
       return { checkedIn: isCheckedIn, device: getCheckinDevice() };
     }
   };
 
-  /* ── reconcile with the server ────────────────────────────────────────
-   *
-   * The widget had no idea what the server thought. It rendered whatever
-   * localStorage said and only ever found out it was wrong by attempting an
-   * impossible transition and being refused — which is what "No check-in
-   * found for today" was: the toggle offering a check-out for a session that
-   * did not exist.
-   *
-   * Asks once per session change. Cheap, and it is the only thing that makes
-   * the toggle trustworthy on a shared browser or the morning after.
-   */
+  /* ── reconcile with the server ──────────────────────────────────────── */
   var lastSyncedFor = null;
 
   function syncFromServer(force) {
     var email = sessionEmail();
     if (!email) {
-      // Signed out: never keep showing the previous person's state.
       if (isCheckedIn) { isCheckedIn = false; paintState(); }
       lastSyncedFor = null;
       return Promise.resolve(false);
     }
     var key = email + '|' + todayStamp();
-    if (!force && lastSyncedFor === key) return Promise.resolve(isCheckedIn);
+    if (!force && lastSyncedFor === key) {
+      paintState();
+      return Promise.resolve(isCheckedIn);
+    }
     lastSyncedFor = key;
 
     return fetch('/api/attendance/today?email=' + encodeURIComponent(email), {
@@ -1070,20 +1060,15 @@
       .then(function (d) {
         if (!d) return isCheckedIn;
         var truth = !!d.checkedIn;
-        if (truth !== isCheckedIn) {
-          console.log('[hrms-checkin] state corrected from server:',
-                      isCheckedIn, '->', truth);
-          isCheckedIn = truth;
-          paintState();
-        }
+        isCheckedIn = truth;
         rememberState(truth);
+        paintState();
         if (truth) startGeoWatch(); else stopGeoWatch();
         return truth;
       })
       .catch(function () {
-        // Offline or the endpoint is down. Leave the cached hint in place
-        // rather than guessing — but allow a retry on the next trigger.
         lastSyncedFor = null;
+        paintState();
         return isCheckedIn;
       });
   }
@@ -1114,6 +1099,16 @@
     boot();
   }
 
+  // Handle in-app route changes so newly mounted pages get the current attendance state
+  window.addEventListener('popstate', function () {
+    paintState();
+    syncFromServer(false);
+  });
+  window.addEventListener('hrmsNavigate', function () {
+    paintState();
+    syncFromServer(false);
+  });
+
   // Signing in or out happens without a reload in this app, so the session key
   // changing is the signal to re-ask. 'storage' covers other tabs; the poll
   // covers this one, where localStorage writes fire no event.
@@ -1129,5 +1124,5 @@
     }
   }, 2000);
 
-  console.log('[hrms-checkin v3] loaded — state:', isCheckedIn, '| device:', getCheckinDevice());
+  console.log('[hrms-checkin v4] loaded — state:', isCheckedIn, '| device:', getCheckinDevice());
 })();
