@@ -34,7 +34,7 @@ def noop(apps, schema_editor):
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('api', '0055_merge_20260821_1937'),
+        ('api', '0055_hrverification_address_verified_and_more'),
     ]
 
     operations = [
