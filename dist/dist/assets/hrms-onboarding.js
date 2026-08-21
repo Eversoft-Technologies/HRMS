@@ -70,13 +70,13 @@
   var CAND_STATUSES = ['Draft', 'Pending Verification', 'Pending Approval', 'Approved', 'Rejected', 'Onboarded'];
   var DOC_TYPES = [['ssn', 'SSN', 1], ['driver_license', 'Driver License', 0],
                    ['state_id', 'State ID', 0], ['visa', 'Visa (Work Authorization)', 0],
-                   ['i94', 'I-94', 0]];
+                   ['i94', 'I-94', 0], ['passport', 'Passport', 0]];
   /* Sentinel for the doc-type dropdown: not a real docType, it tells the upload
      handler to send {isCustom, label} and let the server derive the type. */
   var CUSTOM_DOC_VALUE = '__custom__';
   var MAX_DOC_LABEL = 120;   // mirrors MAX_CUSTOM_DOC_LABEL server-side
-  var EVERSOFT_ASSETS = ['Laptop', 'Monitor', 'Mouse', 'Keyboard', 'Dock', 'Bag', 'Headset'];
-  var ASSET_STATUSES = ['Assigned', 'Returned', 'Lost', 'Damaged'];
+  var EVERSOFT_ASSETS = ['Laptop', 'Monitor', 'Mouse', 'Keyboard', 'Dock', 'Bag', 'Headset','Office365','Email_ID','Software License','ID_Card','Desktop','Mobile'];
+  var ASSET_STATUSES = ['Assigned', 'Returned', 'Lost', 'Damaged','pending', 'Delivered'];
   var MAX_MB = 10;
   var ALLOWED_MIME = ['application/pdf', 'image/png', 'image/jpeg'];
   var PAGE_SIZES = [10, 15, 25, 50, 100];
@@ -851,7 +851,8 @@
         ['state_id', 'State ID', function (r) { return getDocCell(r, 'state_id'); }],
         ['visa', 'Visa', function (r) { return getDocCell(r, 'visa'); }],
         ['i94', 'I-94', function (r) { return getDocCell(r, 'i94'); }],
-        ['uploaded', 'Uploaded', function (r) { return (r.uploaded || 0) + ' / ' + (r.totalRequested || 5); }],
+        ['passport', 'Passport', function (r) { return getDocCell(r, 'passport'); }],
+        ['uploaded', 'Uploaded', function (r) { return (r.uploaded || 0) + ' / ' + (r.totalRequested || 6); }],
         ['missing', 'Missing', function (r) {
           return r.missing.length ? badge('⚠ ' + r.missing.join(', '), 'err') : badge('✔ Complete', 'ok');
         }],
@@ -864,7 +865,8 @@
       cols: [
         ['candidate', 'Candidate'],
         ['status', 'Verification', function (r) { return badge(r.status, statusKind(r.status)); }],
-        ['checked', 'Checklist', function (r) { return r.checked + ' / 5 checked'; }],
+        ['checked', 'Checklist', function (r) { return r.checked + ' / 6 checked'; }],
+        ['backgroundChecked', 'Background', function (r) { return (r.backgroundChecked || 0) + ' / 6 checked'; }],
         ['missing', 'Blocking', function (r) {
           return r.missing.length ? badge('Missing: ' + r.missing.join(', '), 'err') : badge('Ready', 'ok');
         }],
@@ -933,7 +935,8 @@
           { type: 'driver_license', label: 'Driver License' },
           { type: 'state_id', label: 'State ID' },
           { type: 'visa', label: 'Visa' },
-          { type: 'i94', label: 'I-94' }
+          { type: 'i94', label: 'I-94' },
+          { type: 'passport', label: 'Passport' }
         ];
         standard.forEach(function (std) {
           seenTypes[std.type] = true;
@@ -953,7 +956,7 @@
 
         // Append final aggregate columns
         cols.push(['uploaded', 'Uploaded', function (r) {
-          return (r.uploaded || 0) + ' / ' + (r.totalRequested || 5);
+          return (r.uploaded || 0) + ' / ' + (r.totalRequested || 6);
         }]);
         cols.push(['missing', 'Missing', function (r) {
           return r.missing.length ? badge('⚠ ' + r.missing.join(', '), 'err') : badge('✔ Complete', 'ok');
@@ -1588,7 +1591,8 @@
         {type: 'driver_license', label: 'Driver License', required: false, sendToCandidate: true},
         {type: 'state_id', label: 'State ID', required: false, sendToCandidate: false},
         {type: 'visa', label: 'Visa (Work Authorization)', required: false, sendToCandidate: true},
-        {type: 'i94', label: 'I-94', required: false, sendToCandidate: true}
+        {type: 'i94', label: 'I-94', required: false, sendToCandidate: true},
+        {type: 'passport', label: 'Passport', required: false, sendToCandidate: true}
       ];
 
       /* The action buttons are identical for fixed and custom documents. */
@@ -1599,6 +1603,7 @@
         else if (label === 'state_id') label = 'State ID';
         else if (label === 'visa') label = 'Visa (Work Authorization)';
         else if (label === 'i94') label = 'I-94';
+        else if (label === 'passport') label = 'Passport';
         return badge('v' + d.version + ' · ' + label, 'ok') +
           ' <button class="ob-btn" style="padding:3px 9px" data-dl="' + d.id + '">View</button>' +
           ' <button class="ob-btn" style="padding:3px 9px" data-hist="' + esc(d.docType) + '">History</button>' +
@@ -1619,7 +1624,7 @@
         var chkRequired = '<input type="checkbox" class="chk-required" data-index="' + index + '"' + (item.required ? ' checked' : '') + (ro ? ' disabled' : '') + '>';
         var chkSend = '<input type="checkbox" class="chk-send" data-index="' + index + '"' + (item.sendToCandidate ? ' checked' : '') + (ro ? ' disabled' : '') + '>';
 
-        var isSystem = ['ssn', 'driver_license', 'state_id', 'visa', 'i94'].indexOf(item.type) !== -1;
+        var isSystem = ['ssn', 'driver_license', 'state_id', 'visa', 'i94', 'passport'].indexOf(item.type) !== -1;
         var delBtn = (isSystem || ro) ? '' : ' <button class="ob-btn danger" style="padding:2px 6px;margin-left:4px" data-del-checklist-idx="' + index + '">×</button>';
 
         // STATUS column — show circular tick symbol on upload, circular warning symbol when not uploaded
@@ -1969,7 +1974,14 @@
   var CHECKS = [
     ['ssnVerified', 'SSN Verified'], ['driverLicenseVerified', 'Driver License Verified'],
     ['stateIdVerified', 'State ID Verified'], ['visaVerified', 'Visa Verified'],
-    ['i94Verified', 'I-94 Verified'],
+    ['i94Verified', 'I-94 Verified'], ['passportVerified', 'Passport Verified'],
+  ];
+  /* The background-check areas this stage exists to cover. Kept apart from
+     CHECKS: those confirm a document arrived, these confirm a check came back. */
+  var BG_CHECKS = [
+    ['identityVerified', 'Identity Verified'], ['educationVerified', 'Education Verified'],
+    ['employmentVerified', 'Employment Verified'], ['addressVerified', 'Address Verified'],
+    ['criminalVerified', 'Criminal History Verified'], ['referenceVerified', 'References Verified'],
   ];
 
   function tabVerification(el, c) {
@@ -1986,7 +1998,13 @@
             '<b style="color:#ef4444">Cannot approve yet</b><div class="ob-sub" style="margin:6px 0 0">Missing: ' +
             esc(missing.join(', ')) + '</div></div>'
           : '') +
+        '<div class="ob-sub" style="margin:0 0 4px">Documents</div>' +
         CHECKS.map(function (k) {
+          return '<label class="ob-chk"><input type="checkbox" data-v="' + k[0] + '"' +
+                 (v[k[0]] ? ' checked' : '') + '> ' + k[1] + '</label>';
+        }).join('') +
+        '<div class="ob-sub" style="margin:12px 0 4px">Background verification</div>' +
+        BG_CHECKS.map(function (k) {
           return '<label class="ob-chk"><input type="checkbox" data-v="' + k[0] + '"' +
                  (v[k[0]] ? ' checked' : '') + '> ' + k[1] + '</label>';
         }).join('') +
