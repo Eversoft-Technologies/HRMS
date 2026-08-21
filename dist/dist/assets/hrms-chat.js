@@ -144,15 +144,17 @@
 
   function avatarHTML(name, key, pic, cls, email) {
     cls = cls || "";
-    var dot = presenceDot(email);
-    if (pic) {
-      return '<span class="hcx-av ' + cls + '"><img src="' + esc(pic) + '" alt="">' + dot + "</span>";
-    }
-    return (
-      '<span class="hcx-av ' + cls + '" style="background:' + colorFor(key || name) + '">' +
-      esc(initials(name)) + dot +
-      "</span>"
-    );
+    var inner = pic
+      ? '<span class="hcx-av ' + cls + '"><img src="' + esc(pic) + '" alt=""></span>'
+      : '<span class="hcx-av ' + cls + '" style="background:' + colorFor(key || name) + '">' +
+        esc(initials(name)) + "</span>";
+    // A person, not a channel: ask hrms-status.js for a presence dot. The dot
+    // cannot live inside .hcx-av — that element is a clipped circle
+    // (overflow:hidden), which would cut the corner off it — so the avatar is
+    // wrapped in a positioned span and the dot hangs off that instead.
+    var email = String(key || "");
+    if (email.indexOf("@") === -1) return inner;
+    return '<span class="hcx-avwrap" data-hrms-presence="' + esc(email) + '">' + inner + "</span>";
   }
 
   function fmtTime(iso) {
@@ -357,8 +359,15 @@
       "#" + ROOT_ID + " .hcx-empty small{display:block;margin-top:4px;font-size:12px;opacity:.8;}",
 
       // avatar
-      "#" + ROOT_ID + " .hcx-av{width:42px;height:42px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-size:14px;font-weight:700;flex-shrink:0;position:relative;}",
-      "#" + ROOT_ID + " .hcx-av img{width:100%;height:100%;object-fit:cover;border-radius:50%;display:block;}",
+      "#" + ROOT_ID + " .hcx-av{width:42px;height:42px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-size:14px;font-weight:700;flex-shrink:0;overflow:hidden;}",
+      "#" + ROOT_ID + " .hcx-av img{width:100%;height:100%;object-fit:cover;}",
+      "#" + ROOT_ID + " .hcx-avwrap{position:relative;display:inline-flex;flex-shrink:0;}",
+      "#" + ROOT_ID + " .hcx-hstatus{font-weight:600;}",
+      "#" + ROOT_ID + " .hcx-hstatus:not(:empty)::before{content:'·';margin:0 5px;color:var(--hcx-muted,inherit);font-weight:400;}",
+      // The dot is drawn by hrms-status.js; these two rules only size it to the
+      // avatar it is sitting on and keep it out of the panel's own borders.
+      "#" + ROOT_ID + " .hcx-avwrap .hrms-presence-dot{width:11px;height:11px;border:2px solid var(--hcx-panel,var(--bg2));}",
+      "#" + ROOT_ID + " .hcx-avwrap:has(.hcx-av.sm) .hrms-presence-dot{width:9px;height:9px;}",
       "#" + ROOT_ID + " .hcx-av.sm{width:32px;height:32px;font-size:12px;}",
       "#" + ROOT_ID + " .hcx-av.lg{width:40px;height:40px;font-size:14px;}",
       "#" + ROOT_ID + " .hcx-av.ch{background:var(--hcx-sent)!important;}",
@@ -471,6 +480,7 @@
       "#" + ROOT_ID + " .hcx-msg.recv{align-self:flex-start;}",
       "#" + ROOT_ID + " .hcx-msg.cons{margin-top:-1px;}",
       "#" + ROOT_ID + " .hcx-msg.cons .hcx-av{visibility:hidden;}",
+      "#" + ROOT_ID + " .hcx-msg.cons .hrms-presence-dot{visibility:hidden;}",
       "#" + ROOT_ID + " .hcx-bubble{padding:9px 13px;border-radius:16px;font-size:13.5px;line-height:1.5;background:var(--hcx-surface);box-shadow:0 1px 2px rgba(0,0,0,.06);word-break:break-word;position:relative;}",
       "#" + ROOT_ID + " .hcx-msg.sent .hcx-bubble{background:var(--hcx-sent);color:#fff;border-bottom-right-radius:5px;}",
       "#" + ROOT_ID + " .hcx-msg.recv .hcx-bubble{border-bottom-left-radius:5px;}",
@@ -1072,7 +1082,13 @@
     var name = room.display_name || room.name || "Chat";
     var sub = isCh
       ? (room.member_emails || []).length + " members"
-      : directSubline(room);
+      : memberInfo(room, room.other_email);
+    // A direct conversation is with a person, so say where that person is.
+    // hrms-status.js fills this in and keeps it current; it stays empty for
+    // anyone the presence feed has nothing to say about.
+    var presence = (!isCh && room.other_email)
+      ? ' <span class="hcx-hstatus" data-hrms-presence-label="' + esc(room.other_email) + '"></span>'
+      : "";
     var av = isCh
       ? '<span class="hcx-av lg ch">' + ICON.hash + "</span>"
       : avatarHTML(name, room.other_email || name, memberPic(room, room.other_email), "lg", room.other_email);
@@ -1085,7 +1101,7 @@
       '<div class="hcx-head">' +
       '  <button class="hcx-iconbtn back" data-act="back" title="Back">' + ICON.back + "</button>" +
       av +
-      '  <div class="hcx-hinfo"><div class="hcx-hn">' + esc(name) + '</div><div class="hcx-hm">' + esc(sub) + "</div></div>" +
+      '  <div class="hcx-hinfo"><div class="hcx-hn">' + esc(name) + '</div><div class="hcx-hm">' + esc(sub) + presence + "</div></div>" +
       '  <button class="hcx-hicon" data-act="search-toggle" title="Search in conversation">' + ICON.search + "</button>" +
       membersBtn +
       '  <button class="hcx-hbtn primary" data-act="schedule">' + ICON.calendar + " Schedule meeting</button>" +

@@ -8,6 +8,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.exceptions import ValidationError
 
+from api.timeutil import local_now
 from api.models import (
     EmployeeAttendance, Shift, ShiftAssignment, Break, BreakPolicy,
     AttendanceEvent, LateCheckInAlert, LateCheckInPolicy, Overtime,
@@ -120,6 +121,28 @@ class AttendanceCheckInOutViewSet(viewsets.ViewSet):
             email, employee_name, latitude, longitude, device
         )
 
+        return Response(result)
+
+    @action(detail=False, methods=['post'], url_path='device-punch')
+    def device_punch(self, request):
+        """Record punch from external biometric/RFID hardware device."""
+        email = request.data.get('email') or request.data.get('employee_code')
+        employee_name = request.data.get('employeeName') or request.data.get('employee_name') or (email.split('@')[0].title() if email else '')
+        punch_type = request.data.get('punchType') or request.data.get('punch_type', 'in')
+        device_id = request.data.get('deviceId') or request.data.get('device_id', 'biometric_01')
+
+        if not email:
+            return Response(
+                {'error': 'email or employee_code is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        result = AttendanceService.record_device_punch(
+            email=email,
+            employee_name=employee_name,
+            punch_type=punch_type,
+            device_id=device_id
+        )
         return Response(result)
 
     @action(detail=False, methods=['get'])
@@ -286,7 +309,7 @@ class LateCheckInAlertViewSet(viewsets.ViewSet):
             alert = LateCheckInAlert.objects.get(id=alert_id)
             alert.is_excused = True
             alert.excused_by = excused_by
-            alert.excused_at = datetime.now()
+            alert.excused_at = local_now()
             alert.save()
 
             # Send notification
@@ -500,7 +523,7 @@ class AttendanceCorrectionViewSet(viewsets.ViewSet):
             correction.status = 'Approved'
             correction.reviewer = reviewer_email
             correction.reviewer_note = reviewer_note
-            correction.reviewed_at = datetime.now()
+            correction.reviewed_at = local_now()
             correction.save()
 
             # Apply correction to attendance
@@ -544,7 +567,7 @@ class AttendanceCorrectionViewSet(viewsets.ViewSet):
             correction.status = 'Rejected'
             correction.reviewer = reviewer_email
             correction.reviewer_note = reviewer_note
-            correction.reviewed_at = datetime.now()
+            correction.reviewed_at = local_now()
             correction.save()
 
             # Send notification
@@ -585,12 +608,40 @@ class AttendanceCorrectionViewSet(viewsets.ViewSet):
         ])
 
 
+def _wfh_approver(request):
+    """Resolve the caller for a WFH decision. Returns (email, error_response).
+
+    Submitting a request is self-service and stays open, but deciding one is
+    not: these two actions carried no check at all, so any caller who could
+    reach the endpoint could POST a requestId and approve it — including their
+    own, which turns the check-in gate into a formality. Identity comes from
+    X-User-Email like the rest of the API, not from ``request.user``, which is
+    AnonymousUser here (the viewset is AllowAny) and has no ``.email``.
+    """
+    from api.permissions import check_perm
+
+    allowed, caller_email, _user = check_perm(request, 'attendance.approve_wfh')
+    if not caller_email:
+        return None, Response(
+            {'error': 'Authentication required. Please sign in again.',
+             'code': 'AUTH_REQUIRED'},
+            status=status.HTTP_401_UNAUTHORIZED)
+    if not allowed:
+        return None, Response(
+            {'error': 'You do not have permission to approve or reject WFH requests.',
+             'code': 'PERMISSION_DENIED'},
+            status=status.HTTP_403_FORBIDDEN)
+    return caller_email, None
+
+
 class WFHRequestViewSet(viewsets.ViewSet):
     """ViewSet for WFH request management."""
     # Identity is carried by the `email` query/body param (consistent with the
     # rest of the API, which is gated by X-User-Email + require_perm rather than
     # a session/JWT). Requiring IsAuthenticated here made these the only
     # endpoints that 401'd the attendance portal — so allow, and scope by email.
+    # The approve/reject actions check attendance.approve_wfh themselves; see
+    # _wfh_approver above.
     permission_classes = [permissions.AllowAny]
 
     @action(detail=False, methods=['post'])
@@ -639,7 +690,7 @@ class WFHRequestViewSet(viewsets.ViewSet):
         try:
             from api.views import notify_approvers
             notify_approvers(
-                'settings.manage',
+                'attendance.approve_wfh',
                 'New WFH Request',
                 f'{employee_name} requested WFH for {days} day(s) from {from_date} to {to_date}.',
                 '/employees/checkin',
@@ -662,8 +713,10 @@ class WFHRequestViewSet(viewsets.ViewSet):
     @action(detail=False, methods=['post'])
     def approve_request(self, request):
         """Approve WFH request."""
+        approver_email, denied = _wfh_approver(request)
+        if denied:
+            return denied
         request_id = request.data.get('requestId')
-        approver_email = request.user.email if request.user else 'admin'
 
         try:
             wfh_request = WfhRequest.objects.get(id=request_id)
@@ -702,8 +755,10 @@ class WFHRequestViewSet(viewsets.ViewSet):
     @action(detail=False, methods=['post'])
     def reject_request(self, request):
         """Reject WFH request."""
+        approver_email, denied = _wfh_approver(request)
+        if denied:
+            return denied
         request_id = request.data.get('requestId')
-        approver_email = request.user.email if request.user else 'admin'
 
         try:
             wfh_request = WfhRequest.objects.get(id=request_id)

@@ -3,7 +3,11 @@ Models mapped 1:1 onto the existing MySQL tables created by the original
 Node/Express server. Table and column names match exactly so the same
 database can be used without migrating data.
 """
+from decimal import Decimal
 from django.db import models
+from django.utils import timezone
+
+from .timeutil import local_now
 
 
 class JobPost(models.Model):
@@ -76,7 +80,17 @@ class InterviewLink(models.Model):
     outcome = models.CharField(max_length=40, null=True, blank=True)
     email_sent = models.BooleanField(default=False)
     interview_type = models.CharField(max_length=100, default='Technical')
+    # Free text typed on the scheduling form — who will CONDUCT the interview
+    # ("HR Team", "Eva AI", a panel name). It is a label for the invitation
+    # email, not an identity, so it can never answer "whose numbers are these?".
     interviewer = models.CharField(max_length=255, default='', blank=True)
+    # Who SCHEDULED it: the signed-in user, resolved server-side from the
+    # X-User-Email header rather than the request body, so it cannot be spoofed
+    # by a client and cannot disagree with the session that made the call. This
+    # is what the KPI dashboard attributes an interview to. Indexed because
+    # every per-person KPI query filters or groups on it.
+    created_by_email = models.CharField(max_length=255, default='', blank=True, db_index=True)
+    created_by_name = models.CharField(max_length=255, default='', blank=True)
     duration = models.CharField(max_length=50, default='45 min')
     notes = models.TextField(null=True, blank=True)
     # Who last edited the candidate note (any user may edit) + when — shown in
@@ -95,6 +109,12 @@ class InterviewLink(models.Model):
     final_question_count = models.IntegerField(default=3)
     coding_difficulty = models.JSONField(null=True, blank=True)
     followup_sent = models.BooleanField(default=False)
+    # Who sent the outcome email, resolved server-side from the caller's
+    # identity. The mail goes out over a shared SMTP mailbox, so without this
+    # the row records that a candidate was told the outcome but not by whom.
+    followup_sent_by_email = models.CharField(max_length=255, default='', blank=True)
+    followup_sent_by_name = models.CharField(max_length=255, default='', blank=True)
+    followup_sent_at = models.DateTimeField(null=True, blank=True)
     invited_at = models.DateTimeField(null=True, blank=True)
     # Separate access tokens for candidate and recruiter (with configurable expiry)
     candidate_token = models.CharField(max_length=128, null=True, blank=True, db_index=True)
@@ -106,7 +126,15 @@ class InterviewLink(models.Model):
     # Resume and JD text stored for AI-enhanced question generation
     resume_text = models.TextField(null=True, blank=True)
     jd_text = models.TextField(null=True, blank=True)
-    created_at = models.DateTimeField(auto_now_add=True)
+    # Stamped on the business clock, not the host's. auto_now_add uses
+    # datetime.now(), which is the machine's local time — and the KPI dashboard
+    # buckets these rows into days and custom windows using local_today(),
+    # which is settings.TIME_ZONE. On a host whose clock differs from it (a
+    # developer on IST against TIME_ZONE=UTC) the two disagree for hours every
+    # night, and an interview scheduled in that gap was stamped "tomorrow"
+    # while the Today filter still asked for "today" — so it simply did not
+    # appear in its own report. See timeutil.local_now.
+    created_at = models.DateTimeField(default=local_now)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -354,7 +382,7 @@ class EmployeeAttendance(models.Model):
     presence_at = models.DateTimeField(null=True, blank=True)
     worked_minutes = models.IntegerField(default=0)
     note = models.CharField(max_length=255, default='', blank=True)
-    # --- Advanced attendance fields (added via attendance_migrations.sql) ---
+    # --- Advanced attendance fields ---
     shift_id = models.IntegerField(null=True, blank=True)
     is_wfh = models.BooleanField(default=False)
     break_minutes = models.IntegerField(default=0)
@@ -364,6 +392,25 @@ class EmployeeAttendance(models.Model):
     location_lat = models.FloatField(null=True, blank=True)
     location_lng = models.FloatField(null=True, blank=True)
     geo_verified = models.BooleanField(default=False)
+    # --- Out-of-geofence check-in review ---------------------------------
+    # An employee who is not working from home and checks in outside every
+    # active fence is let through, but must give a reason and the check-in is
+    # held for HR/admin review. Blank status = nothing to review (WFH, inside a
+    # fence, or no fences configured).
+    location_reason = models.TextField(null=True, blank=True)
+    location_status = models.CharField(max_length=20, default='', blank=True)  # ''|Pending|Approved|Rejected
+    location_reviewer = models.CharField(max_length=255, default='', blank=True)
+    location_reviewed_at = models.DateTimeField(null=True, blank=True)
+    # Set once the "you have passed N hours today" mail goes out, so the
+    # reminder is sent at most once per employee per day.
+    overtime_alert_sent_at = models.DateTimeField(null=True, blank=True)
+    # Same idea for the "no check-in recorded" notice: the late sweep runs every
+    # few minutes, and nobody should be mailed twice for the same day.
+    late_alert_sent_at = models.DateTimeField(null=True, blank=True)
+    # Set when the browser closed the session because the employee left the
+    # geofence, so the day is distinguishable from a manual check-out.
+    auto_checkout_at = models.DateTimeField(null=True, blank=True)
+    is_auto_checked_out = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -457,8 +504,7 @@ class AttendanceEvent(models.Model):
 
 
 # ===========================================================================
-# Advanced Attendance Management — New models
-# attendance_migrations.sql creates the backing tables.
+# Advanced Attendance Management — Models
 # ===========================================================================
 
 class Shift(models.Model):
@@ -525,7 +571,29 @@ class AttendanceCorrection(models.Model):
 
 
 class GeoFence(models.Model):
-    """A GPS circle zone. Check-ins inside are marked geo_verified=True."""
+    """A GPS circle zone. Check-ins inside are marked geo_verified=True.
+
+    Two kinds of fence live here, told apart by ``owner_email``:
+
+      * blank  — a company location. Any employee checking in inside it is
+        verified. This is what the table originally held.
+      * set    — one employee's registered home, used to verify their WFH
+        check-ins. It belongs to that person and to nobody else.
+
+    Keeping them in one table means home fences inherit the distance maths, the
+    GPS-accuracy allowance and the map rendering that already exist. It also
+    means every query has to be explicit about which kind it wants: an office
+    check-in matched against an unfiltered fence list would let anyone check in
+    "at the office" from a colleague's living room. See _office_fences() and
+    home_fence_for().
+
+    A home fence is only a verification basis once ``status`` is Approved. The
+    employee captures it themselves — they are the one standing in the right
+    place — but until someone confirms it, a person could register wherever
+    they happened to be and self-certify every future check-in.
+    """
+    PENDING, APPROVED, REJECTED = 'Pending', 'Approved', 'Rejected'
+
     name = models.CharField(max_length=100)
     latitude = models.FloatField()
     longitude = models.FloatField()
@@ -533,6 +601,16 @@ class GeoFence(models.Model):
     is_active = models.BooleanField(default=True)
     created_by = models.CharField(max_length=255, default='', blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    # Blank for a company location; an employee's address makes it their home.
+    owner_email = models.CharField(max_length=255, default='', blank=True, db_index=True)
+    # Only meaningful for home fences. Company locations are created by someone
+    # who already holds the permission, so they need no second approval.
+    status = models.CharField(max_length=20, default='', blank=True)
+    reviewer = models.CharField(max_length=255, default='', blank=True)
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    # The accuracy of the fix the employee captured, so a reviewer can see
+    # whether the pin was worth trusting before confirming it.
+    captured_accuracy = models.FloatField(null=True, blank=True)
 
     class Meta:
         db_table = 'attendance_geofences'
@@ -555,6 +633,59 @@ class WfhRequest(models.Model):
     class Meta:
         db_table = 'wfh_requests'
         ordering = ['-id']
+
+
+class WorkArrangement(models.Model):
+    """Where an employee works, effective-dated.
+
+    This is a property of the person, not a permission and not a per-day
+    request. It used to be neither: the only lever was the ``attendance.remote``
+    permission, which is binary (so hybrid could not be expressed at all), hangs
+    off a *role* (so making one person remote meant inventing a role for them),
+    and carries no dates.
+
+    Dates are the reason this is a table of rows rather than a column on the
+    employee. Arrangements change — someone moves onsite to hybrid, a remote
+    hire relocates to a city with an office — and a column would overwrite the
+    past, so recomputing or auditing an old month would judge it by today's
+    rule. Rows are never edited in place: closing one and opening the next
+    keeps the history intact. Same shape as EmployeeCompensation, for the same
+    reason.
+
+    ``remote_weekdays`` are anchor days (Python weekday numbers, Mon=0), used
+    when a team has fixed in-office days. When it is empty the employee picks
+    their own days and ``remote_days_per_week`` is the cap. Both only apply to
+    'hybrid': 'remote' is unrestricted and 'onsite' has no remote entitlement.
+    """
+    ONSITE, HYBRID, REMOTE = 'onsite', 'hybrid', 'remote'
+
+    email = models.CharField(max_length=255, db_index=True)
+    employee_name = models.CharField(max_length=255, default='', blank=True)
+    arrangement = models.CharField(max_length=20, default=ONSITE)  # onsite|hybrid|remote
+    # Anchor days as a comma-separated list of weekday numbers, e.g. "0,4" for
+    # Monday and Friday. Empty means "no fixed days, use the weekly quota".
+    remote_weekdays = models.CharField(max_length=32, default='', blank=True)
+    remote_days_per_week = models.IntegerField(default=0)
+    effective_from = models.DateField()
+    effective_to = models.DateField(null=True, blank=True)  # null = still in force
+    notes = models.TextField(default='', blank=True)
+    created_by = models.CharField(max_length=255, default='', blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'work_arrangements'
+        ordering = ['-effective_from', '-id']
+        indexes = [models.Index(fields=['email', 'effective_from'])]
+
+    def weekday_set(self):
+        """Anchor days as a set of ints. Tolerates blanks and stray values."""
+        out = set()
+        for part in (self.remote_weekdays or '').split(','):
+            part = part.strip()
+            if part.isdigit() and 0 <= int(part) <= 6:
+                out.add(int(part))
+        return out
 
 
 # ===========================================================================
@@ -943,7 +1074,7 @@ class CandidateDocument(models.Model):
         OnboardingCandidate, on_delete=models.CASCADE,
         related_name='documents', db_column='candidate_id',
     )
-    # ssn | driver_license | state_id | visa | i94, or ``custom_<slug>`` for a
+    # ssn | driver_license | state_id | visa | i94 | passport, or ``custom_<slug>`` for a
     # document the uploader named themselves.
     doc_type = models.CharField(max_length=40, db_index=True)
     # Display name for a custom document. Empty for the fixed types, whose
@@ -966,15 +1097,42 @@ class CandidateDocument(models.Model):
 
 class HrVerification(models.Model):
     """HR's document checklist. One row per candidate."""
+    # The PK is exposed as ``verification_id`` in the table; the Python attribute
+    # stays ``id`` so the rest of the code (and DRF) is unaffected.
+    id = models.AutoField(primary_key=True, db_column='verification_id')
     candidate = models.OneToOneField(
         OnboardingCandidate, on_delete=models.CASCADE,
         related_name='hr_verification', db_column='candidate_id',
     )
+    # HR's employee code for the candidate once one has been issued. Employees
+    # are keyed by email elsewhere in this schema, so this is a plain reference
+    # rather than a foreign key.
+    employee_id = models.CharField(max_length=64, default='', blank=True, db_index=True)
+    # Background | Education | Employment | Criminal | ... — free text, the set
+    # is an HR/vendor concern rather than something the app enforces.
+    verification_type = models.CharField(max_length=60, default='', blank=True, db_index=True)
+    # Third-party background-check agency running the check, if any.
+    vendor_name = models.CharField(max_length=255, default='', blank=True)
+    requested_on = models.DateTimeField(null=True, blank=True)
+    completed_on = models.DateTimeField(null=True, blank=True)
+    # Location of the vendor's report. A path/URL, not the file itself — unlike
+    # CandidateDocument these reports are not held in the row.
+    report_path = models.CharField(max_length=500, default='', blank=True)
     ssn_verified = models.BooleanField(default=False)
     driver_license_verified = models.BooleanField(default=False)
     state_id_verified = models.BooleanField(default=False)
     visa_verified = models.BooleanField(default=False)
     i94_verified = models.BooleanField(default=False)
+    passport_verified = models.BooleanField(default=False)
+    # The background-check areas the stage exists to cover. These are separate
+    # from the document tick-boxes above: a document box means "the right file
+    # arrived and matches", these mean "the check on that area came back clean".
+    identity_verified = models.BooleanField(default=False)
+    education_verified = models.BooleanField(default=False)
+    employment_verified = models.BooleanField(default=False)
+    address_verified = models.BooleanField(default=False)
+    criminal_verified = models.BooleanField(default=False)
+    reference_verified = models.BooleanField(default=False)
     # Tick-box state for custom documents, keyed by their ``custom_<slug>``
     # doc_type. The fixed types above get a column each; a custom document is
     # named at upload time, so there is no column to add and this JSON map
@@ -1212,6 +1370,128 @@ class EmailTemplate(models.Model):
         ordering = ['outcome', 'name']
 
 
+# ===========================================================================
+# Core Payroll Module Models
+# ===========================================================================
+
+class EmployeeCompensation(models.Model):
+    """Effective-dated compensation records per employee (identified by email)."""
+    email = models.CharField(max_length=255, db_index=True)
+    pay_type = models.CharField(max_length=20, default='salaried')  # salaried | hourly
+    pay_frequency = models.CharField(max_length=20, default='monthly')  # monthly | semimonthly | biweekly | weekly
+    base_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    annual_ctc = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    currency = models.CharField(max_length=10, default='USD')
+    effective_from = models.DateField(default=timezone.now)
+    effective_to = models.DateField(null=True, blank=True)
+    status = models.CharField(max_length=20, default='active')  # active | inactive
+    notes = models.TextField(default='', blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'employee_compensation'
+        ordering = ['-effective_from']
+
+
+class PayComponent(models.Model):
+    """Catalogue of earnings and deduction components."""
+    code = models.CharField(max_length=50, unique=True)
+    name = models.CharField(max_length=100)
+    component_type = models.CharField(max_length=20, default='earning')  # earning | deduction
+    calc_type = models.CharField(max_length=30, default='fixed')  # fixed | percent_of_base | formula
+    rate = models.DecimalField(max_digits=8, decimal_places=4, default=Decimal('0.0000'))
+    default_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    is_taxable = models.BooleanField(default=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'pay_components'
+        ordering = ['component_type', 'code']
+
+
+class EmployeePayComponent(models.Model):
+    """Per-employee pay component overrides."""
+    email = models.CharField(max_length=255, db_index=True)
+    component = models.ForeignKey(PayComponent, on_delete=models.CASCADE, related_name='employee_components')
+    amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    rate = models.DecimalField(max_digits=8, decimal_places=4, null=True, blank=True)
+    effective_from = models.DateField(default=timezone.now)
+    effective_to = models.DateField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'employee_pay_components'
+        ordering = ['-effective_from']
+
+
+class PayrollRun(models.Model):
+    """Batch pay period run engine record."""
+    period_label = models.CharField(max_length=20, db_index=True)  # e.g., '2026-08'
+    period_start = models.DateField()
+    period_end = models.DateField()
+    pay_date = models.DateField(null=True, blank=True)
+    frequency = models.CharField(max_length=20, default='monthly')
+    status = models.CharField(max_length=30, default='draft')  # draft | processing | pending_approval | approved | paid | cancelled
+    created_by = models.CharField(max_length=255, default='', blank=True)
+    approved_by = models.CharField(max_length=255, default='', blank=True)
+    approved_at = models.DateTimeField(null=True, blank=True)
+    total_gross = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0.00'))
+    total_deductions = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0.00'))
+    total_net = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0.00'))
+    employee_count = models.IntegerField(default=0)
+    notes = models.TextField(default='', blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'payroll_runs'
+        ordering = ['-period_start']
+
+
+class Payslip(models.Model):
+    """Individual employee payslip record for a pay run."""
+    run = models.ForeignKey(PayrollRun, on_delete=models.CASCADE, related_name='payslips')
+    email = models.CharField(max_length=255, db_index=True)
+    employee_name = models.CharField(max_length=255, default='', blank=True)
+    worked_days = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0.00'))
+    paid_days = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0.00'))
+    lop_days = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0.00'))
+    overtime_hours = models.DecimalField(max_digits=6, decimal_places=2, default=Decimal('0.00'))
+    base_salary = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    gross_earnings = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    total_deductions = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    net_pay = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    earnings_data = models.JSONField(default=list, blank=True)
+    deductions_data = models.JSONField(default=list, blank=True)
+    status = models.CharField(max_length=20, default='draft')  # draft | approved | paid
+    file_name = models.CharField(max_length=255, default='', blank=True)
+    file_mime = models.CharField(max_length=100, default='application/pdf', blank=True)
+    file_size = models.IntegerField(default=0)
+    file_data = models.TextField(default='', blank=True)  # base64 PDF
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'payslips'
+        unique_together = ['run', 'email']
+        ordering = ['employee_name', 'email']
+
+
+class PayrollSetting(models.Model):
+    """Key/value configuration store for Payroll module."""
+    key = models.CharField(max_length=100, unique=True)
+    value = models.TextField(default='', blank=True)
+    description = models.CharField(max_length=255, default='', blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'payroll_settings'
+        ordering = ['key']
+
 
 # ==========================================================================
 # Employee Chat models (appended by chat-module integration)
@@ -1305,7 +1585,7 @@ class ChatMeeting(models.Model):
     Stores the schedule plus a shareable ``join_url`` (e.g. a Jitsi Meet room
     link). No video server is run by the app — the link is what participants
     click to join. ``managed = False`` because the ``chat_meetings`` table is
-    created by the raw SQL migration (see chat_migrations.sql), matching the
+    created by migration 0045_chat_tables, matching the
     other chat tables."""
 
     room = models.ForeignKey(

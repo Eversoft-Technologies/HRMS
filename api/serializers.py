@@ -61,6 +61,12 @@ from .models import (
     PayrollInformation,
     PayrollForm,
     CandidateFormSubmission,
+    EmployeeCompensation,
+    PayComponent,
+    EmployeePayComponent,
+    PayrollRun,
+    Payslip,
+    PayrollSetting,
 )
 
 # Datetime wire format used everywhere by the original API (naive, USE_TZ=False).
@@ -302,6 +308,16 @@ class InterviewLinkSerializer(serializers.ModelSerializer):
             'emailSent': bool(instance.email_sent),
             'interviewType': InterviewTypeField().to_representation(instance.interview_type),
             'interviewer': instance.interviewer,
+            # Who scheduled it. Server-set (never accepted from the payload),
+            # so it is safe to show as attribution and to key KPIs on.
+            'createdByEmail': instance.created_by_email or '',
+            'createdByName': instance.created_by_name or '',
+            # Who told the candidate their outcome, and when.
+            'followupSent': bool(instance.followup_sent),
+            'followupSentByEmail': instance.followup_sent_by_email or '',
+            'followupSentByName': instance.followup_sent_by_name or '',
+            'followupSentAt': (instance.followup_sent_at.strftime(DATETIME_FMT)
+                               if instance.followup_sent_at else None),
             'duration': instance.duration,
             'notes': instance.notes,
             'notesUpdatedBy': instance.notes_updated_by or '',
@@ -1573,12 +1589,29 @@ class HrVerificationSerializer(serializers.ModelSerializer):
     stateIdVerified = serializers.BooleanField(source='state_id_verified', required=False, default=False)
     visaVerified = serializers.BooleanField(source='visa_verified', required=False, default=False)
     i94Verified = serializers.BooleanField(source='i94_verified', required=False, default=False)
+    passportVerified = serializers.BooleanField(source='passport_verified', required=False, default=False)
+    identityVerified = serializers.BooleanField(source='identity_verified', required=False, default=False)
+    educationVerified = serializers.BooleanField(source='education_verified', required=False, default=False)
+    employmentVerified = serializers.BooleanField(source='employment_verified', required=False, default=False)
+    addressVerified = serializers.BooleanField(source='address_verified', required=False, default=False)
+    criminalVerified = serializers.BooleanField(source='criminal_verified', required=False, default=False)
+    referenceVerified = serializers.BooleanField(source='reference_verified', required=False, default=False)
+    employeeId = serializers.CharField(source='employee_id', required=False, allow_blank=True, default='')
+    verificationType = serializers.CharField(source='verification_type', required=False, allow_blank=True, default='')
+    vendorName = serializers.CharField(source='vendor_name', required=False, allow_blank=True, default='')
+    requestedOn = serializers.DateTimeField(source='requested_on', required=False, allow_null=True)
+    completedOn = serializers.DateTimeField(source='completed_on', required=False, allow_null=True)
+    reportPath = serializers.CharField(source='report_path', required=False, allow_blank=True, default='')
 
     class Meta:
         model = HrVerification
         fields = [
             'id', 'ssnVerified', 'driverLicenseVerified', 'stateIdVerified',
-            'visaVerified', 'i94Verified', 'status', 'remarks',
+            'visaVerified', 'i94Verified', 'passportVerified', 'status', 'remarks',
+            'identityVerified', 'educationVerified', 'employmentVerified',
+            'addressVerified', 'criminalVerified', 'referenceVerified',
+            'employeeId', 'verificationType', 'vendorName', 'requestedOn',
+            'completedOn', 'reportPath',
         ]
         read_only_fields = ['id']
         extra_kwargs = {
@@ -1589,12 +1622,27 @@ class HrVerificationSerializer(serializers.ModelSerializer):
     def to_representation(self, instance):
         return {
             'id': instance.id,
+            # Same value as ``id``; named for the column HR reports read.
+            'verificationId': instance.id,
             'candidateId': instance.candidate_id,
+            'employeeId': instance.employee_id or '',
+            'verificationType': instance.verification_type or '',
+            'vendorName': instance.vendor_name or '',
+            'requestedOn': instance.requested_on.strftime(DATETIME_FMT) if instance.requested_on else None,
+            'completedOn': instance.completed_on.strftime(DATETIME_FMT) if instance.completed_on else None,
+            'reportPath': instance.report_path or '',
             'ssnVerified': bool(instance.ssn_verified),
             'driverLicenseVerified': bool(instance.driver_license_verified),
             'stateIdVerified': bool(instance.state_id_verified),
             'visaVerified': bool(instance.visa_verified),
             'i94Verified': bool(instance.i94_verified),
+            'passportVerified': bool(instance.passport_verified),
+            'identityVerified': bool(instance.identity_verified),
+            'educationVerified': bool(instance.education_verified),
+            'employmentVerified': bool(instance.employment_verified),
+            'addressVerified': bool(instance.address_verified),
+            'criminalVerified': bool(instance.criminal_verified),
+            'referenceVerified': bool(instance.reference_verified),
             'customVerified': instance.custom_verified or {},
             'status': instance.status or 'Pending',
             'remarks': instance.remarks or '',
@@ -1731,6 +1779,48 @@ class CandidateFormSubmissionSerializer(serializers.ModelSerializer):
         return ret
 
 
+# ===========================================================================
+# Core Payroll Serializers
+# ===========================================================================
+
+class EmployeeCompensationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = EmployeeCompensation
+        fields = '__all__'
+
+
+class PayComponentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PayComponent
+        fields = '__all__'
+
+
+class EmployeePayComponentSerializer(serializers.ModelSerializer):
+    componentDetails = PayComponentSerializer(source='component', read_only=True)
+
+    class Meta:
+        model = EmployeePayComponent
+        fields = '__all__'
+
+
+class PayslipSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Payslip
+        fields = '__all__'
+
+
+class PayrollRunSerializer(serializers.ModelSerializer):
+    payslips = PayslipSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = PayrollRun
+        fields = '__all__'
+
+
+class PayrollSettingSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PayrollSetting
+        fields = '__all__'
 
 
 # ==========================================================================
@@ -1804,7 +1894,6 @@ class ChatMessageSerializer(serializers.ModelSerializer):
             return exp > _dt.now()
         except Exception:
             return True
-
     def get_message(self, obj):
         # Hide the original text once a message is deleted.
         return "" if getattr(obj, "is_deleted", False) else obj.message
