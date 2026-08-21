@@ -85,11 +85,14 @@ jobs:
             #    from the upload so they survive across deploys. Add more lines here
             #    for any other persistent paths (e.g. uploaded media directories).
             mkdir -p "${SHARED_DIR}"
+            mkdir -p "${SHARED_DIR}/media/chat_uploads"
             if [ ! -f "${SHARED_DIR}/.env" ]; then
               echo "!!! Missing ${SHARED_DIR}/.env - create it once (see setup notes)."
               exit 1
             fi
             ln -sfn "${SHARED_DIR}/.env" "${RELEASE_DIR}/.env"
+            rm -rf "${RELEASE_DIR}/media"
+            ln -sfn "${SHARED_DIR}/media" "${RELEASE_DIR}/media"
 
             # 1b. Normalize permissions so Passenger can read the release
             #     (dirs 755, files 644). Symlinks (type l, e.g. the .env link)
