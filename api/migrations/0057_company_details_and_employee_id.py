@@ -3,6 +3,30 @@ import json
 from django.db import migrations, models
 
 
+def create_tables_and_columns_if_not_exists(apps, schema_editor):
+    connection = schema_editor.connection
+    with connection.cursor() as cursor:
+        tables = connection.introspection.table_names(cursor)
+
+        if 'company_details' not in tables:
+            CompanyDetail = apps.get_model('api', 'CompanyDetail')
+            schema_editor.create_model(CompanyDetail)
+
+        if 'app_users' in tables:
+            columns = [col.name if hasattr(col, 'name') else col[0] for col in connection.introspection.get_table_description(cursor, 'app_users')]
+            if 'employee_id' not in columns:
+                AppUser = apps.get_model('api', 'AppUser')
+                field = AppUser._meta.get_field('employee_id')
+                schema_editor.add_field(AppUser, field)
+
+        if 'user_profiles' in tables:
+            columns = [col.name if hasattr(col, 'name') else col[0] for col in connection.introspection.get_table_description(cursor, 'user_profiles')]
+            if 'employee_id' not in columns:
+                UserProfile = apps.get_model('api', 'UserProfile')
+                field = UserProfile._meta.get_field('employee_id')
+                schema_editor.add_field(UserProfile, field)
+
+
 def seed_and_backfill(apps, schema_editor):
     CompanyDetail = apps.get_model('api', 'CompanyDetail')
     AppUser = apps.get_model('api', 'AppUser')
@@ -63,50 +87,57 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.CreateModel(
-            name='CompanyDetail',
-            fields=[
-                ('id', models.AutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('company_name', models.CharField(default='Eversoft Technologies', max_length=255)),
-                ('legal_name', models.CharField(blank=True, default='', max_length=255)),
-                ('brand_name', models.CharField(blank=True, default='Eversoft', max_length=255)),
-                ('company_logo', models.TextField(blank=True, default='')),
-                ('website', models.CharField(blank=True, default='https://eversoftit.com', max_length=255)),
-                ('contact_email', models.CharField(blank=True, default='contact@eversoftit.com', max_length=255)),
-                ('phone', models.CharField(blank=True, default='', max_length=40)),
-                ('tax_id', models.CharField(blank=True, default='', max_length=100)),
-                ('industry', models.CharField(blank=True, default='Information Technology', max_length=120)),
-                ('address_line1', models.CharField(blank=True, default='', max_length=255)),
-                ('address_line2', models.CharField(blank=True, default='', max_length=255)),
-                ('city', models.CharField(blank=True, default='', max_length=100)),
-                ('state', models.CharField(blank=True, default='', max_length=100)),
-                ('country', models.CharField(blank=True, default='India', max_length=100)),
-                ('pincode', models.CharField(blank=True, default='', max_length=20)),
-                ('timezone', models.CharField(blank=True, default='Asia/Kolkata', max_length=100)),
-                ('currency', models.CharField(blank=True, default='INR', max_length=10)),
-                ('date_format', models.CharField(blank=True, default='DD/MM/YYYY', max_length=30)),
-                ('work_week', models.JSONField(blank=True, default=list)),
-                ('emp_id_prefix', models.CharField(blank=True, default='EV-', max_length=20)),
-                ('emp_id_min_digits', models.IntegerField(default=4)),
-                ('emp_id_start_number', models.IntegerField(default=1)),
-                ('emp_id_suffix', models.CharField(blank=True, default='', max_length=20)),
-                ('updated_by', models.CharField(blank=True, default='', max_length=255)),
-                ('updated_at', models.DateTimeField(auto_now=True)),
+        migrations.SeparateDatabaseAndState(
+            state_operations=[
+                migrations.CreateModel(
+                    name='CompanyDetail',
+                    fields=[
+                        ('id', models.AutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                        ('company_name', models.CharField(default='Eversoft Technologies', max_length=255)),
+                        ('legal_name', models.CharField(blank=True, default='', max_length=255)),
+                        ('brand_name', models.CharField(blank=True, default='Eversoft', max_length=255)),
+                        ('company_logo', models.TextField(blank=True, default='')),
+                        ('website', models.CharField(blank=True, default='https://eversoftit.com', max_length=255)),
+                        ('contact_email', models.CharField(blank=True, default='contact@eversoftit.com', max_length=255)),
+                        ('phone', models.CharField(blank=True, default='', max_length=40)),
+                        ('tax_id', models.CharField(blank=True, default='', max_length=100)),
+                        ('industry', models.CharField(blank=True, default='Information Technology', max_length=120)),
+                        ('address_line1', models.CharField(blank=True, default='', max_length=255)),
+                        ('address_line2', models.CharField(blank=True, default='', max_length=255)),
+                        ('city', models.CharField(blank=True, default='', max_length=100)),
+                        ('state', models.CharField(blank=True, default='', max_length=100)),
+                        ('country', models.CharField(blank=True, default='India', max_length=100)),
+                        ('pincode', models.CharField(blank=True, default='', max_length=20)),
+                        ('timezone', models.CharField(blank=True, default='Asia/Kolkata', max_length=100)),
+                        ('currency', models.CharField(blank=True, default='INR', max_length=10)),
+                        ('date_format', models.CharField(blank=True, default='DD/MM/YYYY', max_length=30)),
+                        ('work_week', models.JSONField(blank=True, default=list)),
+                        ('emp_id_prefix', models.CharField(blank=True, default='EV-', max_length=20)),
+                        ('emp_id_min_digits', models.IntegerField(default=4)),
+                        ('emp_id_start_number', models.IntegerField(default=1)),
+                        ('emp_id_suffix', models.CharField(blank=True, default='', max_length=20)),
+                        ('updated_by', models.CharField(blank=True, default='', max_length=255)),
+                        ('updated_at', models.DateTimeField(auto_now=True)),
+                    ],
+                    options={
+                        'db_table': 'company_details',
+                        'ordering': ['id'],
+                    },
+                ),
+                migrations.AddField(
+                    model_name='appuser',
+                    name='employee_id',
+                    field=models.CharField(blank=True, db_index=True, default='', max_length=64),
+                ),
+                migrations.AddField(
+                    model_name='userprofile',
+                    name='employee_id',
+                    field=models.CharField(blank=True, db_index=True, default='', max_length=64),
+                ),
             ],
-            options={
-                'db_table': 'company_details',
-                'ordering': ['id'],
-            },
-        ),
-        migrations.AddField(
-            model_name='appuser',
-            name='employee_id',
-            field=models.CharField(blank=True, db_index=True, default='', max_length=64),
-        ),
-        migrations.AddField(
-            model_name='userprofile',
-            name='employee_id',
-            field=models.CharField(blank=True, db_index=True, default='', max_length=64),
+            database_operations=[
+                migrations.RunPython(create_tables_and_columns_if_not_exists, noop),
+            ],
         ),
         migrations.RunPython(seed_and_backfill, noop),
     ]
