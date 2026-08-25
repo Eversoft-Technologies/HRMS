@@ -45,7 +45,7 @@ def seed_and_backfill(apps, schema_editor):
                 UserProfile.objects.filter(email=user.email, employee_id='').update(employee_id=eid)
             counter += 1
 
-    for prof in UserProfile.objects.filter(employee_id='').order_by('id'):
+    for prof in UserProfile.objects.filter(employee_id='').order_by('email'):
         eid = f"{prefix}{str(counter).zfill(digits)}{suffix}"
         prof.employee_id = eid
         prof.save(update_fields=['employee_id'])
