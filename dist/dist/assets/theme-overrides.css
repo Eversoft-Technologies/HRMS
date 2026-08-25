@@ -708,9 +708,46 @@ body:has(.hrms-drawer-backdrop) #hrms-live-btn {
   border-radius: 50%; display: flex; align-items: center; justify-content: center;
   overflow: hidden; flex-shrink: 0;
 }
-.hrms-drawer-name { font-family: var(--font-d); font-size: 18px; font-weight: 700; color: var(--text); margin-top: 8px; }
-.hrms-drawer-email { font-size: 13px; color: var(--text3); }
-.hrms-drawer-acct { font-size: 12.5px; color: var(--text3); margin-top: 3px; }
+.hrms-drawer-email,
+.hrms-drawer-empid {
+  font-size: 13px !important;
+  color: var(--text3) !important;
+  user-select: text !important;
+  -webkit-user-select: text !important;
+  cursor: pointer !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 5px !important;
+  margin-top: 3px !important;
+  padding: 2px 8px !important;
+  border-radius: 6px !important;
+  transition: all 0.15s ease !important;
+  background: transparent !important;
+  border: 1px solid transparent !important;
+  font-weight: 400 !important;
+}
+
+.hrms-drawer-email:hover,
+.hrms-drawer-empid:hover {
+  background: var(--bg3) !important;
+  border-color: var(--border2) !important;
+  color: var(--text) !important;
+}
+
+.hrms-drawer-copy-hint {
+  font-size: 11px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  margin-left: 2px;
+}
+
+.hrms-drawer-email:hover .hrms-drawer-copy-hint,
+.hrms-drawer-empid:hover .hrms-drawer-copy-hint {
+  opacity: 0.7;
+}
+
+.hrms-drawer-acct { font-size: 12.5px; color: var(--text3); margin-top: 5px; }
 .hrms-drawer-acct .hrms-drawer-dot { margin: 0 7px; opacity: 0.6; }
 .hrms-drawer-signout { color: var(--danger); font-weight: 600; cursor: pointer; }
 
@@ -1521,3 +1558,98 @@ div:has(> #hrms-kpi-btn) button svg {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
 }
+
+/* ============================================================
+   Dashboard High-Contrast Theme Overrides for Dark and Light Mode
+   ============================================================ */
+.hrms-dash .card-title,
+.hrms-dash .hrms-pro-card-title,
+.hrms-dash-pro-card .hrms-pro-card-title {
+  color: var(--text) !important;
+  font-weight: 700 !important;
+  font-size: 12px !important;
+  letter-spacing: 0.5px !important;
+  text-transform: uppercase !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+}
+
+html[data-theme="dark"] .hrms-dash .card-title,
+html[data-theme="dark"] .hrms-dash .hrms-pro-card-title,
+html[data-theme="dark"] .hrms-dash-pro-card .hrms-pro-card-title,
+html[data-theme="dark"] .hrms-action-text,
+html[data-theme="dark"] .hrms-event-title,
+html[data-theme="dark"] .hrms-dept-row-item span:first-child span:last-child {
+  color: #f1f5f9 !important;
+}
+
+html[data-theme="light"] .hrms-dash .card-title,
+html[data-theme="light"] .hrms-dash .hrms-pro-card-title,
+html[data-theme="light"] .hrms-dash-pro-card .hrms-pro-card-title,
+html[data-theme="light"] .hrms-action-text,
+html[data-theme="light"] .hrms-event-title,
+html[data-theme="light"] .hrms-dept-row-item span:first-child span:last-child {
+  color: #0f172a !important;
+}
+
+html[data-theme="dark"] .hrms-att-col-label,
+html[data-theme="dark"] .hrms-att-col-icon,
+html[data-theme="dark"] .hrms-event-sub {
+  color: #cbd5e1 !important;
+}
+
+html[data-theme="light"] .hrms-att-col-label,
+html[data-theme="light"] .hrms-att-col-icon,
+html[data-theme="light"] .hrms-event-sub {
+  color: #334155 !important;
+}
+
+/* ── Company Details & Employee ID Settings Styling ── */
+.hrms-cs-wrapper {
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+.hrms-cs-wrapper .card {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+}
+.hrms-cs-wrapper input,
+.hrms-cs-wrapper select {
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.hrms-cs-wrapper input:focus,
+.hrms-cs-wrapper select:focus {
+  border-color: var(--accent, #3b82f6) !important;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.18) !important;
+}
+
+html[data-theme="dark"] .hrms-cs-wrapper .card {
+  background: var(--bg2, #182234) !important;
+  border-color: var(--border2, #26354a) !important;
+}
+html[data-theme="dark"] .hrms-cs-wrapper input,
+html[data-theme="dark"] .hrms-cs-wrapper select {
+  background: var(--bg3, #0f172a) !important;
+  border-color: var(--border2, #334155) !important;
+  color: #f1f5f9 !important;
+}
+html[data-theme="dark"] .hrms-cs-wrapper label {
+  color: #cbd5e1 !important;
+}
+
+html[data-theme="light"] .hrms-cs-wrapper .card {
+  background: #ffffff !important;
+  border-color: #e2e8f0 !important;
+}
+html[data-theme="light"] .hrms-cs-wrapper input,
+html[data-theme="light"] .hrms-cs-wrapper select {
+  background: #f8fafc !important;
+  border-color: #cbd5e1 !important;
+  color: #0f172a !important;
+}
+html[data-theme="light"] .hrms-cs-wrapper label {
+  color: #334155 !important;
+}
+
+
