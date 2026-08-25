@@ -85,6 +85,16 @@ urlpatterns = [
     path('user-settings/<str:email>/documents', views.user_documents),
     path('user-settings/<str:email>/documents/<str:doc_type>', views.user_document_detail),
 
+    # Company Details & General System Settings (Settings -> General)
+    path('settings/general', views.company_settings),
+    path('settings/general/', views.company_settings),
+    path('settings/company', views.company_settings),
+    path('settings/company/', views.company_settings),
+    path('settings/general/backfill', views.company_settings_backfill),
+    path('settings/general/backfill/', views.company_settings_backfill),
+    path('settings/company/backfill', views.company_settings_backfill),
+    path('settings/company/backfill/', views.company_settings_backfill),
+
     # Employees module — Attendance / Check-In-Out
     path('attendance', views.attendance),
     path('attendance/check-in', views.attendance_check_in),
@@ -149,6 +159,7 @@ urlpatterns = [
     path('companies', views.companies),
     path('me/permissions', views.my_permissions),
 
+    path('dashboard/stats', views.dashboard_stats),
     path('config', views.client_config),
     path('health', views.health),
 

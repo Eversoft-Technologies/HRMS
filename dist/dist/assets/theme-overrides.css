@@ -708,9 +708,46 @@ body:has(.hrms-drawer-backdrop) #hrms-live-btn {
   border-radius: 50%; display: flex; align-items: center; justify-content: center;
   overflow: hidden; flex-shrink: 0;
 }
-.hrms-drawer-name { font-family: var(--font-d); font-size: 18px; font-weight: 700; color: var(--text); margin-top: 8px; }
-.hrms-drawer-email { font-size: 13px; color: var(--text3); }
-.hrms-drawer-acct { font-size: 12.5px; color: var(--text3); margin-top: 3px; }
+.hrms-drawer-email,
+.hrms-drawer-empid {
+  font-size: 13px !important;
+  color: var(--text3) !important;
+  user-select: text !important;
+  -webkit-user-select: text !important;
+  cursor: pointer !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 5px !important;
+  margin-top: 3px !important;
+  padding: 2px 8px !important;
+  border-radius: 6px !important;
+  transition: all 0.15s ease !important;
+  background: transparent !important;
+  border: 1px solid transparent !important;
+  font-weight: 400 !important;
+}
+
+.hrms-drawer-email:hover,
+.hrms-drawer-empid:hover {
+  background: var(--bg3) !important;
+  border-color: var(--border2) !important;
+  color: var(--text) !important;
+}
+
+.hrms-drawer-copy-hint {
+  font-size: 11px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  margin-left: 2px;
+}
+
+.hrms-drawer-email:hover .hrms-drawer-copy-hint,
+.hrms-drawer-empid:hover .hrms-drawer-copy-hint {
+  opacity: 0.7;
+}
+
+.hrms-drawer-acct { font-size: 12.5px; color: var(--text3); margin-top: 5px; }
 .hrms-drawer-acct .hrms-drawer-dot { margin: 0 7px; opacity: 0.6; }
 .hrms-drawer-signout { color: var(--danger); font-weight: 600; cursor: pointer; }
 
