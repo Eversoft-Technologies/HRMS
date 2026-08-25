@@ -20,6 +20,7 @@ from .models import (
     AppUser,
     AttendanceEvent,
     Company,
+    CompanyDetail,
     EmployeeAttendance,
     EmployeeTask,
     Module,
@@ -523,22 +524,98 @@ class QuestionSetSerializer(serializers.ModelSerializer):
 # ---------------------------------------------------------------------------
 # App Users (Settings -> User Access logins)
 # ---------------------------------------------------------------------------
+# Company Details & General System Settings
+# ---------------------------------------------------------------------------
+class CompanyDetailSerializer(serializers.ModelSerializer):
+    companyName = serializers.CharField(source='company_name', required=False, allow_blank=True)
+    legalName = serializers.CharField(source='legal_name', required=False, allow_blank=True)
+    brandName = serializers.CharField(source='brand_name', required=False, allow_blank=True)
+    companyLogo = serializers.CharField(source='company_logo', required=False, allow_blank=True)
+    website = serializers.CharField(source='website', required=False, allow_blank=True)
+    contactEmail = serializers.CharField(source='contact_email', required=False, allow_blank=True)
+    phone = serializers.CharField(source='phone', required=False, allow_blank=True)
+    taxId = serializers.CharField(source='tax_id', required=False, allow_blank=True)
+    industry = serializers.CharField(source='industry', required=False, allow_blank=True)
+    addressLine1 = serializers.CharField(source='address_line1', required=False, allow_blank=True)
+    addressLine2 = serializers.CharField(source='address_line2', required=False, allow_blank=True)
+    city = serializers.CharField(source='city', required=False, allow_blank=True)
+    state = serializers.CharField(source='state', required=False, allow_blank=True)
+    country = serializers.CharField(source='country', required=False, allow_blank=True)
+    pincode = serializers.CharField(source='pincode', required=False, allow_blank=True)
+    timezone = serializers.CharField(source='timezone', required=False, allow_blank=True)
+    currency = serializers.CharField(source='currency', required=False, allow_blank=True)
+    dateFormat = serializers.CharField(source='date_format', required=False, allow_blank=True)
+    workWeek = serializers.JSONField(source='work_week', required=False)
+    empIdPrefix = serializers.CharField(source='emp_id_prefix', required=False, allow_blank=True)
+    empIdMinDigits = serializers.IntegerField(source='emp_id_min_digits', required=False)
+    empIdStartNumber = serializers.IntegerField(source='emp_id_start_number', required=False)
+    empIdSuffix = serializers.CharField(source='emp_id_suffix', required=False, allow_blank=True)
+    updatedBy = serializers.CharField(source='updated_by', required=False, allow_blank=True)
+
+    class Meta:
+        model = CompanyDetail
+        fields = [
+            'id', 'companyName', 'legalName', 'brandName', 'companyLogo', 'website',
+            'contactEmail', 'phone', 'taxId', 'industry', 'addressLine1', 'addressLine2',
+            'city', 'state', 'country', 'pincode', 'timezone', 'currency', 'dateFormat',
+            'workWeek', 'empIdPrefix', 'empIdMinDigits', 'empIdStartNumber', 'empIdSuffix',
+            'updatedBy',
+        ]
+        read_only_fields = ['id']
+
+    def to_representation(self, instance):
+        return {
+            'id': instance.id,
+            'companyName': instance.company_name or 'Eversoft Technologies',
+            'legalName': instance.legal_name or '',
+            'brandName': instance.brand_name or 'Eversoft',
+            'companyLogo': instance.company_logo or '',
+            'website': instance.website or 'https://eversoftit.com',
+            'contactEmail': instance.contact_email or 'contact@eversoftit.com',
+            'phone': instance.phone or '',
+            'taxId': instance.tax_id or '',
+            'industry': instance.industry or 'Information Technology',
+            'addressLine1': instance.address_line1 or '',
+            'addressLine2': instance.address_line2 or '',
+            'city': instance.city or '',
+            'state': instance.state or '',
+            'country': instance.country or 'India',
+            'pincode': instance.pincode or '',
+            'timezone': instance.timezone or 'Asia/Kolkata',
+            'currency': instance.currency or 'INR',
+            'dateFormat': instance.date_format or 'DD/MM/YYYY',
+            'workWeek': safe_list(instance.work_week) or ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'],
+            'empIdPrefix': instance.emp_id_prefix if instance.emp_id_prefix is not None else 'EV-',
+            'empIdMinDigits': instance.emp_id_min_digits or 4,
+            'empIdStartNumber': instance.emp_id_start_number or 1,
+            'empIdSuffix': instance.emp_id_suffix or '',
+            'updatedBy': instance.updated_by or '',
+            'updatedAt': instance.updated_at.strftime(DATETIME_FMT) if instance.updated_at else None,
+        }
+
+
+# ---------------------------------------------------------------------------
+# App Users (Settings -> User Access logins)
+# ---------------------------------------------------------------------------
 class AppUserSerializer(serializers.ModelSerializer):
     name = serializers.CharField(source='full_name')
+    employeeId = serializers.CharField(source='employee_id', required=False, allow_blank=True, default='')
 
     class Meta:
         model = AppUser
-        fields = ['name', 'email', 'password', 'initials', 'role', 'status']
+        fields = ['name', 'email', 'password', 'initials', 'role', 'status', 'employeeId']
         extra_kwargs = {
             'initials': {'required': False, 'allow_blank': True},
             'role': {'required': False, 'default': 'admin'},
             'status': {'required': False, 'default': 'active'},
+            'employeeId': {'required': False, 'allow_blank': True},
         }
 
     def to_representation(self, instance):
         # Keys match what the React app (services/usersApi.js + AuthContext) reads.
         return {
             'id': instance.id,
+            'employeeId': instance.employee_id or '',
             'name': instance.full_name,
             'email': instance.email,
             'password': instance.password,
@@ -560,6 +637,7 @@ class AppUserSerializer(serializers.ModelSerializer):
 # User Settings: Profile / Email config / Documents
 # ---------------------------------------------------------------------------
 class UserProfileSerializer(serializers.ModelSerializer):
+    employeeId = serializers.CharField(source='employee_id', required=False, allow_blank=True, default='')
     firstName = serializers.CharField(source='first_name', required=False, allow_blank=True, default='')
     lastName = serializers.CharField(source='last_name', required=False, allow_blank=True, default='')
     altEmail = serializers.CharField(source='alt_email', required=False, allow_blank=True, default='')
@@ -569,10 +647,11 @@ class UserProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = UserProfile
         fields = [
-            'email', 'firstName', 'lastName', 'phone', 'altEmail',
+            'email', 'employeeId', 'firstName', 'lastName', 'phone', 'altEmail',
             'bloodGroup', 'department', 'designation', 'address', 'profilePic',
         ]
         extra_kwargs = {
+            'employeeId': {'required': False, 'allow_blank': True, 'default': ''},
             'phone': {'required': False, 'allow_blank': True, 'default': ''},
             'department': {'required': False, 'allow_blank': True, 'default': ''},
             'designation': {'required': False, 'allow_blank': True, 'default': ''},
@@ -582,6 +661,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
     def to_representation(self, instance):
         return {
             'email': instance.email,
+            'employeeId': instance.employee_id or '',
             'firstName': instance.first_name or '',
             'lastName': instance.last_name or '',
             'phone': instance.phone or '',
