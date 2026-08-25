@@ -143,6 +143,7 @@ class Command(BaseCommand):
                 # Onboarding workflow roles. Each owns exactly one stage, so no
                 # single role can drive a candidate end-to-end unaided.
                 {'name': 'Manager', 'desc': 'Approve, reject, or return onboarding candidates'},
+                {'name': 'Team Lead', 'desc': 'Review work submitted by their team; view attendance and leave'},
                 {'name': 'IT Admin', 'desc': 'Allocate and track IT assets for onboarding candidates'},
                 {'name': 'Payroll Admin', 'desc': 'Complete payroll information for onboarding candidates'},
                 {'name': 'Recruiter', 'desc': 'Create and edit onboarding candidates'},
@@ -192,6 +193,13 @@ class Command(BaseCommand):
                     'attendance.view', 'leave.view', 'leave.action',
                     'settings.view',
                     'onboarding.view', 'onboarding.approve',
+                ],
+                # A lead reviews their team's work. Deliberately without
+                # submission.action / leave.action / onboarding.* — grant those
+                # from the RBAC screen if a lead should approve as well as see.
+                'Team Lead': [
+                    'employee.view', 'submission.view_all',
+                    'attendance.view', 'leave.view', 'settings.view',
                 ],
                 'IT Admin': [
                     'settings.view',
