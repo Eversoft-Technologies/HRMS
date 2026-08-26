@@ -121,6 +121,11 @@ urlpatterns = [
     path('attendance/wfh/<int:pk>', views.wfh_request_detail),
     path('attendance/corrections', views.attendance_corrections),
     path('attendance/corrections/<int:pk>', views.attendance_correction_detail),
+    # Forgot-punch tickets (raise a ticket beside Request WFH)
+    path('attendance/punch-ticket', views.attendance_punch_ticket),
+    path('attendance/punch-ticket/pending', views.attendance_punch_ticket_pending),
+    path('attendance/punch-ticket/<int:pk>/proof', views.attendance_punch_ticket_proof),
+    path('attendance/punch-ticket/<int:pk>/decide', views.attendance_punch_ticket_decide),
     path('attendance/<int:pk>', views.attendance_detail),
 
     # Shifts

@@ -158,7 +158,39 @@
       '.haa-scope .haa-tr .c-tm{color:var(--text3);}',
       '.haa-scope .haa-tr .c-since{color:var(--text3);text-align:right;font-size:11.5px;}',
       '.haa-scope .haa-dot{width:9px;height:9px;border-radius:50%;justify-self:center;}',
-      '@media(max-width:520px){' + W + ' .haa-row{grid-template-columns:1fr;}}'
+      '@media(max-width:520px){' + W + ' .haa-row{grid-template-columns:1fr;}}',
+      /* raise-a-ticket button row */
+      '.haa-scope .haa-btnrow{display:flex;gap:10px;flex-wrap:wrap;align-items:center;}',
+      '.haa-scope .haa-btn-alt{background:var(--bg3);color:var(--text);border:1px solid var(--border2);}',
+      /* attendance-ticket modal */
+      '.hat-back{position:fixed;inset:0;z-index:100000;background:rgba(0,0,0,.55);display:flex;align-items:flex-start;justify-content:center;padding:32px 16px;overflow:auto;}',
+      '.hat-modal{background:var(--surface,#fff);color:var(--text);border:1px solid var(--border2);border-radius:16px;width:100%;max-width:560px;padding:22px;font-family:var(--font,Arial,Helvetica,sans-serif);box-shadow:0 24px 60px rgba(0,0,0,.35);}',
+      '.hat-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px;}',
+      '.hat-title{font-size:17px;font-weight:800;color:var(--text);}',
+      '.hat-count{font-size:11.5px;font-weight:700;color:var(--text3);background:var(--bg3);border:1px solid var(--border2);border-radius:999px;padding:4px 11px;white-space:nowrap;}',
+      '.hat-f{margin-bottom:12px;display:flex;flex-direction:column;gap:5px;}',
+      '.hat-f label{font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.4px;}',
+      '.hat-req{color:var(--danger,#f75f4f);}',
+      '.hat-in{background:var(--bg3);border:1px solid var(--border2);border-radius:9px;color:var(--text);font:inherit;font-size:13px;padding:9px 11px;outline:none;box-sizing:border-box;width:100%;}',
+      '.hat-in:focus{border-color:var(--accent);}',
+      'textarea.hat-in{min-height:64px;resize:vertical;}',
+      '.hat-note{font-size:12px;color:var(--text2);background:var(--bg3);border:1px solid var(--border2);border-left:3px solid var(--accent);border-radius:8px;padding:9px 11px;margin-bottom:12px;}',
+      '.hat-block{font-size:12.5px;color:var(--text2);background:var(--bg3);border:1px solid var(--border2);border-radius:9px;padding:12px 13px;margin-bottom:6px;}',
+      '.hat-file{font-size:12px;color:var(--text2);}',
+      '.hat-preview{margin-top:8px;}',
+      '.hat-preview img{max-width:100%;max-height:180px;border-radius:9px;border:1px solid var(--border2);display:block;}',
+      '.hat-mf{display:flex;justify-content:flex-end;gap:10px;margin-top:8px;}',
+      '.hat-mf button{border:none;border-radius:9px;font:inherit;font-size:13px;font-weight:700;padding:9px 16px;cursor:pointer;}',
+      '.hat-mf .ok{background:var(--accent);color:#fff;}',
+      '.hat-mf .cx{background:rgba(127,127,127,.18);color:var(--text);}',
+      '.hat-mf button:disabled{opacity:.55;cursor:not-allowed;}',
+      '.hat-msg{font-size:11.5px;font-weight:600;min-height:14px;margin-top:8px;}',
+      '.hat-msg.ok{color:var(--success,#22d3a5);}.hat-msg.err{color:var(--danger,#f75f4f);}',
+      '.hat-reason{font-style:italic;}',
+      '.hat-proofview{max-width:640px;}',
+      '.hat-proofimg{max-height:70vh;overflow:auto;border-radius:10px;border:1px solid var(--border2);}',
+      '.hat-proofimg img{width:100%;display:block;}',
+      '.hat-loading,.hat-err{padding:20px;text-align:center;color:var(--text2);font-size:13px;}'
     ].join('');
     var st = document.createElement('style');
     st.id = ID.style; st.textContent = css;
@@ -197,7 +229,10 @@
           '<label>To<input type="date" id="haa-to" required></label>' +
         '</div>' +
         '<label>Reason<textarea id="haa-reason" placeholder="Optional — why do you need to work from home?"></textarea></label>' +
-        '<button type="submit" class="haa-btn" id="haa-submit">Request WFH</button>' +
+        '<div class="haa-btnrow">' +
+          '<button type="submit" class="haa-btn" id="haa-submit">Request WFH</button>' +
+          '<button type="button" class="haa-btn haa-btn-alt" id="haa-ticket-open">Raise a Ticket</button>' +
+        '</div>' +
         '<span class="haa-msg" id="haa-msg"></span>' +
       '</form>' +
       '<div class="haa-list-title">My WFH requests</div>' +
@@ -209,6 +244,8 @@
     card.querySelector('#haa-from').value = todayIso();
     card.querySelector('#haa-to').value = todayIso();
     card.querySelector('#haa-form').addEventListener('submit', function (e) { e.preventDefault(); submitWfh(card); });
+    var tk = card.querySelector('#haa-ticket-open');
+    if (tk) tk.addEventListener('click', function () { openTicketModal(); });
     return card;
   }
 
@@ -499,6 +536,176 @@
   }
 
   /* ── layout ───────────────────────────────────────────────────────────── */
+  /* ---- Forgot-punch tickets ---- */
+  var ticketProofData = '';
+  function kindLabel(k) { return k === 'forgot_checkin' ? 'Check-in correction' : (k === 'forgot_checkout' ? 'Check-out correction' : (k || '')); }
+  function setMsg(el, t, c) { if (!el) return; el.textContent = t || ''; el.className = 'hat-msg' + (c ? (' ' + c) : ''); }
+  function closeTicketModal() { var b = document.getElementById('hat-back'); if (b && b.parentNode) b.parentNode.removeChild(b); }
+
+  function openTicketModal() {
+    var em = actorEmail();
+    if (!em) { if (window.alert) window.alert('Please sign in first.'); return; }
+    ensureStyle();
+    var back = document.createElement('div');
+    back.id = 'hat-back'; back.className = 'hat-back haa-scope';
+    back.innerHTML = '<div class="hat-modal"><div class="hat-loading">Loading…</div></div>';
+    back.addEventListener('click', function (e) { if (e.target === back) closeTicketModal(); });
+    document.body.appendChild(back);
+    checkApprover(function (isAppr) {
+      api('/api/attendance/punch-ticket?email=' + encodeURIComponent(em))
+        .then(function (ctx) { renderTicketModal(back, ctx, isAppr); if (isAppr) loadTicketApprovals(back); })
+        .catch(function (err) {
+          var m = back.querySelector('.hat-modal');
+          if (m) m.innerHTML = '<div class="hat-err">' + esc((err && err.message) || 'Could not load tickets.') + '</div><div class="hat-mf"><button class="cx" id="hat-x">Close</button></div>';
+          var x = back.querySelector('#hat-x'); if (x) x.onclick = closeTicketModal;
+        });
+    });
+  }
+
+  function renderTicketModal(back, ctx, isAppr) {
+    ticketProofData = '';
+    var m = back.querySelector('.hat-modal'); if (!m) return;
+    var canIn = ctx.canRaiseCheckin, canOut = ctx.canRaiseCheckout;
+    var remaining = (ctx.remaining == null ? 0 : ctx.remaining), limit = ctx.limit || 3;
+    var picker = '';
+    if (canIn && canOut) {
+      picker = '<div class="hat-f"><label>What did you forget?</label>' +
+        '<select id="hat-kind" class="hat-in">' +
+          '<option value="forgot_checkout">Correct check-out (missed)</option>' +
+          '<option value="forgot_checkin">Correct check-in (late or missed)</option>' +
+        '</select></div>';
+    } else if (canIn) {
+      picker = '<input type="hidden" id="hat-kind" value="forgot_checkin">' +
+        '<div class="hat-note">Correct your <b>check-in</b>. On approval it is set to the office start time (' + esc(ctx.officeStart || '09:00') + ') — use this if you missed check-in, or checked in late but were working from the start.</div>';
+    } else if (canOut) {
+      picker = '<input type="hidden" id="hat-kind" value="forgot_checkout">' +
+        '<div class="hat-note">You forgot to <b>check out</b> today. On approval your check-out becomes the office end time (' + esc(ctx.officeEnd || '18:00') + ').</div>';
+    }
+    var raise;
+    if (canIn || canOut) {
+      if (remaining <= 0) {
+        raise = '<div class="hat-block">You have used all ' + limit + ' attendance tickets this month.</div>';
+      } else {
+        raise = picker +
+          '<div class="hat-f"><label>Reason <span class="hat-req">*</span></label>' +
+            '<textarea id="hat-reason" class="hat-in" placeholder="Why did you forget to punch? This is what the approver verifies."></textarea></div>' +
+          '<div class="hat-f"><label>Proof — photo of attendance sheet <span class="hat-req">*</span></label>' +
+            '<input type="file" accept="image/*" id="hat-file" class="hat-file">' +
+            '<div id="hat-preview" class="hat-preview" style="display:none"></div></div>' +
+          '<div class="hat-mf"><button class="cx" id="hat-cancel">Cancel</button>' +
+            '<button class="ok" id="hat-submit">Submit ticket</button></div>' +
+          '<div class="hat-msg" id="hat-msg"></div>';
+      }
+    } else {
+      raise = '<div class="hat-block">' + esc(ctx.blockReason || 'Nothing to correct for today.') + '</div>';
+    }
+    var mine = (ctx.tickets || []).map(function (t) {
+      var cls = String(t.status || 'Pending').toLowerCase();
+      return '<li class="haa-li"><span><span class="haa-who">' + esc(kindLabel(t.kind)) + '</span>' +
+        '<div class="haa-sub">' + esc(t.date || '') + (t.reviewerNote ? ' Â· ' + esc(t.reviewerNote) : '') + '</div></span>' +
+        '<span class="haa-pill ' + esc(cls) + '">' + esc(t.status || 'Pending') + '</span></li>';
+    }).join('') || '<li class="haa-empty">No tickets yet.</li>';
+
+    m.innerHTML =
+      '<div class="hat-head"><div class="hat-title">Attendance Tickets</div>' +
+        '<div class="hat-count">' + remaining + ' of ' + limit + ' left this month</div></div>' +
+      raise +
+      '<div class="haa-list-title">My recent tickets</div>' +
+      '<ul class="haa-list">' + mine + '</ul>' +
+      '<div id="hat-approvals"></div>' +
+      ((canIn || canOut) && remaining > 0 ? '' : '<div class="hat-mf"><button class="cx" id="hat-close2">Close</button></div>');
+
+    var cancel = m.querySelector('#hat-cancel') || m.querySelector('#hat-close2');
+    if (cancel) cancel.onclick = closeTicketModal;
+    var file = m.querySelector('#hat-file'); if (file) file.addEventListener('change', onTicketFile);
+    var sub = m.querySelector('#hat-submit'); if (sub) sub.onclick = function () { submitTicket(back, isAppr); };
+  }
+
+  function onTicketFile(e) {
+    var f = e.target.files && e.target.files[0]; if (!f) return;
+    var prev = document.getElementById('hat-preview');
+    var reader = new FileReader();
+    reader.onload = function () {
+      var img = new Image();
+      img.onload = function () {
+        var max = 1400, w = img.width, h = img.height;
+        if (w > max || h > max) { var sc = Math.min(max / w, max / h); w = Math.round(w * sc); h = Math.round(h * sc); }
+        try {
+          var cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+          cv.getContext('2d').drawImage(img, 0, 0, w, h);
+          ticketProofData = cv.toDataURL('image/jpeg', 0.72);
+        } catch (_) { ticketProofData = reader.result; }
+        if (prev) { prev.style.display = 'block'; prev.innerHTML = '<img src="' + ticketProofData + '" alt="proof">'; }
+      };
+      img.onerror = function () { ticketProofData = reader.result; if (prev) { prev.style.display = 'block'; prev.innerHTML = '<img src="' + ticketProofData + '" alt="proof">'; } };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(f);
+  }
+
+  function submitTicket(back, isAppr) {
+    var m = back.querySelector('.hat-modal'); var em = actorEmail();
+    var msg = m.querySelector('#hat-msg'), sub = m.querySelector('#hat-submit');
+    var kindEl = m.querySelector('#hat-kind'); var kind = kindEl ? kindEl.value : '';
+    var rEl = m.querySelector('#hat-reason'); var reason = (rEl ? rEl.value : '').trim();
+    setMsg(msg, '', '');
+    if (!kind) { setMsg(msg, 'Please choose what you forgot.', 'err'); return; }
+    if (!reason) { setMsg(msg, 'Please enter a reason.', 'err'); return; }
+    if (!ticketProofData) { setMsg(msg, 'Please attach a photo of the attendance sheet.', 'err'); return; }
+    if (sub) { sub.disabled = true; sub.textContent = 'Submitting…'; }
+    api('/api/attendance/punch-ticket', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: em, employeeName: actorName(), kind: kind, reason: reason, proofImage: ticketProofData }) })
+      .then(function () { return api('/api/attendance/punch-ticket?email=' + encodeURIComponent(em)); })
+      .then(function (ctx2) {
+        renderTicketModal(back, ctx2, isAppr);
+        if (isAppr) loadTicketApprovals(back);
+        var okm = back.querySelector('#hat-msg') || back.querySelector('.hat-block');
+        var note = document.createElement('div'); note.className = 'hat-msg ok'; note.textContent = 'Ticket submitted for approval.';
+        var head = back.querySelector('.hat-head'); if (head && head.parentNode) head.parentNode.insertBefore(note, head.nextSibling);
+      })
+      .catch(function (err) { if (sub) { sub.disabled = false; sub.textContent = 'Submit ticket'; } setMsg(msg, (err && err.message) || 'Could not submit the ticket.', 'err'); });
+  }
+
+  function loadTicketApprovals(back) {
+    var box = back.querySelector('#hat-approvals'); if (!box) return;
+    api('/api/attendance/punch-ticket/pending').then(function (rows) {
+      rows = Array.isArray(rows) ? rows : [];
+      var head = '<div class="haa-list-title">Pending tickets (team)</div>';
+      if (!rows.length) { box.innerHTML = head + '<ul class="haa-list"><li class="haa-empty">No pending tickets.</li></ul>'; return; }
+      box.innerHTML = head + '<ul class="haa-list">' + rows.map(function (r) {
+        return '<li class="haa-li"><span><span class="haa-who">' + esc(r.employee || r.email) + '</span>' +
+          '<div class="haa-sub">' + esc(kindLabel(r.kind)) + ' Â· ' + esc(r.date || '') + '</div>' +
+          '<div class="haa-sub hat-reason">' + esc(r.reason || '') + '</div></span>' +
+          '<div class="haa-li-actions">' +
+            (r.hasProof ? '<button class="haa-switch" data-proof="' + esc(r.id) + '">Proof</button>' : '') +
+            '<button class="haa-appr-btn approve" data-appr="' + esc(r.id) + '">Approve</button>' +
+            '<button class="haa-appr-btn reject" data-rej="' + esc(r.id) + '">Reject</button>' +
+          '</div></li>';
+      }).join('') + '</ul>';
+      box.querySelectorAll('[data-appr]').forEach(function (b) { b.onclick = function () { decideTicket(back, 'approve', b.getAttribute('data-appr'), b); }; });
+      box.querySelectorAll('[data-rej]').forEach(function (b) { b.onclick = function () { decideTicket(back, 'reject', b.getAttribute('data-rej'), b); }; });
+      box.querySelectorAll('[data-proof]').forEach(function (b) { b.onclick = function () { viewProof(b.getAttribute('data-proof')); }; });
+    }).catch(function () { box.innerHTML = ''; });
+  }
+
+  function decideTicket(back, action, id, btn) {
+    if (!id) return;
+    var li = btn.closest('.haa-li'); if (li) li.querySelectorAll('button').forEach(function (b) { b.disabled = true; });
+    api('/api/attendance/punch-ticket/' + id + '/decide', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: action }) })
+      .then(function () { loadTicketApprovals(back); window.dispatchEvent(new CustomEvent('hrmsAttendanceSynced', { detail: {} })); })
+      .catch(function (err) { if (li) li.querySelectorAll('button').forEach(function (b) { b.disabled = false; }); if (window.alert) window.alert((err && err.message) || 'Could not update the ticket.'); });
+  }
+
+  function viewProof(id) {
+    api('/api/attendance/punch-ticket/' + id + '/proof').then(function (d) {
+      var v = document.createElement('div'); v.className = 'hat-back haa-scope'; v.style.zIndex = '100001';
+      v.innerHTML = '<div class="hat-modal hat-proofview"><div class="hat-head"><div class="hat-title">Proof of attendance</div></div>' +
+        '<div class="hat-proofimg"><img src="' + ((d && d.proofImage) || '') + '" alt="proof"></div>' +
+        '<div class="hat-mf"><button class="cx">Close</button></div></div>';
+      v.addEventListener('click', function (e) { if (e.target === v || (e.target.classList && e.target.classList.contains('cx'))) v.remove(); });
+      document.body.appendChild(v);
+    }).catch(function (err) { if (window.alert) window.alert((err && err.message) || 'Could not load the proof.'); });
+  }
+
   function appendOrdered(grid, node, order) {
     node.style.order = order;
     if (node.parentElement !== grid) grid.appendChild(node);
