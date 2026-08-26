@@ -353,6 +353,11 @@
     if (onBreak && !keyIsBreak) {
       localStorage.setItem(STORAGE_STATUS, 'away');
       render();
+    } else if (!onBreak && keyIsBreak) {
+      // Breaks can be ended from the attendance card, so the picker must not
+      // keep showing the cached Away status after the server clears presence.
+      localStorage.setItem(STORAGE_STATUS, 'available');
+      render();
     }
   }
 

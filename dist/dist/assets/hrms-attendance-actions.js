@@ -11,7 +11,9 @@
  *   • Overtime is shown inside the check-in card (not its own card).
  *   • Work From Home: request form + your requests + (for admins) approvals.
  *   • Approved WFH gets a "Switch to WFH" button that logs a remote-switch on
- *     the same channel the app's own "Switch to Remote" uses.
+ *     the same channel the app's own "Switch to Remote" uses. A refusal from
+ *     either button lands on our message line — the app's card has no slot of
+ *     its own, so it hands us the text via 'hrmsAttendanceEventFailed'.
  *   • Activity Log and Team Status are rendered by us — columned, scrollable,
  *     each with a filter — so the app's stacked/combined card is hidden.
  *   • Retires the old floating Attendance portal button.
@@ -53,6 +55,19 @@
     });
   }
   function onCheckinPage() { return location.pathname.replace(/\/+$/, '') === CHECKIN_PATH; }
+
+  /*
+   * The check-in page's one message line. Returns whether it was there to
+   * write to, so callers can fall back to an alert rather than swallow the
+   * message when our card has not been built yet.
+   */
+  function showAttMsg(text, kind) {
+    var m = document.getElementById('haa-msg');
+    if (!m) return false;
+    m.textContent = text;
+    m.className = 'haa-msg' + (kind ? ' ' + kind : '');
+    return true;
+  }
 
   function api(path, opts) {
     return fetch(path, opts).then(function (r) {
@@ -529,9 +544,8 @@
         btn.disabled = false; btn.textContent = 'Switch to WFH';
         // The server refuses remote without an approved WFH request (or the
         // attendance.remote grant). Say why instead of silently resetting.
-        var m = document.getElementById('haa-msg');
-        if (m) { m.textContent = (err && err.message) || 'Could not switch to remote.'; m.className = 'haa-msg err'; }
-        else if (window.alert) window.alert((err && err.message) || 'Could not switch to remote.');
+        var m = (err && err.message) || 'Could not switch to remote.';
+        if (!showAttMsg(m, 'err') && window.alert) window.alert(m);
       });
   }
 
@@ -768,6 +782,15 @@
     window.addEventListener('popstate', tick);
     window.addEventListener('hrmsAttendanceSynced', function () { loadOvertime(); loadWfh(); loadApprovals(); loadActivity(); loadTeam(); });
     window.addEventListener('hrmsContextUpdate', function () { loadOvertime(); loadWfh(); loadApprovals(); loadActivity(); loadTeam(); });
+    // The app's own Switch to Remote / Switch to Office post the same
+    // remote-switch event our button does, and the server refuses it without
+    // an approved WFH request. That card has nowhere to print the reason, so
+    // it hands it to us; preventDefault() tells it we displayed the message
+    // and it should not alert on top of us.
+    window.addEventListener('hrmsAttendanceEventFailed', function (e) {
+      var msg = (e.detail && e.detail.message) || 'Could not complete that action.';
+      if (onCheckinPage() && showAttMsg(msg, 'err')) e.preventDefault();
+    });
     // Check-in toggled (topbar switch) → refresh totals + team status.
     window.addEventListener('hrmsCheckinToggle', function () { loadOvertime(); loadTeam(); });
     setInterval(function () { if (onCheckinPage() && document.getElementById(ID.team)) { loadTeam(); loadActivity(); loadOvertime(); } }, 30000);

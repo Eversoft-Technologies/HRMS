@@ -1,6 +1,9 @@
 """
 Test the public_candidate_forms view directly to get the real traceback.
-Run: .venv-1\Scripts\python.exe test_portal_api.py
+Run by hand:  .venv\Scripts\python.exe verify_portal_api.py
+
+Deliberately NOT named test_*: it queries real data at import time, so unittest
+discovery picked it up and ran it against the live database on every test run.
 """
 import os
 import sys
