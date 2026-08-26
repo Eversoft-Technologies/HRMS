@@ -20,7 +20,7 @@ file-storage backend and DRF is configured JSON-parser-only.
 """
 import base64
 import binascii
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 
 from django.conf import settings
 from django.db import transaction
@@ -1411,7 +1411,10 @@ def candidate_verification(request, pk):
     if not serializer.is_valid():
         return serializer_err(serializer)
 
-    now = datetime.now()
+    # Business clock, not the host's: verified_at below is stamped with
+    # local_now(), so using datetime.now() here put two stamps from the same
+    # HR decision 5h30m apart on the UTC server.
+    now = local_now()
     # requested_on is stamped once, when the check is first raised; completed_on
     # only once HR has actually decided, so a Pending save leaves it empty.
     extra = {}

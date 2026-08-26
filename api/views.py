@@ -25,10 +25,10 @@ from datetime import datetime, time, timedelta
 from django.conf import settings
 from django.db import transaction
 from django.db.models import (
-    BooleanField, Case, CharField, Count, F, IntegerField, OuterRef, Q, Subquery,
-    Sum, Value, When,
+    BinaryField, BooleanField, Case, CharField, Count, F, Func, IntegerField,
+    OuterRef, Q, Subquery, Sum, Value, When,
 )
-from django.db.models.functions import Coalesce
+from django.db.models.functions import Coalesce, Substr
 from django.http import HttpResponse, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 
@@ -1422,6 +1422,33 @@ def _extract_video_bytes(raw_data):
     return _decode_chunk(raw_str)
 
 
+class _ByteLength(Func):
+    """MySQL LENGTH() — bytes, not characters.
+
+    Django's Length() compiles to CHAR_LENGTH on MySQL. For a binary column
+    that is the same number today, but Range is a byte protocol, so ask for
+    the thing we actually mean.
+    """
+    function = 'LENGTH'
+    output_field = IntegerField()
+
+
+def _blob_slice(pk, start, length):
+    """Bytes [start, start + length) of a recording's video_buffer.
+
+    Sliced by MySQL, so the rest of the LONGBLOB never crosses the wire.
+    SUBSTRING is 1-based, hence start + 1.
+    """
+    if length <= 0:
+        return b''
+    window = (InterviewRecording.objects.filter(pk=pk)
+              .annotate(blob_window=Substr('video_buffer', start + 1, length,
+                                           output_field=BinaryField()))
+              .values_list('blob_window', flat=True)
+              .first())
+    return bytes(window) if window else b''
+
+
 @csrf_exempt
 def recording_video(request, pk):
     """Binary (video/webm) upload + download.
@@ -1446,23 +1473,33 @@ def recording_video(request, pk):
         return err('Method not allowed', 405)
 
     try:
-        row = InterviewRecording.objects.filter(pk=pk).values_list('video_buffer', 'video_mime', 'recording_data').first()
-        if not row:
+        # Size and mime only. Selecting the LONGBLOB here is what made a 1 KB
+        # seek cost a full read: the row was loaded whole and then sliced in
+        # Python, so every scrub in the player pulled the entire recording into
+        # memory. LENGTH() answers the only question the Range parser asks.
+        meta = (InterviewRecording.objects.filter(pk=pk)
+                .annotate(buffer_len=_ByteLength('video_buffer'))
+                .values_list('buffer_len', 'video_mime')
+                .first())
+        if meta is None:
             return err('Recording not found', 404)
 
-        raw_buf, mime, rd = row
-        video_bytes = b''
-
-        if raw_buf:
-            video_bytes = bytes(raw_buf)
-        elif rd:
-            video_bytes = _extract_video_bytes(rd)
-
-        if not video_bytes:
-            return err('No video data for this recording', 404)
-
-        size = len(video_bytes)
+        buffer_len, mime = meta
+        buffer_len = buffer_len or 0
         content_type = mime or 'video/webm'
+
+        # Legacy rows kept the video base64-encoded (or JSON-chunked) in
+        # recording_data. Decoding needs the whole string, so there is nothing
+        # to slice in SQL — those rows still come back in one piece.
+        legacy_bytes = None
+        if not buffer_len:
+            rd = (InterviewRecording.objects.filter(pk=pk)
+                  .values_list('recording_data', flat=True).first())
+            legacy_bytes = _extract_video_bytes(rd) if rd else b''
+            if not legacy_bytes:
+                return err('No video data for this recording', 404)
+
+        size = buffer_len or len(legacy_bytes)
 
         # --- parse optional Range header ---
         import re as _re
@@ -1486,13 +1523,15 @@ def recording_video(request, pk):
                 resp['Accept-Ranges'] = 'bytes'
                 return resp
 
-            chunk = video_bytes[start:end + 1]
+            chunk = (legacy_bytes[start:end + 1] if legacy_bytes is not None
+                     else _blob_slice(pk, start, end - start + 1))
             resp = HttpResponse(chunk, status=206, content_type=content_type)
             resp['Content-Range'] = f'bytes {start}-{end}/{size}'
             resp['Content-Length'] = str(len(chunk))
         else:
-            resp = HttpResponse(video_bytes, status=200, content_type=content_type)
-            resp['Content-Length'] = str(size)
+            body = legacy_bytes if legacy_bytes is not None else _blob_slice(pk, 0, size)
+            resp = HttpResponse(body, status=200, content_type=content_type)
+            resp['Content-Length'] = str(len(body))
 
         resp['Accept-Ranges'] = 'bytes'
         resp['Cache-Control'] = 'public, max-age=31536000'
@@ -2311,6 +2350,21 @@ def _is_checked_in(obj):
     return bool(obj.check_in and (obj.check_out is None or obj.check_in > obj.check_out))
 
 
+def _open_attendance_session(email, today):
+    """Find today's session or an overnight session opened yesterday."""
+    current = EmployeeAttendance.objects.filter(email=email, date=today).first()
+    if current and _is_checked_in(current):
+        return current
+
+    previous = EmployeeAttendance.objects.filter(
+        email=email, date=today - timedelta(days=1)
+    ).first()
+    if not previous or not _is_checked_in(previous) or not previous.shift_id:
+        return None
+    shift = Shift.objects.filter(pk=previous.shift_id, is_night_shift=True).first()
+    return previous if shift else None
+
+
 @api_view(['POST'])
 @require_perm('attendance.create', or_self=True)
 def attendance_check_in(request):
@@ -2665,7 +2719,7 @@ def attendance_check_out(request):
     if not email:
         return err('email is required')
     now = local_now()
-    obj = EmployeeAttendance.objects.filter(email=email, date=now.date()).first()
+    obj = _open_attendance_session(email, now.date())
     if not obj or not _is_checked_in(obj):
         # Both cases are "there is no open session to close", and they must be
         # refused identically. Only the missing-row case used to be caught, so
@@ -2704,20 +2758,22 @@ def attendance_check_out(request):
     # Close session
     if _is_checked_in(obj):
         session = max(int((now - obj.check_in).total_seconds() // 60), 0)
-        obj.worked_minutes = (obj.worked_minutes or 0) + session
 
     # Checking out mid-break → close the open break and accrue its time.
     if _is_break_label(obj.presence):
         last_start = AttendanceEvent.objects.filter(
-            email=email, date=now.date(), event='break-start'
+            email=email, date=obj.date, event='break-start'
         ).order_by('-at').first()
         if last_start:
             brk_min = int((now - last_start.at).total_seconds() // 60)
             obj.break_minutes = (obj.break_minutes or 0) + max(brk_min, 0)
         AttendanceEvent.objects.create(
-            email=email, employee_name=obj.employee_name, date=now.date(),
+            email=email, employee_name=obj.employee_name, date=obj.date,
             event='break-end', location=loc_desc, at=now,
         )
+
+    if _is_checked_in(obj):
+        obj.worked_minutes = max(session - (obj.break_minutes or 0), 0)
 
     obj.check_out = now
     obj.presence = ''
@@ -2732,7 +2788,7 @@ def attendance_check_out(request):
             obj.note = f'Auto checked out — outside office geofence for >{mins} minutes'
 
     # Calculations based on active shift
-    shift = _get_active_shift(email, now.date())
+    shift = Shift.objects.filter(pk=obj.shift_id).first() or _get_active_shift(email, obj.date)
     if shift.is_flexible:
         req_minutes = int(shift.flex_hours_per_day * 60)
         if obj.worked_minutes > req_minutes:
@@ -2741,7 +2797,10 @@ def attendance_check_out(request):
             obj.overtime_minutes = 0
         obj.early_exit_minutes = max(req_minutes - obj.worked_minutes, 0)
     else:
-        shift_end = datetime.combine(now.date(), shift.end_time)
+        shift_start = datetime.combine(obj.date, shift.start_time)
+        shift_end = datetime.combine(obj.date, shift.end_time)
+        if shift.is_night_shift and shift_end <= shift_start:
+            shift_end += timedelta(days=1)
         if now < shift_end:
             obj.early_exit_minutes = int((shift_end - now).total_seconds() // 60)
         else:
@@ -2756,7 +2815,7 @@ def attendance_check_out(request):
 
     evt_name = 'auto-checkout-departure' if str(body.get('auto') or '').lower() in ('geofence', 'geofence_departure') else 'check-out'
     AttendanceEvent.objects.create(
-        email=email, employee_name=obj.employee_name, date=now.date(),
+        email=email, employee_name=obj.employee_name, date=obj.date,
         event=evt_name, location=loc_desc,
         latitude=lat, longitude=lng,
         geo_fence_id=fence_obj.id if fence_obj else None,

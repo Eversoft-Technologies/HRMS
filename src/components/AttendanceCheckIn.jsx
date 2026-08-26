@@ -23,6 +23,17 @@ const CheckInComponent = () => {
     return localStorage.getItem('employee_name') || 'Employee';
   };
 
+  const formatAttendanceTime = (value) => {
+    if (!value) return '';
+    const parts = String(value).split(':');
+    if (parts.length < 2) return String(value);
+    const hours = Number(parts[0]);
+    const minutes = Number(parts[1]);
+    if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return String(value);
+    const display = new Date(2000, 0, 1, hours, minutes);
+    return display.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  };
+
   // Get current location
   const getLocation = () => {
     return new Promise((resolve, reject) => {
@@ -216,10 +227,10 @@ const CheckInComponent = () => {
               </div>
               <div className="status-details">
                 {todayAttendance.checkInTime && (
-                  <p>Check-In: {new Date(todayAttendance.checkInTime).toLocaleTimeString()}</p>
+                  <p>Check-In: {formatAttendanceTime(todayAttendance.checkInTime)}</p>
                 )}
                 {todayAttendance.checkOutTime && (
-                  <p>Check-Out: {new Date(todayAttendance.checkOutTime).toLocaleTimeString()}</p>
+                  <p>Check-Out: {formatAttendanceTime(todayAttendance.checkOutTime)}</p>
                 )}
                 {todayAttendance.workedMinutes && (
                   <p>Worked: {Math.floor(todayAttendance.workedMinutes / 60)}h {todayAttendance.workedMinutes % 60}m</p>

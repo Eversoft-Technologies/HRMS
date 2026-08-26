@@ -12,6 +12,8 @@ what the client believed, which is the thing that was wrong.
 """
 import os
 import sys
+from datetime import datetime, timedelta, time
+from unittest.mock import patch
 
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'hrms_project.settings')
 
@@ -21,7 +23,7 @@ from django.test import TestCase, Client
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 django.setup()
 
-from api.models import AppUser, EmployeeAttendance, GeoFence
+from api.models import AppUser, EmployeeAttendance, GeoFence, Shift
 from api.timeutil import local_now, local_today
 
 OFFICE_LAT, OFFICE_LNG = 17.4485, 78.3908
@@ -90,6 +92,32 @@ class CheckOutSessionTests(TestCase):
         self.assertIsNotNone(self._row().check_in, 'precondition: checked in')
         self.assertIn(self._check_out().status_code, (200, 201))
         self.assertIsNotNone(self._row().check_out)
+
+    def test_night_shift_can_check_out_after_midnight(self):
+        today = local_today()
+        yesterday = today - timedelta(days=1)
+        shift = Shift.objects.create(
+            name='Night Shift', start_time=time(22, 0), end_time=time(6, 0),
+            is_night_shift=True, overtime_after_minutes=480,
+        )
+        row = EmployeeAttendance.objects.create(
+            email=self.email, employee_name='Test Person', date=yesterday,
+            check_in=datetime.combine(yesterday, time(22, 0)),
+            shift_id=shift.id,
+        )
+        checkout_time = datetime.combine(today, time(6, 0))
+        with patch('api.views.local_now', return_value=checkout_time):
+            response = self._check_out()
+
+        self.assertIn(response.status_code, (200, 201))
+        row.refresh_from_db()
+        self.assertEqual(row.id, response.json()['id'])
+        self.assertEqual(row.date, yesterday)
+        self.assertEqual(row.check_out, checkout_time)
+        self.assertEqual(row.worked_minutes, 480)
+        self.assertFalse(EmployeeAttendance.objects.filter(
+            email=self.email, date=today
+        ).exclude(pk=row.pk).exists())
 
     def test_checking_out_twice_is_refused(self):
         self._check_in()

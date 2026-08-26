@@ -258,12 +258,12 @@ const ManagerDashboard = () => {
                     <td className="email">{att.email}</td>
                     <td>
                       {att.checkInTime
-                        ? new Date(att.checkInTime).toLocaleTimeString()
+                        ? att.checkInTime
                         : '-'}
                     </td>
                     <td>
                       {att.checkOutTime
-                        ? new Date(att.checkOutTime).toLocaleTimeString()
+                        ? att.checkOutTime
                         : '-'}
                     </td>
                     <td>
