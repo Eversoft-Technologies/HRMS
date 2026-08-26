@@ -606,6 +606,11 @@ class AttendanceCorrection(models.Model):
     reviewer_note = models.TextField(null=True, blank=True)
     reviewed_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    # Forgot-punch ticket extension: which punch was missed and the proof photo
+    # (attendance sheet) the employee attaches. Legacy rows keep kind='' so the
+    # 3-per-month limit only counts these tickets, not older corrections.
+    kind = models.CharField(max_length=20, default='', blank=True)  # ''|forgot_checkin|forgot_checkout
+    proof_image = models.TextField(null=True, blank=True)           # base64 data URL
 
     class Meta:
         db_table = 'attendance_corrections'

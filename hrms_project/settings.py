@@ -6,6 +6,7 @@ the built React app (Vite `dist/`) for every other route via WhiteNoise.
 """
 from pathlib import Path
 import os
+import sys
 from datetime import timedelta
 
 from dotenv import load_dotenv
@@ -210,6 +211,21 @@ LOGGING = {
     'handlers': {'console': {'class': 'logging.StreamHandler'}},
     'root': {'handlers': ['console'], 'level': 'INFO'},
 }
+
+# The test suite drives error paths on purpose: a 403 proving a permission is
+# enforced, a mocked SMTP RuntimeError proving check-out survives a dead mailer.
+# Django logs every 4xx/5xx it returns and the app logs its own handled errors,
+# so a fully green run scrolled past pages of tracebacks and read as broken.
+# Quieten the console for "manage.py test" only - dev and production logging are
+# untouched, and unittest still reports real failures (it does not use logging).
+# Set HRMS_TEST_LOGS=1 to get the chatter back when debugging a test.
+if sys.argv[1:2] == ['test'] and os.environ.get('HRMS_TEST_LOGS') != '1':
+    LOGGING['root']['level'] = 'CRITICAL'
+    LOGGING['loggers'] = {
+        'django.request': {
+            'handlers': ['console'], 'level': 'CRITICAL', 'propagate': False,
+        },
+    }
 
 
 # Channels (WebSocket) layer for Employee Chat realtime.

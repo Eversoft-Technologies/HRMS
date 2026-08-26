@@ -25,10 +25,10 @@ from datetime import datetime, time, timedelta
 from django.conf import settings
 from django.db import transaction
 from django.db.models import (
-    BooleanField, Case, CharField, Count, F, IntegerField, OuterRef, Q, Subquery,
-    Sum, Value, When,
+    BinaryField, BooleanField, Case, CharField, Count, F, Func, IntegerField,
+    OuterRef, Q, Subquery, Sum, Value, When,
 )
-from django.db.models.functions import Coalesce
+from django.db.models.functions import Coalesce, Substr
 from django.http import HttpResponse, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 
@@ -1422,6 +1422,33 @@ def _extract_video_bytes(raw_data):
     return _decode_chunk(raw_str)
 
 
+class _ByteLength(Func):
+    """MySQL LENGTH() — bytes, not characters.
+
+    Django's Length() compiles to CHAR_LENGTH on MySQL. For a binary column
+    that is the same number today, but Range is a byte protocol, so ask for
+    the thing we actually mean.
+    """
+    function = 'LENGTH'
+    output_field = IntegerField()
+
+
+def _blob_slice(pk, start, length):
+    """Bytes [start, start + length) of a recording's video_buffer.
+
+    Sliced by MySQL, so the rest of the LONGBLOB never crosses the wire.
+    SUBSTRING is 1-based, hence start + 1.
+    """
+    if length <= 0:
+        return b''
+    window = (InterviewRecording.objects.filter(pk=pk)
+              .annotate(blob_window=Substr('video_buffer', start + 1, length,
+                                           output_field=BinaryField()))
+              .values_list('blob_window', flat=True)
+              .first())
+    return bytes(window) if window else b''
+
+
 @csrf_exempt
 def recording_video(request, pk):
     """Binary (video/webm) upload + download.
@@ -1446,23 +1473,33 @@ def recording_video(request, pk):
         return err('Method not allowed', 405)
 
     try:
-        row = InterviewRecording.objects.filter(pk=pk).values_list('video_buffer', 'video_mime', 'recording_data').first()
-        if not row:
+        # Size and mime only. Selecting the LONGBLOB here is what made a 1 KB
+        # seek cost a full read: the row was loaded whole and then sliced in
+        # Python, so every scrub in the player pulled the entire recording into
+        # memory. LENGTH() answers the only question the Range parser asks.
+        meta = (InterviewRecording.objects.filter(pk=pk)
+                .annotate(buffer_len=_ByteLength('video_buffer'))
+                .values_list('buffer_len', 'video_mime')
+                .first())
+        if meta is None:
             return err('Recording not found', 404)
 
-        raw_buf, mime, rd = row
-        video_bytes = b''
-
-        if raw_buf:
-            video_bytes = bytes(raw_buf)
-        elif rd:
-            video_bytes = _extract_video_bytes(rd)
-
-        if not video_bytes:
-            return err('No video data for this recording', 404)
-
-        size = len(video_bytes)
+        buffer_len, mime = meta
+        buffer_len = buffer_len or 0
         content_type = mime or 'video/webm'
+
+        # Legacy rows kept the video base64-encoded (or JSON-chunked) in
+        # recording_data. Decoding needs the whole string, so there is nothing
+        # to slice in SQL — those rows still come back in one piece.
+        legacy_bytes = None
+        if not buffer_len:
+            rd = (InterviewRecording.objects.filter(pk=pk)
+                  .values_list('recording_data', flat=True).first())
+            legacy_bytes = _extract_video_bytes(rd) if rd else b''
+            if not legacy_bytes:
+                return err('No video data for this recording', 404)
+
+        size = buffer_len or len(legacy_bytes)
 
         # --- parse optional Range header ---
         import re as _re
@@ -1486,13 +1523,15 @@ def recording_video(request, pk):
                 resp['Accept-Ranges'] = 'bytes'
                 return resp
 
-            chunk = video_bytes[start:end + 1]
+            chunk = (legacy_bytes[start:end + 1] if legacy_bytes is not None
+                     else _blob_slice(pk, start, end - start + 1))
             resp = HttpResponse(chunk, status=206, content_type=content_type)
             resp['Content-Range'] = f'bytes {start}-{end}/{size}'
             resp['Content-Length'] = str(len(chunk))
         else:
-            resp = HttpResponse(video_bytes, status=200, content_type=content_type)
-            resp['Content-Length'] = str(size)
+            body = legacy_bytes if legacy_bytes is not None else _blob_slice(pk, 0, size)
+            resp = HttpResponse(body, status=200, content_type=content_type)
+            resp['Content-Length'] = str(len(body))
 
         resp['Accept-Ranges'] = 'bytes'
         resp['Cache-Control'] = 'public, max-age=31536000'
@@ -7116,3 +7155,267 @@ def chat_translate(request):
     if not translated:
         return err("The translation came back empty. Please try again.", 502)
     return Response({"ok": True, "translated": translated, "target": lang})
+
+
+# ===========================================================================
+# Forgot-punch attendance tickets
+# ---------------------------------------------------------------------------
+# An employee who forgot to check in (realised after the workday) or forgot to
+# check out (noticed before midnight) raises a ticket with a reason and a photo
+# of the attendance sheet. An approver (attendance.approve_wfh, same as WFH)
+# approves, which stamps that day's check-in/out to the office shift times.
+# Reuses the AttendanceCorrection table; ticket rows carry kind in
+# forgot_checkin|forgot_checkout so the monthly limit ignores legacy rows.
+# ===========================================================================
+ATT_TICKET_LIMIT = 3
+_TICKET_KINDS = ('forgot_checkin', 'forgot_checkout')
+
+
+def _ticket_caller(request):
+    return norm_email(request.headers.get('X-Actor-Email') or request.headers.get('X-User-Email') or '')
+
+
+def _ticket_is_approver(request):
+    allowed, caller, _u = check_perm(request, 'attendance.approve_wfh')
+    return allowed, caller
+
+
+def _auto_close_open_before_today(email=None):
+    """Close open past-day attendance (check-in set, no check-out) at 23:59 of
+    that day. Marks is_auto_checked_out and recomputes worked minutes. Scoped to
+    one employee when ``email`` is given (lazy self-heal when they open the page)."""
+    today = local_today()
+    qs = EmployeeAttendance.objects.filter(
+        date__lt=today, check_in__isnull=False, check_out__isnull=True)
+    if email:
+        qs = qs.filter(email=norm_email(email))
+    closed = 0
+    for rec in qs:
+        end = datetime.combine(rec.date, time(23, 59, 0))
+        if end <= rec.check_in:
+            end = rec.check_in + timedelta(minutes=1)
+        rec.check_out = end
+        worked = int((end - rec.check_in).total_seconds() // 60) - (rec.break_minutes or 0)
+        rec.worked_minutes = max(0, worked)
+        rec.is_auto_checked_out = True
+        rec.auto_checkout_at = local_now()
+        rec.save(update_fields=['check_out', 'worked_minutes',
+                                'is_auto_checked_out', 'auto_checkout_at'])
+        closed += 1
+    return closed
+
+
+def _ticket_dto(c, include_proof=False):
+    d = {
+        'id': c.id,
+        'email': c.email,
+        'employee': c.employee_name or c.email,
+        'date': c.attendance_date.isoformat() if c.attendance_date else None,
+        'kind': c.kind or '',
+        'reason': c.reason or '',
+        'status': c.status or 'Pending',
+        'reviewer': c.reviewer or '',
+        'reviewerNote': c.reviewer_note or '',
+        'createdAt': dt(c.created_at),
+        'hasProof': bool(c.proof_image),
+    }
+    if include_proof:
+        d['proofImage'] = c.proof_image or ''
+    return d
+
+
+@api_view(['GET', 'POST'])
+def attendance_punch_ticket(request):
+    if request.method == 'GET':
+        email = norm_email(request.query_params.get('email'))
+        if not email:
+            return err('email is required')
+        try:
+            _auto_close_open_before_today(email)
+        except Exception:
+            pass
+        today = local_today()
+        rec = EmployeeAttendance.objects.filter(email=email, date=today).first()
+        has_in = bool(rec and rec.check_in)
+        has_out = bool(rec and rec.check_out)
+        shift = _get_active_shift(email, today)
+        end_time = shift.end_time if shift else time(18, 0)
+        start_time = shift.start_time if shift else time(9, 0)
+        now = local_now()
+        _pend = AttendanceCorrection.objects.filter(
+            email=email, attendance_date=today, status='Pending', kind__in=_TICKET_KINDS)
+        pend_in = _pend.filter(kind='forgot_checkin').exists()
+        pend_out = _pend.filter(kind='forgot_checkout').exists()
+        # Late = checked in, but after the office start time.
+        is_late = bool(has_in and rec and rec.check_in and rec.check_in.time() > start_time)
+        # A check-in ticket (missed OR late) can only be raised once the day has
+        # a check-out.
+        can_checkin = has_out and ((not has_in) or is_late) and not pend_in
+        can_checkout = has_in and (not has_out) and not pend_out
+        used = AttendanceCorrection.objects.filter(
+            email=email, kind__in=_TICKET_KINDS,
+            created_at__year=now.year, created_at__month=now.month).count()
+        block = ''
+        if not can_checkin and not can_checkout:
+            if pend_in or pend_out:
+                block = 'You already have a pending ticket for today — please wait for it to be reviewed.'
+            elif has_in and has_out:
+                block = 'Your check-in is on time and you have checked out — nothing to correct.'
+            elif (not has_in) and (not has_out):
+                block = 'You can raise a check-in ticket only after you have checked out for the day.'
+            else:
+                block = 'Nothing to correct for today.'
+        tickets = AttendanceCorrection.objects.filter(
+            email=email, kind__in=_TICKET_KINDS).order_by('-id')[:8]
+        return Response({
+            'today': {'date': today.isoformat(), 'hasCheckIn': has_in, 'hasCheckOut': has_out},
+            'canRaiseCheckin': can_checkin,
+            'canRaiseCheckout': can_checkout,
+            'blockReason': block,
+            'usedThisMonth': used,
+            'limit': ATT_TICKET_LIMIT,
+            'remaining': max(0, ATT_TICKET_LIMIT - used),
+            'officeStart': start_time.strftime('%H:%M'),
+            'officeEnd': end_time.strftime('%H:%M'),
+            'tickets': [_ticket_dto(c) for c in tickets],
+        })
+
+    # POST — raise a ticket
+    body = request.data
+    email = norm_email(body.get('email'))
+    if not email:
+        return err('email is required')
+    caller = _ticket_caller(request)
+    if caller and email != caller:
+        return err('You can only raise a ticket for your own attendance.', 403)
+    kind = (body.get('kind') or '').strip()
+    if kind not in _TICKET_KINDS:
+        return err('kind must be forgot_checkin or forgot_checkout')
+    reason = (body.get('reason') or '').strip()
+    if not reason:
+        return err('A reason is required (why you forgot to punch).')
+    proof = body.get('proofImage') or ''
+    if not proof:
+        return err('Please attach a photo of the attendance sheet as proof.')
+    if len(proof) > 8 * 1024 * 1024:
+        return err('The proof image is too large. Please use a smaller photo.')
+
+    now = local_now()
+    used = AttendanceCorrection.objects.filter(
+        email=email, kind__in=_TICKET_KINDS,
+        created_at__year=now.year, created_at__month=now.month).count()
+    if used >= ATT_TICKET_LIMIT:
+        return err('You have reached the limit of %d attendance tickets this month.' % ATT_TICKET_LIMIT, 403)
+
+    today = local_today()
+    try:
+        _auto_close_open_before_today(email)
+    except Exception:
+        pass
+    rec = EmployeeAttendance.objects.filter(email=email, date=today).first()
+    has_in = bool(rec and rec.check_in)
+    has_out = bool(rec and rec.check_out)
+    shift = _get_active_shift(email, today)
+    start_time = shift.start_time if shift else time(9, 0)
+    end_time = shift.end_time if shift else time(18, 0)
+    if kind == 'forgot_checkin':
+        if not has_out:
+            return err('You can raise a check-in ticket only after you have checked out for the day.')
+        if has_in and not (rec.check_in and rec.check_in.time() > start_time):
+            return err('Your check-in is already on time — there is nothing to correct.')
+    else:  # forgot_checkout
+        if not has_in:
+            return err('You have no check-in today, so raise a check-in ticket instead.')
+        if has_out:
+            return err('You already have a check-out recorded for today.')
+
+    if AttendanceCorrection.objects.filter(
+            email=email, attendance_date=today, kind=kind, status='Pending').exists():
+        return err('You already have a pending ticket for this. Please wait for it to be reviewed.')
+
+    name = (rec.employee_name if rec and rec.employee_name else '') or (body.get('employeeName') or email.split('@')[0])
+    c = AttendanceCorrection.objects.create(
+        email=email, employee_name=name, attendance_date=today,
+        kind=kind, reason=reason, proof_image=proof, status='Pending')
+    return Response({'success': True, 'id': c.id, 'message': 'Ticket submitted for approval.'})
+
+
+@api_view(['GET'])
+def attendance_punch_ticket_pending(request):
+    allowed, caller = _ticket_is_approver(request)
+    if not caller:
+        return err('Authentication required. Please sign in again.', 401)
+    if not allowed:
+        return err('You do not have permission to review attendance tickets.', 403)
+    rows = AttendanceCorrection.objects.filter(
+        kind__in=_TICKET_KINDS, status='Pending').order_by('-id')[:100]
+    return Response([_ticket_dto(c) for c in rows])
+
+
+@api_view(['GET'])
+def attendance_punch_ticket_proof(request, pk):
+    c = AttendanceCorrection.objects.filter(id=pk).first()
+    if not c:
+        return err('Ticket not found.', 404)
+    allowed, _caller = _ticket_is_approver(request)
+    caller = _ticket_caller(request)
+    if not allowed and caller != norm_email(c.email):
+        return err('You are not allowed to view this proof.', 403)
+    return Response({'id': c.id, 'proofImage': c.proof_image or ''})
+
+
+@api_view(['POST'])
+def attendance_punch_ticket_decide(request, pk):
+    allowed, caller = _ticket_is_approver(request)
+    if not caller:
+        return err('Authentication required. Please sign in again.', 401)
+    if not allowed:
+        return err('You do not have permission to review attendance tickets.', 403)
+    c = AttendanceCorrection.objects.filter(id=pk, kind__in=_TICKET_KINDS).first()
+    if not c:
+        return err('Ticket not found.', 404)
+    action = (request.data.get('action') or '').strip().lower()
+    note = (request.data.get('reviewerNote') or '').strip()
+    if action not in ('approve', 'reject'):
+        return err('action must be approve or reject')
+    if c.status != 'Pending':
+        return err('This ticket has already been %s.' % (c.status or '').lower())
+
+    if action == 'reject':
+        c.status = 'Rejected'
+        c.reviewer = caller
+        c.reviewer_note = note
+        c.reviewed_at = local_now()
+        c.save(update_fields=['status', 'reviewer', 'reviewer_note', 'reviewed_at'])
+        return Response({'success': True, 'message': 'Ticket rejected.'})
+
+    # approve → stamp the office (shift) times onto that day's attendance
+    shift = _get_active_shift(c.email, c.attendance_date)
+    start_t = shift.start_time if shift else time(9, 0)
+    end_t = shift.end_time if shift else time(18, 0)
+    rec = EmployeeAttendance.objects.filter(email=c.email, date=c.attendance_date).first()
+    if not rec:
+        rec = EmployeeAttendance(email=c.email,
+                                 employee_name=c.employee_name or c.email,
+                                 date=c.attendance_date, status='present')
+    if c.kind == 'forgot_checkin' or not rec.check_in:
+        rec.check_in = datetime.combine(c.attendance_date, start_t)
+        rec.late_minutes = 0
+        if (rec.status or '') == 'late':
+            rec.status = 'present'
+    if c.kind == 'forgot_checkout' or not rec.check_out:
+        rec.check_out = datetime.combine(c.attendance_date, end_t)
+    if rec.check_in and rec.check_out:
+        worked = int((rec.check_out - rec.check_in).total_seconds() // 60) - (rec.break_minutes or 0)
+        rec.worked_minutes = max(0, worked)
+    rec.is_auto_checked_out = False
+    if not rec.shift_id and shift:
+        rec.shift_id = shift.id
+    rec.save()
+
+    c.status = 'Approved'
+    c.reviewer = caller
+    c.reviewer_note = note
+    c.reviewed_at = local_now()
+    c.save(update_fields=['status', 'reviewer', 'reviewer_note', 'reviewed_at'])
+    return Response({'success': True, 'message': 'Ticket approved — attendance updated to office hours.'})
