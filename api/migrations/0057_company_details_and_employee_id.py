@@ -9,28 +9,26 @@ def create_tables_and_columns_if_not_exists(apps, schema_editor):
         tables = connection.introspection.table_names(cursor)
 
         if 'company_details' not in tables:
-            CompanyDetail = apps.get_model('api', 'CompanyDetail')
+            from api.models import CompanyDetail
             schema_editor.create_model(CompanyDetail)
 
         if 'app_users' in tables:
             columns = [col.name if hasattr(col, 'name') else col[0] for col in connection.introspection.get_table_description(cursor, 'app_users')]
             if 'employee_id' not in columns:
-                AppUser = apps.get_model('api', 'AppUser')
+                from api.models import AppUser
                 field = AppUser._meta.get_field('employee_id')
                 schema_editor.add_field(AppUser, field)
 
         if 'user_profiles' in tables:
             columns = [col.name if hasattr(col, 'name') else col[0] for col in connection.introspection.get_table_description(cursor, 'user_profiles')]
             if 'employee_id' not in columns:
-                UserProfile = apps.get_model('api', 'UserProfile')
+                from api.models import UserProfile
                 field = UserProfile._meta.get_field('employee_id')
                 schema_editor.add_field(UserProfile, field)
 
 
 def seed_and_backfill(apps, schema_editor):
-    CompanyDetail = apps.get_model('api', 'CompanyDetail')
-    AppUser = apps.get_model('api', 'AppUser')
-    UserProfile = apps.get_model('api', 'UserProfile')
+    from api.models import CompanyDetail, AppUser, UserProfile
 
     comp = CompanyDetail.objects.first()
     if not comp:
