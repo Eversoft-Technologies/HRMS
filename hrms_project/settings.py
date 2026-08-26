@@ -197,7 +197,10 @@ from corsheaders.defaults import default_headers  # noqa: E402
 CORS_ALLOW_HEADERS = list(default_headers) + ['x-api-key', 'x-user-email', 'x-actor-email']
 
 LANGUAGE_CODE = 'en-us'
-TIME_ZONE = 'UTC'
+# Attendance timestamps are stored as naive business-clock values because the
+# legacy database uses dateStrings. Keep the production clock configurable so
+# local development and the server use the same wall-clock timezone.
+TIME_ZONE = os.environ.get('HRMS_TIME_ZONE', 'Asia/Kolkata')
 USE_I18N = True
 USE_TZ = False  # the Node app stored naive datetimes (dateStrings)
 

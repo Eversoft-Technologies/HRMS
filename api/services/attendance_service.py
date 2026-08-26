@@ -18,6 +18,23 @@ class AttendanceService:
     """Handles check-in/out operations, break tracking, and attendance status."""
 
     @staticmethod
+    def _open_session(email: str, today: date):
+        attendance = EmployeeAttendance.objects.filter(
+            email=email, date=today
+        ).first()
+        if attendance and attendance.check_in and not attendance.check_out:
+            return attendance
+
+        previous = EmployeeAttendance.objects.filter(
+            email=email, date=today - timedelta(days=1)
+        ).first()
+        if not previous or not previous.check_in or previous.check_out or not previous.shift_id:
+            return None
+        return previous if Shift.objects.filter(
+            pk=previous.shift_id, is_night_shift=True
+        ).exists() else None
+
+    @staticmethod
     def get_current_shift(email: str, check_time: datetime = None) -> Shift:
         """Get active shift for employee at given time."""
         if check_time is None:
@@ -164,10 +181,7 @@ class AttendanceService:
         now = timezone.now()
         today = now.date()
 
-        attendance = EmployeeAttendance.objects.filter(
-            email=email,
-            date=today
-        ).first()
+        attendance = AttendanceService._open_session(email, today)
 
         if not attendance or not attendance.check_in:
             return {
@@ -192,7 +206,7 @@ class AttendanceService:
         # Subtract break time
         breaks = Break.objects.filter(
             email=email,
-            date=today,
+            date=attendance.date,
             status='completed'
         ).aggregate(total_break=Sum('break_minutes'))
         
@@ -213,7 +227,7 @@ class AttendanceService:
         AttendanceEvent.objects.create(
             email=email,
             employee_name=employee_name,
-            date=today,
+            date=attendance.date,
             event='check-out',
             location='Office' if attendance.geo_verified else 'Unknown',
             latitude=latitude,
@@ -223,7 +237,7 @@ class AttendanceService:
 
         # Calculate overtime
         if attendance.shift_id:
-            overtime_result = OvertimeService.calculate_daily_overtime(email, employee_name, today)
+            overtime_result = OvertimeService.calculate_daily_overtime(email, employee_name, attendance.date)
             if overtime_result:
                 attendance.overtime_minutes = int(overtime_result.get('overtime_hours', 0) * 60)
                 attendance.save()

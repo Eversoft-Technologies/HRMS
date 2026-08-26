@@ -2311,6 +2311,21 @@ def _is_checked_in(obj):
     return bool(obj.check_in and (obj.check_out is None or obj.check_in > obj.check_out))
 
 
+def _open_attendance_session(email, today):
+    """Find today's session or an overnight session opened yesterday."""
+    current = EmployeeAttendance.objects.filter(email=email, date=today).first()
+    if current and _is_checked_in(current):
+        return current
+
+    previous = EmployeeAttendance.objects.filter(
+        email=email, date=today - timedelta(days=1)
+    ).first()
+    if not previous or not _is_checked_in(previous) or not previous.shift_id:
+        return None
+    shift = Shift.objects.filter(pk=previous.shift_id, is_night_shift=True).first()
+    return previous if shift else None
+
+
 @api_view(['POST'])
 @require_perm('attendance.create', or_self=True)
 def attendance_check_in(request):
@@ -2665,7 +2680,7 @@ def attendance_check_out(request):
     if not email:
         return err('email is required')
     now = local_now()
-    obj = EmployeeAttendance.objects.filter(email=email, date=now.date()).first()
+    obj = _open_attendance_session(email, now.date())
     if not obj or not _is_checked_in(obj):
         # Both cases are "there is no open session to close", and they must be
         # refused identically. Only the missing-row case used to be caught, so
@@ -2704,20 +2719,22 @@ def attendance_check_out(request):
     # Close session
     if _is_checked_in(obj):
         session = max(int((now - obj.check_in).total_seconds() // 60), 0)
-        obj.worked_minutes = (obj.worked_minutes or 0) + session
 
     # Checking out mid-break → close the open break and accrue its time.
     if _is_break_label(obj.presence):
         last_start = AttendanceEvent.objects.filter(
-            email=email, date=now.date(), event='break-start'
+            email=email, date=obj.date, event='break-start'
         ).order_by('-at').first()
         if last_start:
             brk_min = int((now - last_start.at).total_seconds() // 60)
             obj.break_minutes = (obj.break_minutes or 0) + max(brk_min, 0)
         AttendanceEvent.objects.create(
-            email=email, employee_name=obj.employee_name, date=now.date(),
+            email=email, employee_name=obj.employee_name, date=obj.date,
             event='break-end', location=loc_desc, at=now,
         )
+
+    if _is_checked_in(obj):
+        obj.worked_minutes = max(session - (obj.break_minutes or 0), 0)
 
     obj.check_out = now
     obj.presence = ''
@@ -2732,7 +2749,7 @@ def attendance_check_out(request):
             obj.note = f'Auto checked out — outside office geofence for >{mins} minutes'
 
     # Calculations based on active shift
-    shift = _get_active_shift(email, now.date())
+    shift = Shift.objects.filter(pk=obj.shift_id).first() or _get_active_shift(email, obj.date)
     if shift.is_flexible:
         req_minutes = int(shift.flex_hours_per_day * 60)
         if obj.worked_minutes > req_minutes:
@@ -2741,7 +2758,10 @@ def attendance_check_out(request):
             obj.overtime_minutes = 0
         obj.early_exit_minutes = max(req_minutes - obj.worked_minutes, 0)
     else:
-        shift_end = datetime.combine(now.date(), shift.end_time)
+        shift_start = datetime.combine(obj.date, shift.start_time)
+        shift_end = datetime.combine(obj.date, shift.end_time)
+        if shift.is_night_shift and shift_end <= shift_start:
+            shift_end += timedelta(days=1)
         if now < shift_end:
             obj.early_exit_minutes = int((shift_end - now).total_seconds() // 60)
         else:
@@ -2756,7 +2776,7 @@ def attendance_check_out(request):
 
     evt_name = 'auto-checkout-departure' if str(body.get('auto') or '').lower() in ('geofence', 'geofence_departure') else 'check-out'
     AttendanceEvent.objects.create(
-        email=email, employee_name=obj.employee_name, date=now.date(),
+        email=email, employee_name=obj.employee_name, date=obj.date,
         event=evt_name, location=loc_desc,
         latitude=lat, longitude=lng,
         geo_fence_id=fence_obj.id if fence_obj else None,
