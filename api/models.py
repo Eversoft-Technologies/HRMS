@@ -617,6 +617,29 @@ class AttendanceCorrection(models.Model):
         ordering = ['-id']
 
 
+class AttendanceLocationPunch(models.Model):
+    """A periodic location sample captured while an employee is checked in.
+
+    Stored roughly once an hour by the web app (see the attendance
+    location-punch endpoint, which throttles to hourly and only records while
+    the employee is checked in). Powers the location log and the map preview on
+    the employee attendance-detail popup."""
+    email = models.CharField(max_length=255, db_index=True)
+    employee_name = models.CharField(max_length=255, default='', blank=True)
+    date = models.DateField(db_index=True)
+    captured_at = models.DateTimeField(db_index=True)
+    latitude = models.FloatField()
+    longitude = models.FloatField()
+    accuracy = models.FloatField(null=True, blank=True)
+    label = models.CharField(max_length=255, default='', blank=True)   # reverse-geocoded place
+    source = models.CharField(max_length=20, default='web', blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'attendance_location_punches'
+        ordering = ['captured_at']
+
+
 class GeoFence(models.Model):
     """A GPS circle zone. Check-ins inside are marked geo_verified=True.
 

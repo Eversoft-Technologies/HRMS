@@ -126,6 +126,9 @@ urlpatterns = [
     path('attendance/punch-ticket/pending', views.attendance_punch_ticket_pending),
     path('attendance/punch-ticket/<int:pk>/proof', views.attendance_punch_ticket_proof),
     path('attendance/punch-ticket/<int:pk>/decide', views.attendance_punch_ticket_decide),
+    # Employee attendance detail + hourly location tracking
+    path('attendance/day-detail', views.attendance_day_detail),
+    path('attendance/location-punch', views.attendance_location_punch),
     path('attendance/<int:pk>', views.attendance_detail),
 
     # Shifts
