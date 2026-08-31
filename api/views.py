@@ -64,6 +64,7 @@ from .models import (
     Shift,
     ShiftAssignment,
     AttendanceCorrection,
+    AttendanceLocationPunch,
     GeoFence,
     WfhRequest,
     WFHPolicy,
@@ -7419,3 +7420,149 @@ def attendance_punch_ticket_decide(request, pk):
     c.reviewed_at = local_now()
     c.save(update_fields=['status', 'reviewer', 'reviewer_note', 'reviewed_at'])
     return Response({'success': True, 'message': 'Ticket approved — attendance updated to office hours.'})
+
+
+# ===========================================================================
+# Employee attendance detail + hourly location tracking
+# ===========================================================================
+def _att_can_view(request, email):
+    """(allowed, caller). Self can always view; others need attendance.view or
+    attendance.approve_wfh (Super Admin bypasses via check_perm)."""
+    caller = _ticket_caller(request)
+    if caller and caller == norm_email(email):
+        return True, caller
+    for code in ('attendance.view', 'attendance.approve_wfh'):
+        allowed, c, _u = check_perm(request, code)
+        if allowed:
+            return True, (c or caller)
+    return False, caller
+
+
+def _fmt_ampm(d):
+    if not d:
+        return ''
+    return d.strftime('%I:%M %p').lstrip('0')
+
+
+def _event_label(ev):
+    ev = str(ev or '')
+    if 'check-in' in ev:
+        return 'Check In'
+    if 'check-out' in ev:
+        return 'Check Out'
+    if 'remote' in ev:
+        return 'Switched to Remote'
+    if 'office' in ev:
+        return 'Switched to Office'
+    if 'break-start' in ev:
+        return 'Break start'
+    if 'break-end' in ev:
+        return 'Break end'
+    return ev
+
+
+@api_view(['GET'])
+def attendance_day_detail(request):
+    email = norm_email(request.query_params.get('email'))
+    if not email:
+        return err('email is required')
+    ok, caller = _att_can_view(request, email)
+    if not ok:
+        return err('You are not allowed to view this attendance.', 403)
+    ds = request.query_params.get('date')
+    try:
+        day = datetime.strptime(ds, '%Y-%m-%d').date() if ds else local_today()
+    except ValueError:
+        return err('Invalid date.')
+    rec = EmployeeAttendance.objects.filter(email=email, date=day).first()
+    shift = _get_active_shift(email, day)
+    check_in = rec.check_in if rec else None
+    check_out = rec.check_out if rec else None
+    gross = int((check_out - check_in).total_seconds() // 60) if (check_in and check_out) else 0
+    effective = (rec.worked_minutes if rec else 0) or 0
+    name = (rec.employee_name if rec and rec.employee_name else '') or email.split('@')[0]
+    events = AttendanceEvent.objects.filter(email=email, date=day).order_by('at')
+    ev = [{
+        'event': e.event, 'label': _event_label(e.event),
+        'time': _fmt_ampm(e.at), 'at': dt(e.at),
+        'location': e.location or '',
+        'latitude': e.latitude, 'longitude': e.longitude,
+    } for e in events]
+    punches = AttendanceLocationPunch.objects.filter(email=email, date=day).order_by('captured_at')
+    pl = [{
+        'id': p.id, 'time': _fmt_ampm(p.captured_at), 'capturedAt': dt(p.captured_at),
+        'latitude': p.latitude, 'longitude': p.longitude,
+        'accuracy': p.accuracy, 'label': p.label or '',
+    } for p in punches]
+    late = (rec.status if rec else '') == 'late'
+    return Response({
+        'email': email, 'employee': name, 'date': day.isoformat(),
+        'shift': {
+            'name': shift.name if shift else 'General Shift',
+            'start': _fmt_ampm(datetime.combine(day, shift.start_time)) if shift else '',
+            'end': _fmt_ampm(datetime.combine(day, shift.end_time)) if shift else '',
+        },
+        'checkIn': _fmt_ampm(check_in), 'checkInAt': dt(check_in),
+        'checkOut': _fmt_ampm(check_out), 'checkOutAt': dt(check_out),
+        'effectiveMinutes': effective, 'grossMinutes': gross,
+        'status': (rec.status if rec else ''),
+        'onTime': bool(check_in) and not late,
+        'isSelf': caller == email,
+        'events': ev, 'punches': pl,
+    })
+
+
+@api_view(['GET', 'POST'])
+def attendance_location_punch(request):
+    if request.method == 'GET':
+        email = norm_email(request.query_params.get('email'))
+        if not email:
+            return err('email is required')
+        ok, _caller = _att_can_view(request, email)
+        if not ok:
+            return err('Not allowed.', 403)
+        ds = request.query_params.get('date')
+        try:
+            day = datetime.strptime(ds, '%Y-%m-%d').date() if ds else local_today()
+        except ValueError:
+            return err('Invalid date.')
+        rows = AttendanceLocationPunch.objects.filter(email=email, date=day).order_by('captured_at')
+        return Response([{
+            'id': p.id, 'time': _fmt_ampm(p.captured_at), 'capturedAt': dt(p.captured_at),
+            'latitude': p.latitude, 'longitude': p.longitude,
+            'accuracy': p.accuracy, 'label': p.label or '',
+        } for p in rows])
+
+    # POST — store a sample (self only, only while checked in, throttled hourly)
+    body = request.data
+    email = norm_email(body.get('email'))
+    if not email:
+        return err('email is required')
+    caller = _ticket_caller(request)
+    if caller and email != caller:
+        return err('You can only store your own location.', 403)
+    try:
+        lat = float(body.get('latitude'))
+        lng = float(body.get('longitude'))
+    except (TypeError, ValueError):
+        return err('latitude and longitude are required')
+    acc = body.get('accuracy')
+    try:
+        acc = float(acc) if acc is not None else None
+    except (TypeError, ValueError):
+        acc = None
+    label = (str(body.get('label') or ''))[:255]
+    now = local_now()
+    today = local_today()
+    rec = EmployeeAttendance.objects.filter(email=email, date=today).first()
+    checked_in = bool(rec and rec.check_in and (not rec.check_out or rec.check_in > rec.check_out))
+    if not checked_in:
+        return Response({'stored': False, 'reason': 'not_checked_in'})
+    last = AttendanceLocationPunch.objects.filter(email=email, date=today).order_by('-captured_at').first()
+    if last and (now - last.captured_at).total_seconds() < 55 * 60:
+        return Response({'stored': False, 'reason': 'too_soon'})
+    name = (rec.employee_name if rec and rec.employee_name else '') or email.split('@')[0]
+    p = AttendanceLocationPunch.objects.create(
+        email=email, employee_name=name, date=today, captured_at=now,
+        latitude=lat, longitude=lng, accuracy=acc, label=label, source='web')
+    return Response({'stored': True, 'id': p.id, 'time': _fmt_ampm(now)})
