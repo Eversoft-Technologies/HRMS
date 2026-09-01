@@ -708,9 +708,46 @@ body:has(.hrms-drawer-backdrop) #hrms-live-btn {
   border-radius: 50%; display: flex; align-items: center; justify-content: center;
   overflow: hidden; flex-shrink: 0;
 }
-.hrms-drawer-name { font-family: var(--font-d); font-size: 18px; font-weight: 700; color: var(--text); margin-top: 8px; }
-.hrms-drawer-email { font-size: 13px; color: var(--text3); }
-.hrms-drawer-acct { font-size: 12.5px; color: var(--text3); margin-top: 3px; }
+.hrms-drawer-email,
+.hrms-drawer-empid {
+  font-size: 13px !important;
+  color: var(--text3) !important;
+  user-select: text !important;
+  -webkit-user-select: text !important;
+  cursor: pointer !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 5px !important;
+  margin-top: 3px !important;
+  padding: 2px 8px !important;
+  border-radius: 6px !important;
+  transition: all 0.15s ease !important;
+  background: transparent !important;
+  border: 1px solid transparent !important;
+  font-weight: 400 !important;
+}
+
+.hrms-drawer-email:hover,
+.hrms-drawer-empid:hover {
+  background: var(--bg3) !important;
+  border-color: var(--border2) !important;
+  color: var(--text) !important;
+}
+
+.hrms-drawer-copy-hint {
+  font-size: 11px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  margin-left: 2px;
+}
+
+.hrms-drawer-email:hover .hrms-drawer-copy-hint,
+.hrms-drawer-empid:hover .hrms-drawer-copy-hint {
+  opacity: 0.7;
+}
+
+.hrms-drawer-acct { font-size: 12.5px; color: var(--text3); margin-top: 5px; }
 .hrms-drawer-acct .hrms-drawer-dot { margin: 0 7px; opacity: 0.6; }
 .hrms-drawer-signout { color: var(--danger); font-weight: 600; cursor: pointer; }
 
@@ -1521,3 +1558,350 @@ div:has(> #hrms-kpi-btn) button svg {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
 }
+
+/* ============================================================
+   wsq — Work Submissions, premium pass.
+
+   The page is built from inline style objects, which a stylesheet cannot
+   normally reach, so the overrides here are !important by necessity, not
+   by habit. Everything is scoped under .wsq, so nothing else in the app
+   can be affected, and deleting this block restores the previous look
+   exactly — no markup depends on it.
+
+   Nothing here changes behaviour: no display:none, no pointer-events,
+   no reordering. The Why? pill, delete icon, attachment chip, AI ring
+   and Approve/Reject/Review buttons keep their markup and handlers.
+   ============================================================ */
+
+/* --- KPI cards ------------------------------------------------
+   Flat bordered boxes become raised surfaces. The coloured top rule
+   each card already carries is kept as its identity and echoed as a
+   soft wash, so the four read as a set rather than four rectangles. */
+.wsq .wsq-kpis > div {
+  border-radius: 16px !important;
+  padding: 18px 20px 16px !important;
+  position: relative;
+  overflow: hidden;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--bg3) 55%, transparent), transparent 62%),
+    var(--bg2) !important;
+  box-shadow: 0 1px 2px rgba(0,0,0,.16), 0 8px 24px -12px rgba(0,0,0,.45);
+  transition: transform .18s cubic-bezier(.2,.7,.3,1), box-shadow .18s ease;
+}
+.wsq .wsq-kpis > div:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 2px 4px rgba(0,0,0,.18), 0 18px 40px -16px rgba(0,0,0,.55);
+}
+/* a wash in the card's own accent, taken from its existing top border */
+.wsq .wsq-kpis > div::after {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 100%;
+  background: radial-gradient(120% 80% at 100% 0%, currentColor 0%, transparent 60%);
+  opacity: .07;
+  pointer-events: none;
+}
+.wsq .wsq-kpis > div:nth-child(1) { color: #3b82f6; }
+.wsq .wsq-kpis > div:nth-child(2) { color: #10b981; }
+.wsq .wsq-kpis > div:nth-child(3) { color: #f59e0b; }
+.wsq .wsq-kpis > div:nth-child(4) { color: #8b5cf6; }
+/* the number itself */
+.wsq .wsq-kpis > div div[style*="font-size: 32px"],
+.wsq .wsq-kpis > div div[style*="fontSize: 32"] {
+  letter-spacing: -1.2px !important;
+  line-height: 1.05 !important;
+}
+/* the icon tile */
+.wsq .wsq-kpis > div svg { position: relative; z-index: 1; }
+
+/* --- the queue card -------------------------------------------
+   One elevated sheet instead of a plain outline. */
+.wsq .wsq-card {
+  border-radius: 18px !important;
+  padding: 22px 22px 8px !important;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--bg3) 40%, transparent), transparent 120px),
+    var(--bg2) !important;
+  box-shadow: 0 1px 2px rgba(0,0,0,.14), 0 24px 60px -30px rgba(0,0,0,.6);
+}
+/* the title rule becomes a gradient */
+.wsq .wsq-head > div:first-child {
+  border-left: 0 !important;
+  padding-left: 14px !important;
+  position: relative;
+}
+.wsq .wsq-head > div:first-child::before {
+  content: "";
+  position: absolute;
+  left: 0; top: 2px; bottom: 2px;
+  width: 4px;
+  border-radius: 4px;
+  background: linear-gradient(180deg, #3b82f6, #8b5cf6);
+}
+.wsq .wsq-head h2 { letter-spacing: -0.4px !important; }
+
+/* --- primary action -------------------------------------------
+   Gradient, with the lift on hover that the flat button lacked. */
+.wsq .wsq-head > button {
+  background: linear-gradient(135deg, #3b82f6, #2563eb) !important;
+  border-radius: 11px !important;
+  box-shadow: 0 2px 6px rgba(37,99,235,.32), 0 10px 24px -12px rgba(37,99,235,.7) !important;
+  transition: transform .16s ease, box-shadow .16s ease, filter .16s ease;
+}
+.wsq .wsq-head > button:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.06);
+  box-shadow: 0 4px 10px rgba(37,99,235,.36), 0 16px 34px -14px rgba(37,99,235,.8) !important;
+}
+.wsq .wsq-head > button:active { transform: translateY(0); }
+
+/* --- table ----------------------------------------------------
+   A quieter header that stays put while the queue scrolls, and
+   hairline separators instead of full-strength rules. */
+.wsq table { border-collapse: separate !important; border-spacing: 0 !important; }
+.wsq .wsq-hrow th {
+  background: color-mix(in srgb, var(--bg2) 88%, var(--bg3)) !important;
+  border-bottom: 1px solid var(--border2) !important;
+  font-size: 10.5px !important;
+  letter-spacing: .09em !important;
+  text-transform: uppercase;
+}
+.wsq .wsq-hrow th:first-child { border-top-left-radius: 12px; }
+.wsq .wsq-hrow th:last-child { border-top-right-radius: 12px; }
+.wsq tbody td {
+  border-bottom: 1px solid color-mix(in srgb, var(--border2) 55%, transparent) !important;
+}
+.wsq tbody tr:last-child td { border-bottom: 0 !important; }
+
+/* avatars get a soft ring so the first column has an anchor */
+.wsq tbody td:first-child > div > div:first-child {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--bg2) 100%, transparent),
+              0 0 0 3.5px color-mix(in srgb, currentColor 22%, transparent);
+}
+
+/* --- filter chips ---------------------------------------------
+   The active chip gets the gradient; the rest sit back. */
+.wsq .wsq-card button[style*="border-radius: 999"],
+.wsq .wsq-card button[style*="borderRadius: 999"] { transition: all .15s ease; }
+
+/* --- search field --------------------------------------------- */
+.wsq input[placeholder="Search submissions"] {
+  border-radius: 11px !important;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+.wsq input[placeholder="Search submissions"]:focus {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+/* --- modals ---------------------------------------------------
+   Deeper elevation so a dialog reads as above the sheet, not on it. */
+.wsq div[style*="position: fixed"] > div {
+  border-radius: 20px !important;
+  box-shadow: 0 40px 90px -30px rgba(0,0,0,.75), 0 2px 6px rgba(0,0,0,.3) !important;
+}
+
+/* --- motion ---------------------------------------------------
+   One entrance, staggered across the KPI row. Nothing loops. */
+@keyframes wsqRise {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: none; }
+}
+.wsq .wsq-kpis > div { animation: wsqRise .4s cubic-bezier(.2,.7,.3,1) backwards; }
+.wsq .wsq-kpis > div:nth-child(1) { animation-delay: .02s; }
+.wsq .wsq-kpis > div:nth-child(2) { animation-delay: .07s; }
+.wsq .wsq-kpis > div:nth-child(3) { animation-delay: .12s; }
+.wsq .wsq-kpis > div:nth-child(4) { animation-delay: .17s; }
+.wsq .wsq-card { animation: wsqRise .45s cubic-bezier(.2,.7,.3,1) .18s backwards; }
+
+@media (prefers-reduced-motion: reduce) {
+  .wsq .wsq-kpis > div,
+  .wsq .wsq-card { animation: none !important; }
+  .wsq .wsq-kpis > div:hover { transform: none; }
+}
+
+/* --- narrow screens ------------------------------------------- */
+@media (max-width: 640px) {
+  .wsq .wsq-card { padding: 16px 14px 6px !important; border-radius: 14px !important; }
+  .wsq .wsq-kpis > div { padding: 15px 16px 13px !important; }
+}
+
+/* --- wsq table fit ---------------------------------------------
+   The table was 1207px inside a 934px card, so it scrolled sideways.
+   The Action column was 220px of that: three buttons forced onto one
+   line. Fixed layout gives every column a share of the width instead
+   of letting content dictate it, and the action buttons now wrap.
+
+   Below 860px the table keeps its own horizontal scroll rather than
+   crushing eight columns — a scroll you opt into beats unreadable. */
+.wsq table {
+  width: 100% !important;
+  table-layout: fixed !important;
+  min-width: 0 !important;
+}
+.wsq thead th, .wsq tbody td { padding: 12px 10px !important; }
+
+/* Fixed pixel widths for everything that has a predictable size, so
+   ACTION can never be squeezed short again — it keeps 200px whatever
+   the viewport. TITLE is left without a width and takes the remainder,
+   because it is the one column that wraps gracefully. */
+/* Proportions, not pixels: a fixed px width does not grow with the table,
+   which is what left EMPLOYEE and REVIEWER stuck at ~110px on a wide screen
+   (breaking "Yaswanth" mid-word) while TITLE took 500px. */
+.wsq thead th:nth-child(1), .wsq tbody td:nth-child(1) { width: 15%; }
+.wsq thead th:nth-child(2), .wsq tbody td:nth-child(2) { width: 9%; }
+.wsq thead th:nth-child(3), .wsq tbody td:nth-child(3) { width: 21%; }
+.wsq thead th:nth-child(4), .wsq tbody td:nth-child(4) { width: 10%; }
+.wsq thead th:nth-child(5), .wsq tbody td:nth-child(5) { width: 14%; }
+.wsq thead th:nth-child(6), .wsq tbody td:nth-child(6) { width: 12%; }
+.wsq thead th:nth-child(7), .wsq tbody td:nth-child(7) { width: 6%; }
+.wsq thead th:nth-child(8), .wsq tbody td:nth-child(8) { width: 13%; }
+.wsq thead th:nth-child(8), .wsq tbody td:nth-child(8) { padding-left: 6px !important; padding-right: 6px !important; }
+
+/* A long name is ellipsised, never broken mid-word. */
+.wsq tbody td { overflow: hidden; }
+.wsq tbody td:nth-child(1) > div > div:last-child,
+.wsq tbody td:nth-child(5) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+.wsq tbody td:nth-child(3) { white-space: normal; }
+
+/* the action cell: wrap onto a second line rather than push the table wide */
+.wsq tbody td:nth-child(8) > div {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  gap: 5px !important;
+  justify-content: center;
+}
+.wsq tbody td:nth-child(8) button {
+  padding: 4px 8px !important;
+  font-size: 10.5px !important;
+  white-space: nowrap;
+}
+
+/* the type badge and the date should not force width either */
+.wsq tbody td:nth-child(2) { white-space: nowrap; }
+.wsq tbody td:nth-child(4) { white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+/* Below ~1200px the eight fixed columns no longer fit the card, and a
+   fixed layout would starve TITLE down to nothing. Hand back to auto
+   layout with a floor, so the table scrolls inside its own box and every
+   column stays readable — a scroll beats a collapsed column. */
+@media (max-width: 1200px) {
+  .wsq table { table-layout: auto !important; min-width: 900px !important; }
+  .wsq thead th, .wsq tbody td { padding: 11px 9px !important; }
+  .wsq thead th:nth-child(n), .wsq tbody td:nth-child(n) { width: auto; }
+  /* Under auto layout a width is only a hint: the browser shrinks a column
+     to its MIN-content, and wrapped buttons make that one button wide. Keep
+     them on one line and set a real minimum so ACTION claims its space. */
+  .wsq tbody td:nth-child(8) > div { flex-wrap: nowrap !important; }
+  .wsq thead th:nth-child(8), .wsq tbody td:nth-child(8) {
+    min-width: 190px;
+    white-space: nowrap;
+  }
+}
+@media (max-width: 860px) {
+  .wsq table { min-width: 820px !important; }
+}
+
+/* --- wsq: people columns match each other -----------------------
+   EMPLOYEE and REVIEWER render the same thing — an avatar and a name —
+   but were built at different sizes (32px/13px vs 24px/12px), so the
+   reviewer read as a smaller, lighter version of the same block and the
+   two columns never lined up with each other. Same treatment for both. */
+.wsq tbody td:nth-child(1) > div > div:first-child,
+.wsq tbody td:nth-child(5) > div > div:first-child {
+  width: 28px !important;
+  height: 28px !important;
+  min-width: 28px;
+  font-size: 10.5px !important;
+  flex: 0 0 auto;
+}
+.wsq tbody td:nth-child(1) > div > span,
+.wsq tbody td:nth-child(5) > div > span {
+  font-size: 12.5px !important;
+  font-weight: 600 !important;
+  line-height: 1.35;
+}
+.wsq tbody td:nth-child(1) > div,
+.wsq tbody td:nth-child(5) > div {
+  display: flex !important;
+  align-items: center !important;
+  gap: 9px !important;
+}
+
+/* --- wsq: motion -----------------------------------------------
+   Rows arrive in a short stagger on load, capped at ten so a full page
+   never turns into a slow cascade. Everything else is a hover or focus
+   response — nothing loops, nothing moves on its own after settling. */
+@keyframes wsqRowIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
+}
+.wsq tbody tr { animation: wsqRowIn .32s cubic-bezier(.2,.7,.3,1) backwards; }
+.wsq tbody tr:nth-child(1)  { animation-delay: .02s; }
+.wsq tbody tr:nth-child(2)  { animation-delay: .05s; }
+.wsq tbody tr:nth-child(3)  { animation-delay: .08s; }
+.wsq tbody tr:nth-child(4)  { animation-delay: .11s; }
+.wsq tbody tr:nth-child(5)  { animation-delay: .14s; }
+.wsq tbody tr:nth-child(6)  { animation-delay: .17s; }
+.wsq tbody tr:nth-child(7)  { animation-delay: .20s; }
+.wsq tbody tr:nth-child(8)  { animation-delay: .23s; }
+.wsq tbody tr:nth-child(9)  { animation-delay: .26s; }
+.wsq tbody tr:nth-child(n+10) { animation-delay: .28s; }
+
+/* action buttons lift slightly and deepen on hover */
+.wsq tbody td:nth-child(8) button,
+.wsq .subs-why-btn,
+.wsq tbody td:nth-child(3) button {
+  transition: transform .14s cubic-bezier(.2,.7,.3,1), filter .14s ease, box-shadow .14s ease;
+}
+.wsq tbody td:nth-child(8) button:hover,
+.wsq .subs-why-btn:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.12);
+}
+.wsq tbody td:nth-child(8) button:active,
+.wsq .subs-why-btn:active { transform: translateY(0); }
+
+/* the attachment chip nudges forward, hinting it opens something */
+.wsq tbody td:nth-child(3) button[title^="Open"] { transition: transform .14s ease, background .14s ease; }
+.wsq tbody td:nth-child(3) button[title^="Open"]:hover { transform: translateX(2px); }
+
+/* filter chips and the view toggle respond to the pointer */
+.wsq-card button { transition: background .15s ease, color .15s ease, transform .12s ease; }
+
+/* the AI ring draws its arc on load rather than snapping to length */
+@keyframes wsqRingIn { from { stroke-dashoffset: var(--wsq-circ, 107); } }
+.wsq svg[viewBox="0 0 44 44"] circle:last-child {
+  animation: wsqRingIn .7s cubic-bezier(.3,.8,.4,1) .15s backwards;
+}
+
+/* pager buttons */
+.wsq .wsq-pager button { transition: background .15s ease, color .15s ease, transform .12s ease; }
+.wsq .wsq-pager button:not(:disabled):hover { transform: translateY(-1px); }
+
+@media (prefers-reduced-motion: reduce) {
+  .wsq tbody tr,
+  .wsq svg[viewBox="0 0 44 44"] circle:last-child { animation: none !important; }
+  .wsq tbody td:nth-child(8) button:hover,
+  .wsq .subs-why-btn:hover,
+  .wsq .wsq-pager button:not(:disabled):hover,
+  .wsq tbody td:nth-child(3) button[title^="Open"]:hover { transform: none; }
+}
+
+/* --- wsq: Type column hidden for the Employee role --------------
+   An employee only ever sees their own submissions, so the Type column
+   tells them nothing they did not just choose themselves. The cell is
+   hidden rather than removed: hrms-perms.js locates the Action column by
+   comparing each row's cell count with the header's, so every row must
+   keep all eight cells. TITLE absorbs the freed width. */
+.wsq.wsq-hide-type thead th:nth-child(2),
+.wsq.wsq-hide-type tbody td:nth-child(2) { display: none; }
+.wsq.wsq-hide-type thead th:nth-child(3),
+.wsq.wsq-hide-type tbody td:nth-child(3) { width: 30%; }

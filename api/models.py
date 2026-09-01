@@ -207,11 +207,52 @@ class QuestionSet(models.Model):
         db_table = 'question_sets'
 
 
+class CompanyDetail(models.Model):
+    """Organization Profile & General System Settings (Settings -> General)."""
+    company_name = models.CharField(max_length=255, default='Eversoft Technologies')
+    legal_name = models.CharField(max_length=255, default='', blank=True)
+    brand_name = models.CharField(max_length=255, default='Eversoft', blank=True)
+    company_logo = models.TextField(default='', blank=True)  # base64 or URL
+    website = models.CharField(max_length=255, default='https://eversoftit.com', blank=True)
+    contact_email = models.CharField(max_length=255, default='contact@eversoftit.com', blank=True)
+    phone = models.CharField(max_length=40, default='', blank=True)
+    tax_id = models.CharField(max_length=100, default='', blank=True)  # GST / EIN / PAN
+    industry = models.CharField(max_length=120, default='Information Technology', blank=True)
+    
+    # Registered Address
+    address_line1 = models.CharField(max_length=255, default='', blank=True)
+    address_line2 = models.CharField(max_length=255, default='', blank=True)
+    city = models.CharField(max_length=100, default='', blank=True)
+    state = models.CharField(max_length=100, default='', blank=True)
+    country = models.CharField(max_length=100, default='India', blank=True)
+    pincode = models.CharField(max_length=20, default='', blank=True)
+    
+    # Localization Defaults
+    timezone = models.CharField(max_length=100, default='Asia/Kolkata', blank=True)
+    currency = models.CharField(max_length=10, default='INR', blank=True)
+    date_format = models.CharField(max_length=30, default='DD/MM/YYYY', blank=True)
+    work_week = models.JSONField(default=list, blank=True)  # ['Mon', 'Tue', 'Wed', 'Thu', 'Fri']
+    
+    # Employee ID Auto-Generation Configuration
+    emp_id_prefix = models.CharField(max_length=20, default='EV-', blank=True)
+    emp_id_min_digits = models.IntegerField(default=4)  # e.g., 4 -> '0001'
+    emp_id_start_number = models.IntegerField(default=1)
+    emp_id_suffix = models.CharField(max_length=20, default='', blank=True)
+    
+    updated_by = models.CharField(max_length=255, default='', blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'company_details'
+        ordering = ['id']
+
+
 class AppUser(models.Model):
     """Login accounts created in Settings -> User Access (and via Sign-up).
     Maps onto the existing `app_users` table so every login persists in MySQL
     instead of only the browser's localStorage. `password` is plain text to
     match the admin UI's "SHOW" reveal button (see hrms_system_schema.sql)."""
+    employee_id = models.CharField(max_length=64, default='', blank=True, db_index=True)
     full_name = models.CharField(max_length=255)
     email = models.CharField(max_length=255, unique=True)
     password = models.CharField(max_length=255, default='', blank=True)
@@ -241,6 +282,7 @@ class AppUser(models.Model):
 
 
 class UserProfile(models.Model):
+    employee_id = models.CharField(max_length=64, default='', blank=True, db_index=True)
     email = models.CharField(max_length=255, primary_key=True)
     first_name = models.CharField(max_length=120, default='', blank=True)
     last_name = models.CharField(max_length=120, default='', blank=True)
@@ -564,10 +606,38 @@ class AttendanceCorrection(models.Model):
     reviewer_note = models.TextField(null=True, blank=True)
     reviewed_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    # Forgot-punch ticket extension: which punch was missed and the proof photo
+    # (attendance sheet) the employee attaches. Legacy rows keep kind='' so the
+    # 3-per-month limit only counts these tickets, not older corrections.
+    kind = models.CharField(max_length=20, default='', blank=True)  # ''|forgot_checkin|forgot_checkout
+    proof_image = models.TextField(null=True, blank=True)           # base64 data URL
 
     class Meta:
         db_table = 'attendance_corrections'
         ordering = ['-id']
+
+
+class AttendanceLocationPunch(models.Model):
+    """A periodic location sample captured while an employee is checked in.
+
+    Stored roughly once an hour by the web app (see the attendance
+    location-punch endpoint, which throttles to hourly and only records while
+    the employee is checked in). Powers the location log and the map preview on
+    the employee attendance-detail popup."""
+    email = models.CharField(max_length=255, db_index=True)
+    employee_name = models.CharField(max_length=255, default='', blank=True)
+    date = models.DateField(db_index=True)
+    captured_at = models.DateTimeField(db_index=True)
+    latitude = models.FloatField()
+    longitude = models.FloatField()
+    accuracy = models.FloatField(null=True, blank=True)
+    label = models.CharField(max_length=255, default='', blank=True)   # reverse-geocoded place
+    source = models.CharField(max_length=20, default='web', blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'attendance_location_punches'
+        ordering = ['captured_at']
 
 
 class GeoFence(models.Model):
@@ -1520,6 +1590,10 @@ class ChatMember(models.Model):
     joined_at = models.DateTimeField()
     # Channel admins can add/remove members and manage other admins.
     is_admin = models.BooleanField(default=False)
+    # When this member last opened/read the room. Used to compute per-member
+    # read receipts — a channel message is "Seen" only once EVERY other member's
+    # last_read_at has passed the message's timestamp.
+    last_read_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         db_table = "chat_members"

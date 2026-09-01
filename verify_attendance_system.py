@@ -8,6 +8,16 @@ import os
 import sys
 import django
 
+# Run this by hand against a live database:  python verify_attendance_system.py
+# It is deliberately NOT named test_*: it queries real data and does its work at
+# import time, so unittest discovery used to pick it up, hit the production DB and
+# then die on the first status line below.
+#
+# That death was the checkmarks: a Windows console defaults to cp1252, which cannot
+# encode them. Reconfigure the stream rather than downgrade the output to ASCII.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "hrms_project.settings")
 django.setup()
 

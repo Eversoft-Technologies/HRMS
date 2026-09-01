@@ -85,6 +85,16 @@ urlpatterns = [
     path('user-settings/<str:email>/documents', views.user_documents),
     path('user-settings/<str:email>/documents/<str:doc_type>', views.user_document_detail),
 
+    # Company Details & General System Settings (Settings -> General)
+    path('settings/general', views.company_settings),
+    path('settings/general/', views.company_settings),
+    path('settings/company', views.company_settings),
+    path('settings/company/', views.company_settings),
+    path('settings/general/backfill', views.company_settings_backfill),
+    path('settings/general/backfill/', views.company_settings_backfill),
+    path('settings/company/backfill', views.company_settings_backfill),
+    path('settings/company/backfill/', views.company_settings_backfill),
+
     # Employees module — Attendance / Check-In-Out
     path('attendance', views.attendance),
     path('attendance/check-in', views.attendance_check_in),
@@ -111,6 +121,14 @@ urlpatterns = [
     path('attendance/wfh/<int:pk>', views.wfh_request_detail),
     path('attendance/corrections', views.attendance_corrections),
     path('attendance/corrections/<int:pk>', views.attendance_correction_detail),
+    # Forgot-punch tickets (raise a ticket beside Request WFH)
+    path('attendance/punch-ticket', views.attendance_punch_ticket),
+    path('attendance/punch-ticket/pending', views.attendance_punch_ticket_pending),
+    path('attendance/punch-ticket/<int:pk>/proof', views.attendance_punch_ticket_proof),
+    path('attendance/punch-ticket/<int:pk>/decide', views.attendance_punch_ticket_decide),
+    # Employee attendance detail + hourly location tracking
+    path('attendance/day-detail', views.attendance_day_detail),
+    path('attendance/location-punch', views.attendance_location_punch),
     path('attendance/<int:pk>', views.attendance_detail),
 
     # Shifts
@@ -149,6 +167,7 @@ urlpatterns = [
     path('companies', views.companies),
     path('me/permissions', views.my_permissions),
 
+    path('dashboard/stats', views.dashboard_stats),
     path('config', views.client_config),
     path('health', views.health),
 

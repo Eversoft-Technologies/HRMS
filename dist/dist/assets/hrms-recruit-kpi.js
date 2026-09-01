@@ -25,6 +25,8 @@
     to:              '',
     teamActiveOnly:  false,
     teamAttr:        '',   // '' | credited | uncredited
+    teamMetric:      'all', // 'all' | 'rate' | 'scores' | 'outcomes'
+    teamChartMode:   'bar', // 'bar' | 'horizontal'
     dept:            '',
     
     // Tab-specific interactive filters
@@ -106,9 +108,8 @@
     if (state.source) url += '&source=' + encodeURIComponent(state.source);
     if (state.verdict) url += '&verdict=' + encodeURIComponent(state.verdict);
     if (state.job_type) url += '&job_type=' + encodeURIComponent(state.job_type);
-    // Only meaningful with range=custom, but sent whenever set so the server
-    // stays the single authority on what the window means.
-    if (state.range === 'custom') {
+    // Sent whenever set so the server stays the single authority on what the window means.
+    if (state.range === 'custom' || state.from || state.to) {
       if (state.from) url += '&from=' + encodeURIComponent(state.from);
       if (state.to) url += '&to=' + encodeURIComponent(state.to);
     }
@@ -269,8 +270,18 @@
       'color:var(--text2,#64748b);cursor:pointer;white-space:nowrap}',
       '.kpi-dl{display:inline-flex;align-items:center;gap:6px;padding:7px 13px;border-radius:8px;',
       'border:1.5px solid var(--border,#e5e7eb);background:var(--bg3,#fff);color:var(--text1,#111);',
-      'font-size:12.5px;font-weight:600;font-family:inherit;cursor:pointer;white-space:nowrap}',
+      'font-size:12.5px;font-weight:600;font-family:inherit;cursor:pointer;white-space:nowrap;transition:.15s}',
       '.kpi-dl:hover{border-color:var(--accent,#6366f1);color:var(--accent,#6366f1)}',
+      '.kpi-apply-btn{background:var(--accent,#6366f1)!important;color:#fff!important;border-color:var(--accent,#6366f1)!important;font-weight:700}',
+      '.kpi-apply-btn:hover{opacity:0.9;transform:translateY(-1px);color:#fff!important}',
+      '.kpi-date-presets{display:inline-flex;align-items:center;gap:4px;background:var(--bg3,#f3f4f6);padding:3px;border-radius:8px;border:1px solid var(--border,#e5e7eb)}',
+      '.kpi-date-btn{background:transparent;border:none;padding:4px 9px;border-radius:6px;font-size:11.5px;font-weight:600;color:var(--text2,#64748b);cursor:pointer;transition:.15s}',
+      '.kpi-date-btn:hover{color:var(--text1,#111)}',
+      '.kpi-date-btn.active{background:var(--accent,#6366f1);color:#fff}',
+      '.kpi-chart-controls{display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap}',
+      '.kpi-chart-btn{display:inline-flex;align-items:center;gap:5px;background:var(--bg3,#f3f4f6);border:1px solid var(--border,#e5e7eb);border-radius:8px;padding:5px 11px;font-size:11.5px;font-weight:600;color:var(--text2,#64748b);cursor:pointer;transition:.15s}',
+      '.kpi-chart-btn:hover{border-color:var(--accent,#6366f1);color:var(--text1,#111)}',
+      '.kpi-chart-btn.active{background:var(--accent,#6366f1);color:#fff;border-color:var(--accent,#6366f1)}',
       '.kpi-dl-lbl{font-size:12px;color:var(--text2,#64748b);white-space:nowrap}',
       '.kpi-date{padding:6px 10px;border-radius:8px;font-size:12.5px;font-family:inherit;',
       'border:1.5px solid var(--border,#e5e7eb);background:var(--bg3,#fff);color:var(--text1,#111)}',
@@ -453,12 +464,22 @@
   }
 
   /* ── shell ────────────────────────────────────────────────────────────── */
+  function updateToolbarUI() {
+    updateTabs();
+    var sum = document.getElementById("kpi-filter-summary");
+    if (sum) sum.textContent = filterSummary();
+  }
+
   function buildShell() {
     var o = document.getElementById(OVERLAY_ID);
     if (!o) return;
+    if (document.getElementById('kpi-modal-root')) {
+      updateToolbarUI();
+      return;
+    }
     var ICON_SLIDERS = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="vertical-align:-3px"><line x1="4" y1="7" x2="20" y2="7"/><circle cx="9" cy="7" r="2.4" fill="var(--card,#fff)"/><line x1="4" y1="17" x2="20" y2="17"/><circle cx="15" cy="17" r="2.4" fill="var(--card,#fff)"/></svg>';
     o.innerHTML =
-      '<div class="kpi-modal">' +
+      '<div class="kpi-modal" id="kpi-modal-root">' +
         '<div class="kpi-head">' +
           '<div>' +
             '<div class="kpi-title">📊 Recruitment KPI Dashboard</div>' +
@@ -503,15 +524,49 @@
         state.verdict = '';
         state.job_type = '';
 
-        updateTabs();
-        buildShell();
+        updateToolbarUI();
         loadAndRender();
         return;
       }
       if (act === 'team-download') { downloadTeamCsv(); return; }
       if (act === 'team-clear-dates') {
         state.from = ''; state.to = ''; state.range = 'all';
-        buildShell(); loadAndRender();
+        updateToolbarUI();
+        loadAndRender();
+        return;
+      }
+      if (act === 'team-apply-dates') {
+        var fromEl = o.querySelector('input[data-kact="team-from"]');
+        var toEl = o.querySelector('input[data-kact="team-to"]');
+        if (fromEl) state.from = fromEl.value;
+        if (toEl) state.to = toEl.value;
+        state.range = (state.from || state.to) ? 'custom' : 'all';
+        updateToolbarUI();
+        loadAndRender();
+        return;
+      }
+      if (act === 'team-preset') {
+        var p = el.getAttribute('data-preset');
+        state.range = p;
+        state.from = '';
+        state.to = '';
+        updateToolbarUI();
+        loadAndRender();
+        return;
+      }
+      if (act === 'team-metric-tab') {
+        state.teamMetric = el.getAttribute('data-metric');
+        var btns = o.querySelectorAll('[data-kact="team-metric-tab"]');
+        for (var b = 0; b < btns.length; b++) {
+          btns[b].classList.toggle('active', btns[b].getAttribute('data-metric') === state.teamMetric);
+        }
+        if (state.data) initTeamCharts(state.data);
+        return;
+      }
+      if (act === 'team-chart-mode') {
+        state.teamChartMode = (state.teamChartMode === 'horizontal' ? 'bar' : 'horizontal');
+        el.textContent = state.teamChartMode === 'horizontal' ? '↕️ Vertical Bars' : '↔️ Horizontal Bars';
+        if (state.data) initTeamCharts(state.data);
         return;
       }
       if (act === 'drill-recruiter') {
@@ -519,7 +574,7 @@
         // dropdown can never show different numbers for the same person.
         state.interviewer = el.getAttribute('data-val') || '';
         state.tab = 'overview';
-        buildShell();
+        updateToolbarUI();
         loadAndRender();
         return;
       }
@@ -530,7 +585,7 @@
           state.dept = '';
         }
         if (state.scope === 'me' && (state.tab === 'jobs' || state.tab === 'team')) state.tab = 'overview';
-        buildShell();
+        updateToolbarUI();
         loadAndRender();
         return;
       }
@@ -543,9 +598,6 @@
       // a local filter over rows already in hand, so it must not feel like a
       // reload or the search box loses focus on every keystroke.
       var caret = e.target.selectionStart;
-      // renderBody() redraws only when the TAB changed, so it would skip this;
-      // rebuild the team body directly (setBody also disposes the old chart
-      // before its canvas is replaced).
       if (!state.data) return;
       setBody(renderTeam(state.data));
       initTeamCharts(state.data);
@@ -564,12 +616,10 @@
       } else if (act === 'filter-dept') {
         state.dept = e.target.value;
       } else if (act === 'team-from' || act === 'team-to') {
-        // Picking either date switches the report to a custom window; clearing
-        // both returns it to All Time rather than leaving a half-open range
-        // that reads as "custom" but filters nothing.
         state[act === 'team-from' ? 'from' : 'to'] = e.target.value;
         state.range = (state.from || state.to) ? 'custom' : 'all';
-        buildShell(); loadAndRender();
+        updateToolbarUI();
+        loadAndRender();
         return;
       } else if (act === 'team-attr') {
         state.teamAttr = e.target.value;
@@ -708,14 +758,8 @@
     if (refreshLbl) {
       refreshLbl.innerHTML = '<span class="kpi-spinner"></span> Updating…';
     }
-    var bodyEl = document.getElementById('kpi-body');
-    if (bodyEl) {
-      bodyEl.style.opacity = '0.65';
-      bodyEl.style.transition = 'opacity 0.2s ease';
-    }
 
     fetchKpis().then(function (r) {
-      if (bodyEl) bodyEl.style.opacity = '1';
       if (!r.ok || !r.data) {
         setBody('<div class="kpi-empty">Failed to load KPIs. Check the server is running.</div>');
         return;
@@ -738,7 +782,8 @@
     if (!d) { setBody('<div class="kpi-loading">Loading…</div>'); return; }
     
     var b = document.getElementById('kpi-body');
-    var needsRebuild = !b || b.innerHTML === '' || state.lastRenderedTab !== state.tab;
+    var tabChanged = state.lastRenderedTab !== state.tab;
+    var needsRebuild = !b || b.innerHTML === '' || tabChanged;
     state.lastRenderedTab = state.tab;
 
     if (state.tab === 'overview') {
@@ -765,7 +810,7 @@
       else updateJobsCards(d);
       initJobsCharts(d);
     } else if (state.tab === 'team') {
-      if (needsRebuild) setBody(renderTeam(d));
+      setBody(renderTeam(d));
       initTeamCharts(d);
     }
     addChartFilters();
@@ -1716,16 +1761,26 @@
         ' in this range were scheduled before the creator was recorded, so there is ' +
         'nobody to attribute them to. Interviews scheduled from now on are credited to ' +
         'whoever schedules them and appear here.</div></div>';
-      return head + teamTable(rows, stats);
+      return teamTotals(stats) + head + teamTable(rows, stats);
     }
 
-    return teamTable(rows, stats) +
-      '<div class="kpi-section" style="margin-top:24px;">' +
+    return teamTotals(stats) +
+      teamTable(rows, stats) +
+      '<div class="kpi-section" style="margin-top:28px;">' +
         '<div class="chart-wrapper">' +
-          '<div class="kpi-section-title">Recruiter Activity Comparison</div>' +
-          '<div style="position:relative;height:240px;"><canvas id="chart-team-activity"></canvas></div>' +
+          '<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:14px">' +
+            '<div class="kpi-section-title" style="margin-bottom:0">Employee Performance & Comparison Graphs</div>' +
+            '<div class="kpi-chart-controls">' +
+              '<button type="button" class="kpi-chart-btn' + ((state.teamMetric || 'all') === 'all' ? ' active' : '') + '" data-kact="team-metric-tab" data-metric="all">📊 All Funnel Metrics</button>' +
+              '<button type="button" class="kpi-chart-btn' + (state.teamMetric === 'rate' ? ' active' : '') + '" data-kact="team-metric-tab" data-metric="rate">🎯 Shortlist Rate %</button>' +
+              '<button type="button" class="kpi-chart-btn' + (state.teamMetric === 'scores' ? ' active' : '') + '" data-kact="team-metric-tab" data-metric="scores">⭐️ Avg Score</button>' +
+              '<button type="button" class="kpi-chart-btn' + (state.teamMetric === 'outcomes' ? ' active' : '') + '" data-kact="team-metric-tab" data-metric="outcomes">🔄 Outcomes</button>' +
+              '<button type="button" class="kpi-chart-btn" data-kact="team-chart-mode" title="Toggle horizontal/vertical view">' + (state.teamChartMode === 'horizontal' ? '↕️ Vertical Bars' : '↔️ Horizontal Bars') + '</button>' +
+            '</div>' +
+          '</div>' +
+          '<div style="position:relative;height:320px;"><canvas id="chart-team-activity"></canvas></div>' +
         '</div>' +
-      '</div>' + teamTotals(stats);
+      '</div>';
   }
 
   function teamTable(rows, stats) {
@@ -1734,13 +1789,28 @@
       ? '<span class="kpi-hint" style="margin:0">Showing ' + rows.length + ' of ' + stats.length + '</span>'
       : '';
 
-    var html = '<div class="kpi-section">' +
+    var activePreset = state.range || 'all';
+    var presets = [
+      ['all', 'All time'],
+      ['day', 'Today'],
+      ['week', 'This Week'],
+      ['month', 'This Month'],
+      ['quarter', 'Last 90 Days']
+    ];
+
+    var presetHtml = '<div class="kpi-date-presets">' +
+      presets.map(function (p) {
+        var isAct = (activePreset === p[0] && !state.from && !state.to);
+        return '<button type="button" class="kpi-date-btn' + (isAct ? ' active' : '') + '" data-kact="team-preset" data-preset="' + p[0] + '">' + p[1] + '</button>';
+      }).join('') +
+    '</div>';
+
+    var html = '<div class="kpi-section" style="margin-top:16px;">' +
       '<div class="kpi-section-title">Per-person report <span class="kpi-period">' +
       esc(periodLabel()) + '</span></div>' +
       '<div class="kpi-hint">Credited to whoever scheduled the interview. Select a row to scope ' +
-      'the whole dashboard to that person. Change the period under Edit Filters — ' +
-      'today, this week, this month, or a custom range.</div>' +
-      '<div class="kpi-team-bar">' +
+      'the whole dashboard to that person. Filter data by date range below or click a quick preset to view reports for any period.</div>' +
+      '<div class="kpi-team-bar" style="flex-wrap:wrap;gap:10px">' +
         '<input class="kpi-search" id="kpi-team-q" data-kact="team-search" type="search" ' +
         'placeholder="Search a person by name or email…" value="' + esc(q) + '">' +
         '<select class="kpi-filter-select" data-kact="team-attr" title="Attribution">' +
@@ -1752,21 +1822,24 @@
         '<label class="kpi-toggle"><input type="checkbox" data-kact="team-active"' +
         (state.teamActiveOnly ? ' checked' : '') + '>With activity only</label>' +
         counted +
+        presetHtml +
       '</div>' +
-      // The period lives in Edit Filters too, but an export is asked for by
+      // The period lives in Edit Filters too, but an export and table view are asked for by
       // date far more often than the whole dashboard is re-scoped — so the
-      // dates sit on the thing being exported.
-      '<div class="kpi-team-bar">' +
-        '<span class="kpi-dl-lbl">Report period</span>' +
+      // dates sit on the report itself with quick view & download actions.
+      '<div class="kpi-team-bar" style="flex-wrap:wrap;gap:10px;background:var(--bg2,#f8fafc);border:1px solid var(--border,#e5e7eb);padding:10px 14px;border-radius:10px;">' +
+        '<span class="kpi-dl-lbl" style="font-weight:600;color:var(--text1,#111)">📅 Date Filter:</span>' +
+        '<span class="kpi-dl-lbl">From</span>' +
         '<input type="date" class="kpi-date" data-kact="team-from" title="From" value="' +
         esc(state.from || '') + '">' +
         '<span class="kpi-dl-lbl">to</span>' +
         '<input type="date" class="kpi-date" data-kact="team-to" title="To" value="' +
         esc(state.to || '') + '">' +
-        ((state.from || state.to)
-          ? '<button class="kpi-dl" data-kact="team-clear-dates" type="button">Clear</button>'
+        '<button class="kpi-dl kpi-apply-btn" data-kact="team-apply-dates" type="button" title="View report data for this date range">🔍 View Report</button>' +
+        ((state.from || state.to || (state.range && state.range !== 'all'))
+          ? '<button class="kpi-dl" data-kact="team-clear-dates" type="button" title="Reset date filters">✕ Reset</button>'
           : '') +
-        '<button class="kpi-dl" data-kact="team-download" type="button" ' +
+        '<button class="kpi-dl" style="margin-left:auto" data-kact="team-download" type="button" ' +
         'title="Download this report as CSV">⭳ Download CSV</button>' +
       '</div>';
 
@@ -1774,7 +1847,7 @@
       return html + '<div class="kpi-empty">Nobody matches “' + esc(q) + '”.</div></div>';
     }
 
-    html += '<div style="overflow-x:auto"><table class="kpi-tbl">' +
+    html += '<div style="overflow-x:auto;margin-top:14px"><table class="kpi-tbl">' +
       '<thead><tr><th>#</th><th>Person</th><th>Scheduled</th><th>Invited</th><th>Completed</th>' +
       '<th>Selected</th><th>Rejected</th><th>Awaiting outcome</th><th>Shortlist Rate</th>' +
       '<th>Avg Score</th><th>Last scheduled</th></tr></thead><tbody>';
@@ -1821,7 +1894,7 @@
     var totalSelected   = stats.reduce(function (s, r) { return s + r.selected; }, 0);
     var people = stats.filter(function (r) { return r.attributed && r.total > 0; }).length;
     var orgRate = totalInterviews > 0 ? (totalSelected / totalInterviews * 100).toFixed(1) : '0.0';
-    return '<div class="kpi-cards" style="margin-top:20px">' +
+    return '<div class="kpi-cards" style="margin-bottom:20px">' +
       kpiCard('People Credited', people, '', 'blue') +
       kpiCard('Org Shortlist Rate', orgRate + '%', '', 'green') +
       kpiCard('Total Scheduled', totalInterviews, '', 'indigo') +
@@ -1832,43 +1905,119 @@
   function initTeamCharts(d) {
     if (!window.Chart) return;
     var colors = getThemeColors();
-    // Same rows the table is showing — a chart plotting everybody while the
-    // table shows one search hit is two answers to one question.
-    var stats = teamRows(d).filter(function (r) { return r.attributed; });
+    var stats = teamRows(d).filter(function (r) { return r.attributed || r.total > 0; });
+    if (!stats.length) stats = (d && d.recruiterStats) || [];
 
-    var c1 = state.charts.find(function(c) { return c.canvas.id === 'chart-team-activity'; });
-    if (c1 && stats.length > 0) {
-      c1.data.labels = stats.map(personName);
-      c1.data.datasets[0].data = stats.map(function(x){return x.total;});
-      c1.data.datasets[1].data = stats.map(function(x){return x.selected;});
-      c1.update();
-    } else {
-      var ctx = document.getElementById('chart-team-activity');
-      if (ctx && stats.length > 0) {
-        var chart = new Chart(ctx, {
-          type: 'bar',
-          data: {
-            labels: stats.map(personName),
-            datasets: [
-              {
-                label: 'Total Interviews',
-                data: stats.map(function(x){return x.total;}),
-                backgroundColor: 'rgba(99, 102, 241, 0.5)',
-                borderRadius: 4
-              },
-              {
-                label: 'Selected',
-                data: stats.map(function(x){return x.selected;}),
-                backgroundColor: colors.success,
-                borderRadius: 4
-              }
-            ]
-          },
-          options: barOptions(colors, true, false)
-        });
-        state.charts.push(chart);
-      }
+    var ctx = document.getElementById('chart-team-activity');
+    if (!ctx) return;
+
+    var existing = state.charts.find(function(c) { return c.canvas && c.canvas.id === 'chart-team-activity'; });
+    if (existing) {
+      try { existing.destroy(); } catch (_) {}
+      state.charts = state.charts.filter(function(c) { return !c.canvas || c.canvas.id !== 'chart-team-activity'; });
     }
+
+    if (!stats.length) return;
+
+    var metricMode = state.teamMetric || 'all';
+    var isHorizontal = state.teamChartMode === 'horizontal';
+    var labels = stats.map(personName);
+    var datasets = [];
+
+    if (metricMode === 'rate') {
+      var rateData = stats.map(function(x) { return x.shortlistRate || 0; });
+      var rateColors = rateData.map(function(v) {
+        return v >= 40 ? colors.success : (v >= 20 ? colors.warning : colors.danger);
+      });
+      datasets = [{
+        label: 'Shortlist Rate (%)',
+        data: rateData,
+        backgroundColor: rateColors,
+        borderRadius: 5,
+        borderWidth: 1,
+        borderColor: colors.cardBg
+      }];
+    } else if (metricMode === 'scores') {
+      datasets = [{
+        label: 'Avg Candidate Score (out of 100)',
+        data: stats.map(function(x) { return x.avgScore || 0; }),
+        backgroundColor: colors.accent,
+        borderRadius: 5,
+        borderWidth: 1,
+        borderColor: colors.cardBg
+      }];
+    } else if (metricMode === 'outcomes') {
+      datasets = [
+        {
+          label: 'Selected',
+          data: stats.map(function(x) { return x.selected || 0; }),
+          backgroundColor: colors.success,
+          borderRadius: 4
+        },
+        {
+          label: 'Rejected',
+          data: stats.map(function(x) { return x.rejected || 0; }),
+          backgroundColor: colors.danger,
+          borderRadius: 4
+        },
+        {
+          label: 'Awaiting Outcome',
+          data: stats.map(function(x) { return x.pending || 0; }),
+          backgroundColor: colors.warning,
+          borderRadius: 4
+        }
+      ];
+    } else {
+      // 'all' — Full Funnel Metrics Breakdown
+      datasets = [
+        {
+          label: 'Scheduled',
+          data: stats.map(function(x) { return x.total || 0; }),
+          backgroundColor: 'rgba(99, 102, 241, 0.75)',
+          borderRadius: 4
+        },
+        {
+          label: 'Invited',
+          data: stats.map(function(x) { return x.invited || 0; }),
+          backgroundColor: 'rgba(6, 182, 212, 0.75)',
+          borderRadius: 4
+        },
+        {
+          label: 'Completed',
+          data: stats.map(function(x) { return x.completed || 0; }),
+          backgroundColor: 'rgba(168, 85, 247, 0.75)',
+          borderRadius: 4
+        },
+        {
+          label: 'Selected',
+          data: stats.map(function(x) { return x.selected || 0; }),
+          backgroundColor: colors.success,
+          borderRadius: 4
+        },
+        {
+          label: 'Rejected',
+          data: stats.map(function(x) { return x.rejected || 0; }),
+          backgroundColor: colors.danger,
+          borderRadius: 4
+        },
+        {
+          label: 'Awaiting Outcome',
+          data: stats.map(function(x) { return x.pending || 0; }),
+          backgroundColor: colors.warning,
+          borderRadius: 4
+        }
+      ];
+    }
+
+    var chart = new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels: labels,
+        datasets: datasets
+      },
+      options: barOptions(colors, true, isHorizontal)
+    });
+    state.charts.push(chart);
   }
 
   /* ── inject trigger button ─────────────────────────────────────────────── */

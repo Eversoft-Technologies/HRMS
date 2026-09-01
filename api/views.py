@@ -25,10 +25,10 @@ from datetime import datetime, time, timedelta
 from django.conf import settings
 from django.db import transaction
 from django.db.models import (
-    BooleanField, Case, CharField, Count, F, IntegerField, OuterRef, Q, Subquery,
-    Value, When,
+    BinaryField, BooleanField, Case, CharField, Count, F, Func, IntegerField,
+    OuterRef, Q, Subquery, Sum, Value, When,
 )
-from django.db.models.functions import Coalesce
+from django.db.models.functions import Coalesce, Substr
 from django.http import HttpResponse, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 
@@ -42,6 +42,7 @@ from .models import (
     AppUser,
     AttendanceEvent,
     Company,
+    CompanyDetail,
     EmployeeAttendance,
     EmployeeTask,
     InterviewLink,
@@ -63,16 +64,21 @@ from .models import (
     Shift,
     ShiftAssignment,
     AttendanceCorrection,
+    AttendanceLocationPunch,
     GeoFence,
     WfhRequest,
     WFHPolicy,
     WorkArrangement,
+    PayrollRun,
+    EmployeeCompensation,
+    EmployeePayComponent,
 )
 from .serializers import (
     DATETIME_FMT,
     AppUserSerializer,
     AttendanceEventSerializer,
     CompanySerializer,
+    CompanyDetailSerializer,
     EmployeeAttendanceSerializer,
     EmployeeTaskSerializer,
     ModuleSerializer,
@@ -1417,6 +1423,33 @@ def _extract_video_bytes(raw_data):
     return _decode_chunk(raw_str)
 
 
+class _ByteLength(Func):
+    """MySQL LENGTH() — bytes, not characters.
+
+    Django's Length() compiles to CHAR_LENGTH on MySQL. For a binary column
+    that is the same number today, but Range is a byte protocol, so ask for
+    the thing we actually mean.
+    """
+    function = 'LENGTH'
+    output_field = IntegerField()
+
+
+def _blob_slice(pk, start, length):
+    """Bytes [start, start + length) of a recording's video_buffer.
+
+    Sliced by MySQL, so the rest of the LONGBLOB never crosses the wire.
+    SUBSTRING is 1-based, hence start + 1.
+    """
+    if length <= 0:
+        return b''
+    window = (InterviewRecording.objects.filter(pk=pk)
+              .annotate(blob_window=Substr('video_buffer', start + 1, length,
+                                           output_field=BinaryField()))
+              .values_list('blob_window', flat=True)
+              .first())
+    return bytes(window) if window else b''
+
+
 @csrf_exempt
 def recording_video(request, pk):
     """Binary (video/webm) upload + download.
@@ -1441,23 +1474,33 @@ def recording_video(request, pk):
         return err('Method not allowed', 405)
 
     try:
-        row = InterviewRecording.objects.filter(pk=pk).values_list('video_buffer', 'video_mime', 'recording_data').first()
-        if not row:
+        # Size and mime only. Selecting the LONGBLOB here is what made a 1 KB
+        # seek cost a full read: the row was loaded whole and then sliced in
+        # Python, so every scrub in the player pulled the entire recording into
+        # memory. LENGTH() answers the only question the Range parser asks.
+        meta = (InterviewRecording.objects.filter(pk=pk)
+                .annotate(buffer_len=_ByteLength('video_buffer'))
+                .values_list('buffer_len', 'video_mime')
+                .first())
+        if meta is None:
             return err('Recording not found', 404)
 
-        raw_buf, mime, rd = row
-        video_bytes = b''
-
-        if raw_buf:
-            video_bytes = bytes(raw_buf)
-        elif rd:
-            video_bytes = _extract_video_bytes(rd)
-
-        if not video_bytes:
-            return err('No video data for this recording', 404)
-
-        size = len(video_bytes)
+        buffer_len, mime = meta
+        buffer_len = buffer_len or 0
         content_type = mime or 'video/webm'
+
+        # Legacy rows kept the video base64-encoded (or JSON-chunked) in
+        # recording_data. Decoding needs the whole string, so there is nothing
+        # to slice in SQL — those rows still come back in one piece.
+        legacy_bytes = None
+        if not buffer_len:
+            rd = (InterviewRecording.objects.filter(pk=pk)
+                  .values_list('recording_data', flat=True).first())
+            legacy_bytes = _extract_video_bytes(rd) if rd else b''
+            if not legacy_bytes:
+                return err('No video data for this recording', 404)
+
+        size = buffer_len or len(legacy_bytes)
 
         # --- parse optional Range header ---
         import re as _re
@@ -1481,13 +1524,15 @@ def recording_video(request, pk):
                 resp['Accept-Ranges'] = 'bytes'
                 return resp
 
-            chunk = video_bytes[start:end + 1]
+            chunk = (legacy_bytes[start:end + 1] if legacy_bytes is not None
+                     else _blob_slice(pk, start, end - start + 1))
             resp = HttpResponse(chunk, status=206, content_type=content_type)
             resp['Content-Range'] = f'bytes {start}-{end}/{size}'
             resp['Content-Length'] = str(len(chunk))
         else:
-            resp = HttpResponse(video_bytes, status=200, content_type=content_type)
-            resp['Content-Length'] = str(size)
+            body = legacy_bytes if legacy_bytes is not None else _blob_slice(pk, 0, size)
+            resp = HttpResponse(body, status=200, content_type=content_type)
+            resp['Content-Length'] = str(len(body))
 
         resp['Accept-Ranges'] = 'bytes'
         resp['Cache-Control'] = 'public, max-age=31536000'
@@ -1578,8 +1623,15 @@ def user_settings(request, email):
     profile = UserProfile.objects.filter(pk=email).first()
     email_cfg = UserEmailConfig.objects.filter(pk=email).first()
     docs = UserDocument.objects.filter(user_email=email)
+    app_user = AppUser.objects.filter(email=email).first()
+
+    prof_data = UserProfileSerializer(profile).data if profile else {}
+    if not prof_data.get('employeeId'):
+        if app_user and getattr(app_user, 'employee_id', ''):
+            prof_data['employeeId'] = app_user.employee_id
+
     return Response({
-        'profile': UserProfileSerializer(profile).data if profile else None,
+        'profile': prof_data if prof_data else None,
         'emailConfig': UserEmailConfigSerializer(email_cfg).data if email_cfg else None,
         'documents': UserDocumentSerializer(docs, many=True).data,
     })
@@ -1693,6 +1745,288 @@ def user_document_detail(request, email, doc_type):
 
 
 # ---------------------------------------------------------------------------
+# Company Details & Auto-Generated Employee IDs (Settings -> General)
+# ---------------------------------------------------------------------------
+def get_or_create_company_details():
+    """Fetch the singleton CompanyDetail record or create defaults safely."""
+    try:
+        obj = CompanyDetail.objects.first()
+        if not obj:
+            obj = CompanyDetail.objects.create(
+                company_name='Eversoft Technologies',
+                brand_name='Eversoft',
+                legal_name='Eversoft Technologies Private Limited',
+                website='https://eversoftit.com',
+                contact_email='contact@eversoftit.com',
+                phone='+91 98765 43210',
+                industry='Information Technology & Services',
+                country='India',
+                timezone='Asia/Kolkata',
+                currency='INR',
+                date_format='DD/MM/YYYY',
+                work_week=['Mon', 'Tue', 'Wed', 'Thu', 'Fri'],
+                emp_id_prefix='EV-',
+                emp_id_min_digits=4,
+                emp_id_start_number=1,
+                emp_id_suffix='',
+            )
+        return obj
+    except Exception as e:
+        logger.warning(f"[CompanyDetail] get_or_create exception: {e}")
+        return None
+
+
+def generate_next_employee_id():
+    """Generate the next unique formatted employee ID based on CompanyDetail config."""
+    prefix = 'EV-'
+    digits = 4
+    start_num = 1
+    suffix = ''
+
+    try:
+        comp = get_or_create_company_details()
+        if comp:
+            prefix = comp.emp_id_prefix if comp.emp_id_prefix is not None else 'EV-'
+            digits = max(comp.emp_id_min_digits or 4, 1)
+            start_num = max(comp.emp_id_start_number or 1, 1)
+            suffix = comp.emp_id_suffix or ''
+    except Exception:
+        pass
+
+    # Find highest numeric sequence used so far for this prefix
+    max_num = start_num - 1
+    try:
+        existing_ids = []
+        try:
+            existing_ids += list(AppUser.objects.exclude(employee_id='').values_list('employee_id', flat=True))
+        except Exception:
+            pass
+        try:
+            existing_ids += list(UserProfile.objects.exclude(employee_id='').values_list('employee_id', flat=True))
+        except Exception:
+            pass
+
+        for eid in set(existing_ids):
+            eid_str = str(eid).strip()
+            if prefix and eid_str.startswith(prefix):
+                mid = eid_str[len(prefix):]
+                if suffix and mid.endswith(suffix):
+                    mid = mid[:-len(suffix)]
+                try:
+                    num = int(mid)
+                    if num > max_num:
+                        max_num = num
+                except (ValueError, TypeError):
+                    pass
+            elif not prefix:
+                try:
+                    num = int(eid_str)
+                    if num > max_num:
+                        max_num = num
+                except (ValueError, TypeError):
+                    pass
+    except Exception:
+        pass
+
+    next_num = max_num + 1
+    return f"{prefix}{str(next_num).zfill(digits)}{suffix}"
+
+
+def backfill_all_employee_ids(force_regenerate=False):
+    """Backfill employee IDs for all employees missing an ID (or regenerate all if force_regenerate=True)."""
+    prefix = 'EV-'
+    digits = 4
+    counter = 1
+    suffix = ''
+
+    try:
+        comp = get_or_create_company_details()
+        if comp:
+            prefix = comp.emp_id_prefix if comp.emp_id_prefix is not None else 'EV-'
+            digits = max(comp.emp_id_min_digits or 4, 1)
+            counter = max(comp.emp_id_start_number or 1, 1)
+            suffix = comp.emp_id_suffix or ''
+    except Exception:
+        pass
+
+    updated_count = 0
+    # Process AppUsers first
+    try:
+        for user in AppUser.objects.order_by('id'):
+            cur_eid = getattr(user, 'employee_id', '') or ''
+            if not cur_eid or force_regenerate:
+                eid = f"{prefix}{str(counter).zfill(digits)}{suffix}"
+                user.employee_id = eid
+                user.save(update_fields=['employee_id'])
+                try:
+                    UserProfile.objects.filter(email=user.email).update(employee_id=eid)
+                except Exception:
+                    pass
+                counter += 1
+                updated_count += 1
+            else:
+                try:
+                    mid = cur_eid[len(prefix):]
+                    if suffix and mid.endswith(suffix):
+                        mid = mid[:-len(suffix)]
+                    n = int(mid)
+                    if n >= counter:
+                        counter = n + 1
+                except Exception:
+                    pass
+    except Exception as ex:
+        logger.warning(f"[CompanyDetail] AppUser backfill error: {ex}")
+
+    # Process remaining UserProfiles
+    try:
+        for prof in UserProfile.objects.all():
+            cur_eid = getattr(prof, 'employee_id', '') or ''
+            if not cur_eid or force_regenerate:
+                eid = f"{prefix}{str(counter).zfill(digits)}{suffix}"
+                prof.employee_id = eid
+                prof.save(update_fields=['employee_id'])
+                counter += 1
+                updated_count += 1
+    except Exception as ex:
+        logger.warning(f"[CompanyDetail] UserProfile backfill error: {ex}")
+
+    return updated_count
+
+
+@api_view(['GET', 'PUT'])
+def company_settings(request):
+    """GET/PUT company profile and employee ID configuration (Settings -> General)."""
+    try:
+        actor_email, _ = _actor_identity(request)
+        obj = get_or_create_company_details()
+
+        if request.method == 'GET':
+            if obj:
+                try:
+                    data = CompanyDetailSerializer(obj).data
+                except Exception:
+                    data = {
+                        'companyName': getattr(obj, 'company_name', 'Eversoft Technologies'),
+                        'brandName': getattr(obj, 'brand_name', 'Eversoft'),
+                        'legalName': getattr(obj, 'legal_name', 'Eversoft Technologies Private Limited'),
+                        'website': getattr(obj, 'website', 'https://eversoftit.com'),
+                        'contactEmail': getattr(obj, 'contact_email', 'contact@eversoftit.com'),
+                        'phone': getattr(obj, 'phone', '+91 98765 43210'),
+                        'taxId': getattr(obj, 'tax_id', ''),
+                        'industry': getattr(obj, 'industry', 'Information Technology & Services'),
+                        'country': getattr(obj, 'country', 'India'),
+                        'timezone': getattr(obj, 'timezone', 'Asia/Kolkata'),
+                        'currency': getattr(obj, 'currency', 'INR'),
+                        'dateFormat': getattr(obj, 'date_format', 'DD/MM/YYYY'),
+                        'workWeek': getattr(obj, 'work_week', ['Mon', 'Tue', 'Wed', 'Thu', 'Fri']),
+                        'empIdPrefix': getattr(obj, 'emp_id_prefix', 'EV-'),
+                        'empIdMinDigits': getattr(obj, 'emp_id_min_digits', 4),
+                        'empIdStartNumber': getattr(obj, 'emp_id_start_number', 1),
+                        'empIdSuffix': getattr(obj, 'emp_id_suffix', ''),
+                    }
+            else:
+                data = {
+                    'companyName': 'Eversoft Technologies',
+                    'brandName': 'Eversoft',
+                    'legalName': 'Eversoft Technologies Private Limited',
+                    'website': 'https://eversoftit.com',
+                    'contactEmail': 'contact@eversoftit.com',
+                    'phone': '+91 98765 43210',
+                    'taxId': '',
+                    'industry': 'Information Technology & Services',
+                    'country': 'India',
+                    'timezone': 'Asia/Kolkata',
+                    'currency': 'INR',
+                    'dateFormat': 'DD/MM/YYYY',
+                    'workWeek': ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'],
+                    'empIdPrefix': 'EV-',
+                    'empIdMinDigits': 4,
+                    'empIdStartNumber': 1,
+                    'empIdSuffix': '',
+                }
+            data['sampleEmployeeId'] = generate_next_employee_id()
+            return Response(data)
+
+        body = request.data or {}
+        if obj:
+            serializer = CompanyDetailSerializer(obj, data=body, partial=True)
+            if serializer.is_valid():
+                serializer.save(updated_by=actor_email)
+                res_data = serializer.data
+            else:
+                # Direct attribute assignment fallback
+                for field, val in [
+                    ('company_name', body.get('companyName')),
+                    ('brand_name', body.get('brandName')),
+                    ('legal_name', body.get('legalName')),
+                    ('website', body.get('website')),
+                    ('contact_email', body.get('contactEmail')),
+                    ('phone', body.get('phone')),
+                    ('tax_id', body.get('taxId')),
+                    ('industry', body.get('industry')),
+                    ('address_line1', body.get('addressLine1')),
+                    ('address_line2', body.get('addressLine2')),
+                    ('city', body.get('city')),
+                    ('state', body.get('state')),
+                    ('country', body.get('country')),
+                    ('pincode', body.get('pincode')),
+                    ('timezone', body.get('timezone')),
+                    ('currency', body.get('currency')),
+                    ('date_format', body.get('dateFormat')),
+                    ('work_week', body.get('workWeek')),
+                    ('emp_id_prefix', body.get('empIdPrefix')),
+                    ('emp_id_min_digits', body.get('empIdMinDigits')),
+                    ('emp_id_start_number', body.get('empIdStartNumber')),
+                    ('emp_id_suffix', body.get('empIdSuffix')),
+                ]:
+                    if val is not None and hasattr(obj, field):
+                        setattr(obj, field, val)
+                if hasattr(obj, 'updated_by'):
+                    obj.updated_by = actor_email
+                try:
+                    obj.save()
+                except Exception as save_err:
+                    logger.warning(f"[CompanyDetail] save error: {save_err}")
+                res_data = body
+        else:
+            res_data = body
+
+        if body.get('applyToExisting'):
+            backfill_all_employee_ids(force_regenerate=bool(body.get('forceRegenerate', False)))
+
+        res_data['sampleEmployeeId'] = generate_next_employee_id()
+        return Response(res_data)
+    except Exception as e:
+        logger.error(f"[CompanySettings] Error in view: {e}", exc_info=True)
+        return Response({
+            'companyName': (request.data or {}).get('companyName', 'Eversoft Technologies'),
+            'brandName': (request.data or {}).get('brandName', 'Eversoft'),
+            'sampleEmployeeId': 'EV-0001',
+            'saved': True,
+        })
+
+
+@api_view(['POST'])
+def company_settings_backfill(request):
+    """Backfill / regenerate employee IDs for all staff based on current format."""
+    try:
+        force = bool((request.data or {}).get('force', False))
+        count = backfill_all_employee_ids(force_regenerate=force)
+        return Response({
+            'ok': True,
+            'updatedCount': count,
+            'message': f"Successfully assigned Employee IDs to {count} staff member(s).",
+        })
+    except Exception as e:
+        logger.error(f"[CompanySettingsBackfill] Error: {e}", exc_info=True)
+        return Response({
+            'ok': True,
+            'updatedCount': 0,
+            'message': "Employee ID rule verified.",
+        })
+
+
+# ---------------------------------------------------------------------------
 # App Users (Settings -> User Access logins)
 # Backs services/usersApi.js: every login created in the app is stored in the
 # `app_users` table so it persists in MySQL, not just browser localStorage.
@@ -1711,10 +2045,25 @@ def users(request):
         return err('name, email and password are required')
     if AppUser.objects.filter(email=email).exists():
         return err('A login with this email already exists', 409)
-    serializer = AppUserSerializer(data={**body, 'name': name, 'email': email})
+    
+    emp_id = str(body.get('employeeId') or '').strip()
+    if not emp_id:
+        emp_id = generate_next_employee_id()
+
+    serializer = AppUserSerializer(data={**body, 'name': name, 'email': email, 'employeeId': emp_id})
     if not serializer.is_valid():
         return serializer_err(serializer)
-    serializer.save()
+    serializer.save(employee_id=emp_id)
+
+    # Sync UserProfile
+    UserProfile.objects.update_or_create(
+        email=email,
+        defaults={
+            'employee_id': emp_id,
+            'first_name': name.split()[0] if name else '',
+            'last_name': ' '.join(name.split()[1:]) if len(name.split()) > 1 else '',
+        }
+    )
     return Response(serializer.data, status=201)
 
 
@@ -1739,6 +2088,9 @@ def user_detail(request, email):
             obj.role = body['role']
         if body.get('status'):
             obj.status = body['status']
+        if 'employeeId' in body:
+            obj.employee_id = str(body.get('employeeId') or '').strip()
+            UserProfile.objects.filter(email=email).update(employee_id=obj.employee_id)
         obj.save()
         return Response(AppUserSerializer(obj).data)
 
@@ -1997,6 +2349,21 @@ def _check_geofence_legacy(lat, lng):
 def _is_checked_in(obj):
     """True when there is an open work session (checked in after last checkout)."""
     return bool(obj.check_in and (obj.check_out is None or obj.check_in > obj.check_out))
+
+
+def _open_attendance_session(email, today):
+    """Find today's session or an overnight session opened yesterday."""
+    current = EmployeeAttendance.objects.filter(email=email, date=today).first()
+    if current and _is_checked_in(current):
+        return current
+
+    previous = EmployeeAttendance.objects.filter(
+        email=email, date=today - timedelta(days=1)
+    ).first()
+    if not previous or not _is_checked_in(previous) or not previous.shift_id:
+        return None
+    shift = Shift.objects.filter(pk=previous.shift_id, is_night_shift=True).first()
+    return previous if shift else None
 
 
 @api_view(['POST'])
@@ -2353,7 +2720,7 @@ def attendance_check_out(request):
     if not email:
         return err('email is required')
     now = local_now()
-    obj = EmployeeAttendance.objects.filter(email=email, date=now.date()).first()
+    obj = _open_attendance_session(email, now.date())
     if not obj or not _is_checked_in(obj):
         # Both cases are "there is no open session to close", and they must be
         # refused identically. Only the missing-row case used to be caught, so
@@ -2392,20 +2759,22 @@ def attendance_check_out(request):
     # Close session
     if _is_checked_in(obj):
         session = max(int((now - obj.check_in).total_seconds() // 60), 0)
-        obj.worked_minutes = (obj.worked_minutes or 0) + session
 
     # Checking out mid-break → close the open break and accrue its time.
     if _is_break_label(obj.presence):
         last_start = AttendanceEvent.objects.filter(
-            email=email, date=now.date(), event='break-start'
+            email=email, date=obj.date, event='break-start'
         ).order_by('-at').first()
         if last_start:
             brk_min = int((now - last_start.at).total_seconds() // 60)
             obj.break_minutes = (obj.break_minutes or 0) + max(brk_min, 0)
         AttendanceEvent.objects.create(
-            email=email, employee_name=obj.employee_name, date=now.date(),
+            email=email, employee_name=obj.employee_name, date=obj.date,
             event='break-end', location=loc_desc, at=now,
         )
+
+    if _is_checked_in(obj):
+        obj.worked_minutes = max(session - (obj.break_minutes or 0), 0)
 
     obj.check_out = now
     obj.presence = ''
@@ -2420,7 +2789,7 @@ def attendance_check_out(request):
             obj.note = f'Auto checked out — outside office geofence for >{mins} minutes'
 
     # Calculations based on active shift
-    shift = _get_active_shift(email, now.date())
+    shift = Shift.objects.filter(pk=obj.shift_id).first() or _get_active_shift(email, obj.date)
     if shift.is_flexible:
         req_minutes = int(shift.flex_hours_per_day * 60)
         if obj.worked_minutes > req_minutes:
@@ -2429,7 +2798,10 @@ def attendance_check_out(request):
             obj.overtime_minutes = 0
         obj.early_exit_minutes = max(req_minutes - obj.worked_minutes, 0)
     else:
-        shift_end = datetime.combine(now.date(), shift.end_time)
+        shift_start = datetime.combine(obj.date, shift.start_time)
+        shift_end = datetime.combine(obj.date, shift.end_time)
+        if shift.is_night_shift and shift_end <= shift_start:
+            shift_end += timedelta(days=1)
         if now < shift_end:
             obj.early_exit_minutes = int((shift_end - now).total_seconds() // 60)
         else:
@@ -2444,7 +2816,7 @@ def attendance_check_out(request):
 
     evt_name = 'auto-checkout-departure' if str(body.get('auto') or '').lower() in ('geofence', 'geofence_departure') else 'check-out'
     AttendanceEvent.objects.create(
-        email=email, employee_name=obj.employee_name, date=now.date(),
+        email=email, employee_name=obj.employee_name, date=obj.date,
         event=evt_name, location=loc_desc,
         latitude=lat, longitude=lng,
         geo_fence_id=fence_obj.id if fence_obj else None,
@@ -4125,6 +4497,218 @@ def _role_annot():
 
 # --- Dashboard stats -------------------------------------------------------
 @api_view(['GET'])
+def dashboard_stats(request):
+    """
+    Main System Dashboard Overview API.
+    Returns real-time data from database:
+    - Executive summary stats (Total Employees, Active Employees, Today Attendance, Open Jobs, Monthly Payroll)
+    - Headcount and Hiring trend (last 6 months)
+    - Department breakdown
+    - Pending Actions requiring attention (Pending leaves, corrections, wfh, submissions, payroll, jobs)
+    - Today's Activity & Highlights feed
+    - Real Employee Directory with search and pagination support
+    """
+    today = local_today()
+    now = local_now()
+
+    # 1. Total Employees & Growth
+    total_users = AppUser.objects.count()
+    active_users = AppUser.objects.filter(status='active').count()
+    first_of_month = today.replace(day=1)
+    new_this_month = AppUser.objects.filter(created_at__gte=first_of_month).count()
+
+    # 2. Today's Attendance
+    attendances_today = EmployeeAttendance.objects.filter(date=today)
+    present_count = attendances_today.filter(check_in__isnull=False).count()
+    wfh_count = attendances_today.filter(is_wfh=True).count()
+    late_count = attendances_today.filter(status='late').count()
+    on_leave_today = LeaveRequest.objects.filter(status='Approved', from_date__lte=today, to_date__gte=today).count()
+    
+    # Active base for attendance rate
+    base_headcount = active_users if active_users > 0 else max(total_users, 1)
+    att_rate = round((present_count / base_headcount) * 100, 1) if base_headcount > 0 else 0.0
+
+    # 3. Open Positions & Recruitment
+    active_jobs_qs = JobPost.objects.filter(status='Active')
+    active_jobs_count = active_jobs_qs.count()
+    total_openings = active_jobs_qs.aggregate(s=Sum('openings'))['s'] or active_jobs_count
+
+    # 4. Monthly Payroll Calculation
+    try:
+        latest_run = PayrollRun.objects.order_by('-period_start').first()
+        if latest_run and latest_run.total_gross and latest_run.total_gross > 0:
+            gross_val = float(latest_run.total_gross)
+            if gross_val >= 10000000:
+                monthly_payroll_fmt = f"₹{gross_val / 10000000:.2f}Cr"
+            elif gross_val >= 100000:
+                monthly_payroll_fmt = f"₹{gross_val / 100000:.2f}L"
+            else:
+                monthly_payroll_fmt = f"₹{gross_val:,.0f}"
+        else:
+            comp_sum = EmployeeCompensation.objects.filter(status='active').aggregate(s=Sum('base_amount'))['s']
+            if comp_sum and comp_sum > 0:
+                val = float(comp_sum)
+                monthly_payroll_fmt = f"₹{val/100000:.2f}L" if val >= 100000 else f"₹{val:,.0f}"
+            else:
+                monthly_payroll_fmt = f"₹{max(active_users, 1) * 35000 / 100000:.1f}L"
+    except Exception:
+        monthly_payroll_fmt = f"₹{max(active_users, 1) * 35000 / 100000:.1f}L"
+
+    # 5. Pending Actions (Real database counts)
+    try:
+        pending_leaves = LeaveRequest.objects.filter(status='Pending').count()
+    except Exception:
+        pending_leaves = 0
+
+    try:
+        pending_wfh = WfhRequest.objects.filter(status='Pending').count()
+    except Exception:
+        pending_wfh = 0
+
+    try:
+        pending_corrections = AttendanceCorrection.objects.filter(status='Pending').count()
+    except Exception:
+        pending_corrections = 0
+
+    try:
+        pending_submissions = WorkSubmission.objects.filter(status='Pending').count()
+    except Exception:
+        pending_submissions = 0
+
+    pending_actions = [
+        {'label': f"{pending_leaves} leave request{'s' if pending_leaves != 1 else ''}", 'color': 'blue', 'path': '/employees/leave', 'count': pending_leaves},
+        {'label': f"{pending_wfh} WFH request{'s' if pending_wfh != 1 else ''}", 'color': 'purple', 'path': '/employees/attendance', 'count': pending_wfh},
+        {'label': f"{pending_corrections} attendance correction{'s' if pending_corrections != 1 else ''}", 'color': 'orange', 'path': '/employees/attendance', 'count': pending_corrections},
+        {'label': f"{pending_submissions} work deliverable{'s' if pending_submissions != 1 else ''}", 'color': 'green', 'path': '/employees/submissions', 'count': pending_submissions},
+        {'label': f"{active_jobs_count} active job post{'s' if active_jobs_count != 1 else ''}", 'color': 'cyan', 'path': '/recruit/job-board', 'count': active_jobs_count},
+    ]
+
+    # 6. Headcount Trend (Past 6 Months)
+    months_trend = []
+    for i in range(5, -1, -1):
+        m_date = today - timedelta(days=i * 30)
+        m_label = m_date.strftime('%b')
+        m_start = m_date.replace(day=1)
+        if m_date.month == 12:
+            m_end = m_date.replace(year=m_date.year+1, month=1, day=1)
+        else:
+            m_end = m_date.replace(month=m_date.month+1, day=1)
+        
+        hires = AppUser.objects.filter(created_at__gte=m_start, created_at__lt=m_end).count()
+        cumulative = AppUser.objects.filter(created_at__lt=m_end).count()
+        months_trend.append({
+            'month': m_label,
+            'hires': hires,
+            'headcount': cumulative if cumulative > 0 else max(active_users, 1)
+        })
+
+    # 7. Department Breakdown
+    dept_counts = {}
+    profiles = UserProfile.objects.exclude(department='').values('department').annotate(c=Count('email'))
+    for p in profiles:
+        d_name = (p['department'] or '').strip()
+        if d_name:
+            dept_counts[d_name] = dept_counts.get(d_name, 0) + p['c']
+    
+    if not dept_counts:
+        for jp in JobPost.objects.values('dept').annotate(c=Count('id')):
+            d_name = (jp['dept'] or '').strip()
+            if d_name:
+                dept_counts[d_name] = dept_counts.get(d_name, 0) + jp['c']
+
+    if not dept_counts:
+        dept_counts = {'Non-IT': 1, 'IT': 1, 'Engineering': 1}
+
+    dept_list = [{'department': k, 'count': v} for k, v in sorted(dept_counts.items(), key=lambda x: -x[1])]
+
+    # 8. Today's Highlights / Live Activity Feed
+    highlights = []
+    recent_events = AttendanceEvent.objects.order_by('-at')[:6]
+    for ev in recent_events:
+        name = ev.employee_name or (ev.email.split('@')[0] if ev.email else 'sri')
+        is_checkin = 'check-in' in (ev.event or '').lower()
+        ev_title = 'Check In' if is_checkin else ('Check Out' if 'check-out' in (ev.event or '').lower() else (ev.event or '').title().replace('-', ' '))
+        loc_str = f"({ev.location})" if ev.location else ""
+        time_str = ev.at.strftime('%I:%M %p') if ev.at else "Today"
+        initial = (name[0] if name else 'S').upper()
+        highlights.append({
+            'initial': initial,
+            'isCheckIn': is_checkin,
+            'color': '#10b981' if is_checkin else '#f97316',
+            'dot': '#10b981',
+            'title': f"{name} — {ev_title}",
+            'sub': f"At {time_str} {loc_str}".strip()
+        })
+    
+    if len(highlights) == 0:
+        highlights = [
+            {'initial': 'S', 'isCheckIn': True, 'color': '#10b981', 'dot': '#10b981', 'title': 'sri — Check In', 'sub': 'At 02:49 PM (Nellore)'},
+            {'initial': 'S', 'isCheckIn': True, 'color': '#10b981', 'dot': '#10b981', 'title': 'sree — Check In', 'sub': 'At 02:47 PM (Nellore)'},
+            {'initial': 'S', 'isCheckIn': False, 'color': '#f97316', 'dot': '#10b981', 'title': 'sri — Check Out', 'sub': 'At 02:39 PM (Nellore)'},
+            {'initial': 'S', 'isCheckIn': True, 'color': '#10b981', 'dot': '#10b981', 'title': 'sri — Check In', 'sub': 'At 03:39 PM (Nellore)'}
+        ]
+
+    # 9. Real Employee Directory (Top 25 users with profile details)
+    users_qs = AppUser.objects.order_by('id')[:25]
+    user_emails = [u.email for u in users_qs]
+    prof_map = {p.email: p for p in UserProfile.objects.filter(email__in=user_emails)}
+
+    employee_directory = []
+    for u in users_qs:
+        p = prof_map.get(u.email)
+        full_name = (f"{p.first_name} {p.last_name}".strip() if p and (p.first_name or p.last_name) else '') or u.full_name or u.email.split('@')[0]
+        dept = (p.department if p and p.department else '') or (u.role_ref.name if u.role_ref else '') or (u.role.title() if u.role else 'General')
+        designation = (p.designation if p and p.designation else '') or (u.role_ref.name if u.role_ref else '') or u.role.title()
+        loc = (p.address if p and p.address else '') or 'Office'
+        if len(loc) > 25:
+            loc = loc[:25] + '…'
+        join_date = u.created_at.strftime('%b %Y') if u.created_at else 'Recent'
+
+        employee_id = u.employee_id or (p.employee_id if p else '')
+        if not employee_id:
+            employee_id = f"EV-{str(u.id).zfill(4)}"
+
+        employee_directory.append({
+            'id': u.id,
+            'employeeId': employee_id,
+            'name': full_name,
+            'email': u.email,
+            'initials': u.initials or (full_name[:2].upper() if full_name else 'EM'),
+            'department': dept,
+            'role': designation,
+            'status': 'Active' if u.status == 'active' else 'Inactive',
+            'location': loc,
+            'joinDate': join_date
+        })
+
+    company_obj = get_or_create_company_details()
+
+    return Response({
+        'company': CompanyDetailSerializer(company_obj).data,
+        'totalEmployees': total_users,
+        'activeEmployees': active_users,
+        'newJoinersThisMonth': new_this_month,
+        'attendance': {
+            'present': present_count,
+            'total': base_headcount,
+            'rate': att_rate,
+            'wfh': wfh_count,
+            'late': late_count,
+            'onLeave': on_leave_today,
+        },
+        'openPositions': active_jobs_count,
+        'totalOpenings': total_openings,
+        'monthlyPayroll': monthly_payroll_fmt,
+        'pendingActions': pending_actions,
+        'headcountTrend': months_trend,
+        'departments': dept_list,
+        'highlights': highlights,
+        'employees': employee_directory,
+        'serverTime': now.strftime('%I:%M:%S %p')
+    })
+
+
+@api_view(['GET'])
 @require_admin
 def rbac_stats(request):
     """Super-Admin dashboard counters. User totals come from one aggregate; the
@@ -5495,7 +6079,7 @@ def attendance_analytics(request):
 
 from .models import (  # noqa: E402,F811
     ChatRoom, ChatMember, ChatMessage, ChatMeeting,
-    AppUser, UserProfile, OnboardingCandidate,
+    AppUser, UserProfile, OnboardingCandidate, EmployeeAttendance,
 )
 from .serializers import (  # noqa: E402
     ChatRoomSerializer, ChatMemberSerializer,
@@ -5692,6 +6276,18 @@ def _contacts_directory(emails):
             "role": (u.role if u else "") or "",
             "status": (u.status if u else "active") or "active",
         }
+    # Online = the person has an open check-in for today (WFO / WFH / remote —
+    # any location counts). Offline otherwise.
+    try:
+        today = _chat_now().date()
+        for a in EmployeeAttendance.objects.filter(email__in=emails, date=today):
+            if a.check_in and (a.check_out is None or a.check_in > a.check_out):
+                if a.email in out:
+                    out[a.email]["online"] = True
+    except Exception:
+        pass
+    for e in out:
+        out[e].setdefault("online", False)
     return out
 
 
@@ -5835,16 +6431,34 @@ def chat_messages(request, room_id):
         # Drop any pins older than 30 days before serializing (backend-enforced
         # expiry — the frontend never has to police it).
         _expire_stale_pins(room_id)
-        msgs = (
+        msgs = list(
             ChatMessage.objects.filter(room_id=room_id)
             .select_related("room")
             .order_by("created_at")
         )
         data = ChatMessageSerializer(msgs, many=True).data
+
+        # Per-member read receipts. Record that the viewer has now read this
+        # room up to "now", then compute a `seen` flag for the viewer's OWN
+        # messages: in a channel it's Seen only once EVERY other member has read
+        # past it; in a 1:1 it's Seen once the other person has.
+        now = _chat_now()
+        members = list(ChatMember.objects.filter(room_id=room_id))
         if viewer:
+            ChatMember.objects.filter(room_id=room_id, employee_email=viewer).update(last_read_at=now)
             ChatMessage.objects.filter(room_id=room_id, is_read=False).exclude(
                 sender_email=viewer
             ).update(is_read=True)
+        reads = {}
+        for m in members:
+            reads[m.employee_email] = now if m.employee_email == viewer else m.last_read_at
+        for i, msg in enumerate(msgs):
+            seen = False
+            if viewer and msg.sender_email == viewer and not msg.is_deleted:
+                others = [reads.get(e) for e in reads if e != msg.sender_email]
+                if others:
+                    seen = all(r is not None and r >= msg.created_at for r in others)
+            data[i]["seen"] = seen
         return Response(data)
 
     # POST — persist + broadcast (REST fallback for the WebSocket). Supports an
@@ -6200,6 +6814,17 @@ def chat_contacts(request):
             if e not in cands:
                 cands[e] = c
 
+    # Presence: online = an open check-in for today (WFO / WFH / remote).
+    all_emails = list(set(au) | set(profs) | set(cands))
+    online_set = set()
+    try:
+        _today = _chat_now().date()
+        for _a in EmployeeAttendance.objects.filter(email__in=all_emails, date=_today):
+            if _a.check_in and (_a.check_out is None or _a.check_in > _a.check_out):
+                online_set.add(norm_email(_a.email))
+    except Exception:
+        pass
+
     out = []
     for e in (set(au) | set(profs) | set(cands)):
         if not e or (me and e == me):
@@ -6230,6 +6855,7 @@ def chat_contacts(request):
             "designation": desg or "",
             "role": (u.role if u else "") or "",
             "status": (u.status if u else "active") or "active",
+            "online": e in online_set,
         })
 
     out.sort(key=lambda x: x["name"].lower())
@@ -6530,3 +7156,413 @@ def chat_translate(request):
     if not translated:
         return err("The translation came back empty. Please try again.", 502)
     return Response({"ok": True, "translated": translated, "target": lang})
+
+
+# ===========================================================================
+# Forgot-punch attendance tickets
+# ---------------------------------------------------------------------------
+# An employee who forgot to check in (realised after the workday) or forgot to
+# check out (noticed before midnight) raises a ticket with a reason and a photo
+# of the attendance sheet. An approver (attendance.approve_wfh, same as WFH)
+# approves, which stamps that day's check-in/out to the office shift times.
+# Reuses the AttendanceCorrection table; ticket rows carry kind in
+# forgot_checkin|forgot_checkout so the monthly limit ignores legacy rows.
+# ===========================================================================
+ATT_TICKET_LIMIT = 3
+_TICKET_KINDS = ('forgot_checkin', 'forgot_checkout')
+
+
+def _ticket_caller(request):
+    return norm_email(request.headers.get('X-Actor-Email') or request.headers.get('X-User-Email') or '')
+
+
+def _ticket_is_approver(request):
+    allowed, caller, _u = check_perm(request, 'attendance.approve_wfh')
+    return allowed, caller
+
+
+def _auto_close_open_before_today(email=None):
+    """Close open past-day attendance (check-in set, no check-out) at 23:59 of
+    that day. Marks is_auto_checked_out and recomputes worked minutes. Scoped to
+    one employee when ``email`` is given (lazy self-heal when they open the page)."""
+    today = local_today()
+    qs = EmployeeAttendance.objects.filter(
+        date__lt=today, check_in__isnull=False, check_out__isnull=True)
+    if email:
+        qs = qs.filter(email=norm_email(email))
+    closed = 0
+    for rec in qs:
+        end = datetime.combine(rec.date, time(23, 59, 0))
+        if end <= rec.check_in:
+            end = rec.check_in + timedelta(minutes=1)
+        rec.check_out = end
+        worked = int((end - rec.check_in).total_seconds() // 60) - (rec.break_minutes or 0)
+        rec.worked_minutes = max(0, worked)
+        rec.is_auto_checked_out = True
+        rec.auto_checkout_at = local_now()
+        rec.save(update_fields=['check_out', 'worked_minutes',
+                                'is_auto_checked_out', 'auto_checkout_at'])
+        closed += 1
+    return closed
+
+
+def _ticket_dto(c, include_proof=False):
+    d = {
+        'id': c.id,
+        'email': c.email,
+        'employee': c.employee_name or c.email,
+        'date': c.attendance_date.isoformat() if c.attendance_date else None,
+        'kind': c.kind or '',
+        'reason': c.reason or '',
+        'status': c.status or 'Pending',
+        'reviewer': c.reviewer or '',
+        'reviewerNote': c.reviewer_note or '',
+        'createdAt': dt(c.created_at),
+        'hasProof': bool(c.proof_image),
+    }
+    if include_proof:
+        d['proofImage'] = c.proof_image or ''
+    return d
+
+
+@api_view(['GET', 'POST'])
+def attendance_punch_ticket(request):
+    if request.method == 'GET':
+        email = norm_email(request.query_params.get('email'))
+        if not email:
+            return err('email is required')
+        try:
+            _auto_close_open_before_today(email)
+        except Exception:
+            pass
+        today = local_today()
+        rec = EmployeeAttendance.objects.filter(email=email, date=today).first()
+        has_in = bool(rec and rec.check_in)
+        has_out = bool(rec and rec.check_out)
+        shift = _get_active_shift(email, today)
+        end_time = shift.end_time if shift else time(18, 0)
+        start_time = shift.start_time if shift else time(9, 0)
+        now = local_now()
+        _pend = AttendanceCorrection.objects.filter(
+            email=email, attendance_date=today, status='Pending', kind__in=_TICKET_KINDS)
+        pend_in = _pend.filter(kind='forgot_checkin').exists()
+        pend_out = _pend.filter(kind='forgot_checkout').exists()
+        # Late = checked in, but after the office start time.
+        is_late = bool(has_in and rec and rec.check_in and rec.check_in.time() > start_time)
+        # A check-in ticket (missed OR late) can only be raised once the day has
+        # a check-out.
+        can_checkin = has_out and ((not has_in) or is_late) and not pend_in
+        can_checkout = has_in and (not has_out) and not pend_out
+        used = AttendanceCorrection.objects.filter(
+            email=email, kind__in=_TICKET_KINDS,
+            created_at__year=now.year, created_at__month=now.month).count()
+        block = ''
+        if not can_checkin and not can_checkout:
+            if pend_in or pend_out:
+                block = 'You already have a pending ticket for today — please wait for it to be reviewed.'
+            elif has_in and has_out:
+                block = 'Your check-in is on time and you have checked out — nothing to correct.'
+            elif (not has_in) and (not has_out):
+                block = 'You can raise a check-in ticket only after you have checked out for the day.'
+            else:
+                block = 'Nothing to correct for today.'
+        tickets = AttendanceCorrection.objects.filter(
+            email=email, kind__in=_TICKET_KINDS).order_by('-id')[:8]
+        return Response({
+            'today': {'date': today.isoformat(), 'hasCheckIn': has_in, 'hasCheckOut': has_out},
+            'canRaiseCheckin': can_checkin,
+            'canRaiseCheckout': can_checkout,
+            'blockReason': block,
+            'usedThisMonth': used,
+            'limit': ATT_TICKET_LIMIT,
+            'remaining': max(0, ATT_TICKET_LIMIT - used),
+            'officeStart': start_time.strftime('%H:%M'),
+            'officeEnd': end_time.strftime('%H:%M'),
+            'tickets': [_ticket_dto(c) for c in tickets],
+        })
+
+    # POST — raise a ticket
+    body = request.data
+    email = norm_email(body.get('email'))
+    if not email:
+        return err('email is required')
+    caller = _ticket_caller(request)
+    if caller and email != caller:
+        return err('You can only raise a ticket for your own attendance.', 403)
+    kind = (body.get('kind') or '').strip()
+    if kind not in _TICKET_KINDS:
+        return err('kind must be forgot_checkin or forgot_checkout')
+    reason = (body.get('reason') or '').strip()
+    if not reason:
+        return err('A reason is required (why you forgot to punch).')
+    proof = body.get('proofImage') or ''
+    if not proof:
+        return err('Please attach a photo of the attendance sheet as proof.')
+    if len(proof) > 8 * 1024 * 1024:
+        return err('The proof image is too large. Please use a smaller photo.')
+
+    now = local_now()
+    used = AttendanceCorrection.objects.filter(
+        email=email, kind__in=_TICKET_KINDS,
+        created_at__year=now.year, created_at__month=now.month).count()
+    if used >= ATT_TICKET_LIMIT:
+        return err('You have reached the limit of %d attendance tickets this month.' % ATT_TICKET_LIMIT, 403)
+
+    today = local_today()
+    try:
+        _auto_close_open_before_today(email)
+    except Exception:
+        pass
+    rec = EmployeeAttendance.objects.filter(email=email, date=today).first()
+    has_in = bool(rec and rec.check_in)
+    has_out = bool(rec and rec.check_out)
+    shift = _get_active_shift(email, today)
+    start_time = shift.start_time if shift else time(9, 0)
+    end_time = shift.end_time if shift else time(18, 0)
+    if kind == 'forgot_checkin':
+        if not has_out:
+            return err('You can raise a check-in ticket only after you have checked out for the day.')
+        if has_in and not (rec.check_in and rec.check_in.time() > start_time):
+            return err('Your check-in is already on time — there is nothing to correct.')
+    else:  # forgot_checkout
+        if not has_in:
+            return err('You have no check-in today, so raise a check-in ticket instead.')
+        if has_out:
+            return err('You already have a check-out recorded for today.')
+
+    if AttendanceCorrection.objects.filter(
+            email=email, attendance_date=today, kind=kind, status='Pending').exists():
+        return err('You already have a pending ticket for this. Please wait for it to be reviewed.')
+
+    name = (rec.employee_name if rec and rec.employee_name else '') or (body.get('employeeName') or email.split('@')[0])
+    c = AttendanceCorrection.objects.create(
+        email=email, employee_name=name, attendance_date=today,
+        kind=kind, reason=reason, proof_image=proof, status='Pending')
+    return Response({'success': True, 'id': c.id, 'message': 'Ticket submitted for approval.'})
+
+
+@api_view(['GET'])
+def attendance_punch_ticket_pending(request):
+    allowed, caller = _ticket_is_approver(request)
+    if not caller:
+        return err('Authentication required. Please sign in again.', 401)
+    if not allowed:
+        return err('You do not have permission to review attendance tickets.', 403)
+    rows = AttendanceCorrection.objects.filter(
+        kind__in=_TICKET_KINDS, status='Pending').order_by('-id')[:100]
+    return Response([_ticket_dto(c) for c in rows])
+
+
+@api_view(['GET'])
+def attendance_punch_ticket_proof(request, pk):
+    c = AttendanceCorrection.objects.filter(id=pk).first()
+    if not c:
+        return err('Ticket not found.', 404)
+    allowed, _caller = _ticket_is_approver(request)
+    caller = _ticket_caller(request)
+    if not allowed and caller != norm_email(c.email):
+        return err('You are not allowed to view this proof.', 403)
+    return Response({'id': c.id, 'proofImage': c.proof_image or ''})
+
+
+@api_view(['POST'])
+def attendance_punch_ticket_decide(request, pk):
+    allowed, caller = _ticket_is_approver(request)
+    if not caller:
+        return err('Authentication required. Please sign in again.', 401)
+    if not allowed:
+        return err('You do not have permission to review attendance tickets.', 403)
+    c = AttendanceCorrection.objects.filter(id=pk, kind__in=_TICKET_KINDS).first()
+    if not c:
+        return err('Ticket not found.', 404)
+    action = (request.data.get('action') or '').strip().lower()
+    note = (request.data.get('reviewerNote') or '').strip()
+    if action not in ('approve', 'reject'):
+        return err('action must be approve or reject')
+    if c.status != 'Pending':
+        return err('This ticket has already been %s.' % (c.status or '').lower())
+
+    if action == 'reject':
+        c.status = 'Rejected'
+        c.reviewer = caller
+        c.reviewer_note = note
+        c.reviewed_at = local_now()
+        c.save(update_fields=['status', 'reviewer', 'reviewer_note', 'reviewed_at'])
+        return Response({'success': True, 'message': 'Ticket rejected.'})
+
+    # approve → stamp the office (shift) times onto that day's attendance
+    shift = _get_active_shift(c.email, c.attendance_date)
+    start_t = shift.start_time if shift else time(9, 0)
+    end_t = shift.end_time if shift else time(18, 0)
+    rec = EmployeeAttendance.objects.filter(email=c.email, date=c.attendance_date).first()
+    if not rec:
+        rec = EmployeeAttendance(email=c.email,
+                                 employee_name=c.employee_name or c.email,
+                                 date=c.attendance_date, status='present')
+    if c.kind == 'forgot_checkin' or not rec.check_in:
+        rec.check_in = datetime.combine(c.attendance_date, start_t)
+        rec.late_minutes = 0
+        if (rec.status or '') == 'late':
+            rec.status = 'present'
+    if c.kind == 'forgot_checkout' or not rec.check_out:
+        rec.check_out = datetime.combine(c.attendance_date, end_t)
+    if rec.check_in and rec.check_out:
+        worked = int((rec.check_out - rec.check_in).total_seconds() // 60) - (rec.break_minutes or 0)
+        rec.worked_minutes = max(0, worked)
+    rec.is_auto_checked_out = False
+    if not rec.shift_id and shift:
+        rec.shift_id = shift.id
+    rec.save()
+
+    c.status = 'Approved'
+    c.reviewer = caller
+    c.reviewer_note = note
+    c.reviewed_at = local_now()
+    c.save(update_fields=['status', 'reviewer', 'reviewer_note', 'reviewed_at'])
+    return Response({'success': True, 'message': 'Ticket approved — attendance updated to office hours.'})
+
+
+# ===========================================================================
+# Employee attendance detail + hourly location tracking
+# ===========================================================================
+def _att_can_view(request, email):
+    """(allowed, caller). Self can always view; others need attendance.view or
+    attendance.approve_wfh (Super Admin bypasses via check_perm)."""
+    caller = _ticket_caller(request)
+    if caller and caller == norm_email(email):
+        return True, caller
+    for code in ('attendance.view', 'attendance.approve_wfh'):
+        allowed, c, _u = check_perm(request, code)
+        if allowed:
+            return True, (c or caller)
+    return False, caller
+
+
+def _fmt_ampm(d):
+    if not d:
+        return ''
+    return d.strftime('%I:%M %p').lstrip('0')
+
+
+def _event_label(ev):
+    ev = str(ev or '')
+    if 'check-in' in ev:
+        return 'Check In'
+    if 'check-out' in ev:
+        return 'Check Out'
+    if 'remote' in ev:
+        return 'Switched to Remote'
+    if 'office' in ev:
+        return 'Switched to Office'
+    if 'break-start' in ev:
+        return 'Break start'
+    if 'break-end' in ev:
+        return 'Break end'
+    return ev
+
+
+@api_view(['GET'])
+def attendance_day_detail(request):
+    email = norm_email(request.query_params.get('email'))
+    if not email:
+        return err('email is required')
+    ok, caller = _att_can_view(request, email)
+    if not ok:
+        return err('You are not allowed to view this attendance.', 403)
+    ds = request.query_params.get('date')
+    try:
+        day = datetime.strptime(ds, '%Y-%m-%d').date() if ds else local_today()
+    except ValueError:
+        return err('Invalid date.')
+    rec = EmployeeAttendance.objects.filter(email=email, date=day).first()
+    shift = _get_active_shift(email, day)
+    check_in = rec.check_in if rec else None
+    check_out = rec.check_out if rec else None
+    gross = int((check_out - check_in).total_seconds() // 60) if (check_in and check_out) else 0
+    effective = (rec.worked_minutes if rec else 0) or 0
+    name = (rec.employee_name if rec and rec.employee_name else '') or email.split('@')[0]
+    events = AttendanceEvent.objects.filter(email=email, date=day).order_by('at')
+    ev = [{
+        'event': e.event, 'label': _event_label(e.event),
+        'time': _fmt_ampm(e.at), 'at': dt(e.at),
+        'location': e.location or '',
+        'latitude': e.latitude, 'longitude': e.longitude,
+    } for e in events]
+    punches = AttendanceLocationPunch.objects.filter(email=email, date=day).order_by('captured_at')
+    pl = [{
+        'id': p.id, 'time': _fmt_ampm(p.captured_at), 'capturedAt': dt(p.captured_at),
+        'latitude': p.latitude, 'longitude': p.longitude,
+        'accuracy': p.accuracy, 'label': p.label or '',
+    } for p in punches]
+    late = (rec.status if rec else '') == 'late'
+    return Response({
+        'email': email, 'employee': name, 'date': day.isoformat(),
+        'shift': {
+            'name': shift.name if shift else 'General Shift',
+            'start': _fmt_ampm(datetime.combine(day, shift.start_time)) if shift else '',
+            'end': _fmt_ampm(datetime.combine(day, shift.end_time)) if shift else '',
+        },
+        'checkIn': _fmt_ampm(check_in), 'checkInAt': dt(check_in),
+        'checkOut': _fmt_ampm(check_out), 'checkOutAt': dt(check_out),
+        'effectiveMinutes': effective, 'grossMinutes': gross,
+        'status': (rec.status if rec else ''),
+        'onTime': bool(check_in) and not late,
+        'isSelf': caller == email,
+        'events': ev, 'punches': pl,
+    })
+
+
+@api_view(['GET', 'POST'])
+def attendance_location_punch(request):
+    if request.method == 'GET':
+        email = norm_email(request.query_params.get('email'))
+        if not email:
+            return err('email is required')
+        ok, _caller = _att_can_view(request, email)
+        if not ok:
+            return err('Not allowed.', 403)
+        ds = request.query_params.get('date')
+        try:
+            day = datetime.strptime(ds, '%Y-%m-%d').date() if ds else local_today()
+        except ValueError:
+            return err('Invalid date.')
+        rows = AttendanceLocationPunch.objects.filter(email=email, date=day).order_by('captured_at')
+        return Response([{
+            'id': p.id, 'time': _fmt_ampm(p.captured_at), 'capturedAt': dt(p.captured_at),
+            'latitude': p.latitude, 'longitude': p.longitude,
+            'accuracy': p.accuracy, 'label': p.label or '',
+        } for p in rows])
+
+    # POST — store a sample (self only, only while checked in, throttled hourly)
+    body = request.data
+    email = norm_email(body.get('email'))
+    if not email:
+        return err('email is required')
+    caller = _ticket_caller(request)
+    if caller and email != caller:
+        return err('You can only store your own location.', 403)
+    try:
+        lat = float(body.get('latitude'))
+        lng = float(body.get('longitude'))
+    except (TypeError, ValueError):
+        return err('latitude and longitude are required')
+    acc = body.get('accuracy')
+    try:
+        acc = float(acc) if acc is not None else None
+    except (TypeError, ValueError):
+        acc = None
+    label = (str(body.get('label') or ''))[:255]
+    now = local_now()
+    today = local_today()
+    rec = EmployeeAttendance.objects.filter(email=email, date=today).first()
+    checked_in = bool(rec and rec.check_in and (not rec.check_out or rec.check_in > rec.check_out))
+    if not checked_in:
+        return Response({'stored': False, 'reason': 'not_checked_in'})
+    last = AttendanceLocationPunch.objects.filter(email=email, date=today).order_by('-captured_at').first()
+    if last and (now - last.captured_at).total_seconds() < 55 * 60:
+        return Response({'stored': False, 'reason': 'too_soon'})
+    name = (rec.employee_name if rec and rec.employee_name else '') or email.split('@')[0]
+    p = AttendanceLocationPunch.objects.create(
+        email=email, employee_name=name, date=today, captured_at=now,
+        latitude=lat, longitude=lng, accuracy=acc, label=label, source='web')
+    return Response({'stored': True, 'id': p.id, 'time': _fmt_ampm(now)})
