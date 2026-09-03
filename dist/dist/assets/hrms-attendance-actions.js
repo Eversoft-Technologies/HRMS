@@ -40,7 +40,7 @@
     team:  'hrms-att-team',     // our Team Status Now card
     style: 'hrms-att-actions-style'
   };
-  var state = { actFilter: 'all', teamFilter: 'all' };
+  var state = { actFilter: 'all', teamFilter: 'all', teamSearch: '' };
   var PIN_SVG = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg>';
   var PIN_BIG = '<svg width="30" height="30" viewBox="0 0 24 24" fill="#e11d48" stroke="#fff" stroke-width="1.5"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3" fill="#fff"></circle></svg>';
 
@@ -235,7 +235,12 @@
       '.hat-mkr{position:absolute;left:50%;top:50%;transform:translate(-50%,-100%);pointer-events:none;filter:drop-shadow(0 2px 3px rgba(0,0,0,.4));}',
       '.hat-mapfallback{display:flex;align-items:center;justify-content:center;height:100%;color:var(--text3);font-size:13px;}',
       '.hat-coord{font-size:11px;color:var(--text3);margin:6px 0;text-align:center;}',
-      '.hat-mf a.ok{text-decoration:none;display:inline-block;}'
+      '.hat-mf a.ok{text-decoration:none;display:inline-block;}',
+      '.haa-scope .haa-title-ctrls{display:flex;gap:8px;align-items:center;}',
+      '.haa-scope .haa-search{background:var(--bg3);border:1px solid var(--border2);border-radius:8px;color:var(--text);font:inherit;font-size:11.5px;font-weight:500;padding:5px 9px;width:130px;max-width:42vw;text-transform:none;letter-spacing:normal;}',
+      '.haa-scope .haa-search:focus{border-color:var(--accent);outline:none;}',
+      '.haa-scope .haa-search::placeholder{color:var(--text3);}',
+      'body.hrms-checkin-page .card,body.hrms-checkin-page .card *,body.hrms-checkin-page .haa-scope,body.hrms-checkin-page .haa-scope *{font-family:Arial,Helvetica,sans-serif!important;}'
     ].join('');
     var st = document.createElement('style');
     st.id = ID.style; st.textContent = css;
@@ -315,18 +320,22 @@
     card.id = ID.team; card.className = 'card haa-scope';
     card.innerHTML =
       '<div class="haa-title">Team Status Now' +
+        '<span class="haa-title-ctrls">' +
+        '<input type="text" class="haa-search" id="haa-team-search" placeholder="Search name…" autocomplete="off">' +
         '<select class="haa-flt" id="haa-team-flt">' +
           '<option value="all">All</option>' +
           '<option value="in office">In Office</option>' +
           '<option value="in break">In Break</option>' +
           '<option value="remote">Remote</option>' +
           '<option value="absent">Absent</option>' +
-        '</select></div>' +
+        '</select></span></div>' +
       '<div class="haa-tbl">' +
         '<div class="haa-head"><span>Employee</span><span class="c-status">Status</span><span style="text-align:right">Since</span></div>' +
         '<div class="haa-scroll"><div id="haa-team-list"><div class="haa-empty">Loading…</div></div></div>' +
       '</div>';
     card.querySelector('#haa-team-flt').addEventListener('change', function (e) { state.teamFilter = e.target.value; renderTeam(); });
+    var tsearch = card.querySelector('#haa-team-search');
+    if (tsearch) tsearch.addEventListener('input', function (e) { state.teamSearch = e.target.value; renderTeam(); });
     var tlist = card.querySelector('#haa-team-list');
     if (tlist) tlist.addEventListener('click', function (e) {
       var row = e.target.closest && e.target.closest('.haa-tr-click'); if (!row) return;
@@ -448,13 +457,15 @@
   function renderTeam() {
     var l = document.getElementById('haa-team-list'); if (!l) return;
     var f = state.teamFilter;
+    var q = (state.teamSearch || '').trim().toLowerCase();
     var rows = teamData.filter(function (r) {
+      if (q && String(r.name || r.email || '').toLowerCase().indexOf(q) === -1) return false;
       if (f === 'all') return true;
       var s = String(r.status || '').toLowerCase();
       if (f === 'remote') return /remote|home|wfh/.test(s);
       return s.indexOf(f) !== -1;
     });
-    if (!rows.length) { l.innerHTML = '<div class="haa-empty">No one matches this filter.</div>'; return; }
+    if (!rows.length) { l.innerHTML = '<div class="haa-empty">' + (q ? 'No employee matches your search.' : 'No one matches this filter.') + '</div>'; return; }
     l.innerHTML = rows.map(function (r) {
       var status = String(r.status || 'Absent'), cls = status.toLowerCase().replace(/\s+/g, '');
       return '<div class="haa-tr haa-tr-click" data-email="' + esc(r.email || '') + '" data-name="' + esc(r.name || r.email || '') + '"><span class="c-nm">' + avatarHtml(r) + esc(r.name || r.email || '—') + '</span>' +
@@ -916,6 +927,7 @@
   }
   function ensureLayout() {
     if (!onCheckinPage()) {
+      document.body.classList.remove('hrms-checkin-page');
       [ID.wfh, ID.act, ID.team, ID.ot, ID.brk].forEach(function (id) { var el = document.getElementById(id); if (el && el.parentNode) el.parentNode.removeChild(el); });
       return;
     }
@@ -925,8 +937,9 @@
     if (!grid) return;
 
     ensureStyle();
+    document.body.classList.add('hrms-checkin-page');
     grid.style.display = 'grid';
-    grid.style.gridTemplateColumns = '1fr 1fr';
+    grid.style.gridTemplateColumns = (window.innerWidth <= 900 ? '1fr' : '1fr 1fr');
     grid.style.gap = '14px';
     grid.style.alignItems = 'start';
     clock.style.order = '10';
@@ -970,6 +983,7 @@
       requestAnimationFrame(function () { scheduled = false; tick(); });
     }).observe(document.body, { childList: true, subtree: true });
     window.addEventListener('popstate', tick);
+    var _rz; window.addEventListener('resize', function () { clearTimeout(_rz); _rz = setTimeout(function () { if (onCheckinPage()) ensureLayout(); }, 150); });
     window.addEventListener('hrmsAttendanceSynced', function () { loadOvertime(); loadWfh(); loadApprovals(); loadActivity(); loadTeam(); });
     window.addEventListener('hrmsContextUpdate', function () { loadOvertime(); loadWfh(); loadApprovals(); loadActivity(); loadTeam(); });
     // The app's own Switch to Remote / Switch to Office post the same

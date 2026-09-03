@@ -375,7 +375,7 @@
       // (no image), fixed to the panel so it stays put while messages scroll.
       "#" + ROOT_ID + " .hcx-main{flex:1;display:flex;flex-direction:column;min-width:0;background-color:var(--hcx-bg);background-image:radial-gradient(120% 85% at 0% 0%,var(--hcx-glow1),transparent 55%),radial-gradient(110% 80% at 100% 4%,var(--hcx-glow2),transparent 55%),radial-gradient(130% 95% at 50% 118%,var(--hcx-glow3),transparent 60%),linear-gradient(155deg,var(--hcx-wash-a),transparent 55%,var(--hcx-wash-b));background-repeat:no-repeat;}",
       "#" + ROOT_ID + " .hcx-head{display:flex;align-items:center;gap:12px;padding:12px 18px;min-height:64px;background:var(--hcx-surface);border-bottom:1px solid var(--hcx-border);}",
-      "#" + ROOT_ID + " .hcx-head .hcx-hn{font-size:15px;font-weight:700;}",
+      "#" + ROOT_ID + " .hcx-head .hcx-hn{font-size:15px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}",
       "#" + ROOT_ID + " .hcx-head .hcx-hm{font-size:12px;color:var(--hcx-muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:52vw;}",
       "#" + ROOT_ID + " .hcx-head .hcx-hinfo{flex:1;min-width:0;}",
       "#" + ROOT_ID + " .hcx-hbtn{display:flex;align-items:center;gap:6px;height:36px;padding:0 12px;border-radius:9px;border:1px solid var(--hcx-border);background:var(--hcx-surface);color:var(--hcx-text);font-family:inherit;font-size:13px;font-weight:600;cursor:pointer;}",
@@ -631,6 +631,22 @@
       "  #" + ROOT_ID + " .hcx-main{width:100%;}",
       "  #" + ROOT_ID + " .hcx-iconbtn.back{display:flex;}",
       "  #" + ROOT_ID + " .hcx-head .hcx-hm{max-width:60vw;}",
+      "  #" + ROOT_ID + " .hcx-inbar{padding:8px 10px calc(8px + env(safe-area-inset-bottom)) 10px;}",
+      "  #" + ROOT_ID + " .hcx-area{padding:14px 12px 6px;}",
+      "  #" + ROOT_ID + " .hcx-inwrap{gap:4px;padding:4px 5px 4px 12px;border-radius:12px;}",
+      "  #" + ROOT_ID + " .hcx-inwrap textarea{font-size:13px;min-height:20px;}",
+      "  #" + ROOT_ID + " .hcx-sendbtn{width:34px;height:34px;border-radius:9px;}",
+      "  #" + ROOT_ID + " .hcx-sendbtn svg{width:16px;height:16px;}",
+      "  #" + ROOT_ID + " .hcx-attachbtn{width:32px;height:32px;}",
+      "  #" + ROOT_ID + " .hcx-attachbtn svg{width:18px;height:18px;}",
+      "  #" + ROOT_ID + " .hcx-head{padding:8px 10px;min-height:54px;gap:8px;}",
+      "  #" + ROOT_ID + " .hcx-head .hcx-av.lg{width:34px;height:34px;font-size:12px;}",
+      "  #" + ROOT_ID + " .hcx-head .hcx-hn{font-size:14px;}",
+      "  #" + ROOT_ID + " .hcx-head .hcx-hm{max-width:42vw;font-size:11px;}",
+      "  #" + ROOT_ID + " .hcx-hicon{width:34px;height:34px;flex-shrink:0;}",
+      "  #" + ROOT_ID + " .hcx-hicon svg{width:16px;height:16px;}",
+      "  #" + ROOT_ID + " .hcx-hbtn{font-size:0;gap:0;padding:0;width:36px;height:36px;justify-content:center;flex-shrink:0;}",
+      "  #" + ROOT_ID + " .hcx-hbtn svg{width:17px;height:17px;}",
       "}",
     ].join("\n");
     var el = document.createElement("style");
@@ -798,13 +814,33 @@
     s.right = "0";
     s.bottom = "0";
     s.width = "100vw";
-    s.height = "100vh";
+    var vv = window.visualViewport;
+    var vh = vv ? (vv.height + "px") : "100dvh";
+    s.height = vh;
+    s.top = vv ? ((vv.offsetTop || 0) + "px") : "0";
     s.zIndex = "2147483000";
-    page.style.height = "100vh";
+    page.style.height = vh;
     page.style.overflow = "hidden";
     document.documentElement.classList.add("hcx-fullscreen");
     // Lock background scroll while the full-screen chat is up.
     document.body.style.overflow = "hidden";
+    if (vv && !state._vvBound) {
+      state._vvBound = true;
+      vv.addEventListener("resize", syncViewport);
+      vv.addEventListener("scroll", syncViewport);
+    }
+  }
+
+  // Keep the full-screen chat matched to the *visible* viewport so the composer
+  // stays above the on-screen keyboard on mobile (visualViewport shrinks when
+  // the keyboard opens; 100vh does not).
+  function syncViewport() {
+    if (!state.root || !document.documentElement.classList.contains("hcx-fullscreen")) return;
+    var vv = window.visualViewport;
+    if (!vv) return;
+    state.root.style.height = vv.height + "px";
+    state.root.style.top = (vv.offsetTop || 0) + "px";
+    var pg = getPage(); if (pg) pg.style.height = vv.height + "px";
   }
 
   // Leave the full-screen chat and return to the rest of the app. Restore the
