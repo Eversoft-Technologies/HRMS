@@ -357,6 +357,10 @@ class ResumeScoreSerializer(serializers.ModelSerializer):
     fileData = serializers.CharField(source='file_data', write_only=True, required=False, allow_null=True, allow_blank=True)
     resumeText = serializers.CharField(source='resume_text', required=False, allow_blank=True, allow_null=True)
     jdText = serializers.CharField(source='jd_text', required=False, allow_blank=True, allow_null=True)
+    aiSummary = serializers.CharField(source='ai_summary', required=False, allow_blank=True, allow_null=True)
+    aiStrengths = serializers.JSONField(source='ai_strengths', required=False, allow_null=True)
+    aiGaps = serializers.JSONField(source='ai_gaps', required=False, allow_null=True)
+    aiEvaluated = serializers.BooleanField(source='ai_evaluated', required=False, default=False)
 
     class Meta:
         model = ResumeScore
@@ -364,6 +368,7 @@ class ResumeScoreSerializer(serializers.ModelSerializer):
             'id', 'name', 'initials', 'role', 'score', 'technical', 'experience',
             'domain', 'gap', 'skills', 'missing', 'formatted', 'source',
             'uploaded', 'fileName', 'fileMime', 'fileData', 'resumeText', 'jdText',
+            'aiSummary', 'aiStrengths', 'aiGaps', 'aiEvaluated',
         ]
         read_only_fields = ['id']
         extra_kwargs = {
@@ -400,6 +405,10 @@ class ResumeScoreSerializer(serializers.ModelSerializer):
             'fileName': instance.file_name,
             'resumeText': instance.resume_text,
             'jdText': instance.jd_text,
+            'aiSummary': instance.ai_summary,
+            'aiStrengths': safe_list(instance.ai_strengths),
+            'aiGaps': safe_list(instance.ai_gaps),
+            'aiEvaluated': bool(instance.ai_evaluated),
         }
 
     def create(self, validated_data):
@@ -446,6 +455,9 @@ class InterviewRecordingSerializer(serializers.ModelSerializer):
     commScore = serializers.IntegerField(source='comm_score', required=False, default=0)
     integrityScore = serializers.IntegerField(source='integrity_score', required=False, default=0)
     recordingData = serializers.CharField(source='recording_data', required=False, allow_null=True, allow_blank=True, write_only=True)
+    aiEvaluation = serializers.JSONField(source='ai_evaluation', required=False, allow_null=True)
+    executiveSummary = serializers.CharField(source='executive_summary', required=False, allow_blank=True, allow_null=True)
+    round2Questions = serializers.JSONField(source='round2_questions', required=False, allow_null=True)
 
     class Meta:
         model = InterviewRecording
@@ -453,6 +465,7 @@ class InterviewRecordingSerializer(serializers.ModelSerializer):
             'id', 'candidateName', 'candidateEmail', 'role', 'duration', 'verdict',
             'totalScore', 'techScore', 'commScore', 'integrityScore',
             'transcript', 'responses', 'recordingData',
+            'aiEvaluation', 'executiveSummary', 'round2Questions',
         ]
         read_only_fields = ['id']
         extra_kwargs = {
@@ -497,6 +510,9 @@ class InterviewRecordingSerializer(serializers.ModelSerializer):
             'hasRecording': bool(has_recording),
             'transcript': instance.transcript,
             'responses': safe_list(instance.responses),
+            'aiEvaluation': instance.ai_evaluation if isinstance(instance.ai_evaluation, dict) else {},
+            'executiveSummary': instance.executive_summary or '',
+            'round2Questions': safe_list(instance.round2_questions),
             'createdAt': instance.created_at.strftime(DATETIME_FMT) if instance.created_at else None,
         }
 
@@ -643,18 +659,25 @@ class UserProfileSerializer(serializers.ModelSerializer):
     altEmail = serializers.CharField(source='alt_email', required=False, allow_blank=True, default='')
     bloodGroup = serializers.CharField(source='blood_group', required=False, allow_blank=True, default='')
     profilePic = serializers.CharField(source='profile_pic', required=False, allow_blank=True, allow_null=True, default='')
+    employmentType = serializers.CharField(source='employment_type', required=False, allow_blank=True, default='Full-time')
+    annualCtc = serializers.DecimalField(source='annual_ctc', max_digits=14, decimal_places=2, required=False, allow_null=True)
+    startDate = serializers.DateField(source='start_date', required=False, allow_null=True)
 
     class Meta:
         model = UserProfile
         fields = [
             'email', 'employeeId', 'firstName', 'lastName', 'phone', 'altEmail',
-            'bloodGroup', 'department', 'designation', 'address', 'profilePic',
+            'bloodGroup', 'department', 'designation', 'manager', 'level',
+            'employmentType', 'location', 'annualCtc', 'startDate', 'address', 'profilePic',
         ]
         extra_kwargs = {
             'employeeId': {'required': False, 'allow_blank': True, 'default': ''},
             'phone': {'required': False, 'allow_blank': True, 'default': ''},
             'department': {'required': False, 'allow_blank': True, 'default': ''},
             'designation': {'required': False, 'allow_blank': True, 'default': ''},
+            'manager': {'required': False, 'allow_blank': True, 'default': ''},
+            'level': {'required': False, 'allow_blank': True, 'default': 'L4'},
+            'location': {'required': False, 'allow_blank': True, 'default': ''},
             'address': {'required': False, 'allow_blank': True, 'allow_null': True, 'default': ''},
         }
 
@@ -671,6 +694,12 @@ class UserProfileSerializer(serializers.ModelSerializer):
             'designation': instance.designation or '',
             'address': instance.address or '',
             'profilePic': instance.profile_pic or '',
+            'manager': instance.manager or '',
+            'level': instance.level or '',
+            'employmentType': instance.employment_type or '',
+            'location': instance.location or '',
+            'annualCtc': str(instance.annual_ctc) if instance.annual_ctc is not None else '',
+            'startDate': instance.start_date.strftime(DATE_FMT) if instance.start_date else '',
             'updatedAt': instance.updated_at.strftime(DATETIME_FMT) if instance.updated_at else None,
         }
 
