@@ -4290,6 +4290,60 @@ def submissions(request):
     return Response(serializer.data, status=201)
 
 
+@api_view(['GET'])
+@require_perm('employee.view', or_self=True)
+def submission_file(request, pk):
+    """Serve one submission's attachment.
+
+    The bytes are deliberately kept out of the list response, so the queue
+    stays cheap to load and a reviewer fetches only the file they open.
+    """
+    obj = WorkSubmission.objects.filter(pk=pk).first()
+    if not obj:
+        return err('Submission not found', 404)
+    # Anyone trusted with the whole queue may open any attachment; everyone
+    # else only their own. Without this an employee could read a colleague's
+    # work by guessing an id.
+    see_all, caller_email, _ = check_perm(request, 'submission.view_all')
+    if not see_all and norm_email(obj.email) != (caller_email or ''):
+        return err('You can only open your own submissions.', 403)
+    if not obj.file_data:
+        return err('This submission has no stored attachment.', 404)
+    return Response({
+        'id': obj.id,
+        'name': obj.file_name or 'attachment',
+        'mime': obj.file_mime or '',
+        'size': obj.file_size or 0,
+        'data': obj.file_data,
+    })
+
+
+@api_view(['GET'])
+@require_perm('employee.view', or_self=True)
+def submission_review_file(request, pk):
+    """Serve whatever the reviewer marked up when sending the work back.
+
+    The submitter must be able to read this — it is the correction they are
+    being asked to act on — so ownership grants access here just as
+    submission.view_all does.
+    """
+    obj = WorkSubmission.objects.filter(pk=pk).first()
+    if not obj:
+        return err('Submission not found', 404)
+    see_all, caller_email, _ = check_perm(request, 'submission.view_all')
+    if not see_all and norm_email(obj.email) != (caller_email or ''):
+        return err('You can only open your own submissions.', 403)
+    if not obj.review_file_data:
+        return err('No file was attached to this review.', 404)
+    return Response({
+        'id': obj.id,
+        'name': obj.review_file_name or 'review-attachment',
+        'mime': obj.review_file_mime or '',
+        'size': obj.review_file_size or 0,
+        'data': obj.review_file_data,
+    })
+
+
 @api_view(['PUT', 'DELETE'])
 # Both methods are gated manually below: PUT by the status being set, DELETE by
 # ownership. The empty map still refuses an unidentified caller — require_perm
@@ -4333,6 +4387,13 @@ def submission_detail(request, pk):
     else:
         need, verb = 'employee.edit', 'edit'
     allowed, caller_email, user = check_perm(request, need)
+    # "In Review" is not a verdict — it only records that a reviewer has opened
+    # the work, which the queue now does by itself. Anyone trusted to see the
+    # whole queue may do that; approving and rejecting still need
+    # submission.action. Without this a Team Lead (who reviews but deliberately
+    # cannot decide) would watch the row move and then snap back on reload.
+    if not allowed and verb == 'review':
+        allowed = check_perm(request, 'submission.view_all')[0]
     if caller_email and user and not allowed:
         return err(f"You don't have permission to {verb} work submissions.", 403)
 
@@ -4340,6 +4401,13 @@ def submission_detail(request, pk):
     if not serializer.is_valid():
         return serializer_err(serializer)
     inst = serializer.save()
+    # Timestamp and attribute the rejection note here rather than trusting the
+    # browser's clock or its claim about who is writing.
+    if str(request.data.get('reviewerNote') or '').strip():
+        inst.reviewer_note_at = local_now()
+        if user and not str(request.data.get('reviewerNoteBy') or '').strip():
+            inst.reviewer_note_by = user.full_name
+        inst.save(update_fields=['reviewer_note_at', 'reviewer_note_by', 'updated_at'])
     new_status = str(request.data.get('status') or '').strip()
     if new_status.lower() in {'approved', 'rejected'} and obj.email:
         create_notification(
