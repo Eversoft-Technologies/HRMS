@@ -522,8 +522,26 @@ class WorkSubmission(models.Model):
     summary = models.TextField(null=True, blank=True)
     link = models.CharField(max_length=500, default='', blank=True)
     file_name = models.CharField(max_length=255, default='', blank=True)
+    # The attachment itself, stored base64-in-row (house style — there is no
+    # file storage backend configured; see CandidateDocument / UserDocument).
+    # Without this the file never left the submitter's browser, so a reviewer
+    # could see the name but never open what they were being asked to review.
+    file_mime = models.CharField(max_length=100, default='', blank=True)
+    file_size = models.IntegerField(default=0)           # decoded bytes
+    file_data = models.TextField(null=True, blank=True)  # base64 data URL
     status = models.CharField(max_length=20, default='Pending')   # Pending | In Review | Approved | Rejected
     reviewer = models.CharField(max_length=255, default='', blank=True)
+    # Why it was sent back, and anything the reviewer marked up. Kept here for
+    # the same reason as the attachment above: written to the browser alone,
+    # the reason existed only for the reviewer who typed it, and the employee
+    # being asked to make the changes could never read them.
+    reviewer_note = models.TextField(null=True, blank=True)
+    reviewer_note_by = models.CharField(max_length=255, default='', blank=True)
+    reviewer_note_at = models.DateTimeField(null=True, blank=True)
+    review_file_name = models.CharField(max_length=255, default='', blank=True)
+    review_file_mime = models.CharField(max_length=100, default='', blank=True)
+    review_file_size = models.IntegerField(default=0)
+    review_file_data = models.TextField(null=True, blank=True)
     ai_score = models.IntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -628,6 +646,29 @@ class AttendanceCorrection(models.Model):
     class Meta:
         db_table = 'attendance_corrections'
         ordering = ['-id']
+
+
+class AttendanceLocationPunch(models.Model):
+    """A periodic location sample captured while an employee is checked in.
+
+    Stored roughly once an hour by the web app (see the attendance
+    location-punch endpoint, which throttles to hourly and only records while
+    the employee is checked in). Powers the location log and the map preview on
+    the employee attendance-detail popup."""
+    email = models.CharField(max_length=255, db_index=True)
+    employee_name = models.CharField(max_length=255, default='', blank=True)
+    date = models.DateField(db_index=True)
+    captured_at = models.DateTimeField(db_index=True)
+    latitude = models.FloatField()
+    longitude = models.FloatField()
+    accuracy = models.FloatField(null=True, blank=True)
+    label = models.CharField(max_length=255, default='', blank=True)   # reverse-geocoded place
+    source = models.CharField(max_length=20, default='web', blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'attendance_location_punches'
+        ordering = ['captured_at']
 
 
 class GeoFence(models.Model):

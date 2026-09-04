@@ -134,6 +134,9 @@ urlpatterns = [
     path('attendance/punch-ticket/pending', views.attendance_punch_ticket_pending),
     path('attendance/punch-ticket/<int:pk>/proof', views.attendance_punch_ticket_proof),
     path('attendance/punch-ticket/<int:pk>/decide', views.attendance_punch_ticket_decide),
+    # Employee attendance detail + hourly location tracking
+    path('attendance/day-detail', views.attendance_day_detail),
+    path('attendance/location-punch', views.attendance_location_punch),
     path('attendance/<int:pk>', views.attendance_detail),
 
     # Shifts
@@ -154,6 +157,8 @@ urlpatterns = [
     # Employees module — Work Submissions
     path('submissions', views.submissions),
     path('submissions/<int:pk>', views.submission_detail),
+    path('submissions/<int:pk>/file', views.submission_file),
+    path('submissions/<int:pk>/review-file', views.submission_review_file),
 
     # Role-Based Access Control (RBAC)
     path('rbac/stats', views.rbac_stats),

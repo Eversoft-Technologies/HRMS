@@ -908,13 +908,38 @@ class EmployeeTaskSerializer(serializers.ModelSerializer):
 class WorkSubmissionSerializer(serializers.ModelSerializer):
     employee = serializers.CharField(source='employee_name', required=False, allow_blank=True, default='')
     fileName = serializers.CharField(source='file_name', required=False, allow_blank=True, default='')
+    fileMime = serializers.CharField(source='file_mime', required=False, allow_blank=True, default='')
+    fileSize = serializers.IntegerField(source='file_size', required=False, default=0)
+    # Write-only: the base64 payload is accepted on submit but never echoed
+    # back in a list, which would otherwise carry every attachment in the
+    # queue over the wire on each page load.
+    fileData = serializers.CharField(source='file_data', required=False,
+                                     allow_blank=True, allow_null=True,
+                                     write_only=True, default='')
+    reviewerNote = serializers.CharField(source='reviewer_note', required=False,
+                                         allow_blank=True, allow_null=True, default='')
+    reviewerNoteBy = serializers.CharField(source='reviewer_note_by', required=False,
+                                           allow_blank=True, default='')
+    reviewFileName = serializers.CharField(source='review_file_name', required=False,
+                                           allow_blank=True, default='')
+    reviewFileMime = serializers.CharField(source='review_file_mime', required=False,
+                                           allow_blank=True, default='')
+    reviewFileSize = serializers.IntegerField(source='review_file_size', required=False, default=0)
+    # Write-only for the same reason as fileData: the queue would otherwise
+    # carry every marked-up file on every page load.
+    reviewFileData = serializers.CharField(source='review_file_data', required=False,
+                                           allow_blank=True, allow_null=True,
+                                           write_only=True, default='')
     aiScore = serializers.IntegerField(source='ai_score', required=False, default=0)
 
     class Meta:
         model = WorkSubmission
         fields = [
             'id', 'email', 'employee', 'title', 'type', 'date', 'summary',
-            'link', 'fileName', 'status', 'reviewer', 'aiScore',
+            'link', 'fileName', 'fileMime', 'fileSize', 'fileData',
+            'status', 'reviewer', 'reviewerNote', 'reviewerNoteBy',
+            'reviewFileName', 'reviewFileMime', 'reviewFileSize', 'reviewFileData',
+            'aiScore',
         ]
         read_only_fields = ['id']
         extra_kwargs = {
@@ -938,8 +963,22 @@ class WorkSubmissionSerializer(serializers.ModelSerializer):
             'summary': instance.summary or '',
             'link': instance.link or '',
             'fileName': instance.file_name or '',
+            'fileMime': instance.file_mime or '',
+            'fileSize': instance.file_size or 0,
+            # The bytes are fetched on demand from /submissions/<id>/file;
+            # the list only says whether there is anything to fetch.
+            'hasFile': bool(instance.file_data),
             'status': instance.status,
             'reviewer': instance.reviewer or '',
+            'reviewerNote': instance.reviewer_note or '',
+            'reviewerNoteBy': instance.reviewer_note_by or '',
+            'reviewerNoteAt': (instance.reviewer_note_at.strftime(DATETIME_FMT)
+                               if instance.reviewer_note_at else ''),
+            'reviewFileName': instance.review_file_name or '',
+            'reviewFileMime': instance.review_file_mime or '',
+            'reviewFileSize': instance.review_file_size or 0,
+            # Fetched on demand from /submissions/<id>/review-file.
+            'hasReviewFile': bool(instance.review_file_data),
             'aiScore': instance.ai_score or 0,
             'createdAt': instance.created_at.strftime(DATETIME_FMT) if instance.created_at else None,
         }
