@@ -149,6 +149,8 @@ urlpatterns = [
     # Employees module — Work Submissions
     path('submissions', views.submissions),
     path('submissions/<int:pk>', views.submission_detail),
+    path('submissions/<int:pk>/file', views.submission_file),
+    path('submissions/<int:pk>/review-file', views.submission_review_file),
 
     # Role-Based Access Control (RBAC)
     path('rbac/stats', views.rbac_stats),
