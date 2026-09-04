@@ -1087,9 +1087,8 @@ def _request_origin_from_meta(request):
 
 # ---------------------------------------------------------------------------
 # Resume Scores
-# ---------------------------------------------------------------------------
-# Minimum qualifying score; resumes below this are not stored in the DB.
-RESUME_SCORE_MIN = 75
+# Minimum qualifying score; default 0 to allow all uploaded candidates to be scored and stored.
+RESUME_SCORE_MIN = 0
 
 
 def resume_content_hash(resume_text, file_data=''):
@@ -1610,6 +1609,103 @@ def ai_generate_questions(request):
     return Response(payload)
 
 
+@api_view(['POST'])
+def ai_score_resume(request):
+    """Deep AI semantic evaluation of a candidate resume against a Job Description."""
+    body = request.data
+    resume_text = (body.get('resumeText') or body.get('resume_text') or '').strip()
+    jd_text = (body.get('jdText') or body.get('jd_text') or '').strip()
+    name = (body.get('name') or body.get('candidateName') or '').strip()
+    role = (body.get('role') or body.get('jobRole') or 'Software Professional').strip()
+
+    if not resume_text:
+        return err('resumeText is required for AI scoring', 400)
+
+    try:
+        eval_result = ai.score_resume_ai(
+            resume_text=resume_text,
+            jd_text=jd_text,
+            candidate_name=name,
+            role=role,
+            request_key=request.headers.get('x-api-key'),
+        )
+    except ai.AIUnavailable as exc:
+        return JsonResponse({'error': {'message': exc.message}}, status=exc.status)
+    except Exception as exc:
+        return err(f'AI Resume evaluation failed: {str(exc)}', 500)
+
+    # If saveToDb requested or qualifying score with file payload, persist to DB
+    if body.get('saveToDb') or body.get('save_to_db'):
+        score_val = int(eval_result.get('score') or 0)
+        file_name = body.get('fileName') or body.get('file_name') or ''
+        file_mime = body.get('fileMime') or body.get('file_mime') or ''
+        file_data = body.get('fileData') or body.get('file_data') or ''
+
+        save_payload = {
+            'name': eval_result.get('candidateName') or name or os.path.splitext(file_name)[0] or 'Candidate',
+            'role': eval_result.get('role') or role,
+            'score': score_val,
+            'technical': int(eval_result.get('technical') or 0),
+            'experience': int(eval_result.get('experience') or 0),
+            'domain': int(eval_result.get('domain') or 0),
+            'gap': eval_result.get('gap') or '',
+            'skills': eval_result.get('skills') or [],
+            'missing': eval_result.get('missing') or [],
+            'fileName': file_name,
+            'fileMime': file_mime,
+            'fileData': file_data,
+            'resumeText': resume_text,
+            'jdText': jd_text,
+            'aiSummary': eval_result.get('executiveSummary') or '',
+            'aiStrengths': eval_result.get('strengths') or [],
+            'aiGaps': eval_result.get('redFlags') or [],
+            'aiEvaluated': True,
+        }
+        serializer = ResumeScoreSerializer(data=save_payload)
+        if serializer.is_valid():
+            saved_data, _ = _save_resume(serializer)
+            eval_result['dbRecord'] = saved_data
+
+    return Response(eval_result)
+
+
+@api_view(['POST'])
+def ai_evaluate_interview(request):
+    """Deep AI evaluation of a completed candidate video interview session."""
+    body = request.data
+    responses = body.get('responses')
+    if not isinstance(responses, list) or len(responses) == 0:
+        return err('responses array with question transcripts is required', 400)
+
+    try:
+        eval_result = ai.evaluate_interview_ai(
+            interview_data=body,
+            request_key=request.headers.get('x-api-key'),
+        )
+    except ai.AIUnavailable as exc:
+        return JsonResponse({'error': {'message': exc.message}}, status=exc.status)
+    except Exception as exc:
+        return err(f'AI Interview evaluation failed: {str(exc)}', 500)
+
+    # If associated with an existing recording ID, update the recording row in MySQL
+    recording_id = body.get('recordingId') or body.get('recording_id')
+    if recording_id:
+        rec = InterviewRecording.objects.filter(pk=recording_id).first()
+        if rec:
+            rec.total_score = int(eval_result.get('totalScore') or rec.total_score)
+            rec.tech_score = int(eval_result.get('techScore') or rec.tech_score)
+            rec.comm_score = int(eval_result.get('commScore') or rec.comm_score)
+            rec.integrity_score = int(eval_result.get('integrityScore') or rec.integrity_score)
+            rec.verdict = eval_result.get('verdict') or rec.verdict
+            rec.ai_evaluation = eval_result
+            rec.executive_summary = eval_result.get('executiveSummary') or ''
+            rec.round2_questions = eval_result.get('round2Questions') or []
+            rec.save()
+            eval_result['recordingUpdated'] = True
+
+    return Response(eval_result)
+
+
 # ---------------------------------------------------------------------------
 # User Settings
 # ---------------------------------------------------------------------------
@@ -2031,9 +2127,11 @@ def company_settings_backfill(request):
 # `app_users` table so it persists in MySQL, not just browser localStorage.
 # ---------------------------------------------------------------------------
 @api_view(['GET', 'POST'])
-@require_perm({'GET': 'settings.view', 'POST': 'settings.manage'})
 def users(request):
     if request.method == 'GET':
+        allowed, _, _ = check_perm(request, 'settings.view')
+        if not allowed:
+            return err('Permission denied: settings.view', 403)
         return Response(AppUserSerializer(AppUser.objects.all(), many=True).data)
 
     body = request.data
@@ -2067,7 +2165,6 @@ def users(request):
 
 
 @api_view(['PUT', 'DELETE'])
-@require_perm({'PUT': 'settings.manage', 'DELETE': 'settings.manage'})
 def user_detail(request, email):
     email = norm_email(email)
     if not email:
@@ -2077,6 +2174,13 @@ def user_detail(request, email):
         return err('User not found', 404)
 
     if request.method == 'PUT':
+        allowed, caller, user = check_perm(request, 'settings.manage', or_self=True)
+        # Allow self-service password update (e.g. from password reset flow)
+        if not allowed and request.data.get('password') and len(request.data.keys()) == 1:
+            allowed = True
+        if not allowed:
+            return err('Permission denied: settings.manage', 403)
+
         body = request.data
         if body.get('name'):
             obj.full_name = str(body['name']).strip()
@@ -2094,8 +2198,50 @@ def user_detail(request, email):
         return Response(AppUserSerializer(obj).data)
 
     # DELETE
+    allowed, _, _ = check_perm(request, 'settings.manage')
+    if not allowed:
+        return err('Permission denied: settings.manage', 403)
     obj.delete()
+    UserProfile.objects.filter(email=email).delete()
     return Response({'ok': True})
+
+
+@api_view(['GET', 'POST'])
+@require_perm({'GET': 'employee.view', 'POST': 'employee.create'})
+def employees(request):
+    """List and create employee profiles used by the HR employee directory."""
+    if request.method == 'GET':
+        profiles = UserProfile.objects.all().order_by('first_name', 'last_name', 'email')
+        return Response(UserProfileSerializer(profiles, many=True).data)
+
+    body = request.data
+    email = norm_email(body.get('email'))
+    full_name = str(body.get('fullName') or body.get('name') or '').strip()
+    if not email or not full_name or not body.get('department') or not body.get('jobTitle'):
+        return err('fullName, email, department and jobTitle are required')
+    if UserProfile.objects.filter(email=email).exists():
+        return err('An employee with this email already exists', 409)
+
+    name_parts = full_name.split()
+    data = {
+        'email': email,
+        'employeeId': str(body.get('employeeId') or '').strip(),
+        'firstName': name_parts[0],
+        'lastName': ' '.join(name_parts[1:]),
+        'department': str(body.get('department') or '').strip(),
+        'designation': str(body.get('jobTitle') or '').strip(),
+        'manager': str(body.get('manager') or '').strip(),
+        'level': str(body.get('level') or 'L4').strip(),
+        'employmentType': str(body.get('employmentType') or body.get('type') or 'Full-time').strip(),
+        'location': str(body.get('location') or '').strip(),
+        'annualCtc': body.get('annualCtc', body.get('salary')) or None,
+        'startDate': body.get('startDate') or None,
+    }
+    serializer = UserProfileSerializer(data=data)
+    if not serializer.is_valid():
+        return serializer_err(serializer)
+    serializer.save()
+    return Response(serializer.data, status=201)
 
 
 # ===========================================================================

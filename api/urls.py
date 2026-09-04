@@ -7,6 +7,7 @@ from . import (auth_views, email_template_views, linkedin_oauth, live_views, vie
 urlpatterns = [
     # Authentication (OTP login + password reset + Google OAuth)
     path('auth/login', auth_views.login),
+    path('auth/signup', auth_views.signup),
     path('auth/verify-otp', auth_views.verify_otp),
     path('auth/resend-otp', auth_views.resend_otp),
     path('auth/forgot-password', auth_views.forgot_password),
@@ -68,10 +69,17 @@ urlpatterns = [
     path('question-sets/<str:set_id>', views.question_set_detail),
 
     path('ai/status', views.ai_status),
+    path('ai/status/', views.ai_status),
     path('ai/generate-questions', views.ai_generate_questions),
+    path('ai/generate-questions/', views.ai_generate_questions),
+    path('ai/score-resume', views.ai_score_resume),
+    path('ai/score-resume/', views.ai_score_resume),
+    path('ai/evaluate-interview', views.ai_evaluate_interview),
+    path('ai/evaluate-interview/', views.ai_evaluate_interview),
 
     path('users', views.users),
     path('users/<str:email>', views.user_detail),
+    path('employees', views.employees),
 
     path('notifications', views.notifications),
     path('notifications/<int:pk>/read', views.notification_read),
