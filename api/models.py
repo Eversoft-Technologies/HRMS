@@ -509,8 +509,26 @@ class WorkSubmission(models.Model):
     summary = models.TextField(null=True, blank=True)
     link = models.CharField(max_length=500, default='', blank=True)
     file_name = models.CharField(max_length=255, default='', blank=True)
+    # The attachment itself, stored base64-in-row (house style — there is no
+    # file storage backend configured; see CandidateDocument / UserDocument).
+    # Without this the file never left the submitter's browser, so a reviewer
+    # could see the name but never open what they were being asked to review.
+    file_mime = models.CharField(max_length=100, default='', blank=True)
+    file_size = models.IntegerField(default=0)           # decoded bytes
+    file_data = models.TextField(null=True, blank=True)  # base64 data URL
     status = models.CharField(max_length=20, default='Pending')   # Pending | In Review | Approved | Rejected
     reviewer = models.CharField(max_length=255, default='', blank=True)
+    # Why it was sent back, and anything the reviewer marked up. Kept here for
+    # the same reason as the attachment above: written to the browser alone,
+    # the reason existed only for the reviewer who typed it, and the employee
+    # being asked to make the changes could never read them.
+    reviewer_note = models.TextField(null=True, blank=True)
+    reviewer_note_by = models.CharField(max_length=255, default='', blank=True)
+    reviewer_note_at = models.DateTimeField(null=True, blank=True)
+    review_file_name = models.CharField(max_length=255, default='', blank=True)
+    review_file_mime = models.CharField(max_length=100, default='', blank=True)
+    review_file_size = models.IntegerField(default=0)
+    review_file_data = models.TextField(null=True, blank=True)
     ai_score = models.IntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
