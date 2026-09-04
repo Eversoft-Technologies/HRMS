@@ -845,12 +845,25 @@ class LeaveRequestSerializer(serializers.ModelSerializer):
 class EmployeeTaskSerializer(serializers.ModelSerializer):
     assigneeEmail = serializers.CharField(source='assignee_email', required=False, allow_blank=True, default='')
     createdBy = serializers.CharField(source='created_by', required=False, allow_blank=True, default='')
+    taskCode = serializers.CharField(source='task_code', required=False, allow_blank=True, default='')
+    teamLead = serializers.CharField(source='team_lead', required=False, allow_blank=True, default='')
+    estimatedHours = serializers.FloatField(source='estimated_hours', required=False, allow_null=True, default=None)
+    attachmentFileName = serializers.CharField(source='attachment_file_name', required=False, allow_blank=True, default='')
+    attachmentFileMime = serializers.CharField(source='attachment_file_mime', required=False, allow_blank=True, default='')
+    attachmentFileData = serializers.CharField(source='attachment_file_data', required=False, allow_blank=True, default='')
+    imageFileName = serializers.CharField(source='image_file_name', required=False, allow_blank=True, default='')
+    imageFileMime = serializers.CharField(source='image_file_mime', required=False, allow_blank=True, default='')
+    imageFileData = serializers.CharField(source='image_file_data', required=False, allow_blank=True, default='')
+    rejectReason = serializers.CharField(source='reject_reason', required=False, allow_blank=True, default='')
 
     class Meta:
         model = EmployeeTask
         fields = [
             'id', 'title', 'assignee', 'assigneeEmail', 'due', 'priority',
-            'stage', 'description', 'createdBy',
+            'stage', 'description', 'createdBy', 'taskCode', 'teamLead',
+            'department', 'estimatedHours', 'progress', 'attachmentFileName',
+            'attachmentFileMime', 'attachmentFileData', 'imageFileName',
+            'imageFileMime', 'imageFileData', 'rejectReason',
         ]
         read_only_fields = ['id']
         extra_kwargs = {
@@ -859,6 +872,8 @@ class EmployeeTaskSerializer(serializers.ModelSerializer):
             'priority': {'required': False, 'default': 'medium'},
             'stage': {'required': False, 'default': 'todo'},
             'description': {'required': False, 'allow_blank': True, 'allow_null': True, 'default': ''},
+            'department': {'required': False, 'allow_blank': True, 'default': ''},
+            'progress': {'required': False, 'default': 0},
         }
 
     def to_representation(self, instance):
@@ -872,6 +887,18 @@ class EmployeeTaskSerializer(serializers.ModelSerializer):
             'stage': instance.stage,
             'description': instance.description or '',
             'createdBy': instance.created_by or '',
+            'taskCode': instance.task_code or '',
+            'teamLead': instance.team_lead or '',
+            'department': instance.department or '',
+            'estimatedHours': instance.estimated_hours,
+            'progress': instance.progress or 0,
+            'attachmentFileName': instance.attachment_file_name or '',
+            'attachmentFileMime': instance.attachment_file_mime or '',
+            'attachmentFileData': instance.attachment_file_data or '',
+            'imageFileName': instance.image_file_name or '',
+            'imageFileMime': instance.image_file_mime or '',
+            'imageFileData': instance.image_file_data or '',
+            'rejectReason': instance.reject_reason or '',
             'createdAt': instance.created_at.strftime(DATETIME_FMT) if instance.created_at else None,
         }
 

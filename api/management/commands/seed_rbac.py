@@ -71,6 +71,12 @@ class Command(BaseCommand):
                 {'name': 'Create Employee/Tasks', 'code': 'employee.create', 'group': 'Employee Group'},
                 {'name': 'Edit Employee/Tasks', 'code': 'employee.edit', 'group': 'Employee Group'},
                 {'name': 'Delete Employee/Tasks', 'code': 'employee.delete', 'group': 'Employee Group'},
+                # Scoped to the Task Tracker only (task_detail), separate from the
+                # generic employee.edit/delete Work Submissions also uses — so
+                # granting a reviewer task edit/delete never also unlocks
+                # Work Submissions editing for them. See migration 0062.
+                {'name': 'Edit Tasks', 'code': 'task.edit', 'group': 'Employee Group'},
+                {'name': 'Delete Tasks', 'code': 'task.delete', 'group': 'Employee Group'},
                 # Work Submissions scope. employee.view reaches the module;
                 # submission.view_all decides whether you see the whole queue or
                 # only what you filed yourself. Employee is deliberately left
@@ -173,14 +179,16 @@ class Command(BaseCommand):
                 'HR Executive': [
                     'recruitment.view', 'recruitment.create', 'recruitment.edit',
                     'recruitment.kpi.view_own',
-                    'employee.view', 'submission.view_all',
+                    'employee.view', 'submission.view_all', 'task.edit',
                     'attendance.view', 'leave.view', 'settings.view',
                     # HR Executive is the recruiter today: creates and edits the
                     # candidate, but cannot verify, approve, or touch payroll.
                     'onboarding.view', 'onboarding.create', 'onboarding.edit',
                 ],
                 'Employee': [
-                    'employee.view', 'attendance.view', 'attendance.create',
+                    # task.edit (not task.delete) lets an employee accept/reject
+                    # their own assigned tasks from the To Do column.
+                    'employee.view', 'task.edit', 'attendance.view', 'attendance.create',
                     'leave.view', 'leave.create', 'settings.view'
                 ],
                 'Recruiter': [
@@ -189,7 +197,7 @@ class Command(BaseCommand):
                     'onboarding.view', 'onboarding.create', 'onboarding.edit',
                 ],
                 'Manager': [
-                    'employee.view', 'submission.view_all',
+                    'employee.view', 'submission.view_all', 'task.edit', 'task.delete',
                     'attendance.view', 'leave.view', 'leave.action',
                     'settings.view',
                     'onboarding.view', 'onboarding.approve',
@@ -198,7 +206,7 @@ class Command(BaseCommand):
                 # submission.action / leave.action / onboarding.* — grant those
                 # from the RBAC screen if a lead should approve as well as see.
                 'Team Lead': [
-                    'employee.view', 'submission.view_all',
+                    'employee.view', 'submission.view_all', 'task.edit', 'task.delete',
                     'attendance.view', 'leave.view', 'settings.view',
                 ],
                 'IT Admin': [

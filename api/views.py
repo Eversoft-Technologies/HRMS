@@ -4185,6 +4185,12 @@ def notifications_read_all(request):
 
 
 # --- Task Tracker ----------------------------------------------------------
+def _data_url_too_large(data_url, limit_bytes=50 * 1024):
+    """Rough decoded-size check for a `data:<mime>;base64,<data>` string."""
+    b64 = str(data_url).split(',', 1)[-1]
+    return (len(b64) * 3) // 4 > limit_bytes
+
+
 @api_view(['GET', 'POST'])
 @require_perm({'GET': 'employee.view', 'POST': 'employee.create'}, or_self=True)
 def tasks(request):
@@ -4204,6 +4210,11 @@ def tasks(request):
     body = request.data
     if not body.get('title'):
         return err('title is required')
+    for field, label in (('attachmentFileData', 'File attachment'), ('imageFileData', 'Image attachment')):
+        if body.get(field) and _data_url_too_large(body[field]):
+            return err(f'{label} exceeds the 50 KB limit')
+    if not body.get('taskCode'):
+        body = {**body, 'taskCode': f'TASK-{int(local_now().timestamp() * 1000)}'}
     serializer = EmployeeTaskSerializer(data=body)
     if not serializer.is_valid():
         return serializer_err(serializer)
@@ -4221,12 +4232,14 @@ def tasks(request):
 
 
 @api_view(['PUT', 'DELETE'])
-@require_perm({'PUT': 'employee.edit', 'DELETE': 'employee.delete'})
+@require_perm({'PUT': 'task.edit', 'DELETE': 'task.delete'})
 def task_detail(request, pk):
     obj = EmployeeTask.objects.filter(pk=pk).first()
     if not obj:
         return err('Task not found', 404)
     if request.method == 'DELETE':
+        if obj.stage != 'todo':
+            return err('Only a task still in To Do can be deleted.', 409)
         obj.delete()
         return Response({'ok': True})
     serializer = EmployeeTaskSerializer(obj, data=request.data, partial=True)
