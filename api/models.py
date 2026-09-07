@@ -503,6 +503,23 @@ class EmployeeTask(models.Model):
     priority = models.CharField(max_length=20, default='medium')    # low | medium | high
     stage = models.CharField(max_length=20, default='todo')         # todo | inprogress | done
     description = models.TextField(null=True, blank=True)
+    task_code = models.CharField(max_length=40, default='', blank=True)   # e.g. TASK-1788507958987
+    team_lead = models.CharField(max_length=255, default='', blank=True)
+    department = models.CharField(max_length=120, default='', blank=True)
+    estimated_hours = models.FloatField(null=True, blank=True)
+    progress = models.IntegerField(default=0)   # 0-100
+    # Attachments are stored as full `data:<mime>;base64,<data>` URLs (house style — no file
+    # storage backend configured; see UserDocument), capped client- and server-side at 50 KB.
+    attachment_file_name = models.CharField(max_length=255, default='', blank=True)
+    attachment_file_mime = models.CharField(max_length=100, default='', blank=True)
+    attachment_file_data = models.TextField(default='', blank=True)
+    image_file_name = models.CharField(max_length=255, default='', blank=True)
+    image_file_mime = models.CharField(max_length=100, default='', blank=True)
+    image_file_data = models.TextField(default='', blank=True)
+    # Set when the assignee rejects the task from the To Do column; a non-empty
+    # value is the "rejected" signal (no separate stage — the task stays put so
+    # the reviewer can see and act on the reason).
+    reject_reason = models.TextField(default='', blank=True)
     created_by = models.CharField(max_length=255, default='', blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
