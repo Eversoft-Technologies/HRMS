@@ -951,31 +951,19 @@ div[style*="position: fixed"][style*="bottom: 80px"][style*="right: 28px"] {
    Scoped to .hrms-dash. The bundle is untouched; deleting this block reverts
    the Dashboard completely. */
 
-@keyframes hrms-dash-in {
-  from { opacity: 0; transform: translateY(10px); }
-}
-@keyframes hrms-dash-pop {
-  from { opacity: 0; transform: translateY(6px) scale(.985); }
+@keyframes hrms-dash-fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 @keyframes hrms-dash-pulse {
   0%, 100% { opacity: 1; transform: scale(1); }
   50%      { opacity: .55; transform: scale(.82); }
 }
 
-/* --- entrance: KPIs, then charts, then lists -------------------------- */
-.hrms-dash .stat-card,
-.hrms-dash .card {
-  animation: hrms-dash-in .46s cubic-bezier(.22, 1, .36, 1) backwards;
+/* --- Clean entrance for dashboard wrap without delayed flashing --- */
+#hrms-live-dashboard-wrap {
+  animation: hrms-dash-fade-in 0.25s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
-.hrms-dash .stat-grid > *:nth-child(1) .stat-card,
-.hrms-dash .stat-grid > *:nth-child(1) { animation-delay: .02s; }
-.hrms-dash .stat-grid > *:nth-child(2) { animation-delay: .07s; }
-.hrms-dash .stat-grid > *:nth-child(3) { animation-delay: .12s; }
-.hrms-dash .stat-grid > *:nth-child(4) { animation-delay: .17s; }
-.hrms-dash > div:nth-of-type(2) .card { animation-delay: .22s; }
-.hrms-dash > div:nth-of-type(3) .card { animation-delay: .28s; }
-.hrms-dash > div:nth-of-type(4) .card { animation-delay: .34s; }
-.hrms-dash > div:nth-of-type(5) .card { animation-delay: .40s; }
 
 /* --- KPI cards: tinted wash + lift ------------------------------------ */
 .hrms-dash .stat-card {
