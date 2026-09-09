@@ -43,6 +43,23 @@
     catch (_) { return null; }
   }
 
+  /* Live Interviews is a recruiting tool. An employee has nothing to do with
+     it — the button only ever opened a list they could not act on — so it is
+     not shown to them at all.
+
+     The role is published by hrms-perms.js, which writes it to localStorage
+     and fires hrmsPermsLoaded once the API confirms it. Gating on a
+     permission code was the first instinct, but recruitment.view is not
+     granted to the Recruiter role in this database, so that would have hidden
+     the button from the very people who run the interviews. The role name is
+     the honest test for what was asked. */
+  function roleName() {
+    try { return String(localStorage.getItem("hrms_role_name") || "").trim().toLowerCase(); }
+    catch (_) { return ""; }
+  }
+  function hiddenForRole() { return roleName() === "employee"; }
+  function canShow() { return !!session() && !onCandidatePage() && !hiddenForRole(); }
+
   // ====================================================================
   // Publisher (candidate)
   // ====================================================================
@@ -356,7 +373,7 @@
       fontFamily: "'Segoe UI',Arial,sans-serif", fontWeight: "700", fontSize: "12px",
       boxShadow: "0 2px 10px rgba(244,63,94,0.32)", alignItems: "center", gap: "7px",
       whiteSpace: "nowrap", flex: "0 0 auto", lineHeight: "1",
-      display: (session() && !onCandidatePage()) ? "flex" : "none"
+      display: canShow() ? "flex" : "none"
     });
     btn.setAttribute("aria-label", "Live Interviews");
     btn.title = "Live Interviews";
@@ -428,6 +445,13 @@
     }
     place();
 
+    /* The role is not known at boot — hrms-perms.js confirms it against
+       the API a moment later. Re-apply then, so an employee never sees
+       the button appear and then vanish. */
+    window.addEventListener("hrmsPermsLoaded", function () {
+      try { btn.style.display = canShow() ? "flex" : "none"; } catch (_) {}
+    });
+
     var placeMo = new MutationObserver(function () {
       placeMo.disconnect();
       try { place(); } catch (_) {}
@@ -436,7 +460,7 @@
     placeMo.observe(document.body, { childList: true, subtree: true });
 
     async function tick(opts) {
-      if (!session() || onCandidatePage()) { btn.style.display = "none"; return; }
+      if (!canShow()) { btn.style.display = "none"; return; }
       btn.style.display = "flex";
       // Only the idle badge count is gated. Signaling for a call that is
       // already up (below) is never suppressed — dropping ICE/answer polls
