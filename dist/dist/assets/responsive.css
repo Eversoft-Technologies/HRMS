@@ -87,6 +87,47 @@
   #hrms-hamburger:hover { background: var(--bg3, rgba(255,255,255,0.06)); }
   #hrms-hamburger svg { width: 22px; height: 22px; }
 
+  /* The same button closes the drawer it opened.
+
+     It could not before: the drawer is 264px wide and starts at top:0, so
+     while open it covered the button's own corner. A tap there landed on the
+     sidebar, not the button, and nothing happened — the toggle had been
+     wired up all along, it was simply unreachable. Lifting the button above
+     the drawer (which is z-index 100) puts it back in reach. */
+  body.sidebar-open #hrms-hamburger {
+    /* Pinned to the drawer's own top-right corner while it is open. Left in
+       place it would sit on the logo, and a cross over the branding reads as
+       damage rather than as a control. The drawer is 264px wide but clamped
+       to 84vw on a narrow screen, so the same min() decides both edges. */
+    position: fixed;
+    top: 9px;
+    left: min(264px, 84vw);
+    transform: translateX(-100%);
+    margin-left: -8px;
+    z-index: 101;
+  }
+
+  /* Bars when shut, a cross when open, so it reads as "close". */
+  #hrms-hamburger .hrms-burger-close { display: none; }
+  body.sidebar-open #hrms-hamburger .hrms-burger-open { display: none; }
+  body.sidebar-open #hrms-hamburger .hrms-burger-close { display: block; }
+
+  /* Locking the page behind the drawer stops the list underneath scrolling
+     when the drawer is flicked. */
+  body.sidebar-open { overflow: hidden; }
+
+  /* Nothing in the topbar may float over the open drawer.
+
+     The Live Interviews pill carries an inline z-index of 998 from the days
+     it was a standalone floating button. It is position:static, which would
+     normally make that z-index inert — but the topbar is a flex container,
+     and z-index DOES apply to flex items whatever their position. So it beat
+     the drawer's z-index of 100 and sat on top of the menu.
+
+     Only the hamburger is meant to stay above the drawer, so that it can
+     close it; everything else in the bar goes behind. */
+  body.sidebar-open .topbar > *:not(#hrms-hamburger) { z-index: auto !important; }
+
   /* Topbar: tighter, no fixed-width search hogging space */
   .topbar { padding: 0 14px; gap: 10px; }
   .topbar-title { font-size: 15px; }
