@@ -2002,13 +2002,13 @@ div:has(> #hrms-kpi-btn) button svg {
    truncates instead of wrapping to two lines. Everything else keeps
    its size, which means the avatar is always on screen and tappable. */
 @media (max-width: 768px) {
-  .topbar {
+  body .topbar {
     gap: 8px;
     padding: 0 12px;
     flex-wrap: nowrap;
     overflow: visible;               /* dropdowns must still escape */
   }
-  .topbar-title {
+  body .topbar-title {
     flex: 1 1 auto;
     min-width: 0;                    /* yields entirely when the row is full */
     white-space: nowrap;
@@ -2027,8 +2027,8 @@ div:has(> #hrms-kpi-btn) button svg {
      alone fill the row, so a fixed floor for the title would only push
      the overflow back onto the account. On a wider phone there is room
      left over and the title reappears by itself. */
-  .topbar > * { flex-shrink: 0; }
-  .topbar > .topbar-title { flex: 1 1 auto; }
+  body .topbar > * { flex-shrink: 0; }
+  body .topbar > .topbar-title { flex: 1 1 auto; }
   .topbar .av { flex: 0 0 auto; margin-left: 2px; }
 }
 @media (max-width: 560px) {
@@ -2039,8 +2039,8 @@ div:has(> #hrms-kpi-btn) button svg {
      These are real size reductions, not transform:scale — a scaled
      element still occupies its original width in the row, so scaling
      would have moved the widgets without giving the avatar any room. */
-  .topbar { gap: 6px; padding: 0 10px; }
-  .topbar-title { font-size: 14px; }
+  body .topbar { gap: 6px; padding: 0 10px; }
+  body .topbar-title { font-size: 14px; }
   #hrms-hamburger { width: 32px; height: 32px; margin-right: 0; }
   #hrms-hamburger svg { width: 20px; height: 20px; }
   .topbar .hrms-ci-wrap { padding: 2px 6px 2px 4px; gap: 4px; border-width: 1px; }
@@ -2048,7 +2048,7 @@ div:has(> #hrms-kpi-btn) button svg {
 }
 @media (max-width: 400px) {
   /* Last of the slack, for the narrowest phones. */
-  .topbar { gap: 4px; padding: 0 8px; }
+  body .topbar { gap: 4px; padding: 0 8px; }
   .topbar .av { margin-left: 0; }
   /* A ceiling on the one widget whose width is set elsewhere and can
      grow with its label. Without a bound, a long label there is enough
@@ -2068,164 +2068,130 @@ div:has(> #hrms-kpi-btn) button svg {
    The column labels come from nth-child rather than data-label
    attributes, so the markup stays exactly as the desktop table. */
 @media (max-width: 640px) {
-  /* KPIs two-up. Four full-width cards meant 600px of scrolling
-     before you reached the queue at all. */
+  /* One KPI per line, as a compact band.
+
+     Two-up fitted, but at 320px every label broke over two lines — "PENDING
+     REVIEW", "All submissions", "Awaiting first look" each wrapped — which
+     read worse than one clean row.
+
+     Stacking would normally cost a lot of scrolling, so the card is laid out
+     along one line instead of down three: label, number, icon. The card's
+     real structure is
+
+         card > row > [ column(label, number, caption), iconBadge ]
+
+     so both wrappers are flattened with display:contents, which lifts the
+     four leaves into the card's own flex line without touching the markup. */
   .wsq .wsq-kpis {
-    grid-template-columns: 1fr 1fr !important;
-    gap: 10px !important;
+    grid-template-columns: 1fr !important;
+    gap: 8px !important;
   }
-  .wsq .wsq-kpis > div { padding: 13px 13px 11px !important; border-radius: 13px !important; }
-  .wsq .wsq-kpis > div div[style*="font-size: 32px"],
-  .wsq .wsq-kpis > div div[style*="fontSize: 32"] { font-size: 25px !important; }
-  /* The icon badge is decorative; the number is the point. */
-  .wsq .wsq-kpis > div > div:first-child > div:last-child { transform: scale(.82); transform-origin: top right; }
-
-  /* Unpick the table. */
-  .wsq .wsq-tablewrap { overflow-x: visible !important; }
-  .wsq table {
-    min-width: 0 !important;
-    table-layout: auto !important;
-    display: block;
-    border-spacing: 0 !important;
-  }
-  .wsq thead { display: none; }        /* the labels move onto each row */
-  .wsq tbody { display: block; }
-
-  /* Two columns: the short facts pair up instead of each taking a
-     full line, which is the difference between a card you take in at
-     a glance and one you scroll through. */
-  .wsq tbody tr {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    column-gap: 12px;
-    background: var(--bg2);
-    border: 1px solid var(--border2);
-    border-radius: 14px;
-    padding: 12px 13px 11px;
-    margin-bottom: 10px;
-    box-shadow: 0 1px 2px rgba(0,0,0,.12), 0 8px 20px -14px rgba(0,0,0,.4);
-  }
-  .wsq tbody tr:hover { background: var(--bg2) !important; }
-
-  .wsq tbody td {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    width: auto !important;
-    padding: 6px 0 !important;
-    border-bottom: 0 !important;
-    overflow: visible;
-    white-space: normal;
-    text-overflow: clip;
-    min-width: 0;
-  }
-
-  /* The paired facts read as label-above-value; a column this narrow
-     has no room to put them side by side. */
-  .wsq tbody td:nth-child(2),
-  .wsq tbody td:nth-child(4),
-  .wsq tbody td:nth-child(5),
-  .wsq tbody td:nth-child(6),
-  .wsq tbody td:nth-child(7) {
-    flex-direction: column;
-    align-items: flex-start;
-    justify-content: flex-start;
-    gap: 3px;
-    padding: 7px 0 !important;
-  }
-
-  /* Identity, title and actions each want the full width. */
-  .wsq tbody td:nth-child(1),
-  .wsq tbody td:nth-child(3),
-  .wsq tbody td:nth-child(8) { grid-column: 1 / -1; }
-
-  /* Type follows the title rather than preceding it. In source order it
-     sits between the name and the title, both of which span the card, so
-     it was stranded on a row of its own with an empty half beside it.
-     Moved down, it pairs with Submitted and the card loses a whole row. */
-  .wsq tbody td:nth-child(1) { order: 1; }
-  .wsq tbody td:nth-child(3) { order: 2; }
-  .wsq tbody td:nth-child(2) { order: 3; }
-  .wsq tbody td:nth-child(4) { order: 4; }
-  .wsq tbody td:nth-child(5) { order: 5; }
-  .wsq tbody td:nth-child(6) { order: 6; }
-  .wsq tbody td:nth-child(7) { order: 7; }
-  .wsq tbody td:nth-child(8) { order: 8; }
-  /* The label for each line, taken from the column it came from. */
-  .wsq tbody td::before {
-    flex: 0 0 auto;
-    font-size: 10.5px;
-    font-weight: 700;
-    letter-spacing: .5px;
-    text-transform: uppercase;
-    color: var(--text3);
-  }
-  .wsq tbody td:nth-child(2)::before { content: "Type"; }
-  .wsq tbody td:nth-child(4)::before { content: "Submitted"; }
-  .wsq tbody td:nth-child(5)::before { content: "Reviewer"; }
-  .wsq tbody td:nth-child(6)::before { content: "Status"; }
-  .wsq tbody td:nth-child(7)::before { content: "AI Score"; }
-
-  /* 1 — who submitted it: the card's heading. */
-  .wsq tbody td:nth-child(1) {
-    justify-content: flex-start;
-    padding: 0 0 9px !important;
-    border-bottom: 1px solid var(--border2) !important;
-    margin-bottom: 4px;
-  }
-  .wsq tbody td:nth-child(1) > div > div:first-child {
-    width: 34px !important; height: 34px !important; min-width: 34px; font-size: 12px !important;
-  }
-  .wsq tbody td:nth-child(1) > div > span { font-size: 14px !important; }
-
-  /* 3 — the title, its summary and the attachment: full width, no label. */
-  .wsq tbody td:nth-child(3) {
-    display: block;
-    padding: 8px 0 4px !important;
-  }
-  .wsq tbody td:nth-child(3) > div:first-child { font-size: 14px !important; }
-
-  /* 5 — the reviewer keeps its avatar, under its own label. */
-  .wsq tbody td:nth-child(5) > div { justify-content: flex-start; }
-
-  /* 7 — the ring is decorative at this size; the number carries it. */
-  .wsq tbody td:nth-child(7) > div { transform: scale(.82); transform-origin: left center; }
-
-  /* 8 — the actions get the full width of the card. */
-  .wsq tbody td:nth-child(8) {
-    display: block;
-    padding: 10px 0 0 !important;
-    border-top: 1px solid var(--border2) !important;
-    margin-top: 5px;
-  }
-  .wsq tbody td:nth-child(8) > div {
+  .wsq .wsq-kpis > div {
+    padding: 11px 14px !important;
+    border-radius: 12px !important;
     display: flex !important;
-    flex-wrap: nowrap !important;
-    gap: 7px !important;
-    width: 100%;
+    align-items: center !important;
+    gap: 12px;
   }
-  .wsq tbody td:nth-child(8) > div > button {
-    flex: 1 1 0;
-    padding: 9px 6px !important;      /* a real tap target, not a 4px pill */
-    font-size: 12px !important;
-  }
-  /* The "—" shown when a row has no actions left needs no divider. */
-  .wsq tbody td:nth-child(8):has(> span) { border-top: 0 !important; padding-top: 0 !important; }
+  .wsq .wsq-kpis > div > div,
+  .wsq .wsq-kpis > div > div > div:first-child { display: contents !important; }
 
-  /* The empty state is a message, not a record. */
-  .wsq tbody tr:has(td[colspan]) { background: transparent; border: 0; box-shadow: none; padding: 0; }
-  .wsq tbody td[colspan] { display: block; text-align: center; padding: 32px 8px !important; }
-  .wsq tbody td[colspan]::before { content: none; }
+  /* label — takes the slack, and stays on one line */
+  .wsq .wsq-kpis > div > div > div:first-child > div:nth-child(1) {
+    order: 1; flex: 1 1 auto; min-width: 0;
+    font-size: 10.5px !important; letter-spacing: .5px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  /* the number — the point of the card, so it keeps its weight */
+  .wsq .wsq-kpis > div > div > div:first-child > div:nth-child(2) {
+    order: 2; flex: 0 0 auto;
+    font-size: 24px !important; line-height: 1 !important; margin: 0 !important;
+  }
+  /* the caption repeats the label in more words; it is the first thing to go */
+  .wsq .wsq-kpis > div > div > div:first-child > div:nth-child(3) { display: none !important; }
+  /* the icon badge closes the line */
+  .wsq .wsq-kpis > div > div > div:last-child {
+    order: 3; flex: 0 0 auto; transform: scale(.8); transform-origin: center right;
+  }
+
+  /* The queue stays a table on a phone, scrolling sideways inside its own
+     card. It was tried as one card per submission, which removed the swipe
+     but made each row about 340px tall — a wall of boxes you scrolled past
+     rather than a list you could scan. A compact table you nudge sideways
+     shows far more of the queue at once, so the swipe is the better trade.
+
+     Only the sizing changes here: smaller type and tighter cells, and a
+     narrower minimum than the desktop rule asks for, so there is less to
+     swipe through. */
+  .wsq .wsq-tablewrap {
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+  }
+  .wsq table { min-width: 660px !important; }
+  .wsq thead th, .wsq tbody td { padding: 9px 8px !important; }
+  .wsq thead th { font-size: 10px !important; }
+  .wsq tbody td { font-size: 12px !important; }
+  /* The people columns keep their avatars but at a size that suits the row. */
+  .wsq tbody td:nth-child(1) > div > div:first-child,
+  .wsq tbody td:nth-child(5) > div > div:first-child {
+    width: 24px !important; height: 24px !important; min-width: 24px; font-size: 9.5px !important;
+  }
+  .wsq tbody td:nth-child(1) > div > span,
+  .wsq tbody td:nth-child(5) > div > span { font-size: 11.5px !important; }
+  /* The actions stay on one line so the column cannot collapse to one button. */
+  .wsq tbody td:nth-child(8) > div { flex-wrap: nowrap !important; gap: 5px !important; }
+  .wsq tbody td:nth-child(8) > div > button { padding: 5px 9px !important; font-size: 10.5px !important; }
 
   /* Paging stacks instead of squeezing onto one line. */
   .wsq .wsq-pager { justify-content: center; gap: 10px; }
   .wsq .wsq-pager > div:first-child { width: 100%; text-align: center; }
 }
 
-/* The type column is hidden for employees; its label must go too, and
-   the columns after it keep the labels they already had (the rules
-   above are keyed to the real column position, which does not move). */
+/* Type is hidden for employees everywhere; repeated at this width with
+   !important so it also beats the sizing rules above. One less column is
+   one less thing to swipe past on a phone. */
 @media (max-width: 640px) {
-  .wsq.wsq-hide-type tbody td:nth-child(2) { display: none !important; }
+  .wsq.wsq-hide-type tbody td:nth-child(2),
+  .wsq.wsq-hide-type thead th:nth-child(2) { display: none !important; }
+}
+
+/* --- the two floating buttons on a phone ------------------------
+   Both sit outside the page content and both got in the way of it. */
+
+@media (max-width: 560px) {
+  /* Live Interviews (the pill in the topbar). Its label animates open to
+     150px on hover — and on a touch screen a tap counts as a hover. On a
+     320px bar there is nowhere for those 150px to go, so the row grew and
+     pushed the account off the end. The label stays shut on a phone; the
+     button keeps its aria-label and title, so nothing is lost to assistive
+     tech or to anyone reading the tooltip. */
+  #hrms-live-btn.hrms-live-mini:hover .hrms-live-lbl,
+  #hrms-live-btn.hrms-live-mini:focus-visible .hrms-live-lbl {
+    max-width: 0 !important;
+    opacity: 0 !important;
+    margin-left: 0 !important;
+  }
+  #hrms-live-btn { padding: 6px 9px !important; gap: 5px !important; }
+
+  /* The AI Assistant button floats over the page bottom-right, so at this
+     width it covered the search box and the first row of the queue. It is
+     smaller, tucked further into the corner, and the page now ends with
+     enough room to scroll the last row out from under it. */
+  .content > div > button[title*="AI Ass" i],
+  button[title*="Open AI Ass" i] {
+    width: 44px !important;
+    height: 44px !important;
+    bottom: 14px !important;
+    right: 14px !important;
+    font-size: 17px !important;
+    box-shadow: 0 6px 18px rgba(79,142,247,.38) !important;
+  }
+  .wsq { padding-bottom: 76px !important; }
+}
+
+@media (max-width: 400px) {
+  #hrms-live-btn { padding: 5px 7px !important; }
+  #hrms-live-btn #hrms-live-count { font-size: 9px !important; padding: 1px 4px !important; }
+  button[title*="Open AI Ass" i] { width: 40px !important; height: 40px !important; font-size: 15px !important; }
 }
