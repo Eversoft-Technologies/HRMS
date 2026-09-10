@@ -520,6 +520,88 @@ class WorkSubmission(models.Model):
         ordering = ['-id']
 
 
+BENCH_SUBMISSION_STATUSES = [
+    'Submitted', 'Interview Scheduled', 'Offered', 'Placed', 'Rejected', 'On Hold',
+]
+
+
+class BenchSubmission(models.Model):
+    """A bench-sales submission: a consultant's profile submitted to a client
+    through a vendor, tracked through to interview/placement.
+    """
+    name = models.CharField(max_length=255)
+    client_name = models.CharField(max_length=255, default='', blank=True)
+    vendor_prime_vendor = models.CharField(max_length=255, default='', blank=True)
+    vendor_person_name = models.CharField(max_length=255, default='', blank=True)
+    vendor_email = models.CharField(max_length=255, default='', blank=True)
+    vendor_contact = models.CharField(max_length=60, default='', blank=True)
+    implementation_partner = models.CharField(max_length=255, default='', blank=True)
+    rate = models.CharField(max_length=60, default='', blank=True)
+    role_responsibilities = models.TextField(default='', blank=True)
+    status = models.CharField(max_length=40, default='Submitted')
+    follow_up_vendor = models.DateField(null=True, blank=True)
+    interview_schedule = models.DateTimeField(null=True, blank=True)
+    created_by = models.CharField(max_length=255, default='', blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'bench_submissions'
+        ordering = ['-id']
+
+
+class BenchSalesProfile(models.Model):
+    """A bench-sales consultant profile — the marketable roster of consultants
+    available to submit to clients/vendors (distinct from BenchSubmission,
+    which tracks one specific submission of a consultant to a client).
+
+    Resume / DL / State ID / I-94 are stored base64-in-row, house style — see
+    UserDocument — since no file storage backend is configured.
+    """
+    name = models.CharField(max_length=255)
+    tech_stack = models.CharField(max_length=500, default='', blank=True)
+    experience = models.CharField(max_length=60, default='', blank=True)
+    email = models.CharField(max_length=255, default='', blank=True)
+    contact_no = models.CharField(max_length=60, default='', blank=True)
+    work_authorization = models.CharField(max_length=40, default='', blank=True)
+
+    resume_file_name = models.CharField(max_length=255, default='', blank=True)
+    resume_file_mime = models.CharField(max_length=100, default='', blank=True)
+    resume_file_data = models.TextField(default='', blank=True)  # base64
+
+    dl_state_id_file_name = models.CharField(max_length=255, default='', blank=True)
+    dl_state_id_file_mime = models.CharField(max_length=100, default='', blank=True)
+    dl_state_id_file_data = models.TextField(default='', blank=True)  # base64
+
+    i94_file_name = models.CharField(max_length=255, default='', blank=True)
+    i94_file_mime = models.CharField(max_length=100, default='', blank=True)
+    i94_file_data = models.TextField(default='', blank=True)  # base64
+
+    created_by = models.CharField(max_length=255, default='', blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'bench_sales_profiles'
+        ordering = ['-id']
+
+
+class BenchSalesCertificate(models.Model):
+    """One uploaded certificate PDF for a Bench Sales profile — up to
+    MAX_CERTIFICATES_PER_PROFILE (see views.py) per profile. Same
+    base64-in-row storage as BenchSalesProfile's resume/DL/I-94 fields.
+    """
+    profile = models.ForeignKey(BenchSalesProfile, related_name='certificate_files', on_delete=models.CASCADE)
+    file_name = models.CharField(max_length=255, default='', blank=True)
+    file_mime = models.CharField(max_length=100, default='', blank=True)
+    file_data = models.TextField(default='', blank=True)  # base64
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'bench_sales_certificates'
+        ordering = ['id']
+
+
 class AttendanceEvent(models.Model):
     """A single timeline event on an employee's day — check-in / check-out,
     break start / end, or a work-mode switch (office <-> remote). These rows
