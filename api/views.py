@@ -61,6 +61,9 @@ from .models import (
     UserEmailConfig,
     UserProfile,
     WorkSubmission,
+    BenchSubmission,
+    BenchSalesProfile,
+    BenchSalesCertificate,
     Shift,
     ShiftAssignment,
     AttendanceCorrection,
@@ -96,6 +99,8 @@ from .serializers import (
     UserEmailConfigSerializer,
     UserProfileSerializer,
     WorkSubmissionSerializer,
+    BenchSubmissionSerializer,
+    BenchSalesProfileSerializer,
     ShiftSerializer,
     ShiftAssignmentSerializer,
     AttendanceCorrectionSerializer,
@@ -4581,6 +4586,327 @@ def submission_detail(request, pk):
         inst.reviewer = user.full_name
         inst.save(update_fields=['reviewer', 'updated_at'])
     return Response(WorkSubmissionSerializer(inst).data)
+
+
+# --- Bench Submissions (Recruit > Bench Sales > Bench Submissions) ---------
+@api_view(['GET', 'POST'])
+@require_perm({'GET': 'recruitment.view', 'POST': 'recruitment.create'})
+def bench_submissions(request):
+    if request.method == 'GET':
+        qs = BenchSubmission.objects.all()
+        status_filter = request.query_params.get('status')
+        search = request.query_params.get('search')
+        if status_filter:
+            qs = qs.filter(status=status_filter)
+        if search:
+            qs = qs.filter(
+                Q(name__icontains=search) | Q(client_name__icontains=search) |
+                Q(vendor_prime_vendor__icontains=search) | Q(vendor_person_name__icontains=search)
+            )
+        return Response(BenchSubmissionSerializer(qs, many=True).data)
+
+    body = dict(request.data or {})
+    if not str(body.get('name') or '').strip():
+        return err('name is required')
+    _, caller_email, _ = check_perm(request, 'recruitment.create')
+    body['createdBy'] = caller_email or ''
+    serializer = BenchSubmissionSerializer(data=body)
+    if not serializer.is_valid():
+        return serializer_err(serializer)
+    serializer.save()
+    return Response(serializer.data, status=201)
+
+
+@api_view(['GET', 'PATCH', 'PUT', 'DELETE'])
+@require_perm({'GET': 'recruitment.view', 'PATCH': 'recruitment.edit',
+               'PUT': 'recruitment.edit', 'DELETE': 'recruitment.delete'})
+def bench_submission_detail(request, pk):
+    obj = BenchSubmission.objects.filter(pk=pk).first()
+    if not obj:
+        return err('Submission not found', 404)
+    if request.method == 'GET':
+        return Response(BenchSubmissionSerializer(obj).data)
+    if request.method == 'DELETE':
+        obj.delete()
+        return Response({'ok': True})
+    serializer = BenchSubmissionSerializer(obj, data=request.data, partial=True)
+    if not serializer.is_valid():
+        return serializer_err(serializer)
+    inst = serializer.save()
+    return Response(BenchSubmissionSerializer(inst).data)
+
+
+# --- Bench Sales (Recruit > Bench Sales) — consultant profile roster -------
+MAX_CERTIFICATES_PER_PROFILE = 10
+_BENCH_SALES_SINGLE_FILE_FIELDS = {
+    'resume': ('resumeFileName', 'resumeFileMime'),
+    'dlStateId': ('dlStateIdFileName', 'dlStateIdFileMime'),
+    'i94': ('i94FileName', 'i94FileMime'),
+}
+# Per-file upload cap (resume / DL / I-94 / each certificate), in MB. Mirrors
+# MAX_UPLOAD_MB in dist/dist/assets/hrms-bench-sales.js — keep the two in sync.
+MAX_BENCH_SALES_FILE_MB = 34
+MAX_BENCH_SALES_FILE_BYTES = MAX_BENCH_SALES_FILE_MB * 1024 * 1024
+
+
+def _base64_decoded_size(data):
+    """Byte size of a base64 payload without decoding it (files are stored as
+    base64 text, so decoding a 34 MB upload just to measure it would double the
+    request's memory)."""
+    data = str(data or '').strip()
+    if not data:
+        return 0
+    padding = len(data) - len(data.rstrip('='))
+    return (len(data) * 3) // 4 - padding
+
+
+def _bench_sales_file_too_large(file_name, data):
+    if _base64_decoded_size(data) > MAX_BENCH_SALES_FILE_BYTES:
+        return (f'{file_name} is larger than {MAX_BENCH_SALES_FILE_MB} MB — '
+                f'each file must be {MAX_BENCH_SALES_FILE_MB} MB or smaller.')
+    return None
+
+
+# Request key -> model column for the three single-document base64 payloads.
+_BENCH_SALES_FILE_DATA_COLS = {
+    'resumeFileData': 'resume_file_data',
+    'dlStateIdFileData': 'dl_state_id_file_data',
+    'i94FileData': 'i94_file_data',
+}
+
+
+def _bench_sales_profile_qs():
+    """Profiles WITHOUT their base64 document columns loaded.
+
+    A 34 MB PDF is ~45 MB of base64 per column, so selecting the blobs just to
+    list the roster (or to re-save an unchanged row on edit) would move hundreds
+    of MB per request and blow past MySQL's max_allowed_packet. The columns are
+    deferred; a LENGTH() annotation per column lets the serializer report
+    has-file flags without touching the data."""
+    from django.db.models.functions import Length
+    cols = list(_BENCH_SALES_FILE_DATA_COLS.values())
+    return BenchSalesProfile.objects.defer(*cols).annotate(
+        **{f'{col}_len': Length(col) for col in cols}
+    )
+
+
+def _pop_bench_sales_file_data(body):
+    """Removes the base64 payloads from the request body (so the serializer's
+    INSERT/UPDATE never carries them) and returns {column: data} for the ones
+    actually supplied."""
+    files = {}
+    for key, col in _BENCH_SALES_FILE_DATA_COLS.items():
+        if key in body:
+            data = body.pop(key)
+            if data:
+                files[col] = data
+    return files
+
+
+def _store_bench_sales_file_data(pk, files):
+    """One UPDATE per document column: each statement then carries at most one
+    ~45 MB payload, which stays under the 64 MB max_allowed_packet default. A
+    single multi-column write of two 34 MB files (~91 MB) drops the connection
+    with 'MySQL server has gone away'."""
+    for col, data in files.items():
+        BenchSalesProfile.objects.filter(pk=pk).update(**{col: data})
+
+
+def _is_pdf(mime, file_name):
+    mime = (mime or '').lower()
+    file_name = (file_name or '').lower()
+    return mime == 'application/pdf' or file_name.endswith('.pdf')
+
+
+def _validate_bench_sales_files(body):
+    """Rejects non-PDF uploads and files over MAX_BENCH_SALES_FILE_MB for
+    resume/DL/I-94/certificates. Returns an error string, or None if every
+    provided file is an acceptable PDF."""
+    for name_key, mime_key in _BENCH_SALES_SINGLE_FILE_FIELDS.values():
+        file_name = body.get(name_key)
+        if file_name and not _is_pdf(body.get(mime_key), file_name):
+            return f'{file_name} is not a PDF — only PDF uploads are allowed.'
+        data_key = name_key[:-len('FileName')] + 'FileData'
+        size_error = _bench_sales_file_too_large(file_name or data_key, body.get(data_key))
+        if size_error:
+            return size_error
+    certs = body.get('certificates') or []
+    if not isinstance(certs, list):
+        return 'certificates must be a list of files'
+    for c in certs:
+        file_name = (c or {}).get('fileName')
+        if file_name and not _is_pdf((c or {}).get('fileMime'), file_name):
+            return f'{file_name} is not a PDF — only PDF uploads are allowed.'
+        size_error = _bench_sales_file_too_large(file_name or 'certificate', (c or {}).get('fileData'))
+        if size_error:
+            return size_error
+    return None
+
+
+@api_view(['GET', 'POST'])
+@require_perm({'GET': 'recruitment.view', 'POST': 'recruitment.create'})
+def bench_sales_profiles(request):
+    if request.method == 'GET':
+        qs = _bench_sales_profile_qs()
+        search = request.query_params.get('search')
+        if search:
+            qs = qs.filter(
+                Q(name__icontains=search) | Q(tech_stack__icontains=search) |
+                Q(email__icontains=search) | Q(contact_no__icontains=search)
+            )
+        return Response(BenchSalesProfileSerializer(qs, many=True).data)
+
+    body = dict(request.data or {})
+    if not str(body.get('name') or '').strip():
+        return err('name is required')
+    certs = body.pop('certificates', None) or []
+    if len(certs) > MAX_CERTIFICATES_PER_PROFILE:
+        return err(f'You can upload up to {MAX_CERTIFICATES_PER_PROFILE} certificates.')
+    file_error = _validate_bench_sales_files(dict(body, certificates=certs))
+    if file_error:
+        return err(file_error)
+    _, caller_email, _ = check_perm(request, 'recruitment.create')
+    body['createdBy'] = caller_email or ''
+    files = _pop_bench_sales_file_data(body)
+    serializer = BenchSalesProfileSerializer(data=body)
+    if not serializer.is_valid():
+        return serializer_err(serializer)
+    inst = serializer.save()
+    _store_bench_sales_file_data(inst.pk, files)
+    if certs:
+        BenchSalesCertificate.objects.bulk_create([
+            BenchSalesCertificate(
+                profile=inst, file_name=c.get('fileName') or '',
+                file_mime=c.get('fileMime') or '', file_data=c.get('fileData') or '',
+            ) for c in certs
+        ], batch_size=1)
+    inst = _bench_sales_profile_qs().get(pk=inst.pk)
+    return Response(BenchSalesProfileSerializer(inst).data, status=201)
+
+
+@api_view(['GET', 'PATCH', 'PUT', 'DELETE'])
+@require_perm({'GET': 'recruitment.view', 'PATCH': 'recruitment.edit',
+               'PUT': 'recruitment.edit', 'DELETE': 'recruitment.delete'})
+def bench_sales_profile_detail(request, pk):
+    obj = _bench_sales_profile_qs().filter(pk=pk).first()
+    if not obj:
+        return err('Profile not found', 404)
+    if request.method == 'GET':
+        return Response(BenchSalesProfileSerializer(obj).data)
+    if request.method == 'DELETE':
+        obj.delete()
+        return Response({'ok': True})
+
+    body = dict(request.data or {})
+    new_certs = body.pop('certificates', None) or []
+    existing_count = obj.certificate_files.count()
+    if existing_count + len(new_certs) > MAX_CERTIFICATES_PER_PROFILE:
+        return err(f'You can upload up to {MAX_CERTIFICATES_PER_PROFILE} certificates per profile.')
+    file_error = _validate_bench_sales_files(dict(body, certificates=new_certs))
+    if file_error:
+        return err(file_error)
+    files = _pop_bench_sales_file_data(body)
+    serializer = BenchSalesProfileSerializer(obj, data=body, partial=True)
+    if not serializer.is_valid():
+        return serializer_err(serializer)
+    # obj was loaded with the document columns deferred, so this save() only
+    # UPDATEs the loaded (small) columns; the documents go one-by-one below.
+    inst = serializer.save()
+    _store_bench_sales_file_data(inst.pk, files)
+    if new_certs:
+        BenchSalesCertificate.objects.bulk_create([
+            BenchSalesCertificate(
+                profile=inst, file_name=c.get('fileName') or '',
+                file_mime=c.get('fileMime') or '', file_data=c.get('fileData') or '',
+            ) for c in new_certs
+        ], batch_size=1)
+    inst = _bench_sales_profile_qs().get(pk=inst.pk)
+    return Response(BenchSalesProfileSerializer(inst).data)
+
+
+@api_view(['DELETE'])
+@require_perm('recruitment.edit')
+def bench_sales_profile_certificate_detail(request, pk, cert_id):
+    cert = BenchSalesCertificate.objects.filter(pk=cert_id, profile_id=pk).first()
+    if not cert:
+        return err('Certificate not found', 404)
+    cert.delete()
+    return Response({'ok': True})
+
+
+# Maps the frontend's file-field slug to the model's (name, mime, data) columns.
+_BENCH_SALES_FILE_FIELDS = {
+    'resume': ('resume_file_name', 'resume_file_mime', 'resume_file_data'),
+    'dl-state-id': ('dl_state_id_file_name', 'dl_state_id_file_mime', 'dl_state_id_file_data'),
+    'i94': ('i94_file_name', 'i94_file_mime', 'i94_file_data'),
+}
+
+
+@api_view(['GET'])
+@require_perm('recruitment.view')
+def bench_sales_profile_file(request, pk, field):
+    """Serve a stored Bench Sales document (resume / DL / State ID / I-94) as
+    a download/inline view — same base64-in-row approach as resume_score_file.
+    """
+    import base64
+    from django.http import HttpResponse
+
+    cols = _BENCH_SALES_FILE_FIELDS.get(field)
+    if not cols:
+        return HttpResponse('Unknown file field', status=404)
+    # only() the requested document: never drag the other two blobs along.
+    obj = BenchSalesProfile.objects.only(*cols).filter(pk=pk).first()
+    if not obj:
+        return HttpResponse('Profile not found', status=404)
+
+    name_col, mime_col, data_col = cols
+    raw_b64 = getattr(obj, data_col)
+    if not raw_b64:
+        return HttpResponse('No file stored for this field', status=404)
+    try:
+        raw = base64.b64decode(raw_b64)
+    except Exception:
+        return HttpResponse('Stored file data is corrupted', status=500)
+
+    mime = getattr(obj, mime_col) or 'application/octet-stream'
+    file_name = getattr(obj, name_col) or field
+
+    disposition = ('inline' if 'pdf' in mime.lower() else 'attachment') + f'; filename="{file_name}"'
+    response = HttpResponse(raw, content_type=mime)
+    response['Content-Disposition'] = disposition
+    response['Content-Length'] = len(raw)
+    response['Access-Control-Allow-Origin'] = '*'
+    response['Access-Control-Expose-Headers'] = 'Content-Disposition'
+    return response
+
+
+@api_view(['GET'])
+@require_perm('recruitment.view')
+def bench_sales_profile_certificate_file(request, pk, cert_id):
+    """Serve one uploaded certificate PDF — same approach as bench_sales_profile_file."""
+    import base64
+    from django.http import HttpResponse
+
+    cert = BenchSalesCertificate.objects.filter(pk=cert_id, profile_id=pk).first()
+    if not cert:
+        return HttpResponse('Certificate not found', status=404)
+    if not cert.file_data:
+        return HttpResponse('No file stored for this certificate', status=404)
+    try:
+        raw = base64.b64decode(cert.file_data)
+    except Exception:
+        return HttpResponse('Stored file data is corrupted', status=500)
+
+    mime = cert.file_mime or 'application/octet-stream'
+    file_name = cert.file_name or 'certificate.pdf'
+
+    disposition = ('inline' if 'pdf' in mime.lower() else 'attachment') + f'; filename="{file_name}"'
+    response = HttpResponse(raw, content_type=mime)
+    response['Content-Disposition'] = disposition
+    response['Content-Length'] = len(raw)
+    response['Access-Control-Allow-Origin'] = '*'
+    response['Access-Control-Expose-Headers'] = 'Content-Disposition'
+    return response
 
 
 # ---------------------------------------------------------------------------
