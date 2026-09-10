@@ -24,8 +24,9 @@ from django.views.decorators.csrf import csrf_exempt
 import logging
 
 from . import mailer
-from .models import AppUser, LoginOtp, PasswordReset
-from .views import app_user_dict, err, make_initials, norm_email, parse_body
+from .models import AppUser, LoginOtp, PasswordReset, UserProfile
+from .views import (app_user_dict, err, make_initials, norm_email, parse_body,
+                    generate_next_employee_id)
 
 OTP_TTL_MINUTES = 10
 OTP_MAX_ATTEMPTS = 5
@@ -81,15 +82,52 @@ def _issue_otp(user, sender_email=None):
         sender_email=sender_email,
     )
     if not result.get('ok') and _dev_otp_enabled():
-        # Email could not be delivered (e.g. no network / Resend unreachable).
-        # Print the code to the server console so login still works offline.
-        logging.warning(
-            '[DEV OTP] Email delivery failed (%s). Verification code for %s is %s '
-            '(valid %d min) — enter it on the code screen.',
-            result.get('error', ''), user.email, code, OTP_TTL_MINUTES,
+        print(
+            f'\n[HRMS DEV OTP] Verification code for {user.email} ({user.full_name}): {code}\n'
+            f'[HRMS DEV OTP] (Printed to server console because email sending failed)\n'
         )
         result['devEcho'] = True
     return result
+
+
+@csrf_exempt
+def signup(request):
+    if request.method != 'POST':
+        return err('Method not allowed', 405)
+    body = parse_body(request)
+    name = str(body.get('name') or '').strip()
+    email = norm_email(body.get('email'))
+    password = body.get('password') or ''
+    role = str(body.get('role') or 'employee').strip()
+    if not name or not email or not password:
+        return err('name, email and password are required')
+    if len(password) < 6:
+        return err('Password must be at least 6 characters.')
+    if AppUser.objects.filter(email=email).exists():
+        return err('An account with this email already exists', 409)
+
+    emp_id = str(body.get('employeeId') or '').strip()
+    if not emp_id:
+        emp_id = generate_next_employee_id()
+
+    user = AppUser.objects.create(
+        full_name=name,
+        email=email,
+        password=password,
+        initials=make_initials(name),
+        role=role,
+        status='active',
+        employee_id=emp_id,
+    )
+    UserProfile.objects.update_or_create(
+        email=email,
+        defaults={
+            'employee_id': emp_id,
+            'first_name': name.split()[0] if name else '',
+            'last_name': ' '.join(name.split()[1:]) if len(name.split()) > 1 else '',
+        }
+    )
+    return JsonResponse({'ok': True, 'user': app_user_dict(user)}, status=201)
 
 
 @csrf_exempt
@@ -117,7 +155,7 @@ def login(request):
             if user.role_ref_id and user.role_ref:
                 actual = user.role_ref.name or ''
             else:
-                actual = {'admin': 'Super Admin', 'hr': 'HR Manager', 'recruitment': 'HR Executive'}.get(
+                actual = {'admin': 'Super Admin', 'hr': 'HR Manager', 'recruitment': 'HR Executive', 'employee': 'Employee'}.get(
                     (user.role or '').lower(), (user.role or ''))
             if role != actual.strip().lower():
                 return err('The selected role does not match this account. Please choose your correct role.', 403)

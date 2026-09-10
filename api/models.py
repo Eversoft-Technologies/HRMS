@@ -168,6 +168,10 @@ class ResumeScore(models.Model):
     # used to dedupe: re-uploading/re-scoring the same resume updates its one row
     # instead of creating another. Empty when there is nothing to fingerprint.
     content_hash = models.CharField(max_length=64, default='', blank=True, db_index=True)
+    ai_summary = models.TextField(null=True, blank=True)
+    ai_strengths = models.JSONField(null=True, blank=True)
+    ai_gaps = models.JSONField(null=True, blank=True)
+    ai_evaluated = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -191,6 +195,9 @@ class InterviewRecording(models.Model):
     video_mime = models.CharField(max_length=100, null=True, blank=True)
     transcript = models.TextField(null=True, blank=True)
     responses = models.JSONField(null=True, blank=True)
+    ai_evaluation = models.JSONField(null=True, blank=True)
+    executive_summary = models.TextField(null=True, blank=True)
+    round2_questions = models.JSONField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -291,6 +298,12 @@ class UserProfile(models.Model):
     blood_group = models.CharField(max_length=10, default='', blank=True)
     department = models.CharField(max_length=120, default='', blank=True)
     designation = models.CharField(max_length=120, default='', blank=True)
+    manager = models.CharField(max_length=255, default='', blank=True)
+    level = models.CharField(max_length=20, default='L4', blank=True)
+    employment_type = models.CharField(max_length=40, default='Full-time', blank=True)
+    location = models.CharField(max_length=255, default='', blank=True)
+    annual_ctc = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
+    start_date = models.DateField(null=True, blank=True)
     address = models.TextField(null=True, blank=True)
     profile_pic = models.TextField(null=True, blank=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -490,6 +503,23 @@ class EmployeeTask(models.Model):
     priority = models.CharField(max_length=20, default='medium')    # low | medium | high
     stage = models.CharField(max_length=20, default='todo')         # todo | inprogress | done
     description = models.TextField(null=True, blank=True)
+    task_code = models.CharField(max_length=40, default='', blank=True)   # e.g. TASK-1788507958987
+    team_lead = models.CharField(max_length=255, default='', blank=True)
+    department = models.CharField(max_length=120, default='', blank=True)
+    estimated_hours = models.FloatField(null=True, blank=True)
+    progress = models.IntegerField(default=0)   # 0-100
+    # Attachments are stored as full `data:<mime>;base64,<data>` URLs (house style — no file
+    # storage backend configured; see UserDocument), capped client- and server-side at 50 KB.
+    attachment_file_name = models.CharField(max_length=255, default='', blank=True)
+    attachment_file_mime = models.CharField(max_length=100, default='', blank=True)
+    attachment_file_data = models.TextField(default='', blank=True)
+    image_file_name = models.CharField(max_length=255, default='', blank=True)
+    image_file_mime = models.CharField(max_length=100, default='', blank=True)
+    image_file_data = models.TextField(default='', blank=True)
+    # Set when the assignee rejects the task from the To Do column; a non-empty
+    # value is the "rejected" signal (no separate stage — the task stays put so
+    # the reviewer can see and act on the reason).
+    reject_reason = models.TextField(default='', blank=True)
     created_by = models.CharField(max_length=255, default='', blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -509,8 +539,26 @@ class WorkSubmission(models.Model):
     summary = models.TextField(null=True, blank=True)
     link = models.CharField(max_length=500, default='', blank=True)
     file_name = models.CharField(max_length=255, default='', blank=True)
+    # The attachment itself, stored base64-in-row (house style — there is no
+    # file storage backend configured; see CandidateDocument / UserDocument).
+    # Without this the file never left the submitter's browser, so a reviewer
+    # could see the name but never open what they were being asked to review.
+    file_mime = models.CharField(max_length=100, default='', blank=True)
+    file_size = models.IntegerField(default=0)           # decoded bytes
+    file_data = models.TextField(null=True, blank=True)  # base64 data URL
     status = models.CharField(max_length=20, default='Pending')   # Pending | In Review | Approved | Rejected
     reviewer = models.CharField(max_length=255, default='', blank=True)
+    # Why it was sent back, and anything the reviewer marked up. Kept here for
+    # the same reason as the attachment above: written to the browser alone,
+    # the reason existed only for the reviewer who typed it, and the employee
+    # being asked to make the changes could never read them.
+    reviewer_note = models.TextField(null=True, blank=True)
+    reviewer_note_by = models.CharField(max_length=255, default='', blank=True)
+    reviewer_note_at = models.DateTimeField(null=True, blank=True)
+    review_file_name = models.CharField(max_length=255, default='', blank=True)
+    review_file_mime = models.CharField(max_length=100, default='', blank=True)
+    review_file_size = models.IntegerField(default=0)
+    review_file_data = models.TextField(null=True, blank=True)
     ai_score = models.IntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

@@ -7,7 +7,13 @@ the built React app (Vite `dist/`) for every other route via WhiteNoise.
 from pathlib import Path
 import os
 import sys
+import warnings
 from datetime import timedelta
+
+try:                                  # Python 3.9+
+    from zoneinfo import ZoneInfo
+except ImportError:                   # pragma: no cover - fallback for 3.8
+    ZoneInfo = None
 
 from dotenv import load_dotenv
 
@@ -35,6 +41,36 @@ def env_bool(name, default=False):
 def env_list(name, default=''):
     raw = os.environ.get(name, default)
     return [item.strip() for item in raw.split(',') if item.strip()]
+
+
+def env_timezone(default):
+    """HRMS_TIME_ZONE from the environment, checked before it is trusted.
+
+    An unrecognised zone name is worse than no setting at all: business_tz()
+    returns None for it, local_now() then falls back to the *host* clock, and
+    the 5h30m drift timeutil exists to prevent is silently back. A typo in
+    .env would not present as a typo - it would present, days later, as
+    attendance stamped against the wrong day.
+
+    Warns and keeps the default rather than raising: one bad character should
+    not stop the server booting, but it must not pass unnoticed either.
+    """
+    name = (os.environ.get('HRMS_TIME_ZONE') or '').strip()
+    if not name:
+        return default
+    if ZoneInfo is None:              # cannot verify here; trust it
+        return name
+    try:
+        ZoneInfo(name)
+    except Exception:
+        warnings.warn(
+            f'HRMS_TIME_ZONE={name!r} is not a known IANA zone name '
+            f'(e.g. "Asia/Kolkata", "UTC") - falling back to {default!r}. '
+            'Timestamps would otherwise be stamped from the host clock.',
+            stacklevel=2,
+        )
+        return default
+    return name
 
 
 # ---------------------------------------------------------------------------
@@ -201,7 +237,10 @@ LANGUAGE_CODE = 'en-us'
 # Attendance timestamps are stored as naive business-clock values because the
 # legacy database uses dateStrings. Keep the production clock configurable so
 # local development and the server use the same wall-clock timezone.
-TIME_ZONE = os.environ.get('HRMS_TIME_ZONE', 'Asia/Kolkata')
+#
+# Validated on the way in - see env_timezone: an unknown name would otherwise
+# hand every stamp back to the host clock without saying so.
+TIME_ZONE = env_timezone('Asia/Kolkata')
 USE_I18N = True
 USE_TZ = False  # the Node app stored naive datetimes (dateStrings)
 

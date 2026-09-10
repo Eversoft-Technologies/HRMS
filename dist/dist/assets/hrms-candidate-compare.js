@@ -207,8 +207,26 @@
       '.cc-rc .cc-rv{font-size:26px;font-weight:800;}' +
       '.cc-rc .cc-rl{font-size:11px;color:var(--text3);margin-top:2px;}' +
       '.cc-chips{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 14px;}' +
-      '.cc-chip{font-size:11px;padding:3px 9px;border-radius:99px;background:var(--bg3);border:1px solid var(--border2);color:var(--text2);}' +
-      '.cc-chip.miss{border-color:rgba(239,68,68,.4);color:#ef8a8a;}' +
+      '.cc-chip{font-size:11.5px;padding:4px 11px;border-radius:99px;font-weight:500;display:inline-flex;align-items:center;gap:4px;line-height:1.45;}' +
+      '.cc-chip b{font-weight:700;}' +
+      '.cc-chip.miss{background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.38);color:#b91c1c;}' +
+      '[data-theme="dark"] .cc-chip.miss, .dark .cc-chip.miss{background:rgba(239,68,68,0.18);border-color:rgba(239,68,68,0.45);color:#fca5a5;}' +
+      '.cc-chip.str{background:rgba(34,197,94,0.12);border:1px solid rgba(34,197,94,0.38);color:#15803d;}' +
+      '[data-theme="dark"] .cc-chip.str, .dark .cc-chip.str{background:rgba(34,197,94,0.18);border-color:rgba(34,197,94,0.45);color:#86efac;}' +
+      '.cc-brief-card{background:var(--bg3);border:1px solid var(--border2);border-left:4px solid #6366f1;border-radius:10px;padding:12px 14px;margin-bottom:14px;font-size:12px;line-height:1.65;color:var(--text);}' +
+      '.cc-brief-card b{font-weight:700;color:var(--text);}' +
+      '.cc-ai-pulse{display:inline-block;animation:ccPulse 1.4s infinite ease-in-out;color:var(--accent,#4f8ef7);}' +
+      '@keyframes ccPulse{0%,100%{opacity:.4;transform:scale(.98)}50%{opacity:1;transform:scale(1.02)}}' +
+      '.cc-toggle-wrap{display:inline-flex;align-items:center;background:var(--bg3);border:1px solid var(--border2);border-radius:9px;padding:3px;gap:3px;vertical-align:middle;}' +
+      '.cc-toggle-tab{border:none;background:transparent;color:var(--text2);font-size:12px;font-weight:600;padding:6px 14px;border-radius:7px;cursor:pointer;display:inline-flex;align-items:center;gap:5px;transition:all .2s ease;}' +
+      '.cc-toggle-tab:hover{color:var(--text);}' +
+      '.cc-toggle-tab.active.std{background:var(--accent,#4f8ef7);color:#fff;box-shadow:0 2px 8px rgba(79,142,247,0.35);}' +
+      '.cc-toggle-tab.active.ai{background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;box-shadow:0 2px 8px rgba(99,102,241,0.38);}' +
+      '#hrms-ai-card-overlay{max-height:510px;overflow-y:auto;overflow-x:hidden;padding-right:4px;box-sizing:border-box;}' +
+      '#hrms-ai-card-overlay::-webkit-scrollbar{width:5px;}' +
+      '#hrms-ai-card-overlay::-webkit-scrollbar-track{background:transparent;}' +
+      '#hrms-ai-card-overlay::-webkit-scrollbar-thumb{background:var(--border2);border-radius:99px;}' +
+      '#hrms-ai-card-overlay::-webkit-scrollbar-thumb:hover{background:var(--accent,#4f8ef7);}' +
       '#' + ID.menu + '{position:absolute;z-index:10000;background:var(--bg2,#161b26);border:1px solid var(--border2);border-radius:8px;box-shadow:0 10px 26px rgba(0,0,0,.4);overflow:hidden;}' +
       '#' + ID.menu + ' button{display:block;width:100%;text-align:left;padding:9px 14px;background:transparent;border:0;color:var(--text);font-size:12px;cursor:pointer;white-space:nowrap;}' +
       '#' + ID.menu + ' button:hover{background:var(--bg3);}';
@@ -257,7 +275,10 @@
     var body = rows.map(function (r) {
       return '<tr data-id="' + esc(r.id) + '">' +
         COLS.map(function (c) { return '<td>' + cell(r, c) + '</td>'; }).join('') +
-        '<td style="text-align:right"><button class="cc-view" data-view="' + esc(r.id) + '">View</button></td>' +
+        '<td style="text-align:right;white-space:nowrap">' +
+          '<button class="cc-btn primary" data-ai="' + esc(r.id) + '" style="padding:2px 8px;font-size:11px;margin-right:6px">✦ AI</button>' +
+          '<button class="cc-view" data-view="' + esc(r.id) + '">View</button>' +
+        '</td>' +
       '</tr>';
     }).join('');
 
@@ -268,6 +289,9 @@
     });
     wrap.querySelectorAll('tbody tr').forEach(function (tr) {
       tr.addEventListener('click', function () { syncToCandidate(byId(tr.getAttribute('data-id'))); });
+    });
+    wrap.querySelectorAll('[data-ai]').forEach(function (b) {
+      b.addEventListener('click', function (e) { e.stopPropagation(); showAIModal(byId(b.getAttribute('data-ai'))); });
     });
     wrap.querySelectorAll('[data-view]').forEach(function (b) {
       b.addEventListener('click', function (e) { e.stopPropagation(); syncToCandidate(byId(b.getAttribute('data-view'))); });
@@ -504,6 +528,258 @@
     ov.querySelector('#cc-m-x').addEventListener('click', closeModal);
     var dl = ov.querySelector('#cc-m-dl'); if (dl) dl.addEventListener('click', function () { downloadResume(r); });
   }
+
+  function findMatchScoreCard() {
+    var cards = document.querySelectorAll('.card');
+    for (var i = 0; i < cards.length; i++) {
+      var c = cards[i];
+      if (c.querySelector('textarea') || c.id === ID.root || c.getAttribute('data-cc-hidden')) continue;
+      var text = (c.textContent || '');
+      if (text.indexOf('MATCH SCORE') !== -1 || text.indexOf('Match Score') !== -1 || text.indexOf('AI DEEP ANALYSIS') !== -1 || text.indexOf('Upload a PDF') !== -1 || text.indexOf('Overall Match') !== -1) {
+        return c;
+      }
+    }
+    for (var j = cards.length - 1; j >= 0; j--) {
+      if (!cards[j].querySelector('textarea') && cards[j].id !== ID.root) return cards[j];
+    }
+    return null;
+  }
+
+  function resolveCandidateAndResume(r, targetCard) {
+    var textareas = document.querySelectorAll('textarea');
+    var jdText = textareas.length >= 2 ? (textareas[0].value || '').trim() : '';
+    var taResume = textareas.length >= 2 ? (textareas[1].value || '').trim() : (textareas.length === 1 ? (textareas[0].value || '').trim() : '');
+
+    if (r && r.resumeText && r.resumeText.trim()) {
+      return Promise.resolve({
+        resumeText: r.resumeText,
+        name: r.name || 'Candidate',
+        role: r.role || 'Senior Frontend Engineer',
+        jdText: r.jdText || jdText,
+        id: r.id
+      });
+    }
+
+    if (taResume) {
+      var extractedName = (r && r.name) || '';
+      if (!extractedName) {
+        var firstLine = (taResume.split('\n')[0] || '').trim();
+        extractedName = firstLine.split(/[-–—|,]/)[0].trim();
+      }
+      return Promise.resolve({
+        resumeText: taResume,
+        name: extractedName || 'Candidate',
+        role: (r && r.role) || 'Senior Frontend Engineer',
+        jdText: (r && r.jdText) || jdText,
+        id: r && r.id
+      });
+    }
+
+    var targetText = targetCard ? (targetCard.textContent || '') : '';
+    var fetchRows = (state.rows && state.rows.length) ? Promise.resolve(state.rows) : api('/api/resume-scores').then(function (d) {
+      state.rows = Array.isArray(d) ? d : [];
+      return state.rows;
+    }).catch(function () { return []; });
+
+    return fetchRows.then(function (rows) {
+      var matched = null;
+      if (rows && rows.length) {
+        for (var i = 0; i < rows.length; i++) {
+          if (rows[i].name && targetText.indexOf(rows[i].name) !== -1) {
+            matched = rows[i];
+            break;
+          }
+        }
+        if (!matched) matched = rows[0];
+      }
+
+      if (matched) {
+        if (matched.resumeText && matched.resumeText.trim()) {
+          return {
+            resumeText: matched.resumeText,
+            name: matched.name,
+            role: matched.role || 'Senior Frontend Engineer',
+            jdText: (r && r.jdText) || jdText,
+            id: matched.id
+          };
+        }
+        return fetchDetail(matched.id).then(function (detail) {
+          return {
+            resumeText: (detail && detail.resumeText) || '',
+            name: matched.name,
+            role: matched.role || 'Senior Frontend Engineer',
+            jdText: (r && r.jdText) || jdText,
+            id: matched.id
+          };
+        }).catch(function () {
+          return {
+            resumeText: '',
+            name: matched.name,
+            role: matched.role || 'Senior Frontend Engineer',
+            jdText: (r && r.jdText) || jdText,
+            id: matched.id
+          };
+        });
+      }
+
+      return {
+        resumeText: '',
+        name: (r && r.name) || 'Candidate',
+        role: (r && r.role) || 'Senior Frontend Engineer',
+        jdText: (r && r.jdText) || jdText
+      };
+    });
+  }
+
+  function showAIModal(r) {
+    var targetCard = findMatchScoreCard();
+    if (!targetCard) return;
+
+    var overlay = document.getElementById('hrms-ai-card-overlay');
+    if (!overlay) {
+      overlay = document.createElement('div');
+      overlay.id = 'hrms-ai-card-overlay';
+      targetCard.appendChild(overlay);
+    }
+    overlay.style.display = 'block';
+    overlay.style.width = '100%';
+    overlay.innerHTML =
+      '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:360px;width:100%;text-align:center;margin:auto" class="cc-ai-pulse">' +
+        '<div style="font-size:42px;margin-bottom:14px;color:#8b5cf6">✦</div>' +
+        '<div style="font-weight:700;font-size:16px;color:var(--text)">Running Rapid AI Semantic Analysis…</div>' +
+        '<div style="font-size:12px;color:var(--text3);margin-top:6px">Evaluating production depth &amp; domain fit via Claude</div>' +
+      '</div>';
+
+    var children = targetCard.children;
+    for (var k = 0; k < children.length; k++) {
+      if (children[k] !== overlay) children[k].style.display = 'none';
+    }
+
+    resolveCandidateAndResume(r, targetCard).then(function (cand) {
+      var resumeText = cand.resumeText || '';
+      var jdText = cand.jdText || '';
+      var name = cand.name || 'Candidate';
+      var role = cand.role || 'Senior Frontend Engineer';
+
+      if (!resumeText) throw new Error('No resume text found for candidate "' + name + '". Please upload or paste a resume.');
+
+      return api('/api/ai/score-resume', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          resumeText: resumeText,
+          jdText: jdText || '',
+          name: name,
+          role: role,
+          saveToDb: true
+        })
+      }).then(function (res) {
+        renderAIResult(res, { name: name, role: role, id: cand.id }, targetCard);
+        loadData();
+      });
+    }).catch(function (err) {
+      var msg = err.message || 'Could not connect to AI service.';
+      if (msg.indexOf('404') !== -1) {
+        msg = 'Endpoint <code>/api/ai/score-resume</code> returned 404.<br><br><b>Action required:</b> Please restart your running Django / Daphne development server so the new AI routes take effect.';
+      }
+      overlay.innerHTML =
+        '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:360px;width:100%;text-align:center;padding:24px;box-sizing:border-box">' +
+          '<div style="color:var(--danger,#ef4444);font-weight:700;font-size:15px;margin-bottom:8px">AI Analysis Unavailable</div>' +
+          '<div style="font-size:12px;color:var(--text3);line-height:1.6">' + msg + '</div>' +
+        '</div>';
+    });
+  }
+
+  function drawRingSvg(percent, color) {
+    var radius = 24;
+    var circ = 2 * Math.PI * radius;
+    var offset = circ - (Math.max(0, Math.min(100, percent)) / 100) * circ;
+    return '<svg width="60" height="60" viewBox="0 0 60 60" style="display:block;margin:0 auto 4px">' +
+      '<circle cx="30" cy="30" r="' + radius + '" stroke="var(--border2)" stroke-width="4.5" fill="none" />' +
+      '<circle cx="30" cy="30" r="' + radius + '" stroke="' + color + '" stroke-width="4.5" fill="none" stroke-dasharray="' + circ + '" stroke-dashoffset="' + offset + '" stroke-linecap="round" transform="rotate(-90 30 30)" />' +
+      '<text x="30" y="34.5" text-anchor="middle" dominant-baseline="middle" font-size="13" font-weight="800" fill="var(--text)" font-family="inherit">' + percent + '%</text>' +
+    '</svg>';
+  }
+
+  function highlightBold(text) {
+    if (!text) return '';
+    var s = esc(text);
+    // Bold numbers + years/experience: e.g. "6 years", "5+ years", "2024"
+    s = s.replace(/(\b\d+\+?\s*(?:years?|yrs?|months?|internship|graduate|production)\b)/gi, '<b>$1</b>');
+    // Bold critical lead keywords
+    s = s.replace(/(\b(?:Zero|No|Lack of|Strong|Excellent|Tier-1|High-risk|Fast-track|Proven)\s+[A-Za-z0-9\+\#\-\/ ]{3,30}?\b)/gi, function (m) {
+      if (m.indexOf('<b>') !== -1) return m;
+      return '<b>' + m + '</b>';
+    });
+    return s;
+  }
+
+  function renderAIResult(res, r, targetCard) {
+    if (!targetCard) targetCard = findMatchScoreCard();
+    if (!targetCard) return;
+
+    var overlay = document.getElementById('hrms-ai-card-overlay');
+    if (!overlay) {
+      overlay = document.createElement('div');
+      overlay.id = 'hrms-ai-card-overlay';
+      targetCard.appendChild(overlay);
+    }
+    overlay.style.display = 'block';
+    overlay.style.width = '100%';
+
+    var children = targetCard.children;
+    for (var k = 0; k < children.length; k++) {
+      if (children[k] !== overlay) children[k].style.display = 'none';
+    }
+
+    var sc = num(res.score), tc = num(res.technical), exp = num(res.experience), dom = num(res.domain);
+    var str = res.strengths || [], red = res.redFlags || [], skills = res.skills || [], missing = res.missing || [];
+    var name = res.candidateName || r.name || 'Candidate';
+    var role = res.role || r.role || 'Software Professional';
+
+    overlay.innerHTML =
+      '<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:14px">' +
+        '<div>' +
+          '<div class="card-title" style="margin-bottom:6px">AI DEEP ANALYSIS</div>' +
+          '<div style="display:flex;align-items:center;gap:10px">' +
+            '<span class="cc-avc" style="width:34px;height:34px;font-size:12px;background:linear-gradient(135deg,var(--accent2,#8b5cf6),var(--accent,#4f8ef7))">' + esc(initials({ name: name })) + '</span>' +
+            '<div>' +
+              '<div style="font-weight:700;font-size:13px;color:var(--text)">' + esc(name) + ' <span class="cc-badge" style="margin-left:6px;font-size:10px;color:#8b5cf6;border-color:rgba(139,92,246,0.3);background:rgba(139,92,246,0.08)">✦ Claude AI</span></div>' +
+              '<div style="font-size:11px;color:var(--text3);margin-top:2px">' + esc(role) + '</div>' +
+            '</div>' +
+          '</div>' +
+        '</div>' +
+        '<div style="text-align:right">' +
+          '<div style="font-size:36px;font-weight:800;color:' + scoreColor(sc) + ';line-height:1">' + sc + '<span style="font-size:13px;color:var(--text3);font-weight:500"> / 100</span></div>' +
+        '</div>' +
+      '</div>' +
+
+      '<div style="display:flex;gap:10px;margin:12px 0 16px;justify-content:space-between">' +
+        '<div style="flex:1;background:var(--bg3);border:1px solid var(--border2);border-radius:12px;padding:10px 6px;text-align:center">' +
+          drawRingSvg(tc, scoreColor(tc)) +
+          '<div style="font-size:9.5px;font-weight:700;color:var(--text3);letter-spacing:0.5px">TECHNICAL</div>' +
+        '</div>' +
+        '<div style="flex:1;background:var(--bg3);border:1px solid var(--border2);border-radius:12px;padding:10px 6px;text-align:center">' +
+          drawRingSvg(exp, scoreColor(exp)) +
+          '<div style="font-size:9.5px;font-weight:700;color:var(--text3);letter-spacing:0.5px">EXPERIENCE</div>' +
+        '</div>' +
+        '<div style="flex:1;background:var(--bg3);border:1px solid var(--border2);border-radius:12px;padding:10px 6px;text-align:center">' +
+          drawRingSvg(dom, scoreColor(dom)) +
+          '<div style="font-size:9.5px;font-weight:700;color:var(--text3);letter-spacing:0.5px">DOMAIN</div>' +
+        '</div>' +
+      '</div>' +
+
+      (skills.length ? '<div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px">MATCHED SKILLS (' + skills.length + ')</div><div class="cc-chips" style="margin-bottom:12px">' + skills.map(function (s) { return '<span class="cc-chip str">✓ ' + esc(s) + '</span>'; }).join('') + '</div>' : '') +
+
+      (missing.length ? '<div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px">MISSING SKILLS (' + missing.length + ')</div><div class="cc-chips" style="margin-bottom:12px">' + missing.map(function (s) { return '<span class="cc-chip miss">✕ ' + esc(s) + '</span>'; }).join('') + '</div>' : '') +
+
+      (res.executiveSummary ? '<div class="cc-brief-card"><b style="color:var(--accent,#4f8ef7)">✦ Hiring Brief:</b> ' + highlightBold(res.executiveSummary) + '</div>' : '') +
+
+      (str.length ? '<div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px">KEY STRENGTHS</div><div class="cc-chips" style="margin-bottom:12px">' + str.map(function (s) { return '<span class="cc-chip str">✓ ' + highlightBold(s) + '</span>'; }).join('') + '</div>' : '') +
+
+      (red.length ? '<div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px">GAPS &amp; RISKS</div><div class="cc-chips" style="margin-bottom:12px">' + red.map(function (s) { return '<span class="cc-chip miss">⚠ ' + highlightBold(s) + '</span>'; }).join('') + '</div>' : '');
+  }
+
   function downloadResume(r) {
     if (!r) return;
     fetchDetail(r.id).then(function (d) {
@@ -556,9 +832,24 @@
   }
   function syncToCandidate(r) {
     if (!r) return;
+    var curMode = localStorage.getItem('hrms_scoring_mode') || 'ai';
     proxyClickReact(r);
     setResumeInput(r.resumeText || '');
     try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch (_) { window.scrollTo(0, 0); }
+
+    if (curMode === 'ai') {
+      setTimeout(function () { showAIModal(r); }, 150);
+    } else {
+      var overlay = document.getElementById('hrms-ai-card-overlay');
+      if (overlay) overlay.style.display = 'none';
+      var targetCard = findMatchScoreCard();
+      if (targetCard) {
+        var children = targetCard.children;
+        for (var k = 0; k < children.length; k++) {
+          if (children[k] !== overlay) children[k].style.display = '';
+        }
+      }
+    }
   }
 
   /* ── export ───────────────────────────────────────────────────────────── */
@@ -602,12 +893,260 @@
   function unmount() {
     var root = document.getElementById(ID.root); if (root) root.remove();
     closePopups(); closeDrawer(); closeModal();
-    // Restore any card we hid (defensive — React usually unmounts it on route change).
+    var optWrap = document.getElementById('hrms-scoring-options'); if (optWrap) optWrap.remove();
+    // Restore any hidden buttons or cards
+    var buttons = document.querySelectorAll('button');
+    for (var i = 0; i < buttons.length; i++) {
+      if ((buttons[i].textContent || '').indexOf('Score Resume') !== -1) buttons[i].style.display = '';
+    }
+    var targetCard = findMatchScoreCard();
+    if (targetCard) {
+      var overlay = document.getElementById('hrms-ai-card-overlay');
+      if (overlay) overlay.remove();
+      var children = targetCard.children;
+      for (var k = 0; k < children.length; k++) children[k].style.display = '';
+    }
     document.querySelectorAll('[data-cc-hidden]').forEach(function (c) { c.style.display = ''; c.removeAttribute('data-cc-hidden'); });
+  }
+
+  function ensureAIButtons() {
+    if (!onPage()) return;
+    var existing = document.getElementById('hrms-scoring-options');
+    if (existing) return;
+
+    var buttons = document.querySelectorAll('button');
+    var scoreBtn = null;
+    for (var i = 0; i < buttons.length; i++) {
+      var t = (buttons[i].textContent || '').trim();
+      if (t.indexOf('Score Resume') !== -1 || t.indexOf('Scoring…') !== -1) {
+        scoreBtn = buttons[i];
+        break;
+      }
+    }
+    if (!scoreBtn || !scoreBtn.parentNode) return;
+
+    scoreBtn.style.display = 'none';
+
+    var curMode = localStorage.getItem('hrms_scoring_mode') || 'ai';
+
+    var optWrap = document.createElement('div');
+    optWrap.id = 'hrms-scoring-options';
+    optWrap.className = 'cc-toggle-wrap';
+    optWrap.innerHTML =
+      '<button id="hrms-toggle-std" class="cc-toggle-tab std ' + (curMode === 'std' ? 'active' : '') + '" title="Standard keyword and rule-based matching">' +
+        '✦ Score Resume' +
+      '</button>' +
+      '<button id="hrms-toggle-ai" class="cc-toggle-tab ai ' + (curMode === 'ai' ? 'active' : '') + '" title="Deep semantic evaluation with Claude AI">' +
+        '✦ AI Deep Score' +
+      '</button>';
+
+    var stdBtn = optWrap.querySelector('#hrms-toggle-std');
+    var aiBtn = optWrap.querySelector('#hrms-toggle-ai');
+
+    function setMode(mode) {
+      curMode = mode;
+      localStorage.setItem('hrms_scoring_mode', mode);
+      if (mode === 'std') {
+        stdBtn.classList.add('active');
+        aiBtn.classList.remove('active');
+      } else {
+        aiBtn.classList.add('active');
+        stdBtn.classList.remove('active');
+      }
+    }
+
+    stdBtn.addEventListener('click', function (e) {
+      e.preventDefault();
+      setMode('std');
+      var targetCard = findMatchScoreCard();
+      if (targetCard) {
+        var overlay = document.getElementById('hrms-ai-card-overlay');
+        if (overlay) overlay.style.display = 'none';
+        var children = targetCard.children;
+        for (var k = 0; k < children.length; k++) {
+          if (children[k] !== overlay) children[k].style.display = '';
+        }
+      }
+      scoreBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+    });
+
+    aiBtn.addEventListener('click', function (e) {
+      e.preventDefault();
+      setMode('ai');
+      showAIModal();
+    });
+
+    // Handle file upload and textarea changes while preserving user's chosen mode
+    function extractAndScoreFile(file) {
+      if (!file) return;
+      var fileName = file.name || 'resume.pdf';
+
+      // Handle Bulk ZIP archives
+      if (/\.zip$/i.test(fileName) || (file.type && file.type.indexOf('zip') !== -1)) {
+        var mode = localStorage.getItem('hrms_scoring_mode') || 'ai';
+        if (mode === 'ai') {
+          // Poll until bulk upload finishes parsing the first candidate and trigger AI evaluation
+          var zipAttempts = 0;
+          var zipInterval = setInterval(function () {
+            zipAttempts++;
+            var tc = findMatchScoreCard();
+            var targetText = tc ? (tc.textContent || '') : '';
+            if (targetText && (targetText.indexOf('Uploaded') !== -1 || targetText.indexOf('/ 100') !== -1 || targetText.indexOf('/100') !== -1 || zipAttempts >= 20)) {
+              clearInterval(zipInterval);
+              showAIModal();
+            }
+          }, 350);
+        } else {
+          var ov = document.getElementById('hrms-ai-card-overlay');
+          if (ov) ov.style.display = 'none';
+          var tc = findMatchScoreCard();
+          if (tc) {
+            var ch = tc.children;
+            for (var k = 0; k < ch.length; k++) {
+              if (ch[k] !== ov) ch[k].style.display = '';
+            }
+          }
+        }
+        return;
+      }
+
+      var jdEl = document.querySelector('textarea[placeholder*="Job Description"], textarea[placeholder*="job description"]') || document.querySelectorAll('textarea')[0];
+      var jdText = jdEl ? jdEl.value : '';
+
+      // Show loading pulse on right card and hide all other elements
+      var targetCard = findMatchScoreCard();
+      if (targetCard) {
+        var overlay = document.getElementById('hrms-ai-card-overlay');
+        if (!overlay) {
+          overlay = document.createElement('div');
+          overlay.id = 'hrms-ai-card-overlay';
+          targetCard.appendChild(overlay);
+        }
+        overlay.style.display = 'flex';
+        overlay.style.width = '100%';
+        overlay.innerHTML =
+          '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;min-height:360px;width:100%;text-align:center;margin:auto" class="cc-ai-pulse">' +
+            '<div style="font-size:42px;margin-bottom:14px;color:#8b5cf6">✦</div>' +
+            '<div style="font-weight:700;font-size:16px;color:var(--text)">Analyzing Uploaded Resume…</div>' +
+            '<div style="font-size:12px;color:var(--text3);margin-top:6px">Evaluating candidate profile with Claude AI</div>' +
+          '</div>';
+
+        var children = targetCard.children;
+        for (var k = 0; k < children.length; k++) {
+          if (children[k] !== overlay) children[k].style.display = 'none';
+        }
+      }
+
+      // If text file
+      if (/\.(txt|md|json|csv|rtf)$/i.test(fileName)) {
+        var reader = new FileReader();
+        reader.onload = function (e) {
+          var txt = e.target.result || '';
+          if (txt) {
+            setResumeInput(txt);
+            showAIModal({ resumeText: txt, jdText: jdText, name: fileName.replace(/\.[^/.]+$/, '') });
+          }
+        };
+        reader.readAsText(file);
+        return;
+      }
+
+      // If PDF and pdfjs is on page
+      if (/\.pdf$/i.test(fileName) && window.pdfjsLib) {
+        var pdfReader = new FileReader();
+        pdfReader.onload = function (e) {
+          var typedarray = new Uint8Array(e.target.result);
+          window.pdfjsLib.getDocument(typedarray).promise.then(function (pdf) {
+            var maxPages = Math.min(pdf.numPages, 10);
+            var pages = [];
+            var done = 0;
+            for (var p = 1; p <= maxPages; p++) {
+              (function (pageNo) {
+                pdf.getPage(pageNo).then(function (page) {
+                  page.getTextContent().then(function (tc) {
+                    pages[pageNo - 1] = tc.items.map(function (item) { return item.str; }).join(' ');
+                    done++;
+                    if (done === maxPages) {
+                      var fullText = pages.join('\n\n').trim();
+                      if (fullText) {
+                        setResumeInput(fullText);
+                        showAIModal({ resumeText: fullText, jdText: jdText, name: fileName.replace(/\.[^/.]+$/, '') });
+                      }
+                    }
+                  });
+                });
+              })(p);
+            }
+          }).catch(function () { /* fallback to polling */ });
+        };
+        pdfReader.readAsArrayBuffer(file);
+      }
+
+      // Poll textarea for React's own parser output
+      var attempts = 0;
+      var checkInterval = setInterval(function () {
+        attempts++;
+        var textareas = document.querySelectorAll('textarea');
+        var resumeText = textareas.length >= 2 ? (textareas[1].value || '').trim() : (textareas.length === 1 ? (textareas[0].value || '').trim() : '');
+        if (resumeText) {
+          clearInterval(checkInterval);
+          showAIModal({ resumeText: resumeText, jdText: jdText, name: fileName.replace(/\.[^/.]+$/, '') });
+        } else if (attempts >= 25) {
+          clearInterval(checkInterval);
+        }
+      }, 250);
+    }
+
+    var allFileInputs = document.querySelectorAll('input[type="file"]');
+    for (var f = 0; f < allFileInputs.length; f++) {
+      if (!allFileInputs[f].__aiResetBound) {
+        allFileInputs[f].__aiResetBound = true;
+        (function (inp) {
+          inp.addEventListener('change', function () {
+            var mode = localStorage.getItem('hrms_scoring_mode') || 'ai';
+            if (inp.files && inp.files[0]) {
+              var isZip = /\.zip$/i.test(inp.files[0].name || '') || (inp.files[0].type && inp.files[0].type.indexOf('zip') !== -1);
+              if (isZip) {
+                var ov = document.getElementById('hrms-ai-card-overlay');
+                if (ov) ov.style.display = 'none';
+                var tc = findMatchScoreCard();
+                if (tc) {
+                  var ch = tc.children;
+                  for (var k = 0; k < ch.length; k++) {
+                    if (ch[k] !== ov) ch[k].style.display = '';
+                  }
+                }
+                return;
+              }
+              if (mode === 'ai') {
+                extractAndScoreFile(inp.files[0]);
+              }
+            } else if (mode === 'std') {
+              var ov = document.getElementById('hrms-ai-card-overlay');
+              if (ov) ov.style.display = 'none';
+              var tc = findMatchScoreCard();
+              if (tc) {
+                var ch = tc.children;
+                for (var k = 0; k < ch.length; k++) {
+                  if (ch[k] !== ov) ch[k].style.display = '';
+                }
+              }
+            }
+          });
+        })(allFileInputs[f]);
+      }
+    }
+
+    if (scoreBtn.nextSibling) {
+      scoreBtn.parentNode.insertBefore(optWrap, scoreBtn.nextSibling);
+    } else {
+      scoreBtn.parentNode.appendChild(optWrap);
+    }
   }
 
   function ensureLayout() {
     if (!onPage()) { if (document.getElementById(ID.root)) unmount(); return; }
+    ensureAIButtons();
     var card = reactCard(); if (!card) return;             // no candidates yet → leave page as-is
     ensureStyle();
 

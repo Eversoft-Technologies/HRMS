@@ -361,6 +361,10 @@ class ResumeScoreSerializer(serializers.ModelSerializer):
     fileData = serializers.CharField(source='file_data', write_only=True, required=False, allow_null=True, allow_blank=True)
     resumeText = serializers.CharField(source='resume_text', required=False, allow_blank=True, allow_null=True)
     jdText = serializers.CharField(source='jd_text', required=False, allow_blank=True, allow_null=True)
+    aiSummary = serializers.CharField(source='ai_summary', required=False, allow_blank=True, allow_null=True)
+    aiStrengths = serializers.JSONField(source='ai_strengths', required=False, allow_null=True)
+    aiGaps = serializers.JSONField(source='ai_gaps', required=False, allow_null=True)
+    aiEvaluated = serializers.BooleanField(source='ai_evaluated', required=False, default=False)
 
     class Meta:
         model = ResumeScore
@@ -368,6 +372,7 @@ class ResumeScoreSerializer(serializers.ModelSerializer):
             'id', 'name', 'initials', 'role', 'score', 'technical', 'experience',
             'domain', 'gap', 'skills', 'missing', 'formatted', 'source',
             'uploaded', 'fileName', 'fileMime', 'fileData', 'resumeText', 'jdText',
+            'aiSummary', 'aiStrengths', 'aiGaps', 'aiEvaluated',
         ]
         read_only_fields = ['id']
         extra_kwargs = {
@@ -404,6 +409,10 @@ class ResumeScoreSerializer(serializers.ModelSerializer):
             'fileName': instance.file_name,
             'resumeText': instance.resume_text,
             'jdText': instance.jd_text,
+            'aiSummary': instance.ai_summary,
+            'aiStrengths': safe_list(instance.ai_strengths),
+            'aiGaps': safe_list(instance.ai_gaps),
+            'aiEvaluated': bool(instance.ai_evaluated),
         }
 
     def create(self, validated_data):
@@ -450,6 +459,9 @@ class InterviewRecordingSerializer(serializers.ModelSerializer):
     commScore = serializers.IntegerField(source='comm_score', required=False, default=0)
     integrityScore = serializers.IntegerField(source='integrity_score', required=False, default=0)
     recordingData = serializers.CharField(source='recording_data', required=False, allow_null=True, allow_blank=True, write_only=True)
+    aiEvaluation = serializers.JSONField(source='ai_evaluation', required=False, allow_null=True)
+    executiveSummary = serializers.CharField(source='executive_summary', required=False, allow_blank=True, allow_null=True)
+    round2Questions = serializers.JSONField(source='round2_questions', required=False, allow_null=True)
 
     class Meta:
         model = InterviewRecording
@@ -457,6 +469,7 @@ class InterviewRecordingSerializer(serializers.ModelSerializer):
             'id', 'candidateName', 'candidateEmail', 'role', 'duration', 'verdict',
             'totalScore', 'techScore', 'commScore', 'integrityScore',
             'transcript', 'responses', 'recordingData',
+            'aiEvaluation', 'executiveSummary', 'round2Questions',
         ]
         read_only_fields = ['id']
         extra_kwargs = {
@@ -501,6 +514,9 @@ class InterviewRecordingSerializer(serializers.ModelSerializer):
             'hasRecording': bool(has_recording),
             'transcript': instance.transcript,
             'responses': safe_list(instance.responses),
+            'aiEvaluation': instance.ai_evaluation if isinstance(instance.ai_evaluation, dict) else {},
+            'executiveSummary': instance.executive_summary or '',
+            'round2Questions': safe_list(instance.round2_questions),
             'createdAt': instance.created_at.strftime(DATETIME_FMT) if instance.created_at else None,
         }
 
@@ -647,18 +663,25 @@ class UserProfileSerializer(serializers.ModelSerializer):
     altEmail = serializers.CharField(source='alt_email', required=False, allow_blank=True, default='')
     bloodGroup = serializers.CharField(source='blood_group', required=False, allow_blank=True, default='')
     profilePic = serializers.CharField(source='profile_pic', required=False, allow_blank=True, allow_null=True, default='')
+    employmentType = serializers.CharField(source='employment_type', required=False, allow_blank=True, default='Full-time')
+    annualCtc = serializers.DecimalField(source='annual_ctc', max_digits=14, decimal_places=2, required=False, allow_null=True)
+    startDate = serializers.DateField(source='start_date', required=False, allow_null=True)
 
     class Meta:
         model = UserProfile
         fields = [
             'email', 'employeeId', 'firstName', 'lastName', 'phone', 'altEmail',
-            'bloodGroup', 'department', 'designation', 'address', 'profilePic',
+            'bloodGroup', 'department', 'designation', 'manager', 'level',
+            'employmentType', 'location', 'annualCtc', 'startDate', 'address', 'profilePic',
         ]
         extra_kwargs = {
             'employeeId': {'required': False, 'allow_blank': True, 'default': ''},
             'phone': {'required': False, 'allow_blank': True, 'default': ''},
             'department': {'required': False, 'allow_blank': True, 'default': ''},
             'designation': {'required': False, 'allow_blank': True, 'default': ''},
+            'manager': {'required': False, 'allow_blank': True, 'default': ''},
+            'level': {'required': False, 'allow_blank': True, 'default': 'L4'},
+            'location': {'required': False, 'allow_blank': True, 'default': ''},
             'address': {'required': False, 'allow_blank': True, 'allow_null': True, 'default': ''},
         }
 
@@ -675,6 +698,12 @@ class UserProfileSerializer(serializers.ModelSerializer):
             'designation': instance.designation or '',
             'address': instance.address or '',
             'profilePic': instance.profile_pic or '',
+            'manager': instance.manager or '',
+            'level': instance.level or '',
+            'employmentType': instance.employment_type or '',
+            'location': instance.location or '',
+            'annualCtc': str(instance.annual_ctc) if instance.annual_ctc is not None else '',
+            'startDate': instance.start_date.strftime(DATE_FMT) if instance.start_date else '',
             'updatedAt': instance.updated_at.strftime(DATETIME_FMT) if instance.updated_at else None,
         }
 
@@ -849,12 +878,25 @@ class LeaveRequestSerializer(serializers.ModelSerializer):
 class EmployeeTaskSerializer(serializers.ModelSerializer):
     assigneeEmail = serializers.CharField(source='assignee_email', required=False, allow_blank=True, default='')
     createdBy = serializers.CharField(source='created_by', required=False, allow_blank=True, default='')
+    taskCode = serializers.CharField(source='task_code', required=False, allow_blank=True, default='')
+    teamLead = serializers.CharField(source='team_lead', required=False, allow_blank=True, default='')
+    estimatedHours = serializers.FloatField(source='estimated_hours', required=False, allow_null=True, default=None)
+    attachmentFileName = serializers.CharField(source='attachment_file_name', required=False, allow_blank=True, default='')
+    attachmentFileMime = serializers.CharField(source='attachment_file_mime', required=False, allow_blank=True, default='')
+    attachmentFileData = serializers.CharField(source='attachment_file_data', required=False, allow_blank=True, default='')
+    imageFileName = serializers.CharField(source='image_file_name', required=False, allow_blank=True, default='')
+    imageFileMime = serializers.CharField(source='image_file_mime', required=False, allow_blank=True, default='')
+    imageFileData = serializers.CharField(source='image_file_data', required=False, allow_blank=True, default='')
+    rejectReason = serializers.CharField(source='reject_reason', required=False, allow_blank=True, default='')
 
     class Meta:
         model = EmployeeTask
         fields = [
             'id', 'title', 'assignee', 'assigneeEmail', 'due', 'priority',
-            'stage', 'description', 'createdBy',
+            'stage', 'description', 'createdBy', 'taskCode', 'teamLead',
+            'department', 'estimatedHours', 'progress', 'attachmentFileName',
+            'attachmentFileMime', 'attachmentFileData', 'imageFileName',
+            'imageFileMime', 'imageFileData', 'rejectReason',
         ]
         read_only_fields = ['id']
         extra_kwargs = {
@@ -863,6 +905,8 @@ class EmployeeTaskSerializer(serializers.ModelSerializer):
             'priority': {'required': False, 'default': 'medium'},
             'stage': {'required': False, 'default': 'todo'},
             'description': {'required': False, 'allow_blank': True, 'allow_null': True, 'default': ''},
+            'department': {'required': False, 'allow_blank': True, 'default': ''},
+            'progress': {'required': False, 'default': 0},
         }
 
     def to_representation(self, instance):
@@ -876,6 +920,18 @@ class EmployeeTaskSerializer(serializers.ModelSerializer):
             'stage': instance.stage,
             'description': instance.description or '',
             'createdBy': instance.created_by or '',
+            'taskCode': instance.task_code or '',
+            'teamLead': instance.team_lead or '',
+            'department': instance.department or '',
+            'estimatedHours': instance.estimated_hours,
+            'progress': instance.progress or 0,
+            'attachmentFileName': instance.attachment_file_name or '',
+            'attachmentFileMime': instance.attachment_file_mime or '',
+            'attachmentFileData': instance.attachment_file_data or '',
+            'imageFileName': instance.image_file_name or '',
+            'imageFileMime': instance.image_file_mime or '',
+            'imageFileData': instance.image_file_data or '',
+            'rejectReason': instance.reject_reason or '',
             'createdAt': instance.created_at.strftime(DATETIME_FMT) if instance.created_at else None,
         }
 
@@ -883,13 +939,38 @@ class EmployeeTaskSerializer(serializers.ModelSerializer):
 class WorkSubmissionSerializer(serializers.ModelSerializer):
     employee = serializers.CharField(source='employee_name', required=False, allow_blank=True, default='')
     fileName = serializers.CharField(source='file_name', required=False, allow_blank=True, default='')
+    fileMime = serializers.CharField(source='file_mime', required=False, allow_blank=True, default='')
+    fileSize = serializers.IntegerField(source='file_size', required=False, default=0)
+    # Write-only: the base64 payload is accepted on submit but never echoed
+    # back in a list, which would otherwise carry every attachment in the
+    # queue over the wire on each page load.
+    fileData = serializers.CharField(source='file_data', required=False,
+                                     allow_blank=True, allow_null=True,
+                                     write_only=True, default='')
+    reviewerNote = serializers.CharField(source='reviewer_note', required=False,
+                                         allow_blank=True, allow_null=True, default='')
+    reviewerNoteBy = serializers.CharField(source='reviewer_note_by', required=False,
+                                           allow_blank=True, default='')
+    reviewFileName = serializers.CharField(source='review_file_name', required=False,
+                                           allow_blank=True, default='')
+    reviewFileMime = serializers.CharField(source='review_file_mime', required=False,
+                                           allow_blank=True, default='')
+    reviewFileSize = serializers.IntegerField(source='review_file_size', required=False, default=0)
+    # Write-only for the same reason as fileData: the queue would otherwise
+    # carry every marked-up file on every page load.
+    reviewFileData = serializers.CharField(source='review_file_data', required=False,
+                                           allow_blank=True, allow_null=True,
+                                           write_only=True, default='')
     aiScore = serializers.IntegerField(source='ai_score', required=False, default=0)
 
     class Meta:
         model = WorkSubmission
         fields = [
             'id', 'email', 'employee', 'title', 'type', 'date', 'summary',
-            'link', 'fileName', 'status', 'reviewer', 'aiScore',
+            'link', 'fileName', 'fileMime', 'fileSize', 'fileData',
+            'status', 'reviewer', 'reviewerNote', 'reviewerNoteBy',
+            'reviewFileName', 'reviewFileMime', 'reviewFileSize', 'reviewFileData',
+            'aiScore',
         ]
         read_only_fields = ['id']
         extra_kwargs = {
@@ -913,8 +994,22 @@ class WorkSubmissionSerializer(serializers.ModelSerializer):
             'summary': instance.summary or '',
             'link': instance.link or '',
             'fileName': instance.file_name or '',
+            'fileMime': instance.file_mime or '',
+            'fileSize': instance.file_size or 0,
+            # The bytes are fetched on demand from /submissions/<id>/file;
+            # the list only says whether there is anything to fetch.
+            'hasFile': bool(instance.file_data),
             'status': instance.status,
             'reviewer': instance.reviewer or '',
+            'reviewerNote': instance.reviewer_note or '',
+            'reviewerNoteBy': instance.reviewer_note_by or '',
+            'reviewerNoteAt': (instance.reviewer_note_at.strftime(DATETIME_FMT)
+                               if instance.reviewer_note_at else ''),
+            'reviewFileName': instance.review_file_name or '',
+            'reviewFileMime': instance.review_file_mime or '',
+            'reviewFileSize': instance.review_file_size or 0,
+            # Fetched on demand from /submissions/<id>/review-file.
+            'hasReviewFile': bool(instance.review_file_data),
             'aiScore': instance.ai_score or 0,
             'createdAt': instance.created_at.strftime(DATETIME_FMT) if instance.created_at else None,
         }

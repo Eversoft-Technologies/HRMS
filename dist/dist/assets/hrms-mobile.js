@@ -18,8 +18,8 @@
   function isMobile() {
     return window.matchMedia(MQ).matches;
   }
-  function openDrawer() { document.body.classList.add('sidebar-open'); }
-  function closeDrawer() { document.body.classList.remove('sidebar-open'); }
+  function openDrawer() { document.body.classList.add('sidebar-open'); syncButtonState(); }
+  function closeDrawer() { document.body.classList.remove('sidebar-open'); syncButtonState(); }
   function toggleDrawer() {
     if (document.body.classList.contains('sidebar-open')) closeDrawer();
     else openDrawer();
@@ -45,10 +45,17 @@
     var b = document.createElement('button');
     b.id = BTN_ID;
     b.type = 'button';
-    b.setAttribute('aria-label', 'Toggle menu');
+    b.setAttribute('aria-label', 'Open menu');
+    b.setAttribute('aria-expanded', 'false');
+    // Both icons ship together and responsive.css shows whichever matches the
+    // drawer state, so the same button closes what it opened. Swapping
+    // innerHTML on each toggle would fight the sync() timer below, which
+    // re-runs every 800ms and would undo it.
     b.innerHTML =
-      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
-      'stroke-linecap="round"><path d="M3 6h18M3 12h18M3 18h18"/></svg>';
+      '<svg class="hrms-burger-open" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+      'stroke-width="2" stroke-linecap="round"><path d="M3 6h18M3 12h18M3 18h18"/></svg>' +
+      '<svg class="hrms-burger-close" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+      'stroke-width="2" stroke-linecap="round"><path d="M5 5l14 14M19 5L5 19"/></svg>';
     b.addEventListener('click', function (e) {
       e.stopPropagation();
       toggleDrawer();
@@ -56,11 +63,21 @@
     topbar.insertBefore(b, topbar.firstChild);
   }
 
+  /* Keep the button's label honest about what pressing it will do. */
+  function syncButtonState() {
+    var b = document.getElementById(BTN_ID);
+    if (!b) return;
+    var open = document.body.classList.contains('sidebar-open');
+    b.setAttribute('aria-expanded', open ? 'true' : 'false');
+    b.setAttribute('aria-label', open ? 'Close menu' : 'Open menu');
+  }
+
   function sync() {
     ensureBackdrop();
     ensureButton();
     // Never leave the drawer "open" when we're back on a desktop width.
     if (!isMobile()) closeDrawer();
+    syncButtonState();
   }
 
   // Close the drawer after tapping a nav link (delegated — survives re-renders).
