@@ -4342,6 +4342,35 @@ def _data_url_too_large(data_url, limit_bytes=50 * 1024):
     return (len(b64) * 3) // 4 > limit_bytes
 
 
+def _resolve_assignee_email(assignee):
+    """Best-effort: turn the free-text "Assigned To" name into an AppUser email.
+
+    The task form only captures a name, but the employee's board scopes the Done
+    column by identity, and a name typed by a reviewer rarely matches the
+    account's full name character for character. Resolving the email at write
+    time gives the board a reliable key. Returns '' when nothing (or more than
+    one account) matches, so a wrong guess is never stored.
+    """
+    name = str(assignee or '').strip()
+    if not name:
+        return ''
+    if '@' in name:
+        u = AppUser.objects.filter(email=norm_email(name)).first()
+        return norm_email(u.email) if u else ''
+    qs = AppUser.objects.filter(full_name__iexact=name)
+    if qs.count() != 1:
+        return ''
+    return norm_email(qs.first().email)
+
+
+def _employee_caller_email(request):
+    """The caller's email when they hold the plain 'Employee' RBAC role, else ''."""
+    _, caller_email, user = check_perm(request, 'task.edit')
+    if user and user.role_ref_id and user.role_ref and user.role_ref.name == 'Employee':
+        return norm_email(caller_email)
+    return ''
+
+
 @api_view(['GET', 'POST'])
 @require_perm({'GET': 'employee.view', 'POST': 'employee.create'}, or_self=True)
 def tasks(request):
@@ -4366,6 +4395,8 @@ def tasks(request):
             return err(f'{label} exceeds the 50 KB limit')
     if not body.get('taskCode'):
         body = {**body, 'taskCode': f'TASK-{int(local_now().timestamp() * 1000)}'}
+    if not body.get('assigneeEmail'):
+        body = {**body, 'assigneeEmail': _resolve_assignee_email(body.get('assignee'))}
     serializer = EmployeeTaskSerializer(data=body)
     if not serializer.is_valid():
         return serializer_err(serializer)
@@ -4393,7 +4424,20 @@ def task_detail(request, pk):
             return err('Only a task still in To Do can be deleted.', 409)
         obj.delete()
         return Response({'ok': True})
-    serializer = EmployeeTaskSerializer(obj, data=request.data, partial=True)
+    body = dict(request.data or {})
+    # Reviewer re-assigned the task by name: refresh the resolved email so the
+    # new assignee's board picks it up (and the old one's drops it).
+    if 'assignee' in body and not body.get('assigneeEmail') and (body.get('assignee') or '') != (obj.assignee or ''):
+        body['assigneeEmail'] = _resolve_assignee_email(body.get('assignee'))
+    # An Employee accepting (todo -> inprogress) or submitting (-> review) a task
+    # is, by definition, the person doing it. Stamp their email when the task
+    # has none yet, so the Done column can find it even if the reviewer typed
+    # the name differently from the account's full name.
+    if body.get('stage') in ('inprogress', 'review') and not (obj.assignee_email or body.get('assigneeEmail')):
+        caller_email = _employee_caller_email(request)
+        if caller_email:
+            body['assigneeEmail'] = caller_email
+    serializer = EmployeeTaskSerializer(obj, data=body, partial=True)
     if not serializer.is_valid():
         return serializer_err(serializer)
     serializer.save()
