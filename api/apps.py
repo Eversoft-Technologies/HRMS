@@ -7,6 +7,10 @@ class ApiConfig(AppConfig):
 
     def ready(self):
         try:
+            from . import signals_realtime  # noqa: F401
+        except Exception:
+            pass
+        try:
             from .models import Notification
             for n in Notification.objects.all():
                 if n.link and n.link.startswith('/') and not n.link.startswith('/employees/') and not n.link.startswith('/recruit/'):

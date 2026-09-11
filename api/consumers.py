@@ -113,3 +113,39 @@ class ChatConsumer(AsyncWebsocketConsumer):
             created_at=datetime.now(),
             is_read=False,
         )
+
+class EmployeeStatusConsumer(AsyncWebsocketConsumer):
+    """Per-employee live channel for the F2F employee-detail popup.
+
+    Server-to-client only: a viewer opens ws/employee/<email>/ and receives
+    'task' and 'attendance' events pushed by post_save signals when that
+    employee's tasks or attendance change (see api/signals_realtime.py).
+    """
+
+    async def connect(self):
+        import re
+        from urllib.parse import unquote
+        raw = self.scope["url_route"]["kwargs"].get("email", "")
+        self.email = unquote(raw).strip().lower()
+        # Channel group names allow only [A-Za-z0-9._-]; the email's "@" is not
+        # allowed, so map disallowed chars to "_". Must match signals_realtime.
+        safe = re.sub(r"[^a-z0-9._-]", "_", self.email)
+        self.group_name = ("emp_" + safe)[:95]
+        await self.channel_layer.group_add(self.group_name, self.channel_name)
+        await self.accept()
+
+    async def disconnect(self, close_code):
+        if getattr(self, "group_name", None):
+            await self.channel_layer.group_discard(self.group_name, self.channel_name)
+
+    async def task_update(self, event):
+        await self.send(text_data=json.dumps({"event": "task", "task": event.get("data")}))
+
+    async def attendance_update(self, event):
+        await self.send(text_data=json.dumps({"event": "attendance", "data": event.get("data")}))
+
+    async def submission_update(self, event):
+        await self.send(text_data=json.dumps({"event": "submission", "data": event.get("data")}))
+
+    async def leave_update(self, event):
+        await self.send(text_data=json.dumps({"event": "leave", "data": event.get("data")}))
