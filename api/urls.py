@@ -160,6 +160,17 @@ urlpatterns = [
     path('submissions/<int:pk>/file', views.submission_file),
     path('submissions/<int:pk>/review-file', views.submission_review_file),
 
+    # Recruit module — Bench Sales — Bench Submissions
+    path('recruit/bench-submissions', views.bench_submissions),
+    path('recruit/bench-submissions/<int:pk>', views.bench_submission_detail),
+
+    # Recruit module — Bench Sales — consultant profile roster
+    path('recruit/bench-sales', views.bench_sales_profiles),
+    path('recruit/bench-sales/<int:pk>', views.bench_sales_profile_detail),
+    path('recruit/bench-sales/<int:pk>/file/<str:field>', views.bench_sales_profile_file),
+    path('recruit/bench-sales/<int:pk>/certificates/<int:cert_id>', views.bench_sales_profile_certificate_detail),
+    path('recruit/bench-sales/<int:pk>/certificates/<int:cert_id>/file', views.bench_sales_profile_certificate_file),
+
     # Role-Based Access Control (RBAC)
     path('rbac/stats', views.rbac_stats),
     path('rbac/users', views.rbac_users),

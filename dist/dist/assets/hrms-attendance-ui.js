@@ -793,10 +793,10 @@
       '.hram-history-controls input.hram-search{width:190px}' +
       '.hram-btn{padding:6px 12px;border-radius:6px;border:1px solid var(--border2,#d1d5db);background:var(--bg,#fff);color:var(--text,#111827);font-size:12px;font-weight:600;cursor:pointer}' +
       '.hram-btn:hover{background:var(--bg3,#f3f4f6)}' +
-      '.hram-table-wrap{overflow-x:auto}' +
+      '.hram-table-wrap{overflow-x:auto;overflow-y:auto;max-height:480px}' +
       '.hram-table{width:100%;border-collapse:collapse;font-size:12px}' +
       '.hram-table thead{background:var(--bg3,#f9fafb)}' +
-      '.hram-table th{text-align:left;padding:9px;font-weight:600;color:var(--text3,#6b7280);text-transform:uppercase;font-size:10px;letter-spacing:.03em;white-space:nowrap}' +
+      '.hram-table th{text-align:left;padding:9px;font-weight:600;color:var(--text3,#6b7280);text-transform:uppercase;font-size:10px;letter-spacing:.03em;white-space:nowrap;position:sticky;top:0;background:var(--bg3,#f9fafb);z-index:1}' +
       '.hram-table td{padding:9px;border-bottom:1px solid var(--border2,#f3f4f6);white-space:nowrap}' +
       '.hram-strong{font-weight:600;color:var(--text,#111827)}' +
       '.hram-emp-cell{white-space:normal}' +

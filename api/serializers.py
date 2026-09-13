@@ -14,6 +14,8 @@ circular import, since ``views`` imports from here.
 import json
 import os
 
+from django.core.exceptions import ValidationError as DjangoValidationError
+from django.core.validators import EmailValidator
 from rest_framework import serializers
 
 from .models import (
@@ -38,6 +40,8 @@ from .models import (
     UserEmailConfig,
     UserProfile,
     WorkSubmission,
+    BenchSubmission,
+    BenchSalesProfile,
     Shift,
     ShiftAssignment,
     AttendanceCorrection,
@@ -1016,6 +1020,143 @@ class WorkSubmissionSerializer(serializers.ModelSerializer):
             from datetime import date as _date
             validated_data['date'] = _date.today()
         return super().create(validated_data)
+
+
+def _validate_optional_email(value, label):
+    """Blank is allowed (the fields are optional server-side); anything else
+    must look like name@example.com."""
+    value = (value or '').strip()
+    if not value:
+        return value
+    try:
+        EmailValidator()(value)
+    except DjangoValidationError:
+        raise serializers.ValidationError(
+            f'{label} must be a valid email address (e.g. name@example.com).')
+    return value
+
+
+class BenchSubmissionSerializer(serializers.ModelSerializer):
+    clientName = serializers.CharField(source='client_name', required=False, allow_blank=True, default='')
+    vendorPrimeVendor = serializers.CharField(source='vendor_prime_vendor', required=False, allow_blank=True, default='')
+    vendorPersonName = serializers.CharField(source='vendor_person_name', required=False, allow_blank=True, default='')
+    vendorEmail = serializers.CharField(source='vendor_email', required=False, allow_blank=True, default='')
+    vendorContact = serializers.CharField(source='vendor_contact', required=False, allow_blank=True, default='')
+    implementationPartner = serializers.CharField(source='implementation_partner', required=False, allow_blank=True, default='')
+    roleResponsibilities = serializers.CharField(source='role_responsibilities', required=False, allow_blank=True, default='')
+    followUpVendor = serializers.DateField(source='follow_up_vendor', required=False, allow_null=True, default=None)
+    interviewSchedule = serializers.DateTimeField(source='interview_schedule', required=False, allow_null=True, default=None)
+    createdBy = serializers.CharField(source='created_by', required=False, allow_blank=True, default='')
+
+    def validate_vendorEmail(self, value):
+        return _validate_optional_email(value, 'Vendor Email')
+
+    class Meta:
+        model = BenchSubmission
+        fields = [
+            'id', 'name', 'clientName', 'vendorPrimeVendor', 'vendorPersonName',
+            'vendorEmail', 'vendorContact', 'implementationPartner', 'rate',
+            'roleResponsibilities', 'status', 'followUpVendor', 'interviewSchedule',
+            'createdBy',
+        ]
+        read_only_fields = ['id']
+        extra_kwargs = {
+            'rate': {'required': False, 'allow_blank': True, 'default': ''},
+            'status': {'required': False, 'default': 'Submitted'},
+        }
+
+    def to_representation(self, instance):
+        return {
+            'id': instance.id,
+            'name': instance.name,
+            'clientName': instance.client_name or '',
+            'vendorPrimeVendor': instance.vendor_prime_vendor or '',
+            'vendorPersonName': instance.vendor_person_name or '',
+            'vendorEmail': instance.vendor_email or '',
+            'vendorContact': instance.vendor_contact or '',
+            'implementationPartner': instance.implementation_partner or '',
+            'rate': instance.rate or '',
+            'roleResponsibilities': instance.role_responsibilities or '',
+            'status': instance.status or 'Submitted',
+            'followUpVendor': instance.follow_up_vendor.strftime(DATE_FMT) if instance.follow_up_vendor else None,
+            'interviewSchedule': instance.interview_schedule.strftime('%Y-%m-%dT%H:%M') if instance.interview_schedule else None,
+            'createdBy': instance.created_by or '',
+            'createdAt': instance.created_at.strftime(DATETIME_FMT) if instance.created_at else None,
+            'updatedAt': instance.updated_at.strftime(DATETIME_FMT) if instance.updated_at else None,
+        }
+
+
+class BenchSalesProfileSerializer(serializers.ModelSerializer):
+    techStack = serializers.CharField(source='tech_stack', required=False, allow_blank=True, default='')
+    experience = serializers.CharField(required=False, allow_blank=True, default='')
+    email = serializers.CharField(required=False, allow_blank=True, default='')
+    contactNo = serializers.CharField(source='contact_no', required=False, allow_blank=True, default='')
+    workAuthorization = serializers.CharField(source='work_authorization', required=False, allow_blank=True, default='')
+
+    resumeFileName = serializers.CharField(source='resume_file_name', required=False, allow_blank=True, default='')
+    resumeFileMime = serializers.CharField(source='resume_file_mime', required=False, allow_blank=True, default='', write_only=True)
+    resumeFileData = serializers.CharField(source='resume_file_data', required=False, allow_blank=True, default='', write_only=True)
+
+    dlStateIdFileName = serializers.CharField(source='dl_state_id_file_name', required=False, allow_blank=True, default='')
+    dlStateIdFileMime = serializers.CharField(source='dl_state_id_file_mime', required=False, allow_blank=True, default='', write_only=True)
+    dlStateIdFileData = serializers.CharField(source='dl_state_id_file_data', required=False, allow_blank=True, default='', write_only=True)
+
+    i94FileName = serializers.CharField(source='i94_file_name', required=False, allow_blank=True, default='')
+    i94FileMime = serializers.CharField(source='i94_file_mime', required=False, allow_blank=True, default='', write_only=True)
+    i94FileData = serializers.CharField(source='i94_file_data', required=False, allow_blank=True, default='', write_only=True)
+
+    createdBy = serializers.CharField(source='created_by', required=False, allow_blank=True, default='')
+
+    def validate_email(self, value):
+        return _validate_optional_email(value, 'Mail Id')
+
+    class Meta:
+        model = BenchSalesProfile
+        fields = [
+            'id', 'name', 'techStack', 'experience', 'email', 'contactNo',
+            'workAuthorization',
+            'resumeFileName', 'resumeFileMime', 'resumeFileData',
+            'dlStateIdFileName', 'dlStateIdFileMime', 'dlStateIdFileData',
+            'i94FileName', 'i94FileMime', 'i94FileData',
+            'createdBy',
+        ]
+        read_only_fields = ['id']
+
+    @staticmethod
+    def _has_file(instance, col):
+        """Instances from views._bench_sales_profile_qs() carry a
+        '<col>_len' LENGTH() annotation with the base64 column deferred; use
+        it so the has-file flag never fetches a ~45 MB blob. Falls back to the
+        column itself for a plainly-loaded instance."""
+        length = getattr(instance, f'{col}_len', None)
+        if length is not None:
+            return length > 0
+        return bool(getattr(instance, col))
+
+    def to_representation(self, instance):
+        return {
+            'id': instance.id,
+            'name': instance.name,
+            'techStack': instance.tech_stack or '',
+            'experience': instance.experience or '',
+            'email': instance.email or '',
+            'contactNo': instance.contact_no or '',
+            'workAuthorization': instance.work_authorization or '',
+            'certificates': [
+                {'id': c.id, 'fileName': c.file_name}
+                # only(): never pull each certificate's base64 body to list names.
+                for c in instance.certificate_files.only('id', 'file_name', 'profile_id')
+            ],
+            'resumeFileName': instance.resume_file_name or '',
+            'resumeHasFile': self._has_file(instance, 'resume_file_data'),
+            'dlStateIdFileName': instance.dl_state_id_file_name or '',
+            'dlStateIdHasFile': self._has_file(instance, 'dl_state_id_file_data'),
+            'i94FileName': instance.i94_file_name or '',
+            'i94HasFile': self._has_file(instance, 'i94_file_data'),
+            'createdBy': instance.created_by or '',
+            'createdAt': instance.created_at.strftime(DATETIME_FMT) if instance.created_at else None,
+            'updatedAt': instance.updated_at.strftime(DATETIME_FMT) if instance.updated_at else None,
+        }
 
 
 # Display label + dot colour for each activity-log event type. Colours map to
