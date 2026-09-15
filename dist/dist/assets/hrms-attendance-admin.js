@@ -68,7 +68,7 @@
    * TILE_URL for your own tile server if this ever gets heavy traffic.
    */
   var TILE = 256;
-  var TILE_URL = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+  var TILE_URL = 'https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png';
 
   function lngToWorldX(lng, z) { return (lng + 180) / 360 * Math.pow(2, z) * TILE; }
   function latToWorldY(lat, z) {

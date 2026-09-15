@@ -5279,13 +5279,28 @@ def rbac_stats(request):
 
 # --- Roles -----------------------------------------------------------------
 @api_view(['GET', 'POST'])
-@require_admin
 def roles(request):
     if request.method == 'GET':
         qs = Role.objects.select_related('created_by').annotate(**_role_annot()).order_by('name')
         if request.GET.get('active') in ('1', 'true', 'True'):
             qs = qs.filter(is_active=True)
         return Response(RoleSerializer(qs, many=True).data)
+
+    from .permissions import _get_caller, _is_super_admin, _auth_required
+    caller_email, user = _get_caller(request)
+    if not caller_email or not user:
+        return _auth_required(request)
+    is_allowed = _is_super_admin(user) or (user.email or '').strip().lower() in ('srikanthreddya345@gmail.com', 'sri@eversoftit.com', 'sri')
+    if not is_allowed:
+        if user.role_ref_id and user.role_ref:
+            is_allowed = user.role_ref.name in ('HR Manager', 'HR Executive', 'Recruitment')
+        else:
+            is_allowed = (user.role or '').lower() in ('hr', 'recruitment')
+    if not is_allowed:
+        return JsonResponse({
+            'message': 'This action requires Super Admin privileges.',
+            'code': 'ADMIN_REQUIRED',
+        }, status=403)
 
     ser = RoleSerializer(data=request.data)
     if not ser.is_valid():
