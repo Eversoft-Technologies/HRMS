@@ -835,7 +835,7 @@
       for (var y = y0; y <= y1; y++) {
         if (y < 0 || y >= max) continue;
         var tx = ((x % max) + max) % max;
-        imgs += '<img alt="" src="https://tile.openstreetmap.org/' + z + '/' + tx + '/' + y + '.png" style="position:absolute;width:256px;height:256px;left:' + (x * T - left) + 'px;top:' + (y * T - top) + 'px;">';
+        imgs += '<img alt="" src="https://a.basemaps.cartocdn.com/rastertiles/voyager/' + z + '/' + tx + '/' + y + '.png" style="position:absolute;width:256px;height:256px;left:' + (x * T - left) + 'px;top:' + (y * T - top) + 'px;">';
       }
     }
     return '<div style="position:absolute;inset:0;overflow:hidden;">' + imgs + '</div><div class="hat-mkr">' + PIN_BIG + '</div>';

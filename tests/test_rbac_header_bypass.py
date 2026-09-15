@@ -33,17 +33,17 @@ class RbacHeaderBypassTests(TestCase):
 
     def test_admin_endpoint_rejects_request_with_no_identity_header(self):
         """An anonymous caller must not reach a @require_admin endpoint."""
-        resp = self.client.get('/api/roles')
+        resp = self.client.get('/api/permissions')
         self.assertIn(resp.status_code, (401, 403), msg=(
-            f'GET /api/roles with no X-User-Email returned {resp.status_code}; '
-            'the RBAC grace period lets anonymous callers list roles.'
+            f'GET /api/permissions with no X-User-Email returned {resp.status_code}; '
+            'the RBAC grace period lets anonymous callers list permissions.'
         ))
 
     def test_admin_endpoint_rejects_unknown_email(self):
         """An address with no AppUser row must not be treated as trusted."""
-        resp = self.client.get('/api/roles', HTTP_X_USER_EMAIL='nobody@attacker.example')
+        resp = self.client.get('/api/permissions', HTTP_X_USER_EMAIL='nobody@attacker.example')
         self.assertIn(resp.status_code, (401, 403), msg=(
-            f'GET /api/roles with an unknown email returned {resp.status_code}; '
+            f'GET /api/permissions with an unknown email returned {resp.status_code}; '
             'unresolvable identities fall into the same open branch.'
         ))
 
@@ -60,8 +60,15 @@ class RbacHeaderBypassTests(TestCase):
 
     def test_signed_in_employee_is_denied_admin_endpoint(self):
         """The check works correctly once an identity actually resolves."""
-        resp = self.client.get('/api/roles', HTTP_X_USER_EMAIL=self.employee.email)
+        resp = self.client.get('/api/permissions', HTTP_X_USER_EMAIL=self.employee.email)
         self.assertIn(resp.status_code, (401, 403))
+
+    def test_public_can_fetch_roles_for_login_dropdown(self):
+        """Login and signup pages need the active role list without an existing session."""
+        resp = self.client.get('/api/roles')
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertTrue(isinstance(data, list))
 
 
 class AuthClosureDoesNotBreakLegitimateTrafficTests(TestCase):

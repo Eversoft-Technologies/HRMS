@@ -32,7 +32,7 @@ const HQ = { lat: 17.4485, lng: 78.3908, radius: 200, label: 'Head Office' };
 let html = ctx.renderMap({ ...HQ, width: 300, height: 200 });
 const tiles = (html.match(/<img /g) || []).length;
 check('renders tiles', tiles >= 4, `${tiles} tiles`);
-check('tiles come from OSM', html.includes('tile.openstreetmap.org'), 'no tile host');
+check('tiles come from tile host', html.includes('cartocdn.com') || html.includes('tile.openstreetmap.org'), 'no tile host');
 check('has attribution', html.includes('OpenStreetMap contributors'), 'missing attribution');
 check('draws the fence circle', /<circle[^>]*stroke="#0f9d58"/.test(html), 'no circle');
 check('no check-in marker when none given', !html.includes('#dc2626'), 'unexpected red marker');
