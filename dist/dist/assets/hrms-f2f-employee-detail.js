@@ -20,7 +20,7 @@
 
   var IV_PATH = '/recruit/interview';
   var EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/;
-  var state = { email: '', tab: 'attendance', timer: null, day: null, attRange: '30', cioDate: '', taskStage: 'all', taskPriority: 'all', subStatus: 'all', leaveStatus: 'all' };
+  var state = { email: '', tab: 'attendance', timer: null, day: null, attRange: '30', attFrom: '', attTo: '', cioDate: '', taskStage: 'all', taskPriority: 'all', subStatus: 'all', leaveStatus: 'all', leaveRange: 'all', leaveFrom: '', leaveTo: '' };
   var PIN_SVG = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg>';
   var PIN_BIG = '<svg width="30" height="30" viewBox="0 0 24 24" fill="#e11d48" stroke="#fff" stroke-width="1.5"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3" fill="#fff"></circle></svg>';
 
@@ -244,7 +244,26 @@
   function selOpts(id, val, opts) { return '<select class="fed-filter" id="' + id + '">' + opts.map(function (o) { return '<option value="' + esc(o[0]) + '"' + (String(val) === String(o[0]) ? ' selected' : '') + '>' + esc(o[1]) + '</option>'; }).join('') + '</select>'; }
   function todayIso() { return isoDate(new Date()); }
   function cioDateVal() { return state.cioDate || todayIso(); }
-  function rangeFor(key) { var to = new Date(), from = new Date(); if (key === 'month') { from = new Date(to.getFullYear(), to.getMonth(), 1); } else { var n = parseInt(key, 10) || 30; from.setDate(from.getDate() - (n - 1)); } return { from: isoDate(from), to: isoDate(to) }; }
+  function rangeFor(key, cfrom, cto) {
+    if (key === 'custom') { return { from: cfrom || isoDate(new Date()), to: cto || todayIso() }; }
+    var to = new Date(), from = new Date();
+    if (key === 'month') { from = new Date(to.getFullYear(), to.getMonth(), 1); }
+    else { var n = ({ '7': 7, '30': 30, '60': 60, '90': 90 })[key] || parseInt(key, 10) || 30; from.setDate(from.getDate() - (n - 1)); }
+    return { from: isoDate(from), to: isoDate(to) };
+  }
+  // Range dropdown + (when Custom) two date inputs. prefix is used for the ids:
+  // <prefix>-range, <prefix>-from, <prefix>-to. withAll adds an 'All time' option.
+  function rangeControls(prefix, val, cfrom, cto, withAll) {
+    var opts = [];
+    if (withAll) opts.push(['all', 'All time']);
+    opts.push(['7', 'Last 7 days'], ['30', 'Last 30 days'], ['60', 'Last 2 months'], ['90', 'Last 3 months'], ['custom', 'Custom']);
+    var html = selOpts(prefix + '-range', val, opts);
+    if (val === 'custom') {
+      html += '<input type="date" class="fed-filter" id="' + prefix + '-from" value="' + esc(cfrom || '') + '" max="' + todayIso() + '">' +
+              '<input type="date" class="fed-filter" id="' + prefix + '-to" value="' + esc(cto || todayIso()) + '" max="' + todayIso() + '">';
+    }
+    return html;
+  }
 
   /* ---- tabs ---- */
   function selectTab(id) {
@@ -266,17 +285,22 @@
     var name = (TABS.filter(function (t) { return t.id === state.tab; })[0] || {}).label || '';
     body.innerHTML = '<div class="fed-stub"><b>' + esc(name) + '</b><br>This module is being added to the employee popup next.</div>';
   }
-  var ATT_LBL = { '7': 'Last 7 days', '30': 'Last 30 days', '90': 'Last 90 days', 'month': 'This month' };
+  var ATT_LBL = { '7': 'Last 7 days', '30': 'Last 30 days', '60': 'Last 2 months', '90': 'Last 3 months', 'month': 'This month' };
   function loadAttendance() {
-    var r = rangeFor(state.attRange || '30');
+    var r = rangeFor(state.attRange || '30', state.attFrom, state.attTo);
     return api('/api/attendance/summary/?email=' + encodeURIComponent(state.email) + '&fromDate=' + r.from + '&toDate=' + r.to)
       .then(function (sum) { state.attSummary = sum; if (state.tab === 'attendance') renderAttendance(); })
       .catch(function () { state.attSummary = {}; if (state.tab === 'attendance') renderAttendance(); });
   }
-  function wireAtt() { var el = document.getElementById('fed-att-range'); if (el) el.onchange = function () { state.attRange = el.value; state.attSummary = null; renderAttendance(); }; }
+  function wireAtt() {
+    var r = document.getElementById('fed-att-range');
+    if (r) r.onchange = function () { state.attRange = r.value; state.attSummary = null; renderAttendance(); };
+    var f = document.getElementById('fed-att-from'); if (f) f.onchange = function () { state.attFrom = f.value; state.attSummary = null; renderAttendance(); };
+    var t = document.getElementById('fed-att-to'); if (t) t.onchange = function () { state.attTo = t.value; state.attSummary = null; renderAttendance(); };
+  }
   function renderAttendance() {
     var body = document.getElementById('fed-body'); if (!body) return;
-    var bar = filterBar(selOpts('fed-att-range', state.attRange || '30', [['7', 'Last 7 days'], ['30', 'Last 30 days'], ['90', 'Last 90 days'], ['month', 'This month']]));
+    var bar = filterBar(rangeControls('fed-att', state.attRange || '30', state.attFrom, state.attTo, false));
     var sum = state.attSummary;
     if (!sum) { body.innerHTML = bar + '<div class="fed-loading">Loading attendance...</div>'; wireAtt(); loadAttendance(); return; }
     var pct = attendancePct(sum);
@@ -286,7 +310,7 @@
       '<div class="fed-pctwrap">' +
         '<div class="fed-ring" style="' + ring + '"><div style="width:70px;height:70px;border-radius:50%;background:var(--surface,#fff);display:flex;align-items:center;justify-content:center;"><span>' + (pct == null ? '--' : pct + '%') + '</span></div></div>' +
         '<div><div class="fed-cv">' + (pct == null ? 'No records' : 'Attendance') + '</div>' +
-          '<div class="fed-ringlbl">' + esc(ATT_LBL[state.attRange || '30']) + '</div></div>' +
+          '<div class="fed-ringlbl">' + esc(state.attRange === 'custom' ? ((state.attFrom || '?') + ' to ' + (state.attTo || todayIso())) : (ATT_LBL[state.attRange || '30'] || '')) + '</div></div>' +
       '</div>' +
       '<div class="fed-break">' +
         bk(sum.present || 0, 'Present') + bk(sum.late || 0, 'Late') + bk(sum.absent || 0, 'Absent') + bk(sum.half_day || 0, 'Half-day') +
@@ -460,8 +484,15 @@
   function renderLeave() {
     var body = document.getElementById('fed-body'); if (!body) return;
     if (!state.leave) { body.innerHTML = '<div class="fed-loading">Loading leave...</div>'; loadLeave(); return; }
-    var bar = filterBar(selOpts('fed-leave-status', state.leaveStatus || 'all', [['all', 'All status'], ['Pending', 'Pending'], ['Approved', 'Approved'], ['Rejected', 'Rejected']]));
-    var rows = (state.leave || []).filter(function (l) { return !state.leaveStatus || state.leaveStatus === 'all' || String(l.status || 'Pending') === state.leaveStatus; });
+    var bar = filterBar(
+      selOpts('fed-leave-status', state.leaveStatus || 'all', [['all', 'All status'], ['Pending', 'Pending'], ['Approved', 'Approved'], ['Rejected', 'Rejected']]) +
+      rangeControls('fed-leave', state.leaveRange || 'all', state.leaveFrom, state.leaveTo, true));
+    var lrng = (state.leaveRange && state.leaveRange !== 'all') ? rangeFor(state.leaveRange, state.leaveFrom, state.leaveTo) : null;
+    var rows = (state.leave || []).filter(function (l) {
+      if (state.leaveStatus && state.leaveStatus !== 'all' && String(l.status || 'Pending') !== state.leaveStatus) return false;
+      if (lrng) { var d = String(l.fromDate || ''); if (d && (d < lrng.from || d > lrng.to)) return false; }
+      return true;
+    });
     var html = '<div class="fed-sec">Leave management <span class="fed-live"><i></i>Live</span></div>';
     if (!rows.length) { body.innerHTML = bar + html + '<div class="fed-empty">No matching leave requests.</div>'; wireLeaveFilter(); return; }
     html += '<div class="fed-subs">' + rows.map(function (l) {
@@ -474,7 +505,12 @@
     body.innerHTML = bar + html;
     wireLeaveFilter();
   }
-  function wireLeaveFilter() { var el = document.getElementById('fed-leave-status'); if (el) el.onchange = function () { state.leaveStatus = el.value; renderLeave(); }; }
+  function wireLeaveFilter() {
+    var s2 = document.getElementById('fed-leave-status'); if (s2) s2.onchange = function () { state.leaveStatus = s2.value; renderLeave(); };
+    var r = document.getElementById('fed-leave-range'); if (r) r.onchange = function () { state.leaveRange = r.value; renderLeave(); };
+    var f = document.getElementById('fed-leave-from'); if (f) f.onchange = function () { state.leaveFrom = f.value; renderLeave(); };
+    var t = document.getElementById('fed-leave-to'); if (t) t.onchange = function () { state.leaveTo = t.value; renderLeave(); };
+  }
 
   /* ---- live WebSocket ---- */
   function openSocket(email) {
