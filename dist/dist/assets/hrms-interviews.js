@@ -542,62 +542,32 @@
       var iv = linkRowInterview(tr.cells[0].textContent);
       fixLinkCell(tr, iv, linkCol);
 
-      // Fill the Recruiter column with who created/scheduled the interview.
-      // Mutate the existing <span>'s text/style in place — never replace it
-      // via innerHTML. React re-renders this whole table (every row, not
-      // just the one that changed) whenever the interviews list updates —
-      // generating a link, creating an interview, saving a note. If we had
-      // swapped in a brand-new node here on an earlier tick, React's next
-      // reconciliation tries to remove a child it thinks is still its own
-      // and throws "NotFoundError: Failed to execute 'removeChild'", which
-      // unmounts the whole app to a blank page. Leaving React's own node in
-      // place (only its text/style changed) keeps its fiber-to-DOM mapping
-      // intact, so its own re-render can still find and update it normally.
+      // Fill the Recruiter column with who created/scheduled the interview
       if (recruiterCol >= 0 && tr.cells[recruiterCol]) {
         var rCell = tr.cells[recruiterCol];
-        var rSpan = rCell.querySelector('span');
-        if (rSpan) {
-          var who = iv ? creatorOf(iv) : '';
-          var label = who || (loaded ? '—' : null);
-          if (label != null && rSpan.textContent !== label) rSpan.textContent = label;
-          if (who) {
-            rSpan.className = 'hrms-iv-recruiter-nm';
-            rSpan.style.cssText = 'font-weight:600;color:var(--text, #1e293b);background:transparent;border:none;padding:0;';
-          }
+        var who = iv ? creatorOf(iv) : '';
+        if (who) {
+          rCell.innerHTML = '<span class="hrms-iv-recruiter-nm" style="font-weight:600;color:var(--text, #1e293b);">' + esc(who) + '</span>';
+        } else if (loaded) {
+          rCell.innerHTML = '<span class="hrms-iv-recruiter-nm" style="color:var(--text3, #94a3b8);">—</span>';
         }
       }
     });
   }
 
-  // Same rule as the Recruiter column above: never remove or replace a node
-  // React rendered for this cell (its "Not generated" <span>, or its own
-  // working Copy <button> once a real link exists) — doing so is what used
-  // to crash the app on the table's next re-render. We only ever hide
-  // React's span (still present, still exactly what its fiber expects to
-  // find) and add our own Copy button as a plain extra sibling.
   function fixLinkCell(tr, iv, linkCol) {
     if (linkCol < 0 || !tr.cells[linkCol]) return;
     var cell = tr.cells[linkCol];
-    var ours = cell.querySelector('.hrms-iv-copy');
-    var reactBtn = Array.prototype.filter.call(cell.querySelectorAll('button'), function (b) { return b !== ours; })[0];
-    if (reactBtn) {
-      // React now has its own working Copy button (a real link exists) —
-      // our stand-in is no longer needed. Remove only the node we created.
-      if (ours && ours.parentNode) ours.parentNode.removeChild(ours);
-      return;
-    }
     var url = candidateLink(iv);
     if (!url) return;                       // no token/link: nothing to offer
-    if (ours) { ours.setAttribute('data-copy', url); return; }
     var text = (cell.textContent || '').trim().toLowerCase();
     var stale = iv && isStaleAppLink(iv.link);
-    if (text === 'not generated' || text === '—' || text === '-' || stale) {
-      var span = cell.querySelector('span');
-      if (span) span.style.display = 'none';
-      var btn = document.createElement('button');
-      btn.type = 'button'; btn.className = 'hrms-iv-copy'; btn.setAttribute('data-copy', url);
-      btn.textContent = 'Copy';
-      cell.appendChild(btn);
+    if (cell.querySelector('.hrms-iv-copy')) {
+      cell.querySelector('.hrms-iv-copy').setAttribute('data-copy', url);
+      return;
+    }
+    if (text === 'not generated' || text === '—' || text === '-' || stale || !cell.querySelector('button')) {
+      cell.innerHTML = '<button type="button" class="hrms-iv-copy" data-copy="' + esc(url) + '">Copy</button>';
     }
   }
 
