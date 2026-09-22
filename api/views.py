@@ -4336,7 +4336,7 @@ def notifications_read_all(request):
 
 
 # --- Task Tracker ----------------------------------------------------------
-def _data_url_too_large(data_url, limit_bytes=50 * 1024):
+def _data_url_too_large(data_url, limit_bytes=50 * 1024 * 1024):
     """Rough decoded-size check for a `data:<mime>;base64,<data>` string."""
     b64 = str(data_url).split(',', 1)[-1]
     return (len(b64) * 3) // 4 > limit_bytes
@@ -4392,7 +4392,7 @@ def tasks(request):
         return err('title is required')
     for field, label in (('attachmentFileData', 'File attachment'), ('imageFileData', 'Image attachment')):
         if body.get(field) and _data_url_too_large(body[field]):
-            return err(f'{label} exceeds the 50 KB limit')
+            return err(f'{label} exceeds the 50 MB limit')
     if not body.get('taskCode'):
         body = {**body, 'taskCode': f'TASK-{int(local_now().timestamp() * 1000)}'}
     if not body.get('assigneeEmail'):
