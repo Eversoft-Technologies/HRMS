@@ -1,0 +1,123 @@
+name: Deploy to Staging (cPanel)
+
+on:
+  push:
+    branches:
+      - staging
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+
+env:
+  # The path cPanel points the Staging Python App at (e.g., hrms_staging).
+  # Uses STAGING_TARGET_DIR secret or defaults to REMOTE_TARGET_DIR_staging
+  STAGING_TARGET_NAME: ${{ secrets.STAGING_TARGET_DIR || 'hrms_staging' }}
+  APP_LINK: /home/${{ secrets.REMOTE_USER }}/${{ secrets.STAGING_TARGET_DIR || 'hrms_staging' }}
+  RELEASES_DIR: /home/${{ secrets.REMOTE_USER }}/${{ secrets.STAGING_TARGET_DIR || 'hrms_staging' }}_releases
+  SHARED_DIR: /home/${{ secrets.REMOTE_USER }}/${{ secrets.STAGING_TARGET_DIR || 'hrms_staging' }}_shared
+  RELEASE_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+  VENV_ACTIVATE: /home/${{ secrets.REMOTE_USER }}/virtualenv/${{ secrets.STAGING_TARGET_DIR || 'hrms_staging' }}/3.10/bin/activate
+
+jobs:
+  deploy-staging:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Ensure remote directories exist
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.REMOTE_HOST }}
+          username: ${{ secrets.REMOTE_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.REMOTE_PORT || '22' }}
+          envs: RELEASES_DIR,SHARED_DIR
+          script: |
+            mkdir -p "${RELEASES_DIR}" "${SHARED_DIR}"
+
+      - name: Upload release to staging server
+        uses: easingthemes/ssh-deploy@main
+        with:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          REMOTE_HOST: ${{ secrets.REMOTE_HOST }}
+          REMOTE_USER: ${{ secrets.REMOTE_USER }}
+          REMOTE_PORT: ${{ secrets.REMOTE_PORT || '22' }}
+          TARGET: ${{ env.RELEASES_DIR }}/${{ env.RELEASE_ID }}
+          SOURCE: "./"
+          EXCLUDE: "/.git/, /.github/, /.venv/, /node_modules/, /db.sqlite3, /smoke_test.sqlite3, /.env, /keypair, /keypair.pub"
+
+      - name: Build, migrate, and atomically switch staging release
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.REMOTE_HOST }}
+          username: ${{ secrets.REMOTE_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.REMOTE_PORT || '22' }}
+          envs: APP_LINK,RELEASES_DIR,SHARED_DIR,RELEASE_ID,VENV_ACTIVATE,STAGING_TARGET_NAME
+          script: |
+            set -euo pipefail
+
+            RELEASE_DIR="${RELEASES_DIR}/${RELEASE_ID}"
+
+            echo ">>> Deploying Staging release ${RELEASE_ID}"
+
+            cleanup_on_failure() {
+              echo "!!! Staging deploy FAILED - staging site untouched, previous release still serving."
+              rm -rf "${RELEASE_DIR}" || true
+            }
+            trap cleanup_on_failure ERR
+
+            mkdir -p "${SHARED_DIR}"
+            mkdir -p "${SHARED_DIR}/media/chat_uploads"
+            if [ ! -f "${SHARED_DIR}/.env" ]; then
+              echo "!!! Missing ${SHARED_DIR}/.env - create it with staging database credentials."
+              exit 1
+            fi
+            ln -sfn "${SHARED_DIR}/.env" "${RELEASE_DIR}/.env"
+            rm -rf "${RELEASE_DIR}/media"
+            ln -sfn "${SHARED_DIR}/media" "${RELEASE_DIR}/media"
+
+            find "${RELEASE_DIR}" -type d -exec chmod 755 {} +
+            find "${RELEASE_DIR}" -type f -exec chmod 644 {} +
+
+            if [ ! -f "${VENV_ACTIVATE}" ]; then
+              echo "!!! Virtualenv not found at ${VENV_ACTIVATE}"
+              exit 1
+            fi
+            source "${VENV_ACTIVATE}"
+
+            cd "${RELEASE_DIR}"
+            pip install --upgrade pip
+            pip install -r requirements.txt
+            python manage.py collectstatic --noinput
+            python manage.py migrate --noinput
+
+            # If APP_LINK is an initial physical directory created by cPanel (not a symlink yet),
+            # remove it so it can be cleanly replaced by the atomic symlink.
+            if [ ! -L "${APP_LINK}" ] && [ -d "${APP_LINK}" ]; then
+              echo ">>> Converting initial physical app directory ${APP_LINK} to symlink"
+              rm -rf "${APP_LINK}"
+            fi
+
+            ln -sfn "${RELEASE_DIR}" "${APP_LINK}.tmp"
+            mv -Tf "${APP_LINK}.tmp" "${APP_LINK}"
+
+            # Ensure cPanel Python selector finds the virtualenv even when following release symlinks
+            VENV_DIR="/home/${{ secrets.REMOTE_USER }}/virtualenv"
+            if [ -d "${VENV_DIR}/${STAGING_TARGET_NAME}" ]; then
+              mkdir -p "${VENV_DIR}/${STAGING_TARGET_NAME}_releases"
+              ln -sfn "${VENV_DIR}/${STAGING_TARGET_NAME}" "${VENV_DIR}/${STAGING_TARGET_NAME}_releases/${RELEASE_ID}"
+            fi
+
+            mkdir -p "${RELEASE_DIR}/tmp"
+            touch "${RELEASE_DIR}/tmp/restart.txt"
+
+            trap - ERR
+            echo ">>> Staging Deploy OK - now serving release ${RELEASE_ID}"
+            cd "${RELEASES_DIR}"
+            ls -1dt */ | tail -n +6 | xargs -r rm -rf
+            echo ">>> Pruned old staging releases (kept newest 5)."

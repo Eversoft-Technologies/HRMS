@@ -78,20 +78,20 @@ DEFAULT_SECTIONS = [
         _field('location', 'Location', 'select', required=True, placeholder='Select Location', masterKey='locations', core=True, width='half'),
         _field('type', 'Job Type', 'select', required=True, placeholder='Select Job Type', masterKey='job_types', defaultValue='Full-time', core=True, width='half'),
         _field('experience', 'Experience (Years)', 'number', required=True, placeholder='e.g. 3', width='half'),
-        _field('salary', 'Salary Range', 'salary', currency=True, core=True),
+        _field('salary', 'Salary Range', 'salary', required=True, currency=True, core=True),
         _field('description', 'Job Description', 'textarea', required=True, placeholder='Enter job description…', core=True),
     ]},
     {'id': 'sec_reqs', 'title': 'Requirements', 'collapsed': False, 'fields': [
         _field('skills', 'Skills Required', 'multiselect', masterKey='skills', placeholder='Select or type skills'),
         _field('education', 'Education', 'select', masterKey='education_levels', placeholder='Select Education', width='half'),
-        _field('openings', 'Openings', 'number', defaultValue=1, core=True, width='half'),
+        _field('openings', 'Openings', 'number', required=True, defaultValue=1, core=True, width='half'),
         _field('certifications', 'Certifications (Optional)', 'text', placeholder='e.g. AWS Certified'),
         _field('notes', 'Additional Notes', 'textarea', placeholder='Anything else candidates should know…'),
     ]},
     {'id': 'sec_meta', 'title': 'Posting Settings', 'collapsed': True, 'fields': [
-        _field('priority', 'Priority', 'select', masterKey='priorities', defaultValue='Normal', core=True, width='half'),
-        _field('status', 'Status', 'select', masterKey='statuses', defaultValue='Active', core=True, width='half'),
-        _field('remote', 'Remote', 'boolean', defaultValue=False, core=True, width='half'),
+        _field('priority', 'Priority', 'select', required=True, masterKey='priorities', defaultValue='Normal', core=True, width='half'),
+        _field('status', 'Status', 'select', required=True, masterKey='statuses', defaultValue='Active', core=True, width='half'),
+        _field('remote', 'Remote', 'boolean', required=True, defaultValue=False, core=True, width='half'),
     ]},
 ]
 

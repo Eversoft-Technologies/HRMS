@@ -214,9 +214,9 @@ def _send_via_smtp(smtp_settings, to, subject, html=None, text=None):
     try:
         context = ssl.create_default_context()
         if smtp_settings.get('secure') or smtp_settings.get('port') == 465:
-            server = smtplib.SMTP_SSL(smtp_settings['host'], smtp_settings['port'], timeout=25, context=context)
+            server = smtplib.SMTP_SSL(smtp_settings['host'], smtp_settings['port'], timeout=8, context=context)
         else:
-            server = smtplib.SMTP(smtp_settings['host'], smtp_settings['port'], timeout=25)
+            server = smtplib.SMTP(smtp_settings['host'], smtp_settings['port'], timeout=8)
             server.ehlo()
             try:
                 server.starttls(context=context)
