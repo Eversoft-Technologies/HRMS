@@ -152,6 +152,7 @@ urlpatterns = [
 
     # Employees module — Task Tracker
     path('tasks', views.tasks),
+    path('tasks/assignees', views.task_assignees),
     path('tasks/<int:pk>', views.task_detail),
 
     # Employees module — Work Submissions
