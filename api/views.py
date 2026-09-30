@@ -4395,6 +4395,41 @@ def _employee_caller_email(request):
     return ''
 
 
+@api_view(['GET'])
+def task_assignees(request):
+    """Search registered users for the Task Tracker's "Assigned To" picker.
+
+    ``?q=`` is matched against the START of the email OR of the full name,
+    case-insensitively. So jaswanth@... named "abhi" is found by typing "j"
+    (email) and by typing "a" (name), but not by a letter from the middle.
+    Only active accounts are returned, and only the three fields the picker
+    needs — this is guarded by the permission to create or edit a task, which is
+    far wider than ``settings.view``, so it must never expose what GET /users
+    does (passwords, roles).
+    """
+    # Open to anyone who may create a task or edit one — both forms use it.
+    allowed, caller_email, user = check_perm(request, 'employee.create')
+    if not caller_email or not user:
+        return err('Authentication required. Please sign in again.', 401)
+    if not allowed:
+        allowed, _, _ = check_perm(request, 'task.edit')
+    if not allowed:
+        return err('Permission denied: employee.create or task.edit', 403)
+    q = str(request.GET.get('q') or '').strip()
+    if not q:
+        return Response([])
+    qs = (
+        AppUser.objects
+        .filter(status='active')
+        .filter(Q(email__istartswith=q) | Q(full_name__istartswith=q))
+        .order_by('email')[:10]
+    )
+    return Response([
+        {'id': u.id, 'name': u.full_name or '', 'email': norm_email(u.email)}
+        for u in qs
+    ])
+
+
 @api_view(['GET', 'POST'])
 @require_perm({'GET': 'employee.view', 'POST': 'employee.create'}, or_self=True)
 def tasks(request):
@@ -4419,7 +4454,19 @@ def tasks(request):
             return err(f'{label} exceeds the 50 MB limit')
     if not body.get('taskCode'):
         body = {**body, 'taskCode': f'TASK-{int(local_now().timestamp() * 1000)}'}
-    if not body.get('assigneeEmail'):
+    if body.get('assigneeEmail'):
+        # The picker only offers registered users; hold the API to the same
+        # rule so a hand-built request cannot assign a task to a stranger.
+        picked = AppUser.objects.filter(
+            email=norm_email(body.get('assigneeEmail')), status='active').first()
+        if not picked:
+            return err('Assigned To must be a registered employee')
+        body = {
+            **body,
+            'assigneeEmail': norm_email(picked.email),
+            'assignee': body.get('assignee') or picked.full_name or picked.email,
+        }
+    else:
         body = {**body, 'assigneeEmail': _resolve_assignee_email(body.get('assignee'))}
     serializer = EmployeeTaskSerializer(data=body)
     if not serializer.is_valid():
@@ -4449,6 +4496,16 @@ def task_detail(request, pk):
         obj.delete()
         return Response({'ok': True})
     body = dict(request.data or {})
+    # Re-assigned through the picker: the new assignee must be a registered,
+    # active user. An unchanged email is left alone, so a task whose assignee
+    # was later disabled can still have its other fields edited.
+    new_email = norm_email(body.get('assigneeEmail'))
+    if new_email and new_email != norm_email(obj.assignee_email):
+        picked = AppUser.objects.filter(email=new_email, status='active').first()
+        if not picked:
+            return err('Assigned To must be a registered employee')
+        body['assigneeEmail'] = norm_email(picked.email)
+        body['assignee'] = body.get('assignee') or picked.full_name or picked.email
     # Reviewer re-assigned the task by name: refresh the resolved email so the
     # new assignee's board picks it up (and the old one's drops it).
     if 'assignee' in body and not body.get('assigneeEmail') and (body.get('assignee') or '') != (obj.assignee or ''):
