@@ -44,6 +44,18 @@ jobs:
       #     npm install
       #     npm run build
 
+      # Ensure the releases & shared parent directories exist on the server
+      - name: Ensure remote directories exist
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.REMOTE_HOST }}
+          username: ${{ secrets.REMOTE_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.REMOTE_PORT || '22' }}
+          envs: RELEASES_DIR,SHARED_DIR
+          script: |
+            mkdir -p "${RELEASES_DIR}" "${SHARED_DIR}"
+
       # Upload the new code into a FRESH release directory - never the live dir.
       # A partial/failed transfer therefore cannot touch the running site.
       - name: Upload release to server
