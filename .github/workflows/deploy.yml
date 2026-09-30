@@ -129,9 +129,13 @@ jobs:
             python manage.py collectstatic --noinput
             python manage.py migrate --noinput
 
-            # 4. All steps succeeded -> atomically point the app symlink at the new
-            #    release. Writing a temp symlink then mv -T over the old one makes
-            #    the switch a single, uninterruptible rename (no missing-link gap).
+            # If APP_LINK is an initial physical directory created by cPanel (not a symlink yet),
+            # remove it so it can be cleanly replaced by the atomic symlink.
+            if [ ! -L "${APP_LINK}" ] && [ -d "${APP_LINK}" ]; then
+              echo ">>> Converting initial physical app directory ${APP_LINK} to symlink"
+              rm -rf "${APP_LINK}"
+            fi
+
             ln -sfn "${RELEASE_DIR}" "${APP_LINK}.tmp"
             mv -Tf "${APP_LINK}.tmp" "${APP_LINK}"
 
