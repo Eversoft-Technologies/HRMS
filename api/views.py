@@ -1257,8 +1257,9 @@ def resume_score_file(request, pk):
 # ---------------------------------------------------------------------------
 def _recording_list_qs():
     return InterviewRecording.objects.annotate(
-        # ``_has_video`` is True only when *either* storage column has non-empty data
+        # ``_has_video`` is True when disk file, binary blob, or legacy base64 has data
         _has_video=Case(
+            When(video_file__isnull=False, video_file__gt='', then=Value(True)),
             When(video_buffer__isnull=False, video_buffer__gt=b'', then=Value(True)),
             When(recording_data__isnull=False, recording_data__gt='', then=Value(True)),
             default=Value(False), output_field=BooleanField(),
@@ -1454,12 +1455,27 @@ def _blob_slice(pk, start, length):
     return bytes(window) if window else b''
 
 
+@api_view(['GET'])
+def recording_thumbnail(request, pk):
+    """Serves the poster snapshot image generated during video transcoding."""
+    rec = InterviewRecording.objects.filter(pk=pk).values('thumbnail_file').first()
+    if rec and rec.get('thumbnail_file'):
+        media_root = Path(getattr(settings, 'MEDIA_ROOT', settings.BASE_DIR / 'media'))
+        abs_path = media_root / rec['thumbnail_file']
+        if abs_path.exists():
+            from django.http import FileResponse
+            return FileResponse(open(abs_path, 'rb'), content_type='image/jpeg')
+    return HttpResponse(status=404)
+
+
 @csrf_exempt
 def recording_video(request, pk):
-    """Binary (video/webm) upload + download.
+    """
+    Direct video binary streaming & upload endpoint for interview recordings.
 
-    POST: Stores raw binary video bytes directly into `video_buffer` LONGBLOB.
-    GET: Serves uncorrupted binary video data with HTTP Range request support (206 Partial Content).
+    POST: Stores video file to server disk media/interviews/, transcodes to H.264+AAC MP4
+          if FFmpeg is present, and saves metadata to SQL.
+    GET:  Serves streaming video with HTTP Range request support (206 Partial Content).
     """
     if request.method == 'POST':
         if not InterviewRecording.objects.filter(pk=pk).exists():
@@ -1468,20 +1484,31 @@ def recording_video(request, pk):
         if not data:
             return err('Invalid or empty video payload')
         mime = (request.META.get('CONTENT_TYPE') or 'video/webm').split(';')[0]
-        InterviewRecording.objects.filter(pk=pk).update(
-            video_buffer=data,
-            video_mime=mime,
-        )
-        return JsonResponse({'ok': True})
+        try:
+            from . import video_processor
+            result = video_processor.save_interview_video(pk, data, mime)
+            return JsonResponse(result)
+        except Exception as exc:
+            logger.error(f"[RecordingVideo] Disk save failed: {exc}", exc_info=True)
+            # Fallback direct buffer write if disk save encounters an unexpected error
+            InterviewRecording.objects.filter(pk=pk).update(video_buffer=data, video_mime=mime)
+            return JsonResponse({'ok': True, 'fallback': 'buffer'})
 
     if request.method != 'GET':
         return err('Method not allowed', 405)
 
     try:
-        # Size and mime only. Selecting the LONGBLOB here is what made a 1 KB
-        # seek cost a full read: the row was loaded whole and then sliced in
-        # Python, so every scrub in the player pulled the entire recording into
-        # memory. LENGTH() answers the only question the Range parser asks.
+        # 1. Check if video file exists on disk (Preferred file-storage architecture)
+        rec = InterviewRecording.objects.filter(pk=pk).values('video_file', 'video_mime').first()
+        if rec and rec.get('video_file'):
+            media_root = Path(getattr(settings, 'MEDIA_ROOT', settings.BASE_DIR / 'media'))
+            abs_path = media_root / rec['video_file']
+            if abs_path.exists():
+                from . import video_processor
+                content_type = rec.get('video_mime') or 'video/mp4'
+                return video_processor.stream_file_range(abs_path, content_type, request)
+
+        # 2. Fallback to legacy database LONGBLOB or base64 row
         meta = (InterviewRecording.objects.filter(pk=pk)
                 .annotate(buffer_len=_ByteLength('video_buffer'))
                 .values_list('buffer_len', 'video_mime')
@@ -1493,9 +1520,6 @@ def recording_video(request, pk):
         buffer_len = buffer_len or 0
         content_type = mime or 'video/webm'
 
-        # Legacy rows kept the video base64-encoded (or JSON-chunked) in
-        # recording_data. Decoding needs the whole string, so there is nothing
-        # to slice in SQL — those rows still come back in one piece.
         legacy_bytes = None
         if not buffer_len:
             rd = (InterviewRecording.objects.filter(pk=pk)

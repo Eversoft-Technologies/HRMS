@@ -197,11 +197,17 @@
       '</div>'
     ].join('');
 
-    // Toggle body expansion
+    // Toggle body expansion (single open accordion)
     item.querySelector('#header-' + f.id).addEventListener('click', function () {
       var body = item.querySelector('#' + id);
       var current = body.style.display;
-      body.style.display = current === 'block' ? 'none' : 'block';
+      var isOpening = current !== 'block';
+      document.querySelectorAll('.cp-form-body').forEach(function (b) {
+        b.style.display = 'none';
+      });
+      if (isOpening) {
+        body.style.display = 'block';
+      }
     });
 
     var errEl = item.querySelector('#err-' + f.id);
@@ -424,8 +430,13 @@
 
               docItem.querySelector('#' + headId).addEventListener('click', function () {
                 var body = docItem.querySelector('#' + bodyId);
-                var current = body.style.display;
-                body.style.display = current === 'block' ? 'none' : 'block';
+                var isOpening = body.style.display !== 'block';
+                listEl.querySelectorAll('.cp-form-body').forEach(function (b) {
+                  b.style.display = 'none';
+                });
+                if (isOpening) {
+                  body.style.display = 'block';
+                }
               });
 
               var upZone = docItem.querySelector('#doc-up-zone-' + item.type);

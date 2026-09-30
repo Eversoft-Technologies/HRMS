@@ -171,7 +171,10 @@ def check_perm(request, code, or_self=False):
             return True, caller_email, user
 
     # Standard permission check
-    if _user_has_perm(user, resolved):
+    if isinstance(resolved, (list, tuple, set)):
+        if any(_user_has_perm(user, p) for p in resolved):
+            return True, caller_email, user
+    elif _user_has_perm(user, resolved):
         return True, caller_email, user
 
     return False, caller_email, user

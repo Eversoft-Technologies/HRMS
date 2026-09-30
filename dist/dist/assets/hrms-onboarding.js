@@ -145,8 +145,8 @@
     setTimeout(function () { if (el.parentNode) el.remove(); }, 3700);
   }
 
-  function fmtDate(s) { return s ? String(s).slice(0, 10) : '—'; }
-  function fmtDateTime(s) { return s ? String(s).replace('T', ' ').slice(0, 16) : '—'; }
+  function fmtDate(s) { return s ? String(s).slice(0, 10) : '<span class="ob-empty-val">-</span>'; }
+  function fmtDateTime(s) { return s ? String(s).replace('T', ' ').slice(0, 16) : '<span class="ob-empty-val">-</span>'; }
   function stageLabel(k) {
     for (var i = 0; i < STAGES.length; i++) if (STAGES[i][0] === k) return STAGES[i][1];
     return k;
@@ -193,17 +193,18 @@
       '.ob-in:focus,.ob-sel:focus,.ob-ta:focus{outline:none;border-color:var(--accent,#4f8ef7)}',
       '.ob-ta{min-height:70px;resize:vertical}',
       '.ob-search{max-width:280px}',
+      '.ob-search{max-width:280px}',
       /* cards */
-      '.ob-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:14px;margin-bottom:22px}',
-      '.ob-card{background:var(--bg2,#141b26);border:1px solid var(--border,#2a3446);border-radius:12px;padding:16px}',
-      '.ob-card .n{font-size:26px;font-weight:800;line-height:1.1}',
-      '.ob-card .l{color:var(--muted,#8a9bb8);font-size:12px;margin-top:6px}',
-      '.ob-card.alert .n{color:#f59e0b}',
-      '.ob-card.bad .n{color:#ef4444}',
-      /* panels */
-      '.ob-grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;margin-bottom:22px}',
-      '.ob-panel{background:var(--bg2,#141b26);border:1px solid var(--border,#2a3446);border-radius:12px;padding:16px}',
-      '.ob-panel h3{margin:0 0 14px;font-size:14px;font-weight:700}',
+      '.ob-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;margin-bottom:22px;width:100%;box-sizing:border-box}',
+      '.ob-card{background:var(--bg2,#141b26);border:1px solid var(--border,#2a3446);border-radius:12px;padding:16px;box-sizing:border-box;transition:border-color .15s}',
+      '.ob-card:hover{border-color:var(--accent,#4f8ef7)}',
+      '.ob-card .n{font-size:26px;font-weight:800;line-height:1.1;color:var(--text,#e6edf7)}',
+      '.ob-card .l{color:var(--muted,#8a9bb8);font-size:12px;margin-top:6px;font-weight:500}',
+      /* panels & grids */
+      '.ob-grid1{display:grid;grid-template-columns:1fr;gap:16px;margin-bottom:22px;width:100%;box-sizing:border-box}',
+      '.ob-grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;margin-bottom:22px;width:100%;box-sizing:border-box}',
+      '.ob-panel{background:var(--bg2,#141b26);border:1px solid var(--border,#2a3446);border-radius:12px;padding:18px;box-sizing:border-box;width:100%}',
+      '.ob-panel h3{margin:0 0 14px;font-size:14px;font-weight:700;color:var(--text,#e6edf7)}',
       '.ob-legend{display:flex;flex-direction:column;gap:6px;font-size:12px}',
       '.ob-legend div{display:flex;align-items:center;gap:7px}',
       '.ob-dot{width:9px;height:9px;border-radius:50%;flex-shrink:0}',
@@ -223,6 +224,8 @@
       '.ob-skel{height:14px;border-radius:5px;background:linear-gradient(90deg,var(--bg3,#1c2433) 25%,var(--border,#2a3446) 50%,var(--bg3,#1c2433) 75%);',
       'background-size:200% 100%;animation:obsk 1.2s infinite}',
       '@keyframes obsk{0%{background-position:200% 0}100%{background-position:-200% 0}}',
+      /* empty dash value */
+      '.ob-empty-val{text-align:center!important;color:var(--muted,#8a9bb8);display:block;width:100%;font-weight:500;user-select:none}',
       /* badges */
       '.ob-badge{display:inline-block;padding:3px 9px;border-radius:20px;font-size:11px;font-weight:700;white-space:nowrap}',
       '.ob-badge.ok{background:rgba(34,197,94,.15);color:#22c55e}',
@@ -260,10 +263,10 @@
       /* stage rail */
       '.ob-rail{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:20px}',
       /* dropzone */
-      '.ob-dz{border:2px dashed var(--border,#2a3446);border-radius:12px;padding:28px;text-align:center;',
-      'color:var(--muted,#8a9bb8);cursor:pointer;transition:.15s;margin-bottom:8px}',
-      '.ob-dz:hover,.ob-dz.over{border-color:var(--accent,#4f8ef7);background:var(--bg2,#141b26)}',
-      '.ob-dz .big{font-size:28px;margin-bottom:8px}',
+      '.ob-dz{border:2px dashed var(--border,#2a3446);border-radius:12px;padding:22px 20px;text-align:center;',
+      'color:var(--muted,#8a9bb8);cursor:pointer;transition:.15s;margin-bottom:12px;background:var(--bg2,#141b26)}',
+      '.ob-dz:hover,.ob-dz.over{border-color:var(--accent,#4f8ef7);background:var(--bg3,#1c2433)}',
+      '.ob-dz .big{font-size:26px;margin-bottom:6px}',
       '.ob-bar{height:4px;border-radius:3px;background:var(--bg3,#1c2433);overflow:hidden;margin-top:10px}',
       '.ob-bar i{display:block;height:100%;background:var(--accent,#4f8ef7);width:0;transition:width .2s}',
       /* timeline */
@@ -274,12 +277,23 @@
       'background:var(--accent,#4f8ef7);border:2px solid var(--bg,#0d131c)}',
       '.ob-tl-i .e{font-weight:700;font-size:13px}',
       '.ob-tl-i .m{color:var(--muted,#8a9bb8);font-size:12px;margin-top:3px}',
-      /* alerts */
-      '.ob-al{display:flex;align-items:center;gap:11px;padding:11px 0;border-bottom:1px solid var(--border2,#1d2634);font-size:13px}',
+      /* alerts & notifications */
+      '.ob-al{display:flex;align-items:flex-start;gap:12px;padding:12px 10px;border-bottom:1px solid var(--border2,#1d2634);font-size:13px;border-radius:8px;transition:background .15s}',
+      '.ob-al:hover{background:var(--bg3,#1c2433)}',
       '.ob-al:last-child{border-bottom:none}',
-      '.ob-al .ic{font-size:15px}',
-      '.ob-al .who{font-weight:600}',
-      '.ob-al .when{margin-left:auto;color:var(--muted,#8a9bb8);font-size:12px;white-space:nowrap}',
+      '.ob-al-ic{font-size:16px;line-height:1.2;flex-shrink:0;padding-top:1px}',
+      '.ob-al-content{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}',
+      '.ob-al-who{font-weight:600;color:var(--text,#e6edf7);font-size:13px;word-break:break-word}',
+      '.ob-al-msg{color:var(--muted,#8a9bb8);font-size:12px;line-height:1.4;word-break:break-word}',
+      '.ob-al-when{margin-left:auto;color:var(--muted,#8a9bb8);font-size:11.5px;white-space:nowrap;flex-shrink:0;padding-top:2px}',
+      /* uniform recent item list rows */
+      '.ob-rec-item{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 8px;border-bottom:1px solid var(--border2,#1d2634);border-radius:7px;transition:background .15s}',
+      '.ob-rec-item:hover{background:var(--bg3,#1c2433)}',
+      '.ob-rec-item:last-child{border-bottom:none}',
+      '.ob-rec-info{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}',
+      '.ob-rec-title{font-weight:600;font-size:13px;color:var(--text,#e6edf7);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+      '.ob-rec-sub{font-size:11.5px;color:var(--muted,#8a9bb8);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+      '.ob-rec-meta{flex-shrink:0;margin-left:8px;text-align:right}',
       /* toast + menu */
       '.ob-toast{position:fixed;top:20px;left:50%;transform:translateX(-50%);z-index:99999;padding:12px 22px;',
       'border-radius:10px;font-size:14px;font-weight:600;color:#fff;box-shadow:0 4px 20px rgba(0,0,0,.25);transition:opacity .4s}',
@@ -326,16 +340,69 @@
       '.ob-fd-cf select,.ob-fd-cf input{flex:1;min-width:0;background:var(--bg2,#141b26);border:1px solid var(--border,#2a3446);',
       'border-radius:7px;color:var(--text,#e6edf7);font:inherit;font-size:12px;padding:7px 8px}',
       '.ob-fd-cfx{flex:0 0 auto;width:30px;background:var(--bg2,#141b26);border:1px solid var(--border,#2a3446);border-radius:7px;color:#ef4444;cursor:pointer}',
-      '@media print{.sidebar,.topbar,.ob-h,.ob-pg{display:none!important}',
-      '#' + ID.root + '{overflow:visible!important;padding:0!important;color:#000!important}',
-      '.ob-wrap,.ob-panel,.ob-card{border-color:#ccc!important;background:#fff!important;color:#000!important}',
-      '.ob-table td,.ob-table th{color:#000!important}}',
+      /* responsive mobile styles */
+      '@media (max-width: 640px){',
+      '  #' + ID.root + '{padding:14px 12px!important;width:100%!important;max-width:100vw!important;box-sizing:border-box!important}',
+      '  .ob-cards{grid-template-columns:repeat(2,1fr)!important;gap:8px!important;width:100%!important}',
+      '  .ob-card{padding:12px 10px!important}',
+      '  .ob-card .n{font-size:22px!important}',
+      '  .ob-grid2{grid-template-columns:1fr!important;gap:12px!important;width:100%!important}',
+      '  .ob-panel{padding:14px 12px!important;width:100%!important}',
+      '  .ob-al{padding:10px 6px!important;gap:8px!important}',
+      '  .ob-al-who{font-size:12.5px!important}',
+      '  .ob-al-msg{font-size:11.5px!important}',
+      '  .ob-rec-item{padding:9px 6px!important;gap:8px!important}',
+      '  .ob-rec-title{font-size:12.5px!important}',
+      '  .ob-rec-meta{max-width:45%!important}',
+      '}',
+      '@page{size:landscape;margin:8mm}',
+      '@media print{',
+      '  body,html{background:#fff!important;color:#000!important;font-size:11px!important}',
+      '  .sidebar,.topbar,#ob-search,#ob-fstatus,#ob-fauth,#ob-filters,#ob-columns,#ob-export,#ob-new,.ob-pg,.ob-actions,.ob-menu,#hrms-ob-toast,.ob-ov,#hrms-ob-modal,#ob-doc-modal{display:none!important}',
+      '  #' + ID.root + '{overflow:visible!important;padding:0!important;margin:0!important;width:100%!important;max-width:100%!important;color:#000!important}',
+      '  .ob-h{display:block!important;margin-bottom:8px!important}',
+      '  .ob-h h2{color:#0f172a!important;font-size:18px!important;font-weight:800!important;margin:0 0 4px!important}',
+      '  .ob-sub{display:block!important;color:#475569!important;font-size:11px!important;margin-bottom:12px!important}',
+      '  .ob-wrap{border:1px solid #cbd5e1!important;background:#fff!important;overflow:visible!important;width:100%!important;box-shadow:none!important;border-radius:4px!important}',
+      '  .ob-panel,.ob-card{border-color:#cbd5e1!important;background:#fff!important;color:#000!important}',
+      '  .ob-table{width:100%!important;border-collapse:collapse!important;font-size:10px!important}',
+      '  .ob-table th{background:#f1f5f9!important;color:#1e293b!important;padding:6px 8px!important;font-size:9.5px!important;font-weight:700!important;border:1px solid #cbd5e1!important;white-space:normal!important;word-break:break-word!important}',
+      '  .ob-table td{color:#0f172a!important;padding:5px 8px!important;font-size:10px!important;border:1px solid #e2e8f0!important;white-space:normal!important;word-break:break-word!important}',
+      '  .ob-badge{border:1px solid #94a3b8!important;padding:1px 5px!important;font-size:9.5px!important}',
+      '}',
     ].join('\n');
     document.head.appendChild(st);
   }
 
   /* ── charts: hand-rolled SVG (no chart library is reachable without a bundler) */
-  var PALETTE = ['#4f8ef7', '#a855f7', '#22c55e', '#f59e0b', '#ef4444', '#14b8a6', '#8a9bb8'];
+  var PALETTE = ['#22c55e', '#f59e0b', '#3b82f6', '#ef4444', '#a855f7', '#06b6d4', '#8a9bb8'];
+
+  function sliceColor(label, i) {
+    var l = String(label || '').toLowerCase();
+    if (l.indexOf('approved') !== -1 || l.indexOf('completed') !== -1 || l.indexOf('onboarded') !== -1 || l.indexOf('active') !== -1) return '#22c55e';
+    if (l.indexOf('in progress') !== -1 || l.indexOf('verification') !== -1 || l.indexOf('review') !== -1 || l.indexOf('extension') !== -1) return '#f59e0b';
+    if (l.indexOf('pending') !== -1 || l.indexOf('missing') !== -1 || l.indexOf('expir') !== -1 || l.indexOf('rejected') !== -1) return '#ef4444';
+    if (l.indexOf('citizen') !== -1 || l.indexOf('us') !== -1) return '#22c55e';
+    if (l.indexOf('gc') !== -1 || l.indexOf('green card') !== -1) return '#10b981';
+    if (l.indexOf('h-1b') !== -1 || l.indexOf('h1b') !== -1) return '#3b82f6';
+    if (l.indexOf('f-1') !== -1 || l.indexOf('f1') !== -1 || l.indexOf('opt') !== -1) return '#a855f7';
+    if (l.indexOf('h-4') !== -1 || l.indexOf('h4') !== -1) return '#06b6d4';
+    return PALETTE[i % PALETTE.length];
+  }
+
+  var MONTH_NAMES = {
+    '01': 'January', '02': 'February', '03': 'March', '04': 'April',
+    '05': 'May', '06': 'June', '07': 'July', '08': 'August',
+    '09': 'September', '10': 'October', '11': 'November', '12': 'December',
+    '1': 'January', '2': 'February', '3': 'March', '4': 'April',
+    '5': 'May', '6': 'June', '7': 'July', '8': 'August',
+    '9': 'September'
+  };
+  function fmtMonth(mStr) {
+    if (!mStr) return '';
+    var part = mStr.indexOf('-') !== -1 ? mStr.split('-')[1] : mStr;
+    return MONTH_NAMES[part] || MONTH_NAMES[mStr] || mStr;
+  }
 
   function donut(data) {
     var total = data.reduce(function (a, d) { return a + d.count; }, 0);
@@ -343,11 +410,10 @@
     var R = 52, r = 32, cx = 60, cy = 60, a0 = -Math.PI / 2, segs = '';
     data.forEach(function (d, i) {
       var frac = d.count / total, a1 = a0 + frac * Math.PI * 2;
-      // A single 100% slice cannot be drawn as an arc (start == end), so render
-      // it as two rings instead of a degenerate path.
+      var col = sliceColor(d.label, i);
       if (frac >= 0.9999) {
         segs += '<circle cx="' + cx + '" cy="' + cy + '" r="' + ((R + r) / 2) + '" fill="none" stroke="' +
-                PALETTE[i % PALETTE.length] + '" stroke-width="' + (R - r) + '"/>';
+                col + '" stroke-width="' + (R - r) + '"/>';
         return;
       }
       var big = frac > 0.5 ? 1 : 0;
@@ -357,11 +423,12 @@
       var xi0 = cx + r * Math.cos(a0), yi0 = cy + r * Math.sin(a0);
       segs += '<path d="M' + x0 + ' ' + y0 + ' A' + R + ' ' + R + ' 0 ' + big + ' 1 ' + x1 + ' ' + y1 +
               ' L' + xi1 + ' ' + yi1 + ' A' + r + ' ' + r + ' 0 ' + big + ' 0 ' + xi0 + ' ' + yi0 + ' Z" fill="' +
-              PALETTE[i % PALETTE.length] + '"/>';
+              col + '"/>';
       a0 = a1;
     });
     var legend = data.map(function (d, i) {
-      return '<div><span class="ob-dot" style="background:' + PALETTE[i % PALETTE.length] + '"></span>' +
+      var col = sliceColor(d.label, i);
+      return '<div><span class="ob-dot" style="background:' + col + '"></span>' +
              esc(d.label) + '<span class="v">' + d.count + '</span></div>';
     }).join('');
     return '<div class="ob-chart"><svg width="120" height="120" viewBox="0 0 120 120">' + segs +
@@ -371,13 +438,15 @@
   }
 
   function bars(data) {
+    if (!data || !data.length) return '<div class="ob-empty" style="padding:26px">No monthly data yet</div>';
     var max = Math.max.apply(null, data.map(function (d) { return d.count; }).concat([1]));
-    return '<div style="display:flex;align-items:flex-end;gap:10px;height:130px">' + data.map(function (d) {
-      var h = Math.round((d.count / max) * 96);
-      return '<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:5px">' +
-             '<div style="font-size:11px;font-weight:700">' + d.count + '</div>' +
-             '<div style="width:100%;height:' + Math.max(h, 2) + 'px;background:var(--accent,#4f8ef7);border-radius:5px 5px 0 0"></div>' +
-             '<div style="font-size:10px;color:var(--muted,#8a9bb8)">' + esc(d.month.slice(5)) + '</div></div>';
+    return '<div style="display:flex;align-items:flex-end;gap:14px;height:160px;padding:10px 10px 0;width:100%;box-sizing:border-box">' + data.map(function (d) {
+      var h = Math.round((d.count / max) * 110);
+      var monthName = fmtMonth(d.month);
+      return '<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:6px;min-width:0">' +
+             '<div style="font-size:12px;font-weight:700;color:var(--text,#e6edf7)">' + d.count + '</div>' +
+             '<div style="width:100%;max-width:48px;height:' + Math.max(h, 4) + 'px;background:var(--accent,#4f8ef7);border-radius:6px 6px 0 0;transition:height 0.3s ease"></div>' +
+             '<div style="font-size:11px;font-weight:500;color:var(--muted,#8a9bb8);text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;width:100%" title="' + esc(monthName) + '">' + esc(monthName) + '</div></div>';
     }).join('') + '</div>';
   }
 
@@ -464,17 +533,41 @@
     ['noAuth', 'No Work Authorization'],
   ];
   function matchPredef(r) {
+    var p = state.predef;
+    if (!p || !p.length || (p.length === 1 && p[0] === 'all') || (Array.isArray(p) && p.indexOf('all') !== -1 && p.length === 1)) {
+      return true;
+    }
+    var selected = Array.isArray(p) ? p.filter(function (x) { return x !== 'all'; }) : [p];
+    if (!selected.length) return true;
+
     var s = String(r.status || '').toLowerCase();
     var d = daysTo(r.authExpiryDate);
-    switch (state.predef) {
-      case 'inprogress': return s.indexOf('completed') === -1 && s.indexOf('activated') === -1 && s !== 'rejected';
-      case 'completed': return s.indexOf('completed') !== -1 || s.indexOf('activated') !== -1;
-      case 'rejected': return s === 'rejected';
-      case 'expiringAuth': return d != null && d >= 0 && d <= 60;
-      case 'expiredAuth': return d != null && d < 0;
-      case 'noAuth': return !r.authType;
-      default: return true;
+
+    // Group selected filters into status vs auth categories
+    var statusFilters = selected.filter(function (k) { return ['inprogress', 'completed', 'rejected'].indexOf(k) !== -1; });
+    var authFilters = selected.filter(function (k) { return ['expiringAuth', 'expiredAuth', 'noAuth'].indexOf(k) !== -1; });
+
+    var statusMatch = true;
+    if (statusFilters.length > 0) {
+      statusMatch = statusFilters.some(function (k) {
+        if (k === 'inprogress') return s.indexOf('completed') === -1 && s.indexOf('activated') === -1 && s !== 'rejected' && s !== 'onboarded' && s !== 'approved' && progressPct(r) < 100;
+        if (k === 'completed') return s.indexOf('completed') !== -1 || s.indexOf('activated') !== -1 || s === 'onboarded' || s === 'approved' || s.indexOf('onboard') !== -1 || progressPct(r) === 100;
+        if (k === 'rejected') return s === 'rejected';
+        return false;
+      });
     }
+
+    var authMatch = true;
+    if (authFilters.length > 0) {
+      authMatch = authFilters.some(function (k) {
+        if (k === 'expiringAuth') return d != null && d >= 0 && d <= 60;
+        if (k === 'expiredAuth') return d != null && d < 0;
+        if (k === 'noAuth') return !r.authType;
+        return false;
+      });
+    }
+
+    return statusMatch && authMatch;
   }
   function filteredRows() {
     var q = (state.search || '').toLowerCase();
@@ -487,7 +580,7 @@
       if (state.filters.status && r.status !== state.filters.status) return false;
       if (state.filters.authType && r.authType !== state.filters.authType) return false;
       if (state.buFilter && state.buFilter.indexOf(String(r.department || '')) === -1) return false;
-      if (state.predef !== 'all' && !matchPredef(r)) return false;
+      if (!matchPredef(r)) return false;
       for (var i = 0; i < state.customFilters.length; i++) {
         var cf = state.customFilters[i];
         if (cf.val && cellRaw(r, cf.key).toLowerCase().indexOf(cf.val.toLowerCase()) === -1) return false;
@@ -498,26 +591,130 @@
   function activeFilterCount() {
     var n = 0;
     if (state.buFilter) n++;
-    if (state.predef && state.predef !== 'all') n++;
+    if (state.predef && state.predef.length && (state.predef.indexOf('all') === -1 || state.predef.length > 1)) {
+      n += (Array.isArray(state.predef) ? state.predef : [state.predef]).filter(function (x) { return x !== 'all'; }).length;
+    }
     n += state.customFilters.filter(function (c) { return c.val; }).length;
     return n;
   }
 
   /* ── page: dashboard ──────────────────────────────────────────────────── */
   var CARDS = [
-    ['totalCandidates', 'Total Candidates', ''],
-    ['pendingVerification', 'Pending Verification', 'alert'],
-    ['pendingApproval', 'Pending Approval', 'alert'],
-    ['completedOnboarding', 'Completed Onboarding', ''],
-    ['missingDocuments', 'Missing Documents', 'bad'],
-    ['expiringWorkAuth', 'Expiring Work Auth', 'bad'],
-    ['itAssetsPending', 'IT Assets Pending', 'alert'],
-    ['payrollPending', 'Payroll Pending', 'alert'],
+    ['totalCandidates', 'Total Candidates'],
+    ['pendingVerification', 'Pending Verification'],
+    ['pendingApproval', 'Pending Approval'],
+    ['completedOnboarding', 'Completed Onboarding'],
+    ['missingDocuments', 'Missing Documents'],
+    ['expiringWorkAuth', 'Expiring Work Auth'],
+    ['itAssetsPending', 'IT Assets Pending'],
+    ['payrollPending', 'Payroll Pending'],
   ];
+
+  function previewCandidateDoc(cid, did) {
+    if (!cid || !did) return;
+    toast('Loading preview…', 'ok');
+    api('/onboarding/candidates/' + cid + '/documents/' + did).then(function (d) {
+      if (!d || !d.fileData) { toast('Document data not available', 'warn'); return; }
+      var prev = document.getElementById('hrms-ob-doc-modal');
+      if (prev) prev.remove();
+      var modal = document.createElement('div');
+      modal.id = 'hrms-ob-doc-modal';
+      modal.className = 'ob-ov';
+      modal.style.zIndex = '99999';
+      var mime = d.fileMime || 'application/octet-stream';
+      var src = 'data:' + mime + ';base64,' + d.fileData;
+      var isPdf = mime === 'application/pdf' || (d.fileName || '').toLowerCase().endsWith('.pdf');
+      var isImg = mime.indexOf('image/') === 0 || /\.(png|jpg|jpeg|gif|webp|svg)$/i.test(d.fileName || '');
+
+      var bodyContent = '';
+      if (isPdf) {
+        bodyContent = '<iframe src="' + src + '" style="border:0;width:100%;height:78vh;border-radius:6px;background:#fff"></iframe>';
+      } else if (isImg) {
+        bodyContent = '<div style="text-align:center;max-height:78vh;overflow:auto;padding:12px;background:rgba(0,0,0,0.15);border-radius:8px;display:flex;align-items:center;justify-content:center">' +
+                      '<img src="' + src + '" style="max-width:100%;max-height:74vh;object-fit:contain;border-radius:6px;box-shadow:0 4px 20px rgba(0,0,0,0.3)" alt="' + esc(d.fileName || 'Screenshot') + '">' +
+                      '</div>';
+      } else {
+        bodyContent = '<div style="padding:48px 20px;text-align:center">' +
+                      '<div style="font-size:36px;margin-bottom:12px">📄</div>' +
+                      '<p style="font-size:14px;font-weight:600;margin-bottom:16px;color:var(--text,#ffffff)">' + esc(d.fileName || 'Document') + '</p>' +
+                      '<a href="' + src + '" download="' + esc(d.fileName || 'document') + '" class="ob-btn primary" style="text-decoration:none">Download File</a></div>';
+      }
+
+      modal.innerHTML =
+        '<div style="position:fixed;inset:0;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box">' +
+          '<div style="background:var(--bg2,#141b26);border:1px solid var(--border,#2a3446);border-radius:14px;width:min(920px,96vw);max-height:92vh;display:flex;flex-direction:column;box-shadow:0 16px 48px rgba(0,0,0,0.55);overflow:hidden">' +
+            '<div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--border,#2a3446);gap:12px">' +
+              '<div style="flex:1;min-width:0">' +
+                '<h3 style="margin:0;font-size:15px;font-weight:700;color:var(--text,#ffffff);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(d.fileName || d.docType || 'Document Preview') + '</h3>' +
+                '<span style="font-size:11.5px;color:var(--muted,#8a9bb8)">Version ' + (d.version || 1) + (d.uploadedAt ? ' • ' + fmtDateTime(d.uploadedAt) : '') + '</span>' +
+              '</div>' +
+              '<div style="display:flex;align-items:center;gap:8px;flex-shrink:0">' +
+                '<a href="' + src + '" download="' + esc(d.fileName || 'download') + '" class="ob-btn" style="text-decoration:none;padding:5px 11px;font-size:12px">Download</a>' +
+                '<button class="ob-x" id="ob-doc-modal-close" style="font-size:22px;line-height:1;cursor:pointer;padding:0 4px" title="Close">×</button>' +
+              '</div>' +
+            '</div>' +
+            '<div style="padding:14px;overflow-y:auto;flex:1">' + bodyContent + '</div>' +
+          '</div>' +
+        '</div>';
+
+      document.body.appendChild(modal);
+      modal.addEventListener('click', function (e) {
+        if (e.target === modal || e.target.id === 'ob-doc-modal-close') modal.remove();
+      });
+      var closeBtn = modal.querySelector('#ob-doc-modal-close');
+      if (closeBtn) closeBtn.addEventListener('click', function () { modal.remove(); });
+    }).catch(function (e) { toast(e.message || 'Could not load document', 'error'); });
+  }
+
+  function renderRecentCandidates(list) {
+    if (!list || !list.length) return '<div class="ob-empty" style="padding:22px">No candidates yet</div>';
+    return list.map(function (c) {
+      return '<div class="ob-rec-item" data-open-cid="' + c.id + '" style="cursor:pointer" title="View candidate">' +
+             '<div class="ob-rec-info">' +
+               '<div class="ob-rec-title">' + esc(c.name || c.email) + '</div>' +
+               '<div class="ob-rec-sub">' + esc(c.candidateCode || c.jobTitle || 'Candidate') + '</div>' +
+             '</div>' +
+             '<div class="ob-rec-meta">' + badge(c.status, statusKind(c.status)) + '</div>' +
+             '</div>';
+    }).join('');
+  }
+
+  function renderRecentDocuments(list) {
+    if (!list || !list.length) return '<div class="ob-empty" style="padding:22px">No documents yet</div>';
+    return list.map(function (x) {
+      return '<div class="ob-rec-item ob-doc-item" data-cid="' + (x.candidateId || x.candidate) + '" data-did="' + x.id + '" style="cursor:pointer" title="Click to view/open document">' +
+             '<div class="ob-rec-info">' +
+               '<div class="ob-rec-title">' + esc(x.fileName || x.docType) + '</div>' +
+               '<div class="ob-rec-sub">' + esc(x.docType || 'Document') + '</div>' +
+             '</div>' +
+             '<div class="ob-rec-meta">' +
+               '<span class="ob-badge neutral">v' + (x.version || 1) + '</span>' +
+             '</div>' +
+             '</div>';
+    }).join('');
+  }
+
+  function renderRecentApprovals(list) {
+    if (!list || !list.length) return '<div class="ob-empty" style="padding:22px">No approvals yet</div>';
+    return list.map(function (x) {
+      var dt = x.actedAt ? x.actedAt.slice(0, 10) : '';
+      var tm = x.actedAt && x.actedAt.length > 11 ? x.actedAt.slice(11, 16) : '';
+      return '<div class="ob-rec-item" data-open-cid="' + (x.candidateId || x.candidate) + '" style="cursor:pointer" title="View approval">' +
+             '<div class="ob-rec-info">' +
+               '<div class="ob-rec-title">' + esc(x.approver || 'Manager') + '</div>' +
+               '<div class="ob-rec-sub">Approved candidate</div>' +
+             '</div>' +
+             '<div class="ob-rec-meta" style="text-align:right">' +
+               '<div style="font-size:11.5px;font-weight:600;color:var(--text,#ffffff);white-space:nowrap">' + (dt || '—') + '</div>' +
+               (tm ? '<div style="font-size:10px;color:var(--muted,#8a9bb8);white-space:nowrap">' + tm + '</div>' : '') +
+             '</div>' +
+             '</div>';
+    }).join('');
+  }
 
   function viewDashboard() {
     if (state.loading || !state.dash) {
-      return '<div class="ob-cards">' + CARDS.map(function () {
+      return '<div class="ob-cards">' + CARDS.map(function (c) {
         return '<div class="ob-card"><div class="ob-skel" style="width:44px;height:26px"></div>' +
                '<div class="ob-skel" style="width:80%;margin-top:10px"></div></div>';
       }).join('') + '</div>';
@@ -525,17 +722,20 @@
     var d = state.dash;
     var cards = CARDS.map(function (c) {
       var n = d.cards[c[0]] || 0;
-      return '<div class="ob-card ' + (n && c[2] ? c[2] : '') + '"><div class="n">' + n + '</div>' +
+      return '<div class="ob-card"><div class="n">' + n + '</div>' +
              '<div class="l">' + c[1] + '</div></div>';
     }).join('');
 
     var alerts = state.alerts.length
       ? state.alerts.slice(0, 8).map(function (a) {
           var ic = a.severity === 'error' ? '🔴' : '⚠️';
-          return '<div class="ob-al" data-cid="' + a.candidateId + '" style="cursor:pointer">' +
-                 '<span class="ic">' + ic + '</span><span class="who">' + esc(a.candidate || '—') + '</span>' +
-                 '<span>' + esc(a.message) + '</span>' +
-                 '<span class="when">' + (a.date ? fmtDate(a.date) : '') + '</span></div>';
+          return '<div class="ob-al" data-cid="' + a.candidateId + '" style="cursor:pointer" title="View candidate">' +
+                 '<span class="ob-al-ic">' + ic + '</span>' +
+                 '<div class="ob-al-content">' +
+                   '<div class="ob-al-who">' + esc(a.candidate || '—') + '</div>' +
+                   '<div class="ob-al-msg">' + esc(a.message) + '</div>' +
+                 '</div>' +
+                 '<span class="ob-al-when">' + (a.date ? fmtDate(a.date) : '') + '</span></div>';
         }).join('')
       : '<div class="ob-empty" style="padding:26px">Nothing needs attention 🎉</div>';
 
@@ -545,29 +745,17 @@
         '<div class="ob-panel"><h3>Candidate Status</h3>' + donut(d.charts.candidateStatus) + '</div>' +
         '<div class="ob-panel"><h3>Onboarding Progress</h3>' + donut(d.charts.onboardingProgress) + '</div>' +
       '</div>' +
-      '<div class="ob-grid2">' +
-        '<div class="ob-panel"><h3>Monthly Onboarded Employees</h3>' + bars(d.charts.monthlyOnboarded) + '</div>' +
+      '<div class="ob-grid1">' +
         '<div class="ob-panel"><h3>Alerts &amp; Notifications</h3>' + alerts + '</div>' +
       '</div>' +
       '<div class="ob-grid2">' +
-        '<div class="ob-panel"><h3>Recently Added Candidates</h3>' + miniList(d.recent.candidates, function (c) {
-          return [esc(c.name || c.email), badge(c.status, statusKind(c.status))];
-        }) + '</div>' +
-        '<div class="ob-panel"><h3>Recently Uploaded Documents</h3>' + miniList(d.recent.documents, function (x) {
-          return [esc(x.fileName || x.docType), '<span style="color:var(--muted,#8a9bb8);font-size:12px">v' + x.version + '</span>'];
-        }) + '</div>' +
-        '<div class="ob-panel"><h3>Recently Approved</h3>' + miniList(d.recent.approvals, function (x) {
-          return [esc(x.approver || '—'), '<span style="color:var(--muted,#8a9bb8);font-size:12px">' + fmtDateTime(x.actedAt) + '</span>'];
-        }) + '</div>' +
+        '<div class="ob-panel"><h3>Recently Added Candidates</h3>' + renderRecentCandidates(d.recent.candidates) + '</div>' +
+        '<div class="ob-panel"><h3>Recently Uploaded Documents</h3>' + renderRecentDocuments(d.recent.documents) + '</div>' +
+        '<div class="ob-panel"><h3>Recently Approved</h3>' + renderRecentApprovals(d.recent.approvals) + '</div>' +
+      '</div>' +
+      '<div class="ob-grid1">' +
+        '<div class="ob-panel"><h3>Monthly Onboarded Employees</h3>' + bars(d.charts.monthlyOnboarded) + '</div>' +
       '</div>';
-  }
-
-  function miniList(rows, fn) {
-    if (!rows || !rows.length) return '<div class="ob-empty" style="padding:22px">Nothing yet</div>';
-    return rows.map(function (r) {
-      var p = fn(r);
-      return '<div class="ob-al">' + p[0] + '<span class="when">' + p[1] + '</span></div>';
-    }).join('');
   }
 
   /* ── page: candidate grid ─────────────────────────────────────────────────
@@ -661,9 +849,9 @@
 
   function cell(row, key) {
     if (key === 'status') return badge(row.status, statusKind(row.status));
-    if (key === 'authType') return row.authType ? badge(row.authType, 'neutral') : '—';
+    if (key === 'authType') return row.authType ? badge(row.authType, 'neutral') : '<span class="ob-empty-val">-</span>';
     if (key === 'authExpiryDate') {
-      if (!row.authExpiryDate) return '—';
+      if (!row.authExpiryDate) return '<span class="ob-empty-val">-</span>';
       var d = daysTo(row.authExpiryDate);
       // Surface an imminent expiry right in the grid — this is the number the
       // whole module exists to keep an eye on.
@@ -671,15 +859,19 @@
       var suffix = d < 0 ? ' (expired)' : d <= 60 ? ' (' + d + 'd)' : '';
       return badge(fmtDate(row.authExpiryDate) + suffix, kind);
     }
-    if (key === 'joiningDate') return fmtDate(row.joiningDate);
-    if (key === 'createdAt') return fmtDate(row.createdAt);
-    if (key === 'dob') return fmtDate(row.dob);
+    if (key === 'joiningDate') return row.joiningDate ? fmtDate(row.joiningDate) : '<span class="ob-empty-val">-</span>';
+    if (key === 'createdAt') return row.createdAt ? fmtDate(row.createdAt) : '<span class="ob-empty-val">-</span>';
+    if (key === 'dob') return row.dob ? fmtDate(row.dob) : '<span class="ob-empty-val">-</span>';
     if (key === 'progress') {
       var pp = progressPct(row);
       return '<div class="ob-prog" title="' + pp + '% complete">' +
              '<div class="ob-prog-bar"><i style="width:' + pp + '%"></i></div><span>' + pp + '%</span></div>';
     }
-    return esc(row[key] || '—');
+    var val = row[key];
+    if (val == null || String(val).trim() === '' || val === '—' || val === '-') {
+      return '<span class="ob-empty-val">-</span>';
+    }
+    return esc(val);
   }
 
   var ICON_COLUMNS = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
@@ -825,10 +1017,10 @@
           return r.authType ? badge(r.authType, 'neutral') : badge('Not set', 'warn');
         }],
         ['status', 'Status', function (r) {
-          return r.status ? badge(r.status, statusKind(r.status)) : '—';
+          return r.status ? badge(r.status, statusKind(r.status)) : '<span class="ob-empty-val">-</span>';
         }],
         ['expiryDate', 'Expiry', function (r) {
-          if (!r.expiryDate) return '—';
+          if (!r.expiryDate) return '<span class="ob-empty-val">-</span>';
           var d = r.daysToExpiry;
           var kind = d < 0 ? 'err' : d <= 60 ? 'warn' : 'ok';
           var sfx = d < 0 ? ' (expired)' : d <= 60 ? ' (' + d + 'd)' : '';
@@ -868,7 +1060,12 @@
         ['checked', 'Checklist', function (r) { return r.checked + ' / 6 checked'; }],
         ['backgroundChecked', 'Background', function (r) { return (r.backgroundChecked || 0) + ' / 6 checked'; }],
         ['missing', 'Blocking', function (r) {
-          return r.missing.length ? badge('Missing: ' + r.missing.join(', '), 'err') : badge('Ready', 'ok');
+          var st = String(r.status || '').toLowerCase();
+          var cst = String(r.candidateStatus || '').toLowerCase();
+          if (st === 'rejected' || cst === 'rejected') {
+            return badge('Rejected', 'err');
+          }
+          return r.missing && r.missing.length ? badge('Missing: ' + r.missing.join(', '), 'err') : badge('Ready', 'ok');
         }],
         ['verifiedBy', 'Verified By'],
         ['verifiedAt', 'Verified At', function (r) { return fmtDateTime(r.verifiedAt); }],
@@ -881,10 +1078,10 @@
       cols: [
         ['candidate', 'Candidate'],
         ['assetSource', 'Source', function (r) {
-          return r.assetSource ? badge(r.assetSource, 'neutral') : '—';
+          return r.assetSource ? badge(r.assetSource, 'neutral') : '<span class="ob-empty-val">-</span>';
         }],
         ['clientName', 'Client'],
-        ['assets', 'Assets', function (r) { return esc((r.assets || []).join(', ') || '—'); }],
+        ['assets', 'Assets', function (r) { return esc((r.assets || []).join(', ') || '') || '<span class="ob-empty-val">-</span>'; }],
         ['assetId', 'Asset ID'],
         ['issuedDate', 'Issued', function (r) { return fmtDate(r.issuedDate); }],
         ['status', 'Status', function (r) {
@@ -901,7 +1098,7 @@
         ['bankName', 'Bank'],
         ['accountNumberMasked', 'Account', function (r) {
           // Masked server-side; the raw number never reaches the browser.
-          return r.accountNumberMasked ? '<code>' + esc(r.accountNumberMasked) + '</code>' : '—';
+          return r.accountNumberMasked ? '<code>' + esc(r.accountNumberMasked) + '</code>' : '<span class="ob-empty-val">-</span>';
         }],
         ['routingNumber', 'Routing'],
         ['taxState', 'Tax State'],
@@ -1018,7 +1215,10 @@
     } else {
       body = rows.map(function (r) {
         return '<tr data-id="' + r.candidateId + '">' + spec.cols.map(function (c) {
-          return '<td>' + (c[2] ? c[2](r) : esc(r[c[0]] || '—')) + '</td>';
+          var val = c[2] ? c[2](r) : r[c[0]];
+          if (val == null || val === '' || val === '—' || val === '-') val = '<span class="ob-empty-val">-</span>';
+          else if (!c[2]) val = esc(val);
+          return '<td>' + val + '</td>';
         }).join('') + '</tr>';
       }).join('');
     }
@@ -1041,6 +1241,7 @@
     }
 
     // Candidate-form panel — its own async load, rendered into a placeholder.
+    // Candidate-form panel — its own async load, rendered into a placeholder.
     if (can('onboarding.settings')) {
       api('/onboarding/field-config').then(function (cfg) {
         var box = document.getElementById('ob-cf-panel');
@@ -1048,44 +1249,61 @@
         var sections = (cfg && cfg.sections) || [];
         var count = flattenSections(sections).length;
         box.innerHTML =
-          '<h3>New Candidate Form <button class="ob-btn" id="ob-cf-edit" style="float:right;padding:4px 10px">⚙ Open Builder</button></h3>' +
+          '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:12px">' +
+            '<h3 style="margin:0">New Candidate Form</h3>' +
+            '<button class="ob-btn primary" id="ob-cf-edit" style="display:inline-flex;align-items:center;gap:5px;padding:5px 12px;font-size:12px;font-weight:700">✏️ Edit Form Fields</button>' +
+          '</div>' +
           (count
             ? sections.map(function (s) {
-                return '<div class="ob-row"><span class="k" style="font-weight:600">' + esc(s.title || 'Section') + '</span>' +
+                return '<div class="ob-row" style="cursor:pointer" title="Click to edit form fields"><span class="k" style="font-weight:600">' + esc(s.title || 'Section') + '</span>' +
                   '<span class="v">' + (s.fields || []).length + ' field(s)</span></div>' +
                   (s.fields || []).map(function (f) {
-                    return '<div class="ob-row" style="padding-left:12px"><span class="k">' + esc(f.label) +
+                    return '<div class="ob-row" style="padding-left:12px;cursor:pointer" title="Click to edit form fields"><span class="k">' + esc(f.label) +
                       (f.required ? ' <span style="color:#ef4444">*</span>' : '') + '</span>' +
                       '<span class="v">' + badge(f.type, 'neutral') + '</span></div>';
                   }).join('');
-              }).join('')
-            : '<div class="ob-sub" style="margin:6px 0 0">No custom fields yet. Build the sections shown on the New Candidate form.</div>');
-        var eb = document.getElementById('ob-cf-edit');
+              }).join('') +
+              '<div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border,#2a3446);display:flex;justify-content:flex-end">' +
+                '<button class="ob-btn primary" id="ob-cf-edit-bot" style="display:inline-flex;align-items:center;gap:6px;padding:6px 14px;font-size:12px;font-weight:700">⚙ Open Form Builder</button>' +
+              '</div>'
+            : '<div class="ob-sub" style="margin:6px 0 0">No custom fields yet. Build the sections shown on the New Candidate form.</div>' +
+              '<div style="margin-top:12px"><button class="ob-btn primary" id="ob-cf-edit-bot">⚙ Open Form Builder</button></div>');
+        var eb = document.getElementById('ob-cf-edit'), ebb = document.getElementById('ob-cf-edit-bot');
         if (eb) eb.addEventListener('click', onbOpenBuilder);
+        if (ebb) ebb.addEventListener('click', onbOpenBuilder);
+        box.querySelectorAll('.ob-row').forEach(function (r) { r.addEventListener('click', onbOpenBuilder); });
       }).catch(function () {});
 
-      // Work-auth extra fields — same shape, its own schema. The full builder
-      // engine only knows the candidate form, so this always uses the local one.
+      // Work-auth extra fields — same shape, its own schema.
       api('/onboarding/work-auth-field-config').then(function (cfg) {
         var box = document.getElementById('ob-wa-panel');
         if (!box) return;
         var sections = (cfg && cfg.sections) || [];
         box.innerHTML =
-          '<h3>Work Authorization Fields <button class="ob-btn" id="ob-wa-edit" style="float:right;padding:4px 10px">⚙ Open Builder</button></h3>' +
+          '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:12px">' +
+            '<h3 style="margin:0">Work Authorization Fields</h3>' +
+            '<button class="ob-btn primary" id="ob-wa-edit" style="display:inline-flex;align-items:center;gap:5px;padding:5px 12px;font-size:12px;font-weight:700">✏️ Edit Fields</button>' +
+          '</div>' +
           (flattenSections(sections).length
             ? sections.map(function (s) {
-                return '<div class="ob-row"><span class="k" style="font-weight:600">' + esc(s.title || 'Section') + '</span>' +
+                return '<div class="ob-row" style="cursor:pointer" title="Click to edit fields"><span class="k" style="font-weight:600">' + esc(s.title || 'Section') + '</span>' +
                   '<span class="v">' + (s.fields || []).length + ' field(s)</span></div>' +
                   (s.fields || []).map(function (f) {
-                    return '<div class="ob-row" style="padding-left:12px"><span class="k">' + esc(f.label) +
+                    return '<div class="ob-row" style="padding-left:12px;cursor:pointer" title="Click to edit fields"><span class="k">' + esc(f.label) +
                       (f.required ? ' <span style="color:#ef4444">*</span>' : '') + '</span>' +
                       '<span class="v">' + badge(f.type, 'neutral') + '</span></div>';
                   }).join('');
-              }).join('')
+              }).join('') +
+              '<div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border,#2a3446);display:flex;justify-content:flex-end">' +
+                '<button class="ob-btn primary" id="ob-wa-edit-bot" style="display:inline-flex;align-items:center;gap:6px;padding:6px 14px;font-size:12px;font-weight:700">⚙ Open Form Builder</button>' +
+              '</div>'
             : '<div class="ob-sub" style="margin:6px 0 0">No extra fields yet. These are added to the ' +
-              'Work Authorization tab for every candidate, on top of the per-visa-type fields below.</div>');
-        var wb = document.getElementById('ob-wa-edit');
+              'Work Authorization tab for every candidate, on top of the per-visa-type fields below.</div>' +
+              '<div style="margin-top:12px"><button class="ob-btn primary" id="ob-wa-edit-bot">⚙ Open Form Builder</button></div>');
+        var wb = document.getElementById('ob-wa-edit'), wbb = document.getElementById('ob-wa-edit-bot');
         if (wb) wb.addEventListener('click', function () { openFormBuilder('workAuth'); });
+        if (wbb) wbb.addEventListener('click', function () { openFormBuilder('workAuth'); });
+        box.querySelectorAll('.ob-row').forEach(function (r) { r.addEventListener('click', function () { openFormBuilder('workAuth'); }); });
       }).catch(function () {});
     }
 
@@ -1096,11 +1314,12 @@
       if (!box) return;
       var sections = (cfg && cfg.sections) || [];
       box.innerHTML =
-        '<h3>Work Authorization Types' +
+        '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:12px">' +
+          '<h3 style="margin:0">Work Authorization Types</h3>' +
           (can('onboarding.settings')
-            ? ' <button class="ob-btn" id="ob-wat-edit" style="float:right;padding:4px 10px">⚙ Open Builder</button>'
+            ? '<button class="ob-btn primary" id="ob-wat-edit" style="display:inline-flex;align-items:center;gap:5px;padding:5px 12px;font-size:12px;font-weight:700">✏️ Edit Types</button>'
             : '') +
-        '</h3>' +
+        '</div>' +
         rows(sections.map(function (s) {
           var n = (s.fields || []).length;
           return [esc(s.id), n ? n + ' field(s)' : 'no extra fields'];
@@ -1219,7 +1438,9 @@
     api('/onboarding/candidates/' + state.detail.id).then(function (c) {
       state.detail = c;
       renderDrawer();
-      if (state.page === '') loadDashboard(); else loadCandidates();
+      if (state.page === '') loadDashboard();
+      if (STAGE_PAGES[state.page]) loadStage();
+      loadCandidates();
     });
   }
 
@@ -1466,7 +1687,13 @@
         var rc = el.querySelector('#wa-receipt'); if (rc) body.receiptNumber = rc.value;
         var sp = el.querySelector('#wa-spons'); if (sp) body.sponsorshipRequired = sp.checked;
         api('/onboarding/candidates/' + c.id + '/work-authorization', { method: 'PUT', body: body })
-          .then(function () { toast('Work authorization saved'); refreshDetail(); })
+          .then(function (res) {
+            toast('Work authorization saved');
+            c.authType = type;
+            if (body.status) c.status = 'In Progress';
+            if (body.expiryDate) c.authExpiryDate = body.expiryDate;
+            refreshDetail();
+          })
           .catch(function (err) { save.disabled = false; e.textContent = err.message; });
       });
     }).catch(function (e) { el.innerHTML = '<div class="ob-err">' + esc(e.message) + '</div>'; });
@@ -1639,12 +1866,13 @@
           statusCell = circleWarning + badge('Optional — not uploaded', 'neutral');
         }
 
-        // ACTION column — view/history/delete when uploaded, else nothing
+        // ACTION column — view/history/delete/upload
         var actionCell = d
           ? ('<button class="ob-btn" style="padding:3px 9px" data-dl="' + d.id + '">View</button>' +
              ' <button class="ob-btn" style="padding:3px 9px" data-hist="' + esc(d.docType) + '">History</button>' +
+             (ro ? '' : ' <button class="ob-btn" style="padding:3px 9px" data-quick-upload="' + item.type + '" title="Upload new version">⬆ Replace</button>') +
              (ro ? '' : ' <button class="ob-btn danger" style="padding:3px 9px" data-rm="' + d.id + '">Delete</button>'))
-          : '—';
+          : (ro ? '<span class="ob-empty-val">-</span>' : '<button class="ob-btn primary" style="padding:3px 10px;font-size:12px" data-quick-upload="' + item.type + '">⬆ Upload ' + esc(item.label) + '</button>');
 
         return '<tr>' +
           '<td style="vertical-align:middle">' +
@@ -1673,7 +1901,7 @@
         '        <th style="text-align:center;width:110px;padding:8px 10px">Send to Candidate</th>',
         '        <th style="text-align:center;width:70px;padding:8px 10px">Required</th>',
         '        <th style="text-align:left;width:160px;padding:8px 10px">Status</th>',
-        '        <th style="text-align:left;width:120px;padding:8px 10px">Action</th>',
+        '        <th style="text-align:left;width:150px;padding:8px 10px">Action</th>',
         '      </tr>',
         '    </thead>',
         '    <tbody>',
@@ -1687,22 +1915,25 @@
       el.innerHTML =
         checklistTable +
         (ro ? '' :
-          '<div class="ob-dz" id="ob-dz"><div class="big">⬆</div>' +
-          '<div><b>Drag &amp; drop</b> files here, or click to choose</div>' +
-          '<div class="ob-sub" style="margin:6px 0 0">PDF, PNG or JPG · max ' + MAX_MB + ' MB each</div></div>' +
-          '<div style="display:flex;gap:8px;margin-bottom:10px">' +
-            '<select class="ob-sel" id="ob-dtype" style="flex:1;margin:0">' +
-              requestedDocsList.filter(function(t){ return t.sendToCandidate; }).map(function (t) {
-                return '<option value="' + t.type + '">Upload as: ' + t.label + (t.required ? ' (required)' : ' (optional)') + '</option>';
-              }).join('') +
-              '<option value="' + CUSTOM_DOC_VALUE + '">Upload as: Custom document…</option>' +
-            '</select>' +
-          '</div>' +
-          '<input class="ob-in" id="ob-dlabel" style="margin-bottom:10px;display:none" maxlength="' +
-            MAX_DOC_LABEL + '" placeholder="Name this document (e.g. Work Permit), then choose the file above">' +
-          '<input type="file" id="ob-file" accept=".pdf,.png,.jpg,.jpeg" multiple hidden>' +
-          '<div class="ob-bar" id="ob-bar" style="display:none"><i></i></div>') +
-        '<div class="ob-err" id="ob-de"></div>';
+          '<div style="background:var(--bg3,#1c2433);border:1px solid var(--border,#2a3446);border-radius:12px;padding:16px;margin-top:16px">' +
+            '<div style="margin-bottom:10px">' +
+              '<label class="ob-lb" style="margin:0 0 6px;font-size:13px;font-weight:700;color:var(--text,#ffffff)">Select Document Type to Upload:</label>' +
+              '<select class="ob-sel" id="ob-dtype" style="width:100%;margin:0;font-weight:600;background:var(--bg2,#141b26);border-color:var(--accent,#4f8ef7)">' +
+                requestedDocsList.map(function (t) {
+                  return '<option value="' + t.type + '">Upload as: ' + t.label + (t.required ? ' (required)' : ' (optional)') + '</option>';
+                }).join('') +
+                '<option value="' + CUSTOM_DOC_VALUE + '">Upload as: Custom document…</option>' +
+              '</select>' +
+            '</div>' +
+            '<input class="ob-in" id="ob-dlabel" style="margin-bottom:10px;display:none" maxlength="' +
+              MAX_DOC_LABEL + '" placeholder="Name this document (e.g. Work Permit), then choose the file below">' +
+            '<div class="ob-dz" id="ob-dz"><div class="big">⬆</div>' +
+            '<div id="ob-dz-txt"><b>Drag &amp; drop</b> files here, or click to choose</div>' +
+            '<div class="ob-sub" style="margin:6px 0 0">PDF, PNG or JPG · max ' + MAX_MB + ' MB each</div></div>' +
+            '<input type="file" id="ob-file" accept=".pdf,.png,.jpg,.jpeg" multiple hidden>' +
+            '<div class="ob-bar" id="ob-bar" style="display:none"><i></i></div>' +
+            '<div class="ob-err" id="ob-de"></div>' +
+          '</div>');
 
       // Event listener for adding custom doc type
       var addBtn = el.querySelector('#btn-add-doc-name');
@@ -1854,6 +2085,21 @@
         });
       });
 
+      // Event listener for row-level quick upload buttons
+      el.querySelectorAll('[data-quick-upload]').forEach(function (btn) {
+        btn.addEventListener('click', function (e) {
+          e.stopPropagation();
+          var type = btn.dataset.quickUpload;
+          var sel = el.querySelector('#ob-dtype');
+          var fileInp = el.querySelector('#ob-file');
+          if (sel) {
+            sel.value = type;
+            syncLabelBox();
+          }
+          if (fileInp) fileInp.click();
+        });
+      });
+
       if (ro) return;
       var dz = el.querySelector('#ob-dz'), inp = el.querySelector('#ob-file');
       var dtype = el.querySelector('#ob-dtype'), dlabel = el.querySelector('#ob-dlabel');
@@ -1868,6 +2114,12 @@
         if (dcustom) {
           dcustom.textContent = custom ? '✕ Cancel custom' : '+ Add Custom Document';
           dcustom.classList.toggle('primary', custom);
+        }
+        var dzTxt = el.querySelector('#ob-dz-txt');
+        if (dzTxt) {
+          var opt = dtype.options[dtype.selectedIndex];
+          var optText = opt ? opt.text.replace(/^Upload as:\s*/, '') : 'files';
+          dzTxt.innerHTML = '<b>Drag &amp; drop</b> file for <span style="color:var(--accent,#4f8ef7);font-weight:700">' + esc(optText) + '</span> here, or click to choose';
         }
       }
       dtype.addEventListener('change', syncLabelBox);
@@ -2055,18 +2307,23 @@
                    '<div class="m">' + esc(h.approver) + ' · ' + fmtDateTime(h.actedAt) +
                    (h.comments ? '<br>' + esc(h.comments) : '') + '</div></div>';
           }).join('') + '</div>'
-        : '<div class="ob-sub" style="margin-top:16px">No decisions yet.</div>';
+        : '<div class="ob-sub" style="margin-top:16px;text-align:center">No decisions yet.</div>';
 
       if (!can('onboarding.approve')) {
-        el.innerHTML = '<div class="ob-empty" style="padding:26px">You do not have permission to approve.</div>' + history;
+        el.innerHTML = '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:32px 16px;width:100%;box-sizing:border-box"><div class="ob-empty" style="padding:16px;display:inline-block;margin-bottom:8px">You do not have permission to approve.</div>' + history + '</div>';
         return;
       }
       el.innerHTML =
+        '<div style="background:var(--bg3,#1c2433);border:1px solid var(--border,#2a3446);border-radius:10px;padding:14px;margin-bottom:16px">' +
+          '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--accent,#4f8ef7);margin-bottom:4px">Approval Type: Candidate Onboarding (Manager Sign-Off)</div>' +
+          '<div style="font-size:13px;color:var(--text,#e6edf7);font-weight:600">Candidate: ' + esc(c.name || c.email) + ' · Current Status: ' + badge(c.status, statusKind(c.status)) + '</div>' +
+          '<div class="ob-sub" style="margin:4px 0 0">Authorize candidate onboarding progress and sign-off on HR verification documents.</div>' +
+        '</div>' +
         '<label class="ob-lb">Comments <span class="ob-sub" style="display:inline">(required to reject or return)</span></label>' +
-        '<textarea class="ob-ta" id="ma-c"></textarea>' +
-        '<div class="ob-act">' +
-          '<button class="ob-btn primary" id="ma-ok">✓ Approve</button>' +
-          '<button class="ob-btn danger" id="ma-no">✕ Reject</button>' +
+        '<textarea class="ob-ta" id="ma-c" placeholder="Enter comments or notes for candidate approval / rejection..."></textarea>' +
+        '<div class="ob-act" style="display:flex;gap:10px;flex-wrap:wrap">' +
+          '<button class="ob-btn primary" id="ma-ok">✓ Approve Candidate Onboarding</button>' +
+          '<button class="ob-btn danger" id="ma-no">✕ Reject Candidate Onboarding</button>' +
           '<button class="ob-btn" id="ma-ret">↩ Return for Correction</button>' +
         '</div><div class="ob-err" id="ma-e"></div>' + history;
 
@@ -2074,7 +2331,7 @@
         api('/onboarding/candidates/' + c.id + '/approve', {
           method: 'POST',
           body: { action: action, comments: el.querySelector('#ma-c').value },
-        }).then(function () { toast('Candidate ' + action.toLowerCase()); refreshDetail(); })
+        }).then(function () { toast('Candidate onboarding ' + action.toLowerCase()); refreshDetail(); })
           .catch(function (e) { el.querySelector('#ma-e').textContent = e.message; });
       }
       el.querySelector('#ma-ok').addEventListener('click', function () { act('Approved'); });
@@ -2097,11 +2354,10 @@
               (ro ? '' : ' <button class="ob-btn danger" style="padding:3px 9px" data-rma="' + a.id + '">Remove</button>') +
               '</span></div>';
           }).join('')
-        : '<div class="ob-sub">No assets allocated yet.</div>';
+        : '<div class="ob-sub" style="margin-top:12px;text-align:center">No assets allocated yet.</div>';
 
       if (ro) {
-        el.innerHTML = existing +
-          '<div class="ob-empty" style="padding:26px">You do not have permission to allocate assets.</div>';
+        el.innerHTML = '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:32px 16px;width:100%;box-sizing:border-box"><div class="ob-empty" style="padding:16px;display:inline-block;margin-bottom:8px">You do not have permission to allocate assets.</div>' + existing + '</div>';
         return;
       }
 
@@ -2478,14 +2734,20 @@
         btn.disabled = true;
         btn.textContent = 'Sending email invite…';
         api('/onboarding/candidates/' + c.id + '/send-portal-link', { method: 'POST' })
-          .then(function () {
-            toast('Portal invitation link emailed to candidate!');
+          .then(function (res) {
+            btn.disabled = false;
+            btn.textContent = 'Resend invite';
+            if (res && res.emailSent === false && res.warning) {
+              toast('Portal link generated! (' + res.warning + ')', 'warn');
+            } else {
+              toast('Portal invitation link emailed to candidate!');
+            }
             refreshDetail();
           })
           .catch(function (err) {
             btn.disabled = false;
             btn.textContent = portalLink ? 'Resend invite' : 'Send portal link';
-            alert('Email failed (but token generated): ' + err.message);
+            toast('Failed to process invite: ' + err.message, 'error');
             refreshDetail();
           });
       });
@@ -3451,7 +3713,8 @@
     ensureStyle();
     var depts = distinctVals('department');
     var bu = state.buFilter ? state.buFilter.slice() : depts.slice();   // default: all selected
-    var predef = state.predef;
+    var predef = Array.isArray(state.predef) ? state.predef.slice() : (state.predef ? [state.predef] : ['all']);
+    if (!predef.length) predef = ['all'];
     var customs = state.customFilters.map(function (c) { return { key: c.key, val: c.val }; });
 
     var ov = document.createElement('div');
@@ -3464,8 +3727,9 @@
           '<div class="ob-fd-sec" style="margin-top:0">Business Unit</div>' +
           '<div class="ob-fd-bu" id="ob-fd-bu"></div>' +
           '<div class="ob-fd-sec">Pre-Defined Filters</div>' +
-          '<div class="ob-fd-pd">' + CAND_PREDEF.map(function (p) {
-            return '<label><input type="radio" name="ob-fd-predef" value="' + p[0] + '"' + (p[0] === predef ? ' checked' : '') + '>' + esc(p[1]) + '</label>';
+          '<div class="ob-fd-pd" id="ob-fd-pd-box">' + CAND_PREDEF.map(function (p) {
+            var isChecked = predef.indexOf(p[0]) !== -1;
+            return '<label><input type="checkbox" name="ob-fd-predef" value="' + p[0] + '"' + (isChecked ? ' checked' : '') + '> ' + esc(p[1]) + '</label>';
           }).join('') + '</div>' +
           '<div class="ob-fd-sec">Custom Filters</div>' +
           '<div id="ob-fd-cf"></div>' +
@@ -3499,7 +3763,37 @@
     }
     drawBu();
 
-    ov.querySelectorAll('input[name="ob-fd-predef"]').forEach(function (r) { r.addEventListener('change', function () { predef = r.value; }); });
+    ov.querySelectorAll('input[name="ob-fd-predef"]').forEach(function (cb) {
+      cb.addEventListener('change', function () {
+        var v = cb.value;
+        if (v === 'all') {
+          if (cb.checked) {
+            predef = ['all'];
+            ov.querySelectorAll('input[name="ob-fd-predef"]').forEach(function (o) {
+              if (o.value !== 'all') o.checked = false;
+            });
+          } else {
+            predef = [];
+          }
+        } else {
+          var allCb = ov.querySelector('input[name="ob-fd-predef"][value="all"]');
+          if (allCb) allCb.checked = false;
+          var allIdx = predef.indexOf('all');
+          if (allIdx !== -1) predef.splice(allIdx, 1);
+
+          if (cb.checked) {
+            if (predef.indexOf(v) === -1) predef.push(v);
+          } else {
+            var idx = predef.indexOf(v);
+            if (idx !== -1) predef.splice(idx, 1);
+          }
+          if (!predef.length && allCb) {
+            allCb.checked = true;
+            predef = ['all'];
+          }
+        }
+      });
+    });
 
     var cfList = ov.querySelector('#ob-fd-cf');
     function drawCf() {
@@ -3521,13 +3815,13 @@
     ov.querySelector('#ob-fd-x').addEventListener('click', closeFiltersDrawer);
     ov.querySelector('#ob-fd-cancel').addEventListener('click', closeFiltersDrawer);
     ov.querySelector('#ob-fd-reset').addEventListener('click', function () {
-      bu = depts.slice(); predef = 'all'; customs = [];
+      bu = depts.slice(); predef = ['all']; customs = [];
       drawBu(); drawCf();
       ov.querySelectorAll('input[name="ob-fd-predef"]').forEach(function (r) { r.checked = r.value === 'all'; });
     });
     ov.querySelector('#ob-fd-apply').addEventListener('click', function () {
       state.buFilter = (bu.length === depts.length) ? null : bu;   // null = no restriction
-      state.predef = predef;
+      state.predef = predef.length ? predef : ['all'];
       state.customFilters = customs.filter(function (c) { return c.val; });
       state.pg = 1;
       closeFiltersDrawer();
@@ -3711,6 +4005,15 @@
     });
     root.querySelectorAll('.ob-al[data-cid]').forEach(function (a) {
       a.addEventListener('click', function () { openDetail(+a.dataset.cid, 'workauth'); });
+    });
+    root.querySelectorAll('.ob-rec-item[data-open-cid]').forEach(function (el) {
+      el.addEventListener('click', function () { openDetail(+el.dataset.openCid, 'overview'); });
+    });
+    root.querySelectorAll('.ob-doc-item[data-cid][data-did]').forEach(function (el) {
+      el.addEventListener('click', function (ev) {
+        ev.stopPropagation();
+        previewCandidateDoc(el.dataset.cid, el.dataset.did);
+      });
     });
   }
 
