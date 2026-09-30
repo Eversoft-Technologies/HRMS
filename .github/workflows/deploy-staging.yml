@@ -57,7 +57,7 @@ jobs:
           username: ${{ secrets.REMOTE_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.REMOTE_PORT || '22' }}
-          envs: APP_LINK,RELEASES_DIR,SHARED_DIR,RELEASE_ID,VENV_ACTIVATE
+          envs: APP_LINK,RELEASES_DIR,SHARED_DIR,RELEASE_ID,VENV_ACTIVATE,STAGING_TARGET_NAME
           script: |
             set -euo pipefail
 
