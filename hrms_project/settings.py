@@ -203,6 +203,18 @@ LINKEDIN_REDIRECT_URI = os.environ.get('LINKEDIN_REDIRECT_URI', '') or (
     HRMS_PUBLIC_URL + '/api/auth/linkedin/callback' if HRMS_PUBLIC_URL else ''
 )
 
+# ---------------------------------------------------------------------------
+# Map & Basemap Tile Configuration
+# ---------------------------------------------------------------------------
+HRMS_BASEMAP_TILE_URL = os.environ.get(
+    'HRMS_BASEMAP_TILE_URL',
+    'https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png'
+)
+HRMS_BASEMAP_ATTRIBUTION = os.environ.get(
+    'HRMS_BASEMAP_ATTRIBUTION',
+    '© OpenStreetMap contributors, © CARTO'
+)
+
 
 # ---------------------------------------------------------------------------
 # Static files + React build
