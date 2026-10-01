@@ -5051,6 +5051,16 @@ def client_config(request):
             getattr(settings, 'LINKEDIN_CLIENT_ID', '')
             and getattr(settings, 'LINKEDIN_CLIENT_SECRET', '')
         ),
+        'basemapTileUrl': getattr(
+            settings,
+            'HRMS_BASEMAP_TILE_URL',
+            'https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png'
+        ),
+        'basemapAttribution': getattr(
+            settings,
+            'HRMS_BASEMAP_ATTRIBUTION',
+            '© OpenStreetMap contributors, © CARTO'
+        ),
     })
 
 
