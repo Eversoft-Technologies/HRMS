@@ -26,7 +26,124 @@
   var state = { tab: 'live_map', fences: [], shifts: [], assignments: [], reviews: [],
                 arrangements: [], roster: [], homes: [], mapFeed: { fences: [], employees: [] },
                 departurePolicy: { enabled: true, timeout_minutes: 15, warning_minutes: 5 },
-                mapMode: 'markers', mapFilter: 'all', deptFilter: 'all', busy: false, errors: {} };
+                mapMode: 'markers', mapFilter: 'all', deptFilter: 'all', basemap: 'auto',
+                searchQuery: '', busy: false, errors: {} };
+
+  /* ── basemap providers & geocoding ───────────────────────────────────── */
+  var BASEMAPS = {
+    streets: {
+      name: '🗺️ Streets',
+      url: (window.__HRMS_CONFIG__ && window.__HRMS_CONFIG__.basemapTileUrl) || 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',
+      attrib: (window.__HRMS_CONFIG__ && window.__HRMS_CONFIG__.basemapAttribution) || '© Esri, HERE, Garmin, USGS, © OpenStreetMap contributors'
+    },
+    satellite: {
+      name: '🛰️ Satellite',
+      url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+      attrib: '© Esri, Maxar, Earthstar Geographics'
+    },
+    dark: {
+      name: '🌙 Dark',
+      url: (window.__HRMS_CONFIG__ && window.__HRMS_CONFIG__.basemapTileUrl) || 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',
+      attrib: '© Esri, HERE, Garmin, USGS, © OpenStreetMap contributors'
+    },
+    topo: {
+      name: '🏔️ Topo',
+      url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',
+      attrib: '© Esri, HERE, Garmin, Intermap, USGS'
+    }
+  };
+
+  function isDarkTheme() {
+    var dt = document.documentElement.getAttribute('data-theme') || document.documentElement.getAttribute('data-theme-choice');
+    if (dt) return dt === 'dark';
+    return !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+  }
+
+  function getEffectiveTileUrl(bmKey) {
+    if (bmKey && BASEMAPS[bmKey]) {
+      return BASEMAPS[bmKey].url;
+    }
+    return BASEMAPS.streets.url;
+  }
+
+  function getEffectiveAttrib(bmKey) {
+    if (bmKey && BASEMAPS[bmKey]) {
+      return BASEMAPS[bmKey].attrib;
+    }
+    return BASEMAPS.streets.attrib;
+  }
+
+  var reverseGeocodeCache = {};
+  function fetchReverseGeocode(lat, lng) {
+    var key = Number(lat).toFixed(4) + ',' + Number(lng).toFixed(4);
+    if (reverseGeocodeCache[key]) return Promise.resolve(reverseGeocodeCache[key]);
+    var url = 'https://nominatim.openstreetmap.org/reverse?format=json&lat=' + encodeURIComponent(lat) + '&lon=' + encodeURIComponent(lng) + '&zoom=18&addressdetails=1';
+    return fetch(url, { headers: { 'Accept': 'application/json' } })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        var addr = (d && d.display_name) || (d && d.name) || (Number(lat).toFixed(5) + ', ' + Number(lng).toFixed(5));
+        reverseGeocodeCache[key] = addr;
+        return addr;
+      })
+      .catch(function () {
+        return Number(lat).toFixed(5) + ', ' + Number(lng).toFixed(5);
+      });
+  }
+
+  function fetchForwardGeocode(query) {
+    if (!query || !query.trim()) return Promise.resolve(null);
+    var url = 'https://nominatim.openstreetmap.org/search?format=json&limit=1&q=' + encodeURIComponent(query.trim());
+    return fetch(url, { headers: { 'Accept': 'application/json' } })
+      .then(function (r) { return r.json(); })
+      .then(function (list) {
+        if (list && list.length > 0) {
+          return {
+            lat: parseFloat(list[0].lat),
+            lng: parseFloat(list[0].lon),
+            name: list[0].display_name
+          };
+        }
+        return null;
+      })
+      .catch(function () { return null; });
+  }
+
+  function calculateLateMinutes(emp) {
+    if (!emp.checkIn || emp.checkIn === '—') return 0;
+    var shift = state.shifts.find(function (s) { return s.name === emp.shiftName; }) || state.shifts[0] || { startTime: '09:00', graceMinutes: 15 };
+    var stStr = shift.startTime || shift.start_time || '09:00';
+    var grace = shift.graceMinutes != null ? shift.graceMinutes : (shift.grace_minutes != null ? shift.grace_minutes : 15);
+    var checkParts = String(emp.checkIn).replace(/^.*T/, '').split(':');
+    var shiftParts = stStr.split(':');
+    if (checkParts.length < 2 || shiftParts.length < 2) return 0;
+    var checkMins = parseInt(checkParts[0], 10) * 60 + parseInt(checkParts[1], 10);
+    var shiftMins = parseInt(shiftParts[0], 10) * 60 + parseInt(shiftParts[1], 10) + grace;
+    return Math.max(0, checkMins - shiftMins);
+  }
+
+  function getAbsentEmployees() {
+    var checkedInEmails = {};
+    (state.mapFeed && state.mapFeed.employees || []).forEach(function (e) {
+      if (e.email) checkedInEmails[e.email.toLowerCase()] = true;
+    });
+    var absent = [];
+    (state.roster || []).forEach(function (r) {
+      if (!checkedInEmails[(r.email || '').toLowerCase()]) {
+        absent.push({
+          email: r.email,
+          name: r.name || r.email,
+          department: r.department || 'General',
+          role: r.designation || r.role || 'Staff',
+          status: 'Absent',
+          isAbsent: true,
+          checkIn: '—',
+          device: 'none',
+          locationStatus: 'Absent'
+        });
+      }
+    });
+    return absent;
+  }
 
   /* ── helpers ─────────────────────────────────────────────────────────── */
   function can(code) {
@@ -57,18 +174,20 @@
     setTimeout(function () { if (t.parentNode) t.remove(); }, 3200);
   }
 
-  /* ── mini map ─────────────────────────────────────────────────────────
-   * A slippy-map view built from OpenStreetMap raster tiles. No mapping
-   * library: pulling Leaflet off a CDN would add a third-party script to every
-   * page load, and all this needs is Web Mercator plus absolutely-positioned
-   * <img> tiles. Draws the fence circle to scale and, when a check-in position
-   * is known, a marker for it and the line between the two.
-   *
-   * OSM's tile policy covers casual use like an internal HR screen; swap
-   * TILE_URL for your own tile server if this ever gets heavy traffic.
-   */
+  /* ── mini map ───────────────────────────────────────────────────────── */
   var TILE = 256;
-  var TILE_URL = 'https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png';
+
+  try {
+    api('/api/config').then(function (cfg) {
+      if (cfg && cfg.basemapTileUrl) {
+        BASEMAPS.streets.url = cfg.basemapTileUrl;
+        if (cfg.basemapAttribution) {
+          BASEMAPS.streets.attrib = cfg.basemapAttribution;
+        }
+        window.__HRMS_CONFIG__ = Object.assign(window.__HRMS_CONFIG__ || {}, cfg);
+      }
+    }).catch(function () {});
+  } catch (_) {}
 
   function lngToWorldX(lng, z) { return (lng + 180) / 360 * Math.pow(2, z) * TILE; }
   function latToWorldY(lat, z) {
@@ -105,7 +224,7 @@
   /*
    * opts: { lat, lng, radius, label,        -- the fence (required)
    *         pointLat, pointLng, pointLabel, -- the check-in (optional)
-   *         width, height }
+   *         width, height, basemap }
    */
   function renderMap(opts) {
     var W = opts.width || 380, H = opts.height || 240;
@@ -131,6 +250,8 @@
     var toY = function (lat) { return latToWorldY(lat, z) - originY; };
 
     // Tiles covering the viewport.
+    var tileUrlTemplate = getEffectiveTileUrl(opts.basemap);
+    var attribText = getEffectiveAttrib(opts.basemap);
     var tiles = '';
     var n = Math.pow(2, z);
     var x0 = Math.floor(originX / TILE), x1 = Math.floor((originX + W) / TILE);
@@ -139,29 +260,30 @@
       for (var ty = y0; ty <= y1; ty++) {
         if (ty < 0 || ty >= n) continue;                 // above the pole / below it
         var wrapped = ((tx % n) + n) % n;                // wrap across the date line
-        var url = TILE_URL.replace('{z}', z).replace('{x}', wrapped).replace('{y}', ty);
+        var url = tileUrlTemplate.replace('{z}', z).replace('{x}', wrapped).replace('{y}', ty);
         tiles += '<img src="' + url + '" width="' + TILE + '" height="' + TILE + '" alt="" ' +
-          'loading="lazy" referrerpolicy="no-referrer" style="position:absolute;left:' +
+          'loading="lazy" style="position:absolute;left:' +
           (tx * TILE - originX) + 'px;top:' + (ty * TILE - originY) + 'px;">';
       }
     }
 
     var fx = toX(fLng), fy = toY(fLat);
     var rpx = radius / metersPerPixel(fLat, z);
+    var isDark = isDarkTheme();
     var svg = '<svg width="' + W + '" height="' + H + '" style="position:absolute;inset:0;' +
       'pointer-events:none;overflow:visible">';
     if (hasPoint) {
       svg += '<line x1="' + fx + '" y1="' + fy + '" x2="' + toX(pLng) + '" y2="' + toY(pLat) +
-        '" stroke="#dc2626" stroke-width="2" stroke-dasharray="5 4"/>';
+        '" stroke="#ef4444" stroke-width="2" stroke-dasharray="5 4"/>';
     }
     if (rpx > 0) {
-      svg += '<circle cx="' + fx + '" cy="' + fy + '" r="' + rpx + '" fill="rgba(15,157,88,.18)" ' +
-        'stroke="#0f9d58" stroke-width="2"/>';
+      svg += '<circle cx="' + fx + '" cy="' + fy + '" r="' + rpx + '" fill="' + (isDark ? 'rgba(16,185,129,.22)' : 'rgba(15,157,88,.18)') + '" ' +
+        'stroke="' + (isDark ? '#10b981' : '#0f9d58') + '" stroke-width="2.5"/>';
     }
-    svg += '<circle cx="' + fx + '" cy="' + fy + '" r="6" fill="#0f9d58" stroke="#fff" stroke-width="2"/>';
+    svg += '<circle cx="' + fx + '" cy="' + fy + '" r="6" fill="' + (isDark ? '#10b981' : '#0f9d58') + '" stroke="#fff" stroke-width="2"/>';
     if (hasPoint) {
       var px = toX(pLng), py = toY(pLat);
-      svg += '<circle cx="' + px + '" cy="' + py + '" r="7" fill="#dc2626" stroke="#fff" stroke-width="2"/>';
+      svg += '<circle cx="' + px + '" cy="' + py + '" r="7" fill="#ef4444" stroke="#fff" stroke-width="2"/>';
     }
     svg += '</svg>';
 
@@ -173,11 +295,12 @@
       : esc(opts.label || '') + (radius ? ' · ' + radius + ' m radius' : '');
 
     return '' +
-      '<div style="position:relative;width:' + W + 'px;height:' + H + 'px;overflow:hidden;' +
-      'border:1px solid var(--haa-line);border-radius:10px;background:var(--haa-map-bg)">' + tiles + svg +
+      '<div class="haa-mini-map-wrap" style="position:relative;width:' + W + 'px;height:' + H + 'px;overflow:hidden;' +
+      'border:1px solid var(--haa-line);border-radius:10px;background:var(--haa-map-bg)">' +
+      '<div class="haa-tiles" style="position:absolute;inset:0">' + tiles + '</div>' + svg +
       '<div style="position:absolute;right:0;bottom:0;background:var(--haa-attrib);' +
       'font-size:9px;color:var(--haa-muted);padding:1px 5px;border-radius:5px 0 0 0">' +
-      '© OpenStreetMap contributors</div></div>' +
+      esc(attribText) + '</div></div>' +
       '<div style="font-size:12px;color:var(--haa-muted);margin-top:6px">' + caption + '</div>';
   }
 
@@ -185,25 +308,47 @@
   function createInteractiveAttendanceMap(host) {
     var fences = (state.mapFeed && state.mapFeed.fences) || state.fences || [];
     var employees = (state.mapFeed && state.mapFeed.employees) || [];
+    var absentEmployees = getAbsentEmployees();
+    var allEmpsWithAbsent = employees.concat(absentEmployees);
+
     var mode = state.mapMode || 'markers';
     var statusFilter = state.mapFilter || 'all';
     var deptFilter = state.deptFilter || 'all';
+    var activeBasemap = state.basemap || 'auto';
 
-    var visibleEmps = employees.filter(function (emp) {
-      if (deptFilter !== 'all' && emp.department !== deptFilter) return false;
-      if (statusFilter === 'onsite' && (!emp.geoVerified || emp.isWfh)) return false;
-      if (statusFilter === 'wfh' && !emp.isWfh) return false;
-      if (statusFilter === 'pending' && emp.locationStatus !== 'Pending' && emp.status !== 'Pending Review') return false;
-      return true;
-    });
+    function getVisibleEmployees() {
+      var searchQ = (state.searchQuery || '').toLowerCase().trim();
+      var pool = (statusFilter === 'absent') ? [] : employees;
+
+      return pool.filter(function (emp) {
+        if (!emp.latitude || !emp.longitude || emp.isAbsent) return false;
+        if (deptFilter !== 'all' && emp.department !== deptFilter) return false;
+
+        var lateMin = calculateLateMinutes(emp);
+        if (statusFilter === 'onsite' && (!emp.geoVerified || emp.isWfh || lateMin > 0)) return false;
+        if (statusFilter === 'late' && lateMin <= 0) return false;
+        if (statusFilter === 'wfh' && !emp.isWfh) return false;
+        if (statusFilter === 'pending' && (emp.locationStatus !== 'Pending' && emp.status !== 'Pending Review')) return false;
+
+        if (searchQ) {
+          var matchName = (emp.name || '').toLowerCase().indexOf(searchQ) >= 0;
+          var matchEmail = (emp.email || '').toLowerCase().indexOf(searchQ) >= 0;
+          var matchDept = (emp.department || '').toLowerCase().indexOf(searchQ) >= 0;
+          var matchRole = (emp.role || '').toLowerCase().indexOf(searchQ) >= 0;
+          if (!matchName && !matchEmail && !matchDept && !matchRole) return false;
+        }
+
+        return true;
+      });
+    }
 
     var defaultLat = 12.9716, defaultLng = 77.5946;
     if (fences.length && fences[0].latitude) {
       defaultLat = fences[0].latitude;
       defaultLng = fences[0].longitude;
-    } else if (visibleEmps.length && visibleEmps[0].latitude) {
-      defaultLat = visibleEmps[0].latitude;
-      defaultLng = visibleEmps[0].longitude;
+    } else if (employees.length && employees[0].latitude) {
+      defaultLat = employees[0].latitude;
+      defaultLng = employees[0].longitude;
     }
 
     var st = {
@@ -219,7 +364,7 @@
 
     var container = document.createElement('div');
     container.className = 'haa-live-map-canvas-wrap';
-    container.style.cssText = 'position:relative;width:100%;height:100%;overflow:hidden;user-select:none;cursor:grab;';
+    container.style.cssText = 'position:relative;width:100%;height:100%;overflow:hidden;user-select:none;cursor:grab;background:var(--haa-map-bg,#f1f5f9);';
 
     var tileLayer = document.createElement('div');
     tileLayer.className = 'haa-map-tiles-layer';
@@ -241,64 +386,119 @@
     overlayLayer.style.cssText = 'position:absolute;inset:0;pointer-events:auto;';
     container.appendChild(overlayLayer);
 
+    /* 🛰️ Basemap Switcher Floating Control */
+    var basemapControl = document.createElement('div');
+    basemapControl.className = 'haa-map-basemap-ctrl';
+    basemapControl.style.cssText = 'position:absolute;left:14px;top:14px;display:inline-flex;gap:3px;background:var(--haa-surface,#fff);padding:3px;border-radius:8px;border:1px solid var(--haa-line,#cbd5e1);box-shadow:0 3px 10px rgba(0,0,0,0.14);z-index:30;';
+    
+    function currentEffectiveBasemap() {
+      if (activeBasemap && activeBasemap !== 'auto') return activeBasemap;
+      return isDarkTheme() ? 'dark' : 'streets';
+    }
+
+    function renderBasemapButtons() {
+      var eff = currentEffectiveBasemap();
+      basemapControl.innerHTML =
+        '<button class="haa-map-base-btn ' + (eff === 'streets' ? 'on' : '') + '" data-base="streets" title="Street Map" style="padding:4px 9px;border-radius:6px;border:none;background:' + (eff === 'streets' ? 'var(--haa-accent,#4f46e5)' : 'transparent') + ';color:' + (eff === 'streets' ? '#fff' : 'var(--haa-text,#0f172a)') + ';font-size:11px;font-weight:700;cursor:pointer;">🗺️ Streets</button>' +
+        '<button class="haa-map-base-btn ' + (eff === 'satellite' ? 'on' : '') + '" data-base="satellite" title="Satellite Imagery" style="padding:4px 9px;border-radius:6px;border:none;background:' + (eff === 'satellite' ? 'var(--haa-accent,#4f46e5)' : 'transparent') + ';color:' + (eff === 'satellite' ? '#fff' : 'var(--haa-text,#0f172a)') + ';font-size:11px;font-weight:700;cursor:pointer;">🛰️ Satellite</button>' +
+        '<button class="haa-map-base-btn ' + (eff === 'dark' ? 'on' : '') + '" data-base="dark" title="Dark Map" style="padding:4px 9px;border-radius:6px;border:none;background:' + (eff === 'dark' ? 'var(--haa-accent,#4f46e5)' : 'transparent') + ';color:' + (eff === 'dark' ? '#fff' : 'var(--haa-text,#0f172a)') + ';font-size:11px;font-weight:700;cursor:pointer;">🌙 Dark</button>' +
+        '<button class="haa-map-base-btn ' + (eff === 'topo' ? 'on' : '') + '" data-base="topo" title="Topographic Map" style="padding:4px 9px;border-radius:6px;border:none;background:' + (eff === 'topo' ? 'var(--haa-accent,#4f46e5)' : 'transparent') + ';color:' + (eff === 'topo' ? '#fff' : 'var(--haa-text,#0f172a)') + ';font-size:11px;font-weight:700;cursor:pointer;">🏔️ Topo</button>';
+
+      var baseBtns = basemapControl.querySelectorAll('[data-base]');
+      for (var b = 0; b < baseBtns.length; b++) {
+        (function (btn) {
+          btn.onclick = function (e) {
+            e.stopPropagation();
+            var bmKey = btn.getAttribute('data-base');
+            activeBasemap = state.basemap = bmKey;
+            renderBasemapButtons();
+            attrib.textContent = getEffectiveAttrib(activeBasemap);
+            redraw();
+          };
+        })(baseBtns[b]);
+      }
+    }
+    renderBasemapButtons();
+    container.appendChild(basemapControl);
+
+    /* Zoom Controls */
     var zoomWrap = document.createElement('div');
     zoomWrap.className = 'haa-map-zoom-controls';
     zoomWrap.style.cssText = 'position:absolute;right:14px;top:14px;display:flex;flex-direction:column;gap:4px;z-index:30;';
     zoomWrap.innerHTML =
       '<button class="haa-map-zbtn" id="haa-z-in" title="Zoom In" style="width:34px;height:34px;border-radius:8px;border:1px solid var(--haa-line,#cbd5e1);background:var(--haa-surface,#fff);color:var(--haa-text,#0f172a);font-weight:700;font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 6px rgba(0,0,0,0.15);">+</button>' +
       '<button class="haa-map-zbtn" id="haa-z-out" title="Zoom Out" style="width:34px;height:34px;border-radius:8px;border:1px solid var(--haa-line,#cbd5e1);background:var(--haa-surface,#fff);color:var(--haa-text,#0f172a);font-weight:700;font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 6px rgba(0,0,0,0.15);">−</button>' +
-      '<button class="haa-map-zbtn" id="haa-z-fit" title="Fit All" style="width:34px;height:34px;border-radius:8px;border:1px solid var(--haa-line,#cbd5e1);background:var(--haa-surface,#fff);color:var(--haa-text,#0f172a);font-size:13px;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 6px rgba(0,0,0,0.15);">🎯</button>';
+      '<button class="haa-map-zbtn" id="haa-z-fit" title="Fit All Employees & Offices" style="width:34px;height:34px;border-radius:8px;border:1px solid var(--haa-line,#cbd5e1);background:var(--haa-surface,#fff);color:var(--haa-text,#0f172a);font-size:13px;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 6px rgba(0,0,0,0.15);">🎯</button>';
     container.appendChild(zoomWrap);
 
     var attrib = document.createElement('div');
-    attrib.style.cssText = 'position:absolute;right:0;bottom:0;background:var(--haa-attrib,rgba(15,23,42,0.75));font-size:9px;color:var(--haa-muted,#fff);padding:1px 6px;border-radius:5px 0 0 0;z-index:20;';
-    attrib.textContent = '© OpenStreetMap contributors';
+    attrib.style.cssText = 'position:absolute;right:0;bottom:0;background:var(--haa-attrib,rgba(15,23,42,0.75));font-size:9px;color:var(--haa-muted,#fff);padding:2px 8px;border-radius:5px 0 0 0;z-index:20;';
+    attrib.textContent = getEffectiveAttrib(activeBasemap);
     container.appendChild(attrib);
 
     host.innerHTML = '';
     host.appendChild(container);
+
+    function nearestOfficeFence(lat, lng) {
+      var best = null, bestD = Infinity;
+      fences.forEach(function (f) {
+        if (!f.latitude || !f.longitude) return;
+        var d = haversine(lat, lng, Number(f.latitude), Number(f.longitude));
+        if (d < bestD) { bestD = d; best = f; }
+      });
+      return { fence: best, distanceMeters: bestD };
+    }
 
     function redraw() {
       var W = container.clientWidth || 800;
       var H = container.clientHeight || 560;
       if (W < 10 || H < 10) return;
 
+      var visibleEmps = getVisibleEmployees();
+
       var originX = lngToWorldX(st.lng, st.z) - W / 2;
       var originY = latToWorldY(st.lat, st.z) - H / 2;
       var toX = function (lng) { return lngToWorldX(lng, st.z) - originX; };
       var toY = function (lat) { return latToWorldY(lat, st.z) - originY; };
 
-      // 1. Tiles
+      // 1. Render Tiles for Active Basemap
+      tileLayer.className = (activeBasemap === 'satellite') ? 'haa-map-tiles-layer no-filter' : 'haa-tiles haa-map-tiles-layer';
       var tilesHtml = '';
       var n = Math.pow(2, st.z);
       var x0 = Math.floor(originX / TILE), x1 = Math.floor((originX + W) / TILE);
       var y0 = Math.floor(originY / TILE), y1 = Math.floor((originY + H) / TILE);
+      var currentTileUrlTemplate = getEffectiveTileUrl(activeBasemap);
+      attrib.textContent = getEffectiveAttrib(activeBasemap);
+
       for (var tx = x0; tx <= x1; tx++) {
         for (var ty = y0; ty <= y1; ty++) {
           if (ty < 0 || ty >= n) continue;
           var wrapped = ((tx % n) + n) % n;
-          var url = TILE_URL.replace('{z}', st.z).replace('{x}', wrapped).replace('{y}', ty);
+          var url = currentTileUrlTemplate.replace('{z}', st.z).replace('{x}', wrapped).replace('{y}', ty);
           tilesHtml += '<img src="' + url + '" width="' + TILE + '" height="' + TILE + '" alt="" ' +
-            'loading="lazy" referrerpolicy="no-referrer" style="position:absolute;left:' +
+            'loading="lazy" style="position:absolute;left:' +
             (tx * TILE - originX) + 'px;top:' + (ty * TILE - originY) + 'px;">';
         }
       }
       tileLayer.innerHTML = tilesHtml;
 
-      // 2. SVG Geofence circles
+      // 2. SVG Geofence circles & Measurement rings
       var svgHtml = '';
       fences.forEach(function (f) {
         if (!f.latitude || !f.longitude) return;
         var fx = toX(f.longitude), fy = toY(f.latitude);
         var rMeters = Number(f.radiusMeters || f.radius_meters) || 200;
         var rPx = rMeters / metersPerPixel(f.latitude, st.z);
-        svgHtml += '<circle cx="' + fx + '" cy="' + fy + '" r="' + Math.max(4, rPx) + '" ' +
-          'fill="rgba(79,142,247,0.15)" stroke="#4f8ef7" stroke-width="2.5" stroke-dasharray="6 4"/>';
-        svgHtml += '<circle cx="' + fx + '" cy="' + fy + '" r="5" fill="#4f8ef7" stroke="#fff" stroke-width="2"/>';
+        var fenceColor = f.isHome ? '#8b5cf6' : '#3b82f6';
+        var fillColor = f.isHome ? 'rgba(139,92,246,0.12)' : 'rgba(59,130,246,0.14)';
+
+        svgHtml += '<circle cx="' + fx + '" cy="' + fy + '" r="' + Math.max(6, rPx) + '" ' +
+          'fill="' + fillColor + '" stroke="' + fenceColor + '" stroke-width="2.5" stroke-dasharray="6 4"/>';
+        svgHtml += '<circle cx="' + fx + '" cy="' + fy + '" r="5" fill="' + fenceColor + '" stroke="#fff" stroke-width="2"/>';
       });
       svgLayer.innerHTML = svgHtml;
 
-      // 3. Heatmap
+      // 3. Attendance Heatmap
       if (mode === 'heatmap') {
         heatmapCanvas.width = W;
         heatmapCanvas.height = H;
@@ -306,37 +506,103 @@
         ctx.clearRect(0, 0, W, H);
 
         visibleEmps.forEach(function (emp) {
-          if (!emp.latitude || !emp.longitude) return;
+          if (!emp.latitude || !emp.longitude || emp.isAbsent) return;
           var px = toX(emp.longitude), py = toY(emp.latitude);
-          var grad = ctx.createRadialGradient(px, py, 4, px, py, 48);
-          grad.addColorStop(0, 'rgba(239, 68, 68, 0.9)');
-          grad.addColorStop(0.3, 'rgba(245, 158, 11, 0.7)');
-          grad.addColorStop(0.6, 'rgba(16, 185, 129, 0.4)');
+          var grad = ctx.createRadialGradient(px, py, 4, px, py, 52);
+          grad.addColorStop(0, 'rgba(239, 68, 68, 0.92)');
+          grad.addColorStop(0.3, 'rgba(245, 158, 11, 0.75)');
+          grad.addColorStop(0.6, 'rgba(16, 185, 129, 0.45)');
           grad.addColorStop(1, 'rgba(59, 130, 246, 0)');
           ctx.fillStyle = grad;
           ctx.beginPath();
-          ctx.arc(px, py, 48, 0, Math.PI * 2);
+          ctx.arc(px, py, 52, 0, Math.PI * 2);
           ctx.fill();
         });
       }
 
-      // 4. Overlays (Fence badges & Employee Markers/Clusters)
+      // 4. Overlays (Office Badges, Absent Roster, & Employee Markers/Clusters)
       overlayLayer.innerHTML = '';
 
+      // 🔴 Dedicated Absent Roster Panel when filtering by Absent
+      if (statusFilter === 'absent') {
+        var absentCard = document.createElement('div');
+        absentCard.className = 'haa-absent-roster-panel';
+        absentCard.style.cssText = 'position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);' +
+          'background:var(--haa-surface,#fff);color:var(--haa-text,#0f172a);border-radius:14px;padding:20px;' +
+          'box-shadow:0 20px 60px rgba(0,0,0,0.4);border:1px solid var(--haa-line,#cbd5e1);z-index:50;width:92%;' +
+          'max-width:540px;max-height:80%;display:flex;flex-direction:column;font-family:\'Segoe UI\',Arial,sans-serif;animation:haa-pop-in 0.18s ease;pointer-events:auto;user-select:text;cursor:default;';
+
+        absentCard.onmousedown = function (e) { e.stopPropagation(); };
+        absentCard.onmouseup = function (e) { e.stopPropagation(); };
+        absentCard.onclick = function (e) { e.stopPropagation(); };
+        absentCard.addEventListener('wheel', function (e) { e.stopPropagation(); }, { passive: false });
+
+        var absentRowsHtml = absentEmployees.map(function (emp) {
+          var initials = (emp.name || 'U').split(' ').map(function (w) { return w[0]; }).join('').toUpperCase().slice(0, 2);
+          return '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px;border-bottom:1px solid var(--haa-line2,#f1f5f9);">' +
+            '  <div style="display:flex;align-items:center;gap:10px;min-width:0;">' +
+            '    <div style="width:36px;height:36px;border-radius:50%;background:#fee2e2;color:#b91c1c;border:2px solid #ef4444;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px;flex-shrink:0;">' + esc(initials) + '</div>' +
+            '    <div style="min-width:0;">' +
+            '      <div style="font-weight:700;font-size:13px;color:var(--haa-text,#0f172a);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + esc(emp.name) + '</div>' +
+            '      <div style="font-size:11px;color:var(--haa-muted,#64748b);">' + esc(emp.department) + ' · ' + esc(emp.role || 'Staff') + '</div>' +
+            '    </div>' +
+            '  </div>' +
+            '  <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">' +
+            '    <button type="button" class="haa-btn haa-remind-btn" data-name="' + esc(emp.name) + '" style="font-size:11px;padding:5px 12px;height:30px;cursor:pointer;border-radius:6px;background:var(--haa-accent,#4f46e5);color:#fff;border:none;font-weight:700;display:inline-flex;align-items:center;gap:4px;">📲 Remind</button>' +
+            '    <a href="/hr/hris" style="font-size:11px;color:var(--haa-link,#4f46e5);font-weight:600;padding:4px 6px;text-decoration:none;">Profile →</a>' +
+            '  </div>' +
+            '</div>';
+        }).join('');
+
+        absentCard.innerHTML =
+          '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid var(--haa-line,#cbd5e1);">' +
+          '  <div style="display:flex;align-items:center;gap:8px;">' +
+          '    <span style="font-size:18px;">🔴</span>' +
+          '    <strong style="font-size:15px;color:var(--haa-text,#0f172a);">Absent / Unaccounted Staff</strong>' +
+          '    <span style="background:var(--haa-err-bg,#fee2e2);color:var(--haa-err-fg,#b91c1c);font-weight:700;font-size:11px;padding:2px 8px;border-radius:12px;">' + absentEmployees.length + ' absent</span>' +
+          '  </div>' +
+          '  <button id="haa-absent-close" style="background:none;border:none;color:var(--haa-muted,#64748b);font-size:18px;cursor:pointer;padding:2px 8px;line-height:1;border-radius:4px;">✕</button>' +
+          '</div>' +
+          '<div style="font-size:12px;color:var(--haa-muted,#64748b);margin-bottom:10px;">Enrolled staff who have not checked in today:</div>' +
+          '<div id="haa-absent-scroll-list" style="overflow-y:auto;max-height:280px;padding-right:6px;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;">' + (absentRowsHtml || '<div class="haa-empty">No absent staff today! 🎉</div>') + '</div>';
+
+        overlayLayer.appendChild(absentCard);
+
+        absentCard.querySelector('#haa-absent-close').onclick = function (e) {
+          e.stopPropagation();
+          var allBtn = document.querySelector('[data-map-flt="all"]');
+          if (allBtn) allBtn.click();
+        };
+
+        var remindBtns = absentCard.querySelectorAll('.haa-remind-btn');
+        for (var rb = 0; rb < remindBtns.length; rb++) {
+          (function (btn) {
+            btn.onclick = function (e) {
+              e.stopPropagation();
+              e.preventDefault();
+              var empName = btn.getAttribute('data-name');
+              btn.disabled = true;
+              btn.style.background = '#10b981';
+              btn.textContent = '✓ Reminded';
+              toast('Check-in reminder notification sent to ' + empName);
+            };
+          })(remindBtns[rb]);
+        }
+      }
+
+      // 🏢 Office Location Badges
       fences.forEach(function (f) {
         if (!f.latitude || !f.longitude) return;
         var fx = toX(f.longitude), fy = toY(f.latitude);
         var lbl = document.createElement('div');
         lbl.className = 'haa-map-fence-badge';
         lbl.style.cssText = 'position:absolute;left:' + fx + 'px;top:' + (fy - 28) + 'px;transform:translate(-50%,-100%);' +
-          'background:rgba(15,23,42,0.88);color:#fff;padding:4px 10px;border-radius:20px;font-size:11px;font-weight:700;' +
-          'border:1px solid ' + (f.isHome ? '#8b5cf6' : '#4f8ef7') + ';box-shadow:0 4px 14px rgba(0,0,0,0.3);white-space:nowrap;pointer-events:auto;cursor:pointer;z-index:12;';
+          'background:rgba(15,23,42,0.88);color:#fff;padding:5px 12px;border-radius:20px;font-size:11px;font-weight:700;' +
+          'border:1px solid ' + (f.isHome ? '#8b5cf6' : '#3b82f6') + ';box-shadow:0 4px 16px rgba(0,0,0,0.35);white-space:nowrap;pointer-events:auto;cursor:pointer;z-index:15;';
 
         var onSiteEmpsInFence = employees.filter(function (emp) {
-          if (emp.latitude == null || emp.longitude == null) return false;
-          if (f.isHome) {
-            return emp.isWfh && emp.email === f.ownerEmail;
-          }
+          if (emp.latitude == null || emp.longitude == null || emp.isAbsent) return false;
+          if (f.isHome) return emp.isWfh && emp.email === f.ownerEmail;
           if (!emp.geoVerified || emp.isWfh) return false;
           var d = haversine(emp.latitude, emp.longitude, f.latitude, f.longitude);
           return d <= (Number(f.radiusMeters || f.radius_meters) || 200) + 60 || emp.isSimulatedCoord;
@@ -344,8 +610,8 @@
 
         var countNum = (f.activeCount != null && f.activeCount > 0) ? f.activeCount : onSiteEmpsInFence.length;
         var iconPrefix = f.isHome ? '🏠 ' : '🏢 ';
-        var labelSuffix = f.isHome ? ' remote' : ' on-site';
-        lbl.innerHTML = iconPrefix + esc(f.name) + ' <span style="background:' + (f.isHome ? '#8b5cf6' : '#4f8ef7') + ';color:#fff;border-radius:10px;padding:1px 6px;margin-left:4px;font-size:10px;">' + countNum + labelSuffix + '</span>';
+        var labelSuffix = f.isHome ? ' Remote' : ' On-Site';
+        lbl.innerHTML = iconPrefix + esc(f.name) + ' <span style="background:' + (f.isHome ? '#8b5cf6' : '#3b82f6') + ';color:#fff;border-radius:10px;padding:2px 7px;margin-left:4px;font-size:10px;">' + countNum + labelSuffix + '</span>';
 
         lbl.onclick = function (e) {
           e.stopPropagation();
@@ -367,14 +633,15 @@
         overlayLayer.appendChild(lbl);
       });
 
+      // 👥 Marker Clustering & Employee Pins
       if (mode === 'markers') {
         var clusters = [];
-        var CLUSTER_RADIUS = 32;
+        var CLUSTER_RADIUS = 34;
 
         visibleEmps.forEach(function (emp) {
           if (!emp.latitude || !emp.longitude) return;
           var px = toX(emp.longitude), py = toY(emp.latitude);
-          if (px < -60 || px > W + 60 || py < -60 || py > H + 60) return;
+          if (px < -80 || px > W + 80 || py < -80 || py > H + 80) return;
 
           var matchedCluster = null;
           for (var c = 0; c < clusters.length; c++) {
@@ -394,30 +661,38 @@
 
         clusters.forEach(function (cl) {
           if (cl.members.length > 1 && st.z < 17) {
+            // Clustered bubble
             var cMarker = document.createElement('div');
             cMarker.className = 'haa-map-cluster-bubble';
             cMarker.style.cssText = 'position:absolute;left:' + cl.x + 'px;top:' + cl.y + 'px;transform:translate(-50%,-50%);' +
-              'width:40px;height:40px;border-radius:50%;background:linear-gradient(135deg,#4f46e5,#7c3aed);color:#fff;' +
+              'width:42px;height:42px;border-radius:50%;background:linear-gradient(135deg,#4f46e5,#7c3aed);color:#fff;' +
               'display:flex;align-items:center;justify-content:center;font-weight:800;font-size:14px;border:3px solid #fff;' +
-              'box-shadow:0 4px 16px rgba(79,70,229,0.5);cursor:pointer;transition:transform 0.15s;z-index:25;';
+              'box-shadow:0 4px 18px rgba(79,70,229,0.55);cursor:pointer;transition:transform 0.15s;z-index:25;';
             cMarker.textContent = cl.members.length;
-            cMarker.title = cl.members.length + ' employees checked in here (click to view profiles)';
+            cMarker.title = cl.members.length + ' employees here (click to view roster)';
             cMarker.onclick = function (e) {
               e.stopPropagation();
-              showClusterPopover(cl.members, cl.x, cl.y, '👥 Checked-In Here (' + cl.members.length + ')');
+              showClusterPopover(cl.members, cl.x, cl.y, '👥 Checked-In Group (' + cl.members.length + ')');
             };
             overlayLayer.appendChild(cMarker);
           } else {
+            // Individual Employee Pins
             var count = cl.members.length;
             cl.members.forEach(function (emp, idx) {
               var angle = (idx / count) * 2 * Math.PI;
-              var offsetRadius = count > 1 ? 26 : 0;
+              var offsetRadius = count > 1 ? 28 : 0;
               var pinX = cl.x + Math.cos(angle) * offsetRadius;
               var pinY = cl.y + Math.sin(angle) * offsetRadius;
 
-              var dotColor = emp.isWfh ? '#3b82f6' : (emp.status === 'Pending Review' ? '#f59e0b' : '#10b981');
+              var lateMins = calculateLateMinutes(emp);
+              var dotColor = emp.isAbsent ? '#ef4444'
+                           : emp.isWfh ? '#8b5cf6'
+                           : (lateMins > 0 ? '#f59e0b' : (emp.status === 'Pending Review' ? '#eab308' : '#10b981'));
+
               var initials = (emp.name || 'U').split(' ').map(function (w) { return w[0]; }).join('').toUpperCase().slice(0, 2);
-              var badgeIcon = emp.isWfh ? '🏠' : (emp.device === 'mobile' ? '📱' : '');
+              var badgeIcon = emp.isAbsent ? '🔴'
+                            : emp.isWfh ? '🏠'
+                            : (lateMins > 0 ? '🟠' : (emp.device === 'mobile' ? '📱' : '💻'));
 
               var picHtml = emp.profilePic
                 ? '<img src="' + esc(emp.profilePic) + '" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:50%;display:block;" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\';" />' +
@@ -429,11 +704,11 @@
               eMarker.style.cssText = 'position:absolute;left:' + pinX + 'px;top:' + pinY + 'px;transform:translate(-50%,-50%);' +
                 'cursor:pointer;z-index:20;transition:transform 0.15s;';
               eMarker.innerHTML =
-                '<div style="width:36px;height:36px;border-radius:50%;background:' + dotColor + ';border:3px solid #fff;' +
+                '<div style="width:38px;height:38px;border-radius:50%;background:' + dotColor + ';border:3px solid #fff;' +
                 'display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:12px;overflow:hidden;' +
-                'box-shadow:0 4px 12px rgba(0,0,0,0.3);position:relative;" title="' + esc(emp.name) + ' (' + esc(emp.department) + ')">' +
+                'box-shadow:0 4px 14px rgba(0,0,0,0.32);position:relative;" title="' + esc(emp.name) + ' (' + esc(emp.department || 'Staff') + ')">' +
                 picHtml +
-                (badgeIcon ? '<span style="position:absolute;bottom:-2px;right:-2px;font-size:10px;background:rgba(15,23,42,0.85);border-radius:50%;width:14px;height:14px;display:flex;align-items:center;justify-content:center;line-height:1;border:1px solid #fff;">' + badgeIcon + '</span>' : '') +
+                (badgeIcon ? '<span style="position:absolute;bottom:-2px;right:-2px;font-size:10px;background:rgba(15,23,42,0.88);border-radius:50%;width:15px;height:15px;display:flex;align-items:center;justify-content:center;line-height:1;border:1px solid #fff;">' + badgeIcon + '</span>' : '') +
                 '</div>';
 
               eMarker.onclick = function (e) {
@@ -455,22 +730,31 @@
       pop.className = 'haa-map-emp-popover';
       pop.style.cssText = 'position:absolute;left:' + px + 'px;top:' + (py - 14) + 'px;transform:translate(-50%,-100%);' +
         'background:var(--haa-surface,#ffffff);color:var(--haa-text,#0f172a);border-radius:14px;padding:16px;' +
-        'box-shadow:0 16px 42px rgba(0,0,0,0.3);border:1px solid var(--haa-line,#cbd5e1);z-index:50;min-width:320px;' +
-        'max-width:380px;max-height:420px;display:flex;flex-direction:column;font-family:\'Segoe UI\',Arial,sans-serif;animation:haa-pop-in 0.18s ease;';
+        'box-shadow:0 18px 46px rgba(0,0,0,0.32);border:1px solid var(--haa-line,#cbd5e1);z-index:50;min-width:320px;' +
+        'max-width:390px;max-height:430px;display:flex;flex-direction:column;font-family:\'Segoe UI\',Arial,sans-serif;animation:haa-pop-in 0.18s ease;';
 
       var listHtml = members.map(function (emp, idx) {
-        var statusColor = emp.isWfh ? '#3b82f6' : (emp.status === 'Pending Review' ? '#f59e0b' : '#10b981');
+        var lateMins = calculateLateMinutes(emp);
+        var statusColor = emp.isAbsent ? '#ef4444'
+                        : emp.isWfh ? '#8b5cf6'
+                        : (lateMins > 0 ? '#f59e0b' : (emp.status === 'Pending Review' ? '#eab308' : '#10b981'));
+
         var initials = (emp.name || 'U').split(' ').map(function (w) { return w[0]; }).join('').toUpperCase().slice(0, 2);
         var avatarEl = emp.profilePic
           ? '<img src="' + esc(emp.profilePic) + '" alt="" style="width:34px;height:34px;border-radius:50%;object-fit:cover;flex-shrink:0;margin-top:2px;border:2px solid ' + statusColor + ';" onerror="this.outerHTML=\'<div style=\\\'width:34px;height:34px;border-radius:50%;background:' + statusColor + ';color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px;flex-shrink:0;margin-top:2px;\\\'>' + esc(initials) + '</div>\';" />'
           : '<div style="width:34px;height:34px;border-radius:50%;background:' + statusColor + ';color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px;flex-shrink:0;margin-top:2px;">' + esc(initials) + '</div>';
+
+        var statusTag = emp.isAbsent ? '<span style="font-size:10px;font-weight:700;padding:2px 6px;border-radius:10px;background:rgba(239,68,68,0.15);color:#dc2626;">🔴 Absent</span>'
+                      : (lateMins > 0 ? '<span style="font-size:10px;font-weight:700;padding:2px 6px;border-radius:10px;background:rgba(245,158,11,0.15);color:#d97706;">🟠 Late (' + lateMins + 'm)</span>'
+                      : (emp.isWfh ? '<span style="font-size:10px;font-weight:700;padding:2px 6px;border-radius:10px;background:rgba(139,92,246,0.15);color:#7c3aed;">🏠 Remote</span>'
+                      : '<span style="font-size:10px;font-weight:700;padding:2px 6px;border-radius:10px;background:rgba(16,185,129,0.15);color:#059669;">🟢 On-Site</span>'));
 
         return '<div class="haa-cluster-emp-row" data-cl-idx="' + idx + '" style="display:flex;align-items:flex-start;gap:10px;padding:10px 8px;border-bottom:1px solid var(--haa-line,#e2e8f0);border-radius:8px;cursor:pointer;transition:background 0.15s;">' +
           '  ' + avatarEl +
           '  <div style="flex:1;min-width:0;">' +
           '    <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;">' +
           '      <div style="font-weight:700;font-size:13px;color:var(--haa-text,#0f172a);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + esc(emp.name) + '</div>' +
-          '      <span style="font-size:10px;font-weight:700;padding:2px 6px;border-radius:10px;background:' + (emp.geoVerified ? 'rgba(16,185,129,0.15);color:#059669;' : 'rgba(59,130,246,0.15);color:#2563eb;') + '">' + esc(emp.status) + '</span>' +
+          '      ' + statusTag +
           '    </div>' +
           '    <div style="font-size:11px;color:var(--haa-muted,#64748b);margin-top:1px;">' + esc(emp.department) + ' · ' + esc(emp.role || 'Staff') + '</div>' +
           '    <div style="display:flex;align-items:center;justify-content:space-between;margin-top:4px;font-size:11px;color:var(--haa-muted,#64748b);">' +
@@ -520,19 +804,36 @@
       var pop = document.createElement('div');
       pop.className = 'haa-map-emp-popover';
       pop.style.cssText = 'position:absolute;left:' + px + 'px;top:' + (py - 12) + 'px;transform:translate(-50%,-100%);' +
-        'background:var(--haa-surface,#ffffff);color:var(--haa-text,#0f172a);border-radius:12px;padding:14px 16px;' +
-        'box-shadow:0 12px 36px rgba(0,0,0,0.28);border:1px solid var(--haa-line,#cbd5e1);z-index:40;min-width:260px;' +
-        'max-width:320px;font-family:\'Segoe UI\',Arial,sans-serif;animation:haa-pop-in 0.18s ease;';
+        'background:var(--haa-surface,#ffffff);color:var(--haa-text,#0f172a);border-radius:12px;padding:15px 16px;' +
+        'box-shadow:0 14px 40px rgba(0,0,0,0.3);border:1px solid var(--haa-line,#cbd5e1);z-index:45;min-width:280px;' +
+        'max-width:340px;font-family:\'Segoe UI\',Arial,sans-serif;animation:haa-pop-in 0.18s ease;';
 
-      var statusColor = emp.isWfh ? '#3b82f6' : (emp.status === 'Pending Review' ? '#f59e0b' : '#10b981');
+      var lateMins = calculateLateMinutes(emp);
+      var statusColor = emp.isAbsent ? '#ef4444'
+                      : emp.isWfh ? '#8b5cf6'
+                      : (lateMins > 0 ? '#f59e0b' : (emp.status === 'Pending Review' ? '#eab308' : '#10b981'));
+
       var initials = (emp.name || 'U').split(' ').map(function (w) { return w[0]; }).join('').toUpperCase().slice(0, 2);
       var popupAvatar = emp.profilePic
-        ? '<img src="' + esc(emp.profilePic) + '" alt="" style="width:40px;height:40px;border-radius:50%;object-fit:cover;border:2.5px solid ' + statusColor + ';box-shadow:0 2px 8px rgba(0,0,0,0.15);" onerror="this.outerHTML=\'<div style=\\\'width:38px;height:38px;border-radius:50%;background:' + statusColor + ';color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;\\\'>' + esc(initials) + '</div>\';" />'
-        : '<div style="width:38px;height:38px;border-radius:50%;background:' + statusColor + ';color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;">' + esc(initials) + '</div>';
+        ? '<img src="' + esc(emp.profilePic) + '" alt="" style="width:42px;height:42px;border-radius:50%;object-fit:cover;border:2.5px solid ' + statusColor + ';box-shadow:0 2px 8px rgba(0,0,0,0.15);" onerror="this.outerHTML=\'<div style=\\\'width:40px;height:40px;border-radius:50%;background:' + statusColor + ';color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;\\\'>' + esc(initials) + '</div>\';" />'
+        : '<div style="width:42px;height:42px;border-radius:50%;background:' + statusColor + ';color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;">' + esc(initials) + '</div>';
 
       var backBtnHtml = clusterMembers && clusterMembers.length > 1
-        ? '<button id="haa-pop-back" style="background:none;border:none;color:var(--haa-link,#4f46e5);font-size:12px;cursor:pointer;padding:0;font-weight:600;display:flex;align-items:center;gap:2px;">← Back to list</button>'
+        ? '<button id="haa-pop-back" style="background:none;border:none;color:var(--haa-link,#4f46e5);font-size:12px;cursor:pointer;padding:0;font-weight:600;display:flex;align-items:center;gap:2px;">← Back to group</button>'
         : '';
+
+      var nearest = nearestOfficeFence(emp.latitude, emp.longitude);
+      var fenceStatusHtml = '';
+      if (nearest && nearest.fence) {
+        var rMet = Number(nearest.fence.radiusMeters || nearest.fence.radius_meters) || 200;
+        var inside = nearest.distanceMeters <= rMet;
+        fenceStatusHtml = '<div style="margin-top:6px;font-size:11px;color:' + (inside ? '#059669' : '#d97706') + ';background:' + (inside ? 'rgba(16,185,129,0.08)' : 'rgba(245,158,11,0.08)') + ';padding:4px 8px;border-radius:6px;">' +
+          '<strong>' + (inside ? '✅ Inside' : '⚠️ Outside') + ' ' + esc(nearest.fence.name) + ':</strong> ' +
+          prettyDistance(nearest.distanceMeters) + ' from centre' +
+          '</div>';
+      }
+
+      var directionsUrl = 'https://www.google.com/maps/dir/?api=1&destination=' + encodeURIComponent(emp.latitude) + ',' + encodeURIComponent(emp.longitude);
 
       pop.innerHTML =
         (backBtnHtml ? '<div style="margin-bottom:8px;">' + backBtnHtml + '</div>' : '') +
@@ -547,17 +848,31 @@
         '  <button id="haa-pop-x" style="background:none;border:none;color:var(--haa-muted);font-size:16px;cursor:pointer;padding:2px 6px;">✕</button>' +
         '</div>' +
         '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:8px 0;border-top:1px solid var(--haa-line);border-bottom:1px solid var(--haa-line);font-size:12px;">' +
-        '  <div><span style="color:var(--haa-muted);">Status:</span> <strong>' + esc(emp.status) + '</strong></div>' +
-        '  <div><span style="color:var(--haa-muted);">Device:</span> ' + (emp.device === 'mobile' ? '📱 Mobile' : '💻 Desktop') + '</div>' +
-        '  <div><span style="color:var(--haa-muted);">Checked in:</span> <strong>' + esc(emp.checkIn || '—') + '</strong></div>' +
-        '  <div><span style="color:var(--haa-muted);">GPS:</span> ' + (emp.accuracy ? '±' + Math.round(emp.accuracy) + ' m' : (emp.isSimulatedCoord ? (emp.isWfh ? 'Remote / WFH' : 'Office Geo') : 'Verified')) + '</div>' +
+        '  <div><span style="color:var(--haa-muted);">Status:</span> <strong>' + (emp.isAbsent ? '🔴 Absent' : (lateMins > 0 ? '🟠 Late (' + lateMins + 'm)' : esc(emp.status || 'Active'))) + '</strong></div>' +
+        '  <div><span style="color:var(--haa-muted);">Device:</span> ' + (emp.device === 'mobile' ? '📱 Mobile GPS' : (emp.device === 'none' ? '—' : '💻 Desktop')) + '</div>' +
+        '  <div><span style="color:var(--haa-muted);">Check-In:</span> <strong>' + esc(emp.checkIn || '—') + '</strong></div>' +
+        '  <div><span style="color:var(--haa-muted);">GPS Fix:</span> ' + (emp.accuracy ? '±' + Math.round(emp.accuracy) + ' m' : (emp.isSimulatedCoord ? (emp.isWfh ? 'Remote / WFH' : 'Office Geo') : 'Verified')) + '</div>' +
         '</div>' +
-        (emp.locationReason ? '<div style="margin-top:8px;font-size:11px;color:var(--haa-warn-fg);background:rgba(245,158,11,0.1);padding:6px 8px;border-radius:6px;"><strong>Note:</strong> ' + esc(emp.locationReason) + '</div>' : '') +
-        '<div style="margin-top:10px;display:flex;justify-content:flex-end;gap:6px;">' +
+        fenceStatusHtml +
+        '<div id="haa-pop-addr" style="margin-top:8px;font-size:11px;color:var(--haa-muted);background:var(--haa-alt,#f8fafc);padding:6px 8px;border-radius:6px;border:1px solid var(--haa-line,#e2e8f0);">' +
+        '  📍 <em>Loading street address…</em>' +
+        '</div>' +
+        (emp.locationReason ? '<div style="margin-top:6px;font-size:11px;color:var(--haa-warn-fg);background:rgba(245,158,11,0.1);padding:6px 8px;border-radius:6px;"><strong>Note:</strong> ' + esc(emp.locationReason) + '</div>' : '') +
+        '<div style="margin-top:10px;display:flex;align-items:center;justify-content:space-between;gap:6px;">' +
+        '  <a href="' + directionsUrl + '" target="_blank" rel="noopener" style="font-size:11px;color:#fff;background:var(--haa-accent,#4f46e5);text-decoration:none;font-weight:700;padding:5px 10px;border-radius:6px;display:inline-flex;align-items:center;gap:4px;">🛣️ Directions</a>' +
         '  <a href="/hr/hris" style="font-size:11px;color:var(--haa-link);text-decoration:none;font-weight:600;padding:4px 8px;">View Profile →</a>' +
         '</div>';
 
       overlayLayer.appendChild(pop);
+
+      // Async reverse geocoding
+      var addrEl = pop.querySelector('#haa-pop-addr');
+      fetchReverseGeocode(emp.latitude, emp.longitude).then(function (addr) {
+        if (addrEl && addrEl.parentNode) {
+          addrEl.innerHTML = '📍 <strong>Location:</strong> ' + esc(addr);
+        }
+      });
+
       pop.querySelector('#haa-pop-x').onclick = function (ev) {
         ev.stopPropagation();
         pop.remove();
@@ -572,7 +887,7 @@
     }
 
     container.onmousedown = function (e) {
-      if (e.target.closest('.haa-map-emp-popover') || e.target.closest('.haa-map-zoom-controls')) return;
+      if (e.target.closest('.haa-absent-roster-panel') || e.target.closest('.haa-map-emp-popover') || e.target.closest('.haa-map-zoom-controls') || e.target.closest('.haa-map-basemap-ctrl')) return;
       st.isDragging = true;
       st.dragStartX = e.clientX;
       st.dragStartY = e.clientY;
@@ -600,6 +915,7 @@
     });
 
     container.addEventListener('wheel', function (e) {
+      if (e.target.closest('.haa-absent-roster-panel') || e.target.closest('.haa-map-emp-popover')) return;
       e.preventDefault();
       if (e.deltaY < 0) {
         st.z = Math.min(18, st.z + 1);
@@ -623,7 +939,7 @@
       e.stopPropagation();
       var pts = [];
       fences.forEach(function (f) { if (f.latitude && f.longitude) pts.push([f.latitude, f.longitude]); });
-      visibleEmps.forEach(function (e) { if (e.latitude && e.longitude) pts.push([e.latitude, e.longitude]); });
+      getVisibleEmployees().forEach(function (e) { if (e.latitude && e.longitude) pts.push([e.latitude, e.longitude]); });
       if (pts.length) {
         var minLat = 90, maxLat = -90, minLng = 180, maxLng = -180;
         pts.forEach(function (p) {
@@ -652,20 +968,27 @@
       },
       setFilter: function (flt) {
         statusFilter = state.mapFilter = flt;
-        // If focusing on remote or onsite, pan map to relevant employee if available
         if (flt === 'wfh') {
           var wfhEmp = employees.find(function (e) { return e.isWfh && e.latitude && e.longitude; });
-          if (wfhEmp) {
-            st.lat = wfhEmp.latitude;
-            st.lng = wfhEmp.longitude;
-            st.z = 14;
-          }
+          if (wfhEmp) { st.lat = wfhEmp.latitude; st.lng = wfhEmp.longitude; st.z = 14; }
         } else if (flt === 'onsite') {
           var onsiteEmp = employees.find(function (e) { return !e.isWfh && e.geoVerified && e.latitude && e.longitude; });
-          if (onsiteEmp) {
-            st.lat = onsiteEmp.latitude;
-            st.lng = onsiteEmp.longitude;
-            st.z = 14;
+          if (onsiteEmp) { st.lat = onsiteEmp.latitude; st.lng = onsiteEmp.longitude; st.z = 14; }
+        } else if (flt === 'late') {
+          var lateEmp = employees.find(function (e) { return calculateLateMinutes(e) > 0 && e.latitude && e.longitude; });
+          if (lateEmp) { st.lat = lateEmp.latitude; st.lng = lateEmp.longitude; st.z = 14; }
+        } else if (flt === 'all') {
+          var pts = [];
+          fences.forEach(function (f) { if (f.latitude && f.longitude) pts.push([f.latitude, f.longitude]); });
+          employees.forEach(function (e) { if (e.latitude && e.longitude) pts.push([e.latitude, e.longitude]); });
+          if (pts.length) {
+            var minLat = 90, maxLat = -90, minLng = 180, maxLng = -180;
+            pts.forEach(function (p) {
+              minLat = Math.min(minLat, p[0]); maxLat = Math.max(maxLat, p[0]);
+              minLng = Math.min(minLng, p[1]); maxLng = Math.max(maxLng, p[1]);
+            });
+            st.lat = (minLat + maxLat) / 2;
+            st.lng = (minLng + maxLng) / 2;
           }
         }
         redraw();
@@ -674,7 +997,22 @@
         deptFilter = state.deptFilter = dept;
         redraw();
       },
+      setSearch: function (q) {
+        state.searchQuery = q;
+        redraw();
+      },
+      panTo: function (lat, lng, zoom) {
+        st.lat = lat;
+        st.lng = lng;
+        if (zoom) st.z = zoom;
+        redraw();
+      },
       refresh: function () {
+        redraw();
+      },
+      setBasemap: function (bmKey) {
+        activeBasemap = state.basemap = bmKey;
+        renderBasemapButtons();
         redraw();
       }
     };
@@ -715,8 +1053,8 @@
       '<div class="haa-hint" style="position:absolute;left:50%;top:10px;transform:translateX(-50%);' +
       'background:rgba(15,23,42,.78);color:#fff;font-size:11px;padding:4px 10px;border-radius:20px;' +
       'pointer-events:none">Drag to pan · click to place the centre</div>' +
-      '<div style="position:absolute;right:0;bottom:0;background:var(--haa-attrib);font-size:9px;' +
-      'color:var(--haa-muted);padding:1px 5px;border-radius:5px 0 0 0">© OpenStreetMap contributors</div>' +
+      '<div class="haa-picker-attrib" style="position:absolute;right:0;bottom:0;background:var(--haa-attrib);font-size:9px;' +
+      'color:var(--haa-muted);padding:1px 5px;border-radius:5px 0 0 0"></div>' +
       '</div>' +
       '<div class="haa-read" style="font-size:12px;color:var(--haa-muted);margin-top:6px"></div>';
 
@@ -724,10 +1062,14 @@
     var tileLayer = host.querySelector('.haa-tiles');
     var ov = host.querySelector('.haa-ov');
     var read = host.querySelector('.haa-read');
+    var attribEl = host.querySelector('.haa-picker-attrib');
 
     function draw() {
       W = box.clientWidth; H = box.clientHeight;
       if (!W || !H) return;
+      var currentTileUrl = getEffectiveTileUrl(opts.basemap);
+      if (attribEl) attribEl.textContent = getEffectiveAttrib(opts.basemap);
+
       var originX = lngToWorldX(st.lng, st.z) - W / 2;
       var originY = latToWorldY(st.lat, st.z) - H / 2;
       var n = Math.pow(2, st.z), html = '';
@@ -735,9 +1077,9 @@
         for (var ty = Math.floor(originY / TILE); ty <= Math.floor((originY + H) / TILE); ty++) {
           if (ty < 0 || ty >= n) continue;
           var wx = ((tx % n) + n) % n;
-          html += '<img src="' + TILE_URL.replace('{z}', st.z).replace('{x}', wx).replace('{y}', ty) +
+          html += '<img src="' + currentTileUrl.replace('{z}', st.z).replace('{x}', wx).replace('{y}', ty) +
             '" width="' + TILE + '" height="' + TILE + '" alt="" draggable="false" ' +
-            'referrerpolicy="no-referrer" style="position:absolute;pointer-events:none;left:' +
+            'style="position:absolute;pointer-events:none;left:' +
             (tx * TILE - originX) + 'px;top:' + (ty * TILE - originY) + 'px">';
         }
       }
@@ -745,15 +1087,16 @@
 
       var cx = W / 2, cy = H / 2;
       var rpx = st.radius / metersPerPixel(st.lat, st.z);
+      var isDark = isDarkTheme();
       var s = '';
       if (st.accuracy) {
         var apx = st.accuracy / metersPerPixel(st.lat, st.z);
-        s += '<circle cx="' + cx + '" cy="' + cy + '" r="' + apx + '" fill="rgba(37,99,235,.12)" ' +
-          'stroke="#2563eb" stroke-width="1" stroke-dasharray="4 3"/>';
+        s += '<circle cx="' + cx + '" cy="' + cy + '" r="' + apx + '" fill="rgba(37,99,235,.15)" ' +
+          'stroke="#3b82f6" stroke-width="1.5" stroke-dasharray="4 3"/>';
       }
-      s += '<circle cx="' + cx + '" cy="' + cy + '" r="' + rpx + '" fill="rgba(15,157,88,.18)" ' +
-        'stroke="#0f9d58" stroke-width="2"/>' +
-        '<circle cx="' + cx + '" cy="' + cy + '" r="6" fill="#0f9d58" stroke="#fff" stroke-width="2"/>';
+      s += '<circle cx="' + cx + '" cy="' + cy + '" r="' + rpx + '" fill="' + (isDark ? 'rgba(16,185,129,.22)' : 'rgba(15,157,88,.18)') + '" ' +
+        'stroke="' + (isDark ? '#10b981' : '#0f9d58') + '" stroke-width="2.5"/>' +
+        '<circle cx="' + cx + '" cy="' + cy + '" r="6" fill="' + (isDark ? '#10b981' : '#0f9d58') + '" stroke="#fff" stroke-width="2"/>';
       ov.innerHTML = s;
 
       read.innerHTML = '<strong>' + st.lat.toFixed(6) + ', ' + st.lng.toFixed(6) + '</strong>' +
@@ -848,15 +1191,12 @@
       '--haa-err-bg:#fee2e2;--haa-err-fg:#b91c1c;--haa-err-soft:#fef2f2;--haa-err-line:#fecaca;',
       '--haa-chip:#e2e8f0;--haa-link:#2563eb;--haa-scrim:rgba(15,23,42,.55);',
       '--haa-info-bg:#dbeafe;--haa-info-fg:#1e40af;',
-      /* The tiles are raster OpenStreetMap PNGs, so dark mode cannot restyle
-         them — it inverts them instead. The filter is on the tile layer alone,
-         never the SVG overlay above it, or the geofence circle and the centre
-         pin would invert with it and stop meaning what they mean. */
-      '--haa-map-bg:#e8eef3;--haa-map-filter:none;',
-      '--haa-attrib:rgba(255,255,255,.82);',
+      '--haa-accent:#4f46e5;',
+      '--haa-map-bg:#f8fafc;--haa-map-filter:none;',
+      '--haa-attrib:rgba(255,255,255,.88);',
       'color-scheme:light}',
       /* ── dark palette ────────────────────────────────────────────────── */
-      'html[data-theme="dark"] .haa-back{',
+      'html[data-theme="dark"] .haa-back, html[data-theme-choice="dark"] .haa-back{',
       '--haa-surface:#111827;--haa-body:#0a0e1a;--haa-card:#131c2e;--haa-alt:#1a2235;',
       '--haa-line:rgba(255,255,255,.10);--haa-line2:rgba(255,255,255,.06);',
       '--haa-text:#e8edf7;--haa-text2:#c7d2e4;--haa-muted:#8a9bb8;--haa-faint:#6b7c99;',
@@ -867,9 +1207,10 @@
       '--haa-err-soft:rgba(247,95,79,.10);--haa-err-line:rgba(247,95,79,.35);',
       '--haa-chip:rgba(148,163,184,.18);--haa-link:#7aa7ff;--haa-scrim:rgba(0,0,0,.62);',
       '--haa-info-bg:rgba(79,142,247,.18);--haa-info-fg:#8ab4ff;',
+      '--haa-accent:#6366f1;',
       '--haa-map-bg:#0d1424;',
       '--haa-map-filter:invert(1) hue-rotate(180deg) brightness(.86) contrast(1.05);',
-      '--haa-attrib:rgba(10,14,26,.82);',
+      '--haa-attrib:rgba(10,14,26,.88);',
       'color-scheme:dark}',
       /* ── mount button (outside the overlay: app tokens, not panel ones) ─ */
       '#' + BTN_ID + '{display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border-radius:8px;',
@@ -922,9 +1263,26 @@
       '.haa-back .haa-empty{text-align:center;color:var(--haa-faint);padding:28px;font-size:13px}',
       '.haa-back .haa-pill{display:inline-block;padding:2px 9px;border-radius:20px;font-size:11px;',
       'font-weight:700}',
-      /* ── map ────────────────────────────────────────────────────────── */
-      '.haa-back .haa-tiles{filter:var(--haa-map-filter)}',
+      /* ── map & toolbar chrome ───────────────────────────────────────── */
+      '.haa-back .haa-tiles, .haa-back .haa-map-tiles-layer{filter:var(--haa-map-filter)}',
+      '.haa-back .haa-map-tiles-layer.no-filter{filter:none!important}',
       '.haa-back a{color:var(--haa-link)}',
+      '.haa-back .haa-map-tbtn{padding:5px 12px;border-radius:6px;border:none;background:transparent;color:var(--haa-muted);font-size:12px;font-weight:700;cursor:pointer;transition:all .15s;}',
+      '.haa-back .haa-map-tbtn.on{background:var(--haa-accent,#4f46e5);color:#fff;}',
+      '.haa-back .haa-map-chip{padding:5px 12px;border-radius:20px;border:1px solid var(--haa-line);background:var(--haa-surface);color:var(--haa-muted);font-size:11px;font-weight:700;cursor:pointer;transition:all .15s;}',
+      '.haa-back .haa-map-chip:hover{border-color:var(--haa-accent,#4f46e5);color:var(--haa-text);}',
+      '.haa-back .haa-map-chip.on{background:var(--haa-accent,#4f46e5);border-color:var(--haa-accent,#4f46e5);color:#fff;}',
+      '.haa-back .haa-map-search-in{padding:6px 12px 6px 30px;border:1px solid var(--haa-in-line);border-radius:8px;font-size:12px;background:var(--haa-in-bg);color:var(--haa-text);width:220px;outline:none;}',
+      '.haa-back .haa-map-search-in:focus{border-color:var(--haa-accent,#4f46e5);box-shadow:0 0 0 2px rgba(79,70,229,0.2);}',
+      '.haa-back .haa-map-cluster-bubble:hover{transform:translate(-50%,-50%) scale(1.12);}',
+      '.haa-back .haa-map-emp-pin:hover{transform:translate(-50%,-50%) scale(1.18);z-index:35!important;}',
+      '.haa-back .haa-absent-roster-panel{background:var(--haa-surface,#fff);color:var(--haa-text,#0f172a);}',
+      '.haa-back #haa-absent-scroll-list::-webkit-scrollbar{width:6px;}',
+      '.haa-back #haa-absent-scroll-list::-webkit-scrollbar-track{background:transparent;}',
+      '.haa-back #haa-absent-scroll-list::-webkit-scrollbar-thumb{background:var(--haa-line,#cbd5e1);border-radius:4px;}',
+      '.haa-back #haa-absent-scroll-list::-webkit-scrollbar-thumb:hover{background:var(--haa-muted,#64748b);}',
+      '@keyframes haa-pop-in{from{opacity:0;transform:translate(-50%,-92%) scale(.95);}to{opacity:1;transform:translate(-50%,-100%) scale(1);}}',
+      '@keyframes haa-pulse{0%{box-shadow:0 0 0 0 rgba(16,185,129,.7);}70%{box-shadow:0 0 0 10px rgba(16,185,129,0);}100%{box-shadow:0 0 0 0 rgba(16,185,129,0);}}',
     ].join('');
     document.head.appendChild(s);
   }
@@ -1431,14 +1789,18 @@
     var feed = state.mapFeed || { fences: state.fences || [], employees: [] };
     var emps = feed.employees || [];
     var fences = feed.fences || state.fences || [];
+    var absent = getAbsentEmployees();
 
     var totalActive = emps.length;
-    var onSiteCount = emps.filter(function (e) { return e.geoVerified && !e.isWfh; }).length;
-    var wfhCount = emps.filter(function (e) { return e.isWfh; }).length;
+    var totalRoster = state.roster.length || (totalActive + absent.length);
+    var lateCount = emps.filter(function (e) { return calculateLateMinutes(e) > 0 && !e.isAbsent; }).length;
+    var onSiteCount = emps.filter(function (e) { return e.geoVerified && !e.isWfh && !e.isAbsent && calculateLateMinutes(e) === 0; }).length;
+    var wfhCount = emps.filter(function (e) { return e.isWfh && !e.isAbsent; }).length;
+    var absentCount = absent.length;
     var pendingCount = emps.filter(function (e) { return e.locationStatus === 'Pending' || e.status === 'Pending Review'; }).length;
 
     var depts = {};
-    emps.forEach(function (e) { if (e.department) depts[e.department] = true; });
+    emps.concat(absent).forEach(function (e) { if (e.department) depts[e.department] = true; });
     var deptList = Object.keys(depts).sort();
 
     var deptOptions = '<option value="all">All Departments</option>' +
@@ -1451,27 +1813,35 @@
       '  <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">' +
       '    <div class="haa-map-btn-group" style="display:inline-flex;background:var(--haa-surface,#fff);border:1px solid var(--haa-line,#cbd5e1);border-radius:8px;padding:3px;">' +
       '      <button class="haa-map-tbtn ' + (state.mapMode !== 'heatmap' ? 'on' : '') + '" data-map-mode="markers">📍 Pins & Clusters</button>' +
-      '      <button class="haa-map-tbtn ' + (state.mapMode === 'heatmap' ? 'on' : '') + '" data-map-mode="heatmap">🔥 Heatmap</button>' +
+      '      <button class="haa-map-tbtn ' + (state.mapMode === 'heatmap' ? 'on' : '') + '" data-map-mode="heatmap">🔥 Attendance Heatmap</button>' +
       '    </div>' +
       '    <div class="haa-map-filter-group" style="display:inline-flex;gap:4px;flex-wrap:wrap;">' +
-      '      <button class="haa-map-chip ' + (state.mapFilter === 'all' ? 'on' : '') + '" data-map-flt="all">All (' + totalActive + ')</button>' +
-      '      <button class="haa-map-chip ' + (state.mapFilter === 'onsite' ? 'on' : '') + '" data-map-flt="onsite">🏢 On-Site (' + onSiteCount + ')</button>' +
+      '      <button class="haa-map-chip ' + (state.mapFilter === 'all' ? 'on' : '') + '" data-map-flt="all">All (' + (totalActive + absentCount) + ')</button>' +
+      '      <button class="haa-map-chip ' + (state.mapFilter === 'onsite' ? 'on' : '') + '" data-map-flt="onsite">🟢 On-Site (' + onSiteCount + ')</button>' +
+      '      <button class="haa-map-chip ' + (state.mapFilter === 'late' ? 'on' : '') + '" data-map-flt="late">🟠 Late (' + lateCount + ')</button>' +
       '      <button class="haa-map-chip ' + (state.mapFilter === 'wfh' ? 'on' : '') + '" data-map-flt="wfh">🏠 Remote (' + wfhCount + ')</button>' +
+      '      <button class="haa-map-chip ' + (state.mapFilter === 'absent' ? 'on' : '') + '" data-map-flt="absent">🔴 Absent (' + absentCount + ')</button>' +
       '      <button class="haa-map-chip ' + (state.mapFilter === 'pending' ? 'on' : '') + '" data-map-flt="pending">⏳ Pending (' + pendingCount + ')</button>' +
       '    </div>' +
       '  </div>' +
-      '  <div style="display:flex;align-items:center;gap:8px;">' +
-      '    <select class="haa-in" id="haa-map-dept" style="padding:6px 12px;font-size:12px;height:34px;border-radius:7px;">' + deptOptions + '</select>' +
+      '  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
+      '    <div style="position:relative;display:inline-flex;align-items:center;">' +
+      '      <span style="position:absolute;left:9px;font-size:12px;color:var(--haa-muted,#64748b);pointer-events:none;">🔎</span>' +
+      '      <input class="haa-map-search-in" id="haa-map-search" type="text" placeholder="Search staff, office, address…" value="' + esc(state.searchQuery || '') + '" />' +
+      '    </div>' +
+      '    <select class="haa-in" id="haa-map-dept" style="padding:6px 12px;font-size:12px;height:34px;border-radius:7px;width:auto;min-width:140px;">' + deptOptions + '</select>' +
       '    <button class="haa-btn sec" id="haa-map-refresh" style="height:34px;display:flex;align-items:center;gap:4px;font-size:12px;">🔄 Refresh</button>' +
       '  </div>' +
       '</div>' +
       '<div id="haa-live-map-container" style="position:relative;width:100%;height:560px;border-radius:12px;overflow:hidden;border:1px solid var(--haa-line,#cbd5e1);background:var(--haa-map-bg,#f8fafc);box-shadow:0 4px 20px rgba(0,0,0,0.12);"></div>' +
       '<div class="haa-map-stats-strip" style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-top:12px;padding:10px 14px;background:var(--haa-surface,#fff);border:1px solid var(--haa-line,#cbd5e1);border-radius:8px;font-size:12px;color:var(--haa-muted,#64748b);">' +
-      '  <div><strong style="color:var(--haa-text,#0f172a);">' + totalActive + '</strong> Active Now</div>' +
+      '  <div><strong style="color:var(--haa-text,#0f172a);">' + totalActive + '</strong> Checked-In Today</div>' +
       '  <div><span style="color:#10b981;">●</span> <strong style="color:var(--haa-text,#0f172a);">' + onSiteCount + '</strong> On-Site Verified</div>' +
-      '  <div><span style="color:#3b82f6;">●</span> <strong style="color:var(--haa-text,#0f172a);">' + wfhCount + '</strong> Remote / WFH</div>' +
-      '  <div><span style="color:#f59e0b;">●</span> <strong style="color:var(--haa-text,#0f172a);">' + pendingCount + '</strong> Awaiting HR Approval</div>' +
-      '  <div><strong style="color:var(--haa-text,#0f172a);">' + fences.length + '</strong> Office Geofences Configured</div>' +
+      '  <div><span style="color:#f59e0b;">●</span> <strong style="color:var(--haa-text,#0f172a);">' + lateCount + '</strong> Late Arrivals</div>' +
+      '  <div><span style="color:#8b5cf6;">●</span> <strong style="color:var(--haa-text,#0f172a);">' + wfhCount + '</strong> Remote / WFH</div>' +
+      '  <div><span style="color:#ef4444;">●</span> <strong style="color:var(--haa-text,#0f172a);">' + absentCount + '</strong> Absent / Unaccounted</div>' +
+      '  <div><span style="color:#eab308;">●</span> <strong style="color:var(--haa-text,#0f172a);">' + pendingCount + '</strong> Awaiting Approval</div>' +
+      '  <div><strong style="color:var(--haa-text,#0f172a);">' + fences.length + '</strong> Office Geofences</div>' +
       '</div>';
   }
 
@@ -1522,6 +1892,45 @@
             if (state.interactiveMap) state.interactiveMap.setFilter(f);
           };
         })(filterChips[fc]);
+      }
+
+      var searchIn = body.querySelector('#haa-map-search');
+      if (searchIn) {
+        var searchDebounceTimer = null;
+        searchIn.oninput = function () {
+          clearTimeout(searchDebounceTimer);
+          searchDebounceTimer = setTimeout(function () {
+            state.searchQuery = searchIn.value;
+            if (state.interactiveMap) state.interactiveMap.setSearch(searchIn.value);
+          }, 200);
+        };
+        searchIn.onkeydown = function (e) {
+          if (e.key === 'Enter') {
+            var q = searchIn.value.trim();
+            if (!q) return;
+            // First check if matching an office or employee
+            var matchedFence = state.fences.find(function (f) { return (f.name || '').toLowerCase().indexOf(q.toLowerCase()) >= 0; });
+            if (matchedFence && matchedFence.latitude && matchedFence.longitude) {
+              if (state.interactiveMap) state.interactiveMap.panTo(matchedFence.latitude, matchedFence.longitude, 16);
+              return;
+            }
+            var matchedEmp = (state.mapFeed.employees || []).find(function (emp) { return (emp.name || '').toLowerCase().indexOf(q.toLowerCase()) >= 0 && emp.latitude && emp.longitude; });
+            if (matchedEmp) {
+              if (state.interactiveMap) state.interactiveMap.panTo(matchedEmp.latitude, matchedEmp.longitude, 16);
+              return;
+            }
+            // Forward Geocode via Nominatim
+            toast('Searching location: ' + q + '…');
+            fetchForwardGeocode(q).then(function (res) {
+              if (res && state.interactiveMap) {
+                state.interactiveMap.panTo(res.lat, res.lng, 15);
+                toast('Found: ' + res.name);
+              } else {
+                toast('No location found for "' + q + '"', true);
+              }
+            });
+          }
+        };
       }
 
       var deptSel = body.querySelector('#haa-map-dept');
@@ -1962,7 +2371,55 @@
     return null;
   }
 
+  var themeObserverAttached = false;
+  function setupThemeSync() {
+    if (themeObserverAttached) return;
+    themeObserverAttached = true;
+
+    function onThemeChange() {
+      var isDark = isDarkTheme();
+      if (state.basemap === 'streets' || state.basemap === 'dark' || state.basemap === 'auto') {
+        state.basemap = isDark ? 'dark' : 'streets';
+      }
+      if (state.interactiveMap) {
+        if (state.interactiveMap.setBasemap && (state.basemap === 'streets' || state.basemap === 'dark' || state.basemap === 'auto')) {
+          state.interactiveMap.setBasemap(state.basemap);
+        } else if (state.interactiveMap.refresh) {
+          state.interactiveMap.refresh();
+        }
+      }
+      if (state.picker && state.picker.redraw) {
+        state.picker.redraw();
+      }
+      if (document.getElementById(OVERLAY_ID) && (state.tab === 'fences' || state.tab === 'reviews' || state.tab === 'homes')) {
+        render();
+      }
+    }
+
+    if (window.MutationObserver) {
+      var observer = new MutationObserver(function (muts) {
+        for (var i = 0; i < muts.length; i++) {
+          if (muts[i].attributeName === 'data-theme' || muts[i].attributeName === 'data-theme-choice') {
+            onThemeChange();
+            break;
+          }
+        }
+      });
+      observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'data-theme-choice'] });
+    }
+
+    if (window.matchMedia) {
+      var mq = window.matchMedia('(prefers-color-scheme: dark)');
+      if (mq.addEventListener) {
+        mq.addEventListener('change', onThemeChange);
+      } else if (mq.addListener) {
+        mq.addListener(onThemeChange);
+      }
+    }
+  }
+
   function boot() {
+    setupThemeSync();
     mount();
     var pending = false;
     new MutationObserver(function () {
