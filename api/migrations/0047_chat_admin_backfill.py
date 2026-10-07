@@ -33,43 +33,27 @@ from django.db import migrations
 
 
 def backfill_admins(apps, schema_editor):
-    with schema_editor.connection.cursor() as cursor:
-        # 1. the creator of each GROUP room, where they are a member of it.
-        cursor.execute(
-            """
-            UPDATE `chat_members` m
-              JOIN `chat_rooms` r ON m.room_id = r.id
-               SET m.is_admin = 1
-             WHERE m.employee_email = r.created_by
-               AND r.is_group = 1
-               AND m.is_admin = 0
-            """
-        )
-        promoted_creators = cursor.rowcount
+    ChatMember = apps.get_model('api', 'ChatMember')
+    ChatRoom = apps.get_model('api', 'ChatRoom')
 
-        # 2. any group room with no admin at all → its earliest member.
-        #    The inner SELECT is materialised into a derived table because
-        #    MySQL will not let a subquery read the table being updated.
-        cursor.execute(
-            """
-            UPDATE `chat_members` cm
-              JOIN (
-                    SELECT mm.room_id, MIN(mm.id) AS first_id
-                      FROM `chat_members` mm
-                      JOIN `chat_rooms` rr
-                        ON rr.id = mm.room_id AND rr.is_group = 1
-                     WHERE mm.room_id NOT IN (
-                           SELECT room_id FROM (
-                                  SELECT room_id FROM `chat_members`
-                                   WHERE is_admin = 1
-                           ) AS held
-                     )
-                     GROUP BY mm.room_id
-              ) x ON cm.id = x.first_id
-               SET cm.is_admin = 1
-            """
-        )
-        promoted_orphans = cursor.rowcount
+    promoted_creators = 0
+    for room in ChatRoom.objects.filter(is_group=True).iterator():
+        creator_member = ChatMember.objects.filter(room_id=room.id, employee_email=room.created_by).order_by('id').first()
+        if creator_member and not creator_member.is_admin:
+            creator_member.is_admin = True
+            creator_member.save(update_fields=['is_admin'])
+            promoted_creators += 1
+
+    promoted_orphans = 0
+    for room in ChatRoom.objects.filter(is_group=True).iterator():
+        if ChatMember.objects.filter(room_id=room.id, is_admin=True).exists():
+            continue
+
+        earliest_member = ChatMember.objects.filter(room_id=room.id).order_by('id').first()
+        if earliest_member and not earliest_member.is_admin:
+            earliest_member.is_admin = True
+            earliest_member.save(update_fields=['is_admin'])
+            promoted_orphans += 1
 
     if promoted_creators or promoted_orphans:
         print('  chat admins backfilled: %d creator(s), %d orphaned channel(s)'

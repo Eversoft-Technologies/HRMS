@@ -159,7 +159,7 @@ DATABASES = {
         'ENGINE': 'django.db.backends.mysql',
         'NAME':  os.environ.get('DB_NAME', 'hrms_system'),
         'USER':  os.environ.get('DB_USER', 'root'),
-        'PASSWORD': os.environ.get('DB_PASSWORD', '1234'),
+        'PASSWORD': os.environ.get('DB_PASSWORD', 'root'),
         'HOST':  os.environ.get('DB_HOST', 'localhost'),
         'PORT': os.environ.get('DB_PORT', '3306'),
         'OPTIONS': {
@@ -167,6 +167,12 @@ DATABASES = {
         },
     }
 }
+
+if 'test' in sys.argv:
+    DATABASES['default'] = {
+        'ENGINE': 'django.db.backends.sqlite3',
+        'NAME': BASE_DIR / 'test.sqlite3',
+    }
 
 # Match the existing INT AUTO_INCREMENT primary keys (not BIGINT).
 DEFAULT_AUTO_FIELD = 'django.db.models.AutoField'
