@@ -224,6 +224,7 @@
       '.hrms-iv-toolbar select{flex:0 1 150px;width:150px;min-width:0;max-width:45%;box-sizing:border-box;margin-right:2px;}',
       '.hrms-iv-toolbar input:focus,.hrms-iv-toolbar select:focus{border-color:var(--accent);}',
       '.hrms-iv-scroll{max-height:300px;overflow-y:auto;}',
+      '.hrms-iv-status-card .badge{display:inline-flex;align-items:center;justify-content:flex-start;text-align:left;width:96px;min-width:96px;height:24px;padding-left:10px;box-sizing:border-box;flex:0 0 96px;white-space:nowrap;}',
       '.hrms-iv-row{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border2);}',
       '.hrms-iv-row:last-child{border-bottom:none;}',
       '.hrms-iv-av{flex-shrink:0;width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11.8px;font-weight:600;color:#fff;}',
@@ -300,7 +301,11 @@
     var titles = document.querySelectorAll('.card-title');
     for (var i = 0; i < titles.length; i++) {
       if ((titles[i].textContent || '').trim() === title) {
-        return titles[i].closest('.card') || titles[i].parentNode;
+        var card = titles[i].closest('.card') || titles[i].parentNode;
+        if (title === 'Upcoming Interviews' || title === 'Recently Completed') {
+          card.classList.add('hrms-iv-status-card');
+        }
+        return card;
       }
     }
     return null;
