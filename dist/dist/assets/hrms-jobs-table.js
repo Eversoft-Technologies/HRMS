@@ -210,7 +210,7 @@
       R + ' .jt-status .jt-edit{opacity:0;font-size:11px;color:var(--accent,#38bdf8);}',
       R + ' .jt-status:hover .jt-edit{opacity:1;}',
       /* editable priority cell (colored badge) */
-      R + ' .jt-pri{display:inline-flex;align-items:center;gap:6px;cursor:pointer;background:rgba(255,255,255,0.06);border:1px solid var(--border2,rgba(255,255,255,0.15));border-radius:6px;padding:3px 9px;font-size:12px;font-weight:600;color:var(--text,#f1f5f9);transition:all .15s ease;}',
+      R + ' .jt-pri{display:inline-flex;align-items:center;justify-content:center;gap:6px;cursor:pointer;background:rgba(255,255,255,0.06);border:1px solid var(--border2,rgba(255,255,255,0.15));border-radius:6px;padding:3px 9px;width:92px;min-width:92px;box-sizing:border-box;white-space:nowrap;flex-shrink:0;font-size:12px;font-weight:600;color:var(--text,#f1f5f9);transition:all .15s ease;}',
       R + ' .jt-pri:hover{background:rgba(255,255,255,0.14);border-color:var(--accent,#38bdf8);color:#ffffff;}',
       R + ' .jt-pdot{width:8px;height:8px;border-radius:50%;flex-shrink:0;box-shadow:0 0 4px rgba(0,0,0,.4);}',
       R + ' .jt-caret{font-size:9px;color:var(--text2,#cbd5e1);opacity:.85;margin-left:2px;}',
@@ -238,6 +238,7 @@
       M + '{position:absolute;z-index:400;background:var(--bg2,#1e293b);border:1px solid var(--border2,#334155);border-radius:10px;box-shadow:0 12px 34px rgba(0,0,0,.5);padding:6px;min-width:180px;}',
       M + ' button{display:block;width:100%;text-align:left;background:none;border:none;color:var(--text,#f8fafc);font:inherit;font-size:12.5px;padding:9px 12px;border-radius:7px;cursor:pointer;}',
       M + ' button:hover{background:var(--bg3,#334155);}',
+      '@media(max-width:768px){' + M + '{right:0;left:auto;max-width:calc(100vw - 24px);min-width:min(180px,calc(100vw - 24px));box-sizing:border-box;}}',
       /* per-column filter popup */
       P + '{position:fixed;z-index:600;width:240px;background:var(--bg2,#1e293b);border:1px solid var(--border2,#334155);border-radius:10px;box-shadow:0 16px 40px rgba(0,0,0,.5);display:flex;flex-direction:column;overflow:hidden;}',
       P + ' .jt-psort{display:flex;border-bottom:1px solid var(--border2,#334155);}',

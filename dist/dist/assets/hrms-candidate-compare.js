@@ -150,12 +150,14 @@
       R + ' tbody td{padding:9px 10px;border-bottom:1px solid var(--border);color:var(--text);vertical-align:middle;}' +
       R + ' tbody tr{cursor:pointer;}' +
       R + ' tbody tr:hover{background:var(--bg3);}' +
-      R + ' .cc-av{display:inline-flex;align-items:center;gap:7px;}' +
+      R + ' .cc-av{display:flex;align-items:center;gap:7px;min-width:0;}' +
+
       // Global (not root-scoped) so the detail/resume modal avatar styles too.
       '.cc-avc{width:28px;height:28px;border-radius:50%;background:var(--accent,#4f8ef7);color:#fff;font-size:11px;font-weight:700;display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;}' +
       R + ' .cc-nm{max-width:230px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}' +
-      R + ' .cc-ic{background:transparent;border:0;cursor:pointer;font-size:13px;opacity:.5;padding:0 2px;line-height:1;color:var(--text2);}' +
+      R + ' .cc-ic{background:transparent;border:0;cursor:pointer;font-size:13px;opacity:.5;padding:0 2px;line-height:1;color:var(--text2);flex:0 0 20px;width:20px;height:24px;display:inline-flex;align-items:center;justify-content:center;}' +
       R + ' .cc-ic:hover{opacity:1;color:var(--accent,#4f8ef7);}' +
+
       R + ' .cc-badge{display:inline-block;font-size:11px;font-weight:600;padding:2px 8px;border-radius:99px;background:var(--bg3);border:1px solid var(--border2);color:var(--text2);}' +
       R + ' .cc-bar-t{height:7px;border-radius:99px;background:var(--border2);overflow:hidden;min-width:52px;display:inline-block;width:70px;vertical-align:middle;}' +
       // display:block — an inline <span> ignores height/width, so the fill was invisible.
@@ -229,6 +231,7 @@
       '#hrms-ai-card-overlay::-webkit-scrollbar-thumb:hover{background:var(--accent,#4f8ef7);}' +
       '#' + ID.menu + '{position:absolute;z-index:10000;background:var(--bg2,#161b26);border:1px solid var(--border2);border-radius:8px;box-shadow:0 10px 26px rgba(0,0,0,.4);overflow:hidden;}' +
       '#' + ID.menu + ' button{display:block;width:100%;text-align:left;padding:9px 14px;background:transparent;border:0;color:var(--text);font-size:12px;cursor:pointer;white-space:nowrap;}' +
+      '#' + ID.menu + ' button:hover{background:var(--bg3);}';
       '#' + ID.menu + ' button:hover{background:var(--bg3);}';
     var st = document.createElement('style'); st.id = ID.style; st.textContent = css;
     document.head.appendChild(st);
