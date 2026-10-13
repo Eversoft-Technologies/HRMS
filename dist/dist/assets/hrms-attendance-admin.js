@@ -548,7 +548,7 @@
             '    </div>' +
             '  </div>' +
             '  <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">' +
-            '    <button type="button" class="haa-btn haa-remind-btn" data-name="' + esc(emp.name) + '" style="font-size:11px;padding:5px 12px;height:30px;cursor:pointer;border-radius:6px;background:var(--haa-accent,#4f46e5);color:#fff;border:none;font-weight:700;display:inline-flex;align-items:center;gap:4px;">📲 Remind</button>' +
+            '    <button type="button" class="haa-btn haa-remind-btn" data-name="' + esc(emp.name) + '" data-email="' + esc(emp.email || '') + '" style="font-size:11px;padding:5px 12px;height:30px;cursor:pointer;border-radius:6px;background:var(--haa-accent,#4f46e5);color:#fff;border:none;font-weight:700;display:inline-flex;align-items:center;gap:4px;">📲 Remind</button>' +
             '    <a href="/hr/hris" style="font-size:11px;color:var(--haa-link,#4f46e5);font-weight:600;padding:4px 6px;text-decoration:none;">Profile →</a>' +
             '  </div>' +
             '</div>';
@@ -561,7 +561,10 @@
           '    <strong style="font-size:15px;color:var(--haa-text,#0f172a);">Absent / Unaccounted Staff</strong>' +
           '    <span style="background:var(--haa-err-bg,#fee2e2);color:var(--haa-err-fg,#b91c1c);font-weight:700;font-size:11px;padding:2px 8px;border-radius:12px;">' + absentEmployees.length + ' absent</span>' +
           '  </div>' +
-          '  <button id="haa-absent-close" style="background:none;border:none;color:var(--haa-muted,#64748b);font-size:18px;cursor:pointer;padding:2px 8px;line-height:1;border-radius:4px;">✕</button>' +
+          '  <div style="display:flex;align-items:center;gap:8px;">' +
+          (absentEmployees.length > 0 ? '    <button id="haa-remind-all-btn" class="haa-btn" style="font-size:11px;padding:4px 10px;height:28px;cursor:pointer;border-radius:6px;background:var(--haa-accent,#4f46e5);color:#fff;border:none;font-weight:700;display:inline-flex;align-items:center;gap:4px;">📲 Remind All</button>' : '') +
+          '    <button id="haa-absent-close" style="background:none;border:none;color:var(--haa-muted,#64748b);font-size:18px;cursor:pointer;padding:2px 8px;line-height:1;border-radius:4px;">✕</button>' +
+          '  </div>' +
           '</div>' +
           '<div style="font-size:12px;color:var(--haa-muted,#64748b);margin-bottom:10px;">Enrolled staff who have not checked in today:</div>' +
           '<div id="haa-absent-scroll-list" style="overflow-y:auto;max-height:280px;padding-right:6px;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;">' + (absentRowsHtml || '<div class="haa-empty">No absent staff today! 🎉</div>') + '</div>';
@@ -581,12 +584,62 @@
               e.stopPropagation();
               e.preventDefault();
               var empName = btn.getAttribute('data-name');
+              var empEmail = btn.getAttribute('data-email');
+              if (!empEmail) {
+                toast('No email found for ' + empName, true);
+                return;
+              }
               btn.disabled = true;
-              btn.style.background = '#10b981';
-              btn.textContent = '✓ Reminded';
-              toast('Check-in reminder notification sent to ' + empName);
+              btn.textContent = '⏳ Sending...';
+              api('/api/attendance/remind', {
+                method: 'POST',
+                body: JSON.stringify({ email: empEmail, name: empName })
+              }).then(function () {
+                btn.style.background = '#10b981';
+                btn.textContent = '✓ Reminded';
+                toast('Check-in reminder notification sent to ' + empName);
+              }).catch(function (err) {
+                btn.disabled = false;
+                btn.style.background = 'var(--haa-accent,#4f46e5)';
+                btn.textContent = '📲 Remind';
+                toast('Failed to send reminder: ' + (err.message || err), true);
+              });
             };
           })(remindBtns[rb]);
+        }
+
+        var remindAllBtn = absentCard.querySelector('#haa-remind-all-btn');
+        if (remindAllBtn && absentEmployees.length > 0) {
+          remindAllBtn.onclick = function (e) {
+            e.stopPropagation();
+            e.preventDefault();
+            var emails = absentEmployees.map(function (emp) { return emp.email; }).filter(Boolean);
+            if (!emails.length) {
+              toast('No employee emails available to remind', true);
+              return;
+            }
+            remindAllBtn.disabled = true;
+            remindAllBtn.textContent = '⏳ Sending...';
+            api('/api/attendance/remind', {
+              method: 'POST',
+              body: JSON.stringify({ emails: emails })
+            }).then(function () {
+              remindAllBtn.style.background = '#10b981';
+              remindAllBtn.textContent = '✓ Reminded All (' + emails.length + ')';
+              var allBtns = absentCard.querySelectorAll('.haa-remind-btn');
+              for (var i = 0; i < allBtns.length; i++) {
+                allBtns[i].disabled = true;
+                allBtns[i].style.background = '#10b981';
+                allBtns[i].textContent = '✓ Reminded';
+              }
+              toast('Check-in reminder notifications sent to all ' + emails.length + ' absent staff');
+            }).catch(function (err) {
+              remindAllBtn.disabled = false;
+              remindAllBtn.style.background = 'var(--haa-accent,#4f46e5)';
+              remindAllBtn.textContent = '📲 Remind All';
+              toast('Failed to send reminders: ' + (err.message || err), true);
+            });
+          };
         }
       }
 

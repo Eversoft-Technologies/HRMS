@@ -2822,3 +2822,13 @@ html[data-theme="light"] div[style*="position: fixed"]:has(span:is([style*="Pipe
   position: static !important;
   margin: 6px auto !important;
 }
+
+/* Sidebar: the nav marks every link whose path prefixes the URL, so "Recruit"
+   lit up together with "F2F Interview". Only the most specific link (the last
+   active sibling) keeps the highlight; hrms-sidebar.js enforces the same. */
+.sidebar .nav-item.active:has(~ .nav-item.active) { color: var(--text2); background: transparent; border-left-color: transparent; font-weight: 400; }
+.sidebar .nav-item.active:has(~ .nav-item.active):hover { color: var(--text); background: rgba(79, 142, 247, 0.05); }
+
+/* AI Interviewer candidate list: Active / Completed / Scheduled badges share
+   one width. */
+.content .badge:has(+ .btn-primary) { min-width: 92px; justify-content: center; text-align: center; }

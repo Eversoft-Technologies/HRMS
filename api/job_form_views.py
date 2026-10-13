@@ -74,6 +74,8 @@ def _field(key, label, ftype, **kw):
 DEFAULT_SECTIONS = [
     {'id': 'sec_details', 'title': 'Job Details', 'collapsed': False, 'fields': [
         _field('title', 'Job Title', 'text', required=True, placeholder='e.g. Senior Data Analyst', core=True),
+        _field('code', 'Job Code', 'text', placeholder='Leave blank to auto-generate (e.g. JOB-101)',
+               help='Unique code for this posting. Resume Scoring loads the job description by this code.', core=True),
         _field('dept', 'Department', 'select', required=True, placeholder='Select Department', masterKey='departments', core=True, width='half'),
         _field('location', 'Location', 'select', required=True, placeholder='Select Location', masterKey='locations', core=True, width='half'),
         _field('type', 'Job Type', 'select', required=True, placeholder='Select Job Type', masterKey='job_types', defaultValue='Full-time', core=True, width='half'),
