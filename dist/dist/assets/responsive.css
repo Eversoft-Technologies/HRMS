@@ -136,15 +136,21 @@
   /* Content breathing room */
   .content { padding: 16px 14px; }
 
-  /* Collapse every multi-column grid to a single column */
-  .stat-grid,
-  .grid-2,
-  .grid-3,
-  .grid-2-1,
-  .grid-1-2,
-  .kanban {
-    grid-template-columns: 1fr;
-  }
+  
+/* Keep statistic cards horizontal on mobile */
+.stat-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+  gap: 5px;
+}
+
+/* Keep other grids in a single column on mobile */
+.grid-2,
+.grid-3,
+.grid-2-1,
+.grid-1-2,
+.kanban {
+  grid-template-columns: 1fr;
+}
 
   /* Section headers stack (title above the action button) */
   .sec-head { flex-direction: column; align-items: stretch; gap: 12px; }
