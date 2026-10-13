@@ -23,6 +23,7 @@ urlpatterns = [
     path('auth/linkedin/disconnect', linkedin_oauth.linkedin_disconnect),
 
     path('jobs', views.jobs),
+    path('jobs/next-code', views.job_next_code),
     path('jobs/<int:pk>', views.job_detail),
 
     # Reusable candidate follow-up email templates
@@ -118,6 +119,7 @@ urlpatterns = [
     path('attendance/geofence-check', views.attendance_geofence_check),
     path('attendance/location-reviews', views.attendance_location_reviews),
     path('attendance/map-feed', views.attendance_map_feed),
+    path('attendance/remind', views.attendance_remind),
     path('attendance/departure-policy', views.attendance_departure_policy),
     path('attendance/roster', views.attendance_roster),
     path('attendance/home-locations', views.attendance_home_locations),

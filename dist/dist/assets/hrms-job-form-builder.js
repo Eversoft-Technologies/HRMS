@@ -20,7 +20,7 @@
   var JOBS_PATH = '/recruit/job-board';
   var LS_CURRENCY = 'hrms_job_currency';
   var LS_OPTS = 'hrms_jobform_options';
-  var CORE_KEYS = { title: 1, dept: 1, location: 1, type: 1, salary: 1, openings: 1, priority: 1, status: 1, remote: 1, description: 1 };
+  var CORE_KEYS = { code: 1, title: 1, dept: 1, location: 1, type: 1, salary: 1, openings: 1, priority: 1, status: 1, remote: 1, description: 1 };
 
   var TYPES = {
     text: { label: 'Text Input', icon: 'Tt', cat: 'basic' },
@@ -253,7 +253,29 @@
       '.pjf-gear:hover{border-color:var(--accent);color:var(--accent);}',
       '.pjf-foot{display:flex;justify-content:flex-end;gap:10px;padding:14px 20px;border-top:1px solid var(--border2);}',
       '.pjf-foot .pjf-msg{margin-right:auto;align-self:center;}',
-      '@media(max-width:1000px){.jfb-c-pal{display:none;}.jfb-c-prev{display:none;}}'
+      '@media(max-width:1000px){.jfb-c-pal{display:none;}.jfb-c-prev{display:none;}}',
+      '@media(max-width:768px){' +
+        '.jfb-ovl{padding:0;}' +
+        '.jfb-modal{width:100vw;height:100vh;height:100dvh;border-radius:0;}' +
+        /* Header: title row with the close button, then the actions two per row. */
+        '.jfb-head{flex-wrap:wrap;gap:8px;padding:12px 14px;}' +
+        '.jfb-head>div:first-child{order:0;flex:1 1 0;min-width:0;}' +
+        '.jfb-head h2{font-size:17px;}' +
+        '.jfb-head .sp{display:none;}' +
+        '.jfb-head .jfb-x{order:1;flex:0 0 34px;}' +
+        '.jfb-head #jfb-msg{order:2;flex:1 1 100%;}.jfb-head #jfb-msg:empty{display:none;}' +
+        '.jfb-head .jfb-hbtn{order:3;flex:1 1 calc(50% - 4px);justify-content:center;min-height:40px;padding:9px 10px;}' +
+        '.jfb-tabs{overflow-x:auto;padding:0 10px;}.jfb-tab{white-space:nowrap;padding:11px 12px;}' +
+        /* Field rows: full-width wrapping label, 40px action buttons on their own line. */
+        '.jfb-c-canvas.jfb-scroll{padding:12px;}.jfb-sec-b{padding:8px;}' +
+        '.jfb-fld{flex-wrap:wrap;gap:8px 10px;padding:10px 12px;}' +
+        '.jfb-fld .grip{font-size:16px;padding:4px 0;}' +
+        '.jfb-fld .fic{width:26px;height:26px;font-size:11px;}' +
+        '.jfb-fld .lb{flex:1 1 calc(100% - 80px);font-size:14px;white-space:normal;line-height:1.3;}' +
+        '.jfb-fld>button:first-of-type{margin-left:auto;}' +
+        '.jfb-fld .jfb-ico,.jfb-sec-h .jfb-ico{display:inline-flex;align-items:center;justify-content:center;min-width:40px;min-height:40px;padding:0;font-size:17px;}' +
+        '.jfb-sec-h{padding:10px 10px;}.jfb-sec-h .tt{font-size:14px;}' +
+      '}'
     ].join('');
     var st = document.createElement('style'); st.id = 'jfb-style'; st.textContent = css; document.head.appendChild(st);
   }
@@ -747,6 +769,7 @@
       '<div class="pjf-foot"><span class="pjf-msg" id="pjf-msg"></span><button class="jfb-btn ghost" id="pjf-cancel">Cancel</button><button class="jfb-btn" id="pjf-submit">' + esc(o.submitLabel || 'Post Job') + '</button></div></div>';
     document.body.appendChild(ovl);
     document.getElementById('pjf-bodywrap').innerHTML = formHtml();
+    ensureJobCodeField(ovl);
     setupLinkedInRow(ovl);
     wireMultiselects(ovl.querySelector('.pjf-form'));
     wireConditional(ovl.querySelector('.pjf-form'));
@@ -757,11 +780,64 @@
     ovl.querySelector('#pjf-submit').addEventListener('click', submitPostJob);
   }
   function closePostJob() { var o = document.getElementById('pjf-ovl'); if (o) o.remove(); }
+  // Job Code is a system field: the Board shows it as a column and Resume
+  // Scoring loads a description by it, so the form offers it even on a
+  // published schema that predates the field. Blank = auto-assigned; the
+  // upcoming code is shown as the placeholder and only reserved on save.
+  function ensureJobCodeField(ovl) {
+    var form = ovl.querySelector('.pjf-form'); if (!form) return;
+    var inp = form.querySelector('[name="code"]');
+    if (!inp) {
+      var grid = form.querySelector('.pjf-grid'); if (!grid) return;
+      var grp = el('<div class="pjf-fgrp pjf-w-full" data-fkey="code"><label class="pjf-lab">Job Code</label>' +
+        '<input type="text" class="pjf-in" name="code" placeholder="Leave blank to auto-generate">' +
+        '<div class="pjf-help">Unique code for this posting. Resume Scoring loads the job description by this code.</div>' +
+        '<div class="pjf-err" data-err="code">This field is required.</div></div>');
+      var title = grid.querySelector('[data-fkey="title"]');
+      if (title) grid.insertBefore(grp, title.nextSibling); else grid.insertBefore(grp, grid.querySelector('.pjf-fgrp'));
+      inp = grp.querySelector('input');
+    }
+    api('/api/jobs/next-code').then(function (d) { if (d && d.code && inp && !inp.value) inp.placeholder = 'Auto: ' + d.code + ' (or enter your own)'; }).catch(function () {});
+  }
+  // Mirrors JobPostSerializer (api/serializers.py): letters only — no
+  // numbers, no emojis (the job_posts table stores them as "?"), no symbols
+  // beyond the separators real titles need (BUG-HRMS-JOB-001).
+  var TITLE_SEPARATORS = "-/&.,'+#()";
+  function jobTitleProblem(title) {
+    var t = String(title == null ? '' : title).trim();
+    if (!t) return '';
+    if (/[\uD800-\uDFFF]/.test(t)) return 'Job title cannot contain emojis or special symbols.';
+    if (/\p{N}/u.test(t)) return 'Job title cannot contain numbers; use letters only.';
+    for (var i = 0; i < t.length; i++) {
+      var ch = t.charAt(i);
+      if (!/[\p{L}\p{M}\s]/u.test(ch) && TITLE_SEPARATORS.indexOf(ch) === -1) return "Job title can contain only letters, spaces and - / & . , ' + # ( ).";
+    }
+    if (!/\p{L}/u.test(t)) return 'Job title must contain letters.';
+    return '';
+  }
+  // A two-number range ("$ 50000 - 80000", "10-12 LPA") must not run
+  // backwards (BUG-HRMS-JOB-002). Units: k, L/lakh/LPA, m, cr.
+  var SAL_SCALE = { k: 1e3, l: 1e5, lac: 1e5, lakh: 1e5, lakhs: 1e5, lpa: 1e5, m: 1e6, mn: 1e6, cr: 1e7, crore: 1e7 };
+  var SAL_RANGE_RE = /(\d[\d,]*(?:\.\d+)?)\s*([a-z]*)\s*(?:-|\u2013|\u2014|to)\s*[^\d\s]*\s*(\d[\d,]*(?:\.\d+)?)\s*([a-z]*)/i;
+  function salaryRangeProblem(text) {
+    var m = SAL_RANGE_RE.exec(String(text == null ? '' : text));
+    if (!m) return '';
+    var loUnit = (m[2] || m[4]).toLowerCase(), hiUnit = (m[4] || m[2]).toLowerCase();
+    var lo = parseFloat(m[1].replace(/,/g, '')) * (SAL_SCALE[loUnit] || 1);
+    var hi = parseFloat(m[3].replace(/,/g, '')) * (SAL_SCALE[hiUnit] || 1);
+    return (isFinite(lo) && isFinite(hi) && lo > hi) ? 'Maximum salary must be greater than or equal to the minimum salary.' : '';
+  }
+  function markFieldError(formRoot, key, msg) {
+    var grp = formRoot.querySelector('[data-fkey="' + cssEsc(key) + '"]'); if (!grp) return;
+    var e = grp.querySelector('[data-err]');
+    if (e) { if (!e.hasAttribute('data-default')) e.setAttribute('data-default', e.textContent); e.textContent = msg; e.classList.add('on'); }
+    try { grp.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (_) {}
+  }
   function pjfMsg(t, cls) { var m = document.getElementById('pjf-msg'); if (m) { m.textContent = t || ''; m.className = 'pjf-msg' + (cls ? ' ' + cls : ''); } }
   function submitPostJob() {
     var ovl = document.getElementById('pjf-ovl'); if (!ovl) return; var formRoot = ovl.querySelector('.pjf-form');
     var vals = {}, ok = true, firstErr = null;
-    formRoot.querySelectorAll('.pjf-err').forEach(function (e) { e.classList.remove('on'); });
+    formRoot.querySelectorAll('.pjf-err').forEach(function (e) { e.classList.remove('on'); if (e.hasAttribute('data-default')) e.textContent = e.getAttribute('data-default'); });
     allFields().forEach(function (f) {
       if (f.type === 'heading') return;
       var grp = formRoot.querySelector('[data-fkey="' + cssEsc(f.key) + '"]'); var visible = grp && grp.style.display !== 'none'; var val;
@@ -788,7 +864,13 @@
       // JobPost.custom_fields clean (no empty strings / empty arrays).
       else if (!(v === '' || v == null || (Array.isArray(v) && v.length === 0))) payload.customFields[f.key] = v;
     });
+    var codeEl = formRoot.querySelector('[name="code"]');
+    if (codeEl) payload.code = (codeEl.value || '').trim().toUpperCase();   // '' -> server assigns
     if (!payload.title || !payload.dept) { pjfMsg('Title and Department are required.', 'err'); return; }
+    var titleProblem = jobTitleProblem(payload.title);
+    if (titleProblem) { markFieldError(formRoot, 'title', titleProblem); pjfMsg(titleProblem, 'err'); return; }
+    var salaryProblem = salaryRangeProblem(vals.salary);
+    if (salaryProblem) { markFieldError(formRoot, 'salary', salaryProblem); pjfMsg(salaryProblem, 'err'); return; }
 
     // Sharing to a public profile gets a review step; plain saves do not.
     if (shareToLinkedIn) { openLinkedInPreview(payload); return; }

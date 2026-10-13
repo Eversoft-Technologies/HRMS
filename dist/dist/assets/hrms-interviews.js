@@ -222,7 +222,9 @@
       '.hrms-iv-toolbar input,.hrms-iv-toolbar select{background:var(--bg3);border:1px solid var(--border2);border-radius:8px;padding:7px 10px;color:var(--text);font-size:12px;outline:none;}',
       '.hrms-iv-toolbar input{flex:1 1 140px;min-width:0;}',
       '.hrms-iv-toolbar input:focus,.hrms-iv-toolbar select:focus{border-color:var(--accent);}',
-      '.hrms-iv-scroll{max-height:300px;overflow-y:auto;}',
+      /* Six rows fit without a scrollbar; when one appears it sits in the card's
+         padding, so the toolbar selects and the rows keep the same right edge. */
+      '.hrms-iv-scroll{max-height:324px;overflow-y:auto;scrollbar-gutter:stable;margin-right:-12px;padding-right:12px;}',
       '.hrms-iv-row{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border2);}',
       '.hrms-iv-row:last-child{border-bottom:none;}',
       '.hrms-iv-av{flex-shrink:0;width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11.8px;font-weight:600;color:#fff;}',
@@ -260,7 +262,22 @@
       '.hrms-iv-acts button{padding:8px 16px;font-size:12px;font-weight:600;border-radius:7px;cursor:pointer;}',
       '.hrms-iv-cancel{background:transparent;border:1px solid var(--border2);color:var(--text3);}',
       '.hrms-iv-save{background:var(--accent);border:none;color:#fff;}',
-      '.hrms-iv-save:disabled{opacity:.6;cursor:not-allowed;}'
+      '.hrms-iv-save:disabled{opacity:.6;cursor:not-allowed;}',
+      /* Equal-width status badges in the Recently Completed rows. */
+      '.hrms-iv-row .badge{min-width:88px;justify-content:center;}',
+      /* Follow-up Emails: fixed score column and action group so every row lines up
+         (the React row packs everything to the right; a "Sent" label is narrower
+         than a "Send" button, which shifted the row above it). */
+      '.hrms-iv-fu div[style*="width: 110px"]{justify-content:center!important;}',
+      '.hrms-iv-fu div[style*="width: 110px"] > span[style*="padding-left: 8px"]{padding-left:0!important;}',
+      '.hrms-iv-fu div[style*="width: 110px"] > .badge{min-width:92px;justify-content:center;}',
+      '.hrms-iv-fu div[style*="gap: 7px"]{min-width:176px;flex-shrink:0;justify-content:flex-end;}',
+      '.hrms-iv-fu div[style*="gap: 7px"] > .btn-primary,.hrms-iv-fu div[style*="gap: 7px"] > span{display:inline-flex;align-items:center;justify-content:center;min-width:68px;box-sizing:border-box;}',
+      '.hrms-iv-fu div[style*="gap: 7px"] > span{padding:5px 0;}',
+      '.hrms-iv-fu div[style*="gap: 5px"] > button{min-width:96px;}',
+      /* The wrench emoji is a grey glyph on the light theme; render it as a solid
+         accent-coloured silhouette there. */
+      'html[data-theme="light"] .hrms-iv-emoji{color:transparent;text-shadow:0 0 0 var(--accent);}'
     ].join('');
     var st = document.createElement('style');
     st.id = STYLE_ID; st.textContent = css;
@@ -456,6 +473,7 @@
   function enhanceFollowup() {
     var card = cardByTitle('Candidate Follow-up Status');
     if (!card) return;
+    card.classList.add('hrms-iv-fu');   // alignment rules in ensureStyle()
     var avs = card.querySelectorAll('.av');
     Array.prototype.forEach.call(avs, function (av) {
       var row = av.parentElement;
@@ -1262,6 +1280,13 @@
     decorateLinksTable();
     wireCopy();
     badgeCreateForm();
+    // "Technical Deep-Dive" in QUESTION STRUCTURE: split the wrench emoji out
+    // of the text node so the light theme can recolour it (see .hrms-iv-emoji).
+    document.querySelectorAll('.content div[style*="font-weight: 700"]').forEach(function (d) {
+      if (d.childNodes.length === 1 && d.firstChild.nodeType === 3 && d.textContent.indexOf('\uD83D\uDD27 ') === 0) {
+        d.innerHTML = '<span class="hrms-iv-emoji" aria-hidden="true">\uD83D\uDD27</span> ' + esc(d.textContent.slice(3));
+      }
+    });
     enhanceEmailPreview();
     if ((up || done || fu) && !loaded && !loading) load(false);
   }

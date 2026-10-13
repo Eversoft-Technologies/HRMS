@@ -41,6 +41,7 @@
     loading:         false,
     timer:           null,
     charts:          [], // Keep track of active Chart.js instances
+    pushed:          false, // true while our history entry (for the Back button) is live
     lastRenderedTab: null // Tracks the active tab to prevent unnecessary HTML rebuilds
   };
 
@@ -231,7 +232,11 @@
       /* body */
       '.kpi-body{flex:1;overflow-y:auto;padding:24px;background:var(--card,#fff);transition:opacity 0.25s ease}',
       /* cards grid */
-      '.kpi-cards{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px}',
+      /* minmax(0,1fr): a long value ("1h 23m 45s") no longer widens its own column. */
+      '.kpi-cards{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:20px}',
+      '.kpi-card{min-width:0}',
+      '.kpi-card-val{overflow-wrap:anywhere}',
+      '@media(max-width:1100px){.kpi-cards{grid-template-columns:repeat(2,minmax(0,1fr))}}',
       '.kpi-card{background:var(--bg2,#f8fafc);border:1.5px solid var(--border,#e5e7eb);border-radius:12px;padding:14px 16px;position:relative;overflow:hidden;transition:transform .2s, box-shadow .2s, border-color .2s;box-sizing:border-box}',
       '.kpi-card:hover{transform:translateY(-2px);border-color:var(--accent,#6366f1);box-shadow:0 6px 18px rgba(99,102,241,0.18)}',
       '.kpi-card::before{content:"";position:absolute;top:0;left:0;right:0;height:4px}',
@@ -294,7 +299,7 @@
       '.kpi-empty{text-align:center;color:var(--text3,#888);font-size:14px;padding:48px 0}',
       /* layout and grid wrappers */
       '.kpi-two{display:grid;grid-template-columns:1fr 1fr;gap:20px}',
-      '@media(max-width:768px){.kpi-two{grid-template-columns:1fr}.kpi-cards{grid-template-columns:repeat(2,1fr)}}',
+      '@media(max-width:768px){.kpi-two{grid-template-columns:1fr}.kpi-cards{grid-template-columns:repeat(2,minmax(0,1fr))}}',
       '.chart-wrapper{background:var(--bg2,#f8fafc);border:1px solid var(--border,#e5e7eb);border-radius:12px;padding:16px;box-sizing:border-box}',
       /* trigger button */
       /* --card and --text1 are names this app's palette never defined, so the pill
@@ -315,6 +320,10 @@
     o.addEventListener('click', function (e) { if (e.target === o) close(); });
     document.body.appendChild(o);
     document.addEventListener('keydown', onKey);
+    // A history entry of our own, so the browser Back button closes the
+    // dashboard instead of leaving the F2F page underneath it.
+    try { history.pushState({ hrmsKpi: 1 }, '', location.href); state.pushed = true; } catch (_) { state.pushed = false; }
+    window.addEventListener('popstate', onPop);
     buildShell();
     
     loadChartJs(function () {
@@ -327,7 +336,15 @@
     }, REFRESH_MS);
   }
 
+  // X / Escape / backdrop: drop the history entry we pushed (onPop then tears
+  // down), so a later Back press is not swallowed by a stale entry.
   function close() {
+    if (state.pushed && history.state && history.state.hrmsKpi) { state.pushed = false; history.back(); return; }
+    closeNow();
+  }
+  function onPop() { state.pushed = false; closeNow(); }
+  function closeNow() {
+    window.removeEventListener('popstate', onPop);
     clearInterval(state.timer);
     if (state.charts && state.charts.length) {
       state.charts.forEach(function (c) {
