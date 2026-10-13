@@ -15,20 +15,22 @@ def create_tables_and_columns_if_not_exists(apps, schema_editor):
         if 'app_users' in tables:
             columns = [col.name if hasattr(col, 'name') else col[0] for col in connection.introspection.get_table_description(cursor, 'app_users')]
             if 'employee_id' not in columns:
-                from api.models import AppUser
+                AppUser = apps.get_model('api', 'AppUser')
                 field = AppUser._meta.get_field('employee_id')
                 schema_editor.add_field(AppUser, field)
 
         if 'user_profiles' in tables:
             columns = [col.name if hasattr(col, 'name') else col[0] for col in connection.introspection.get_table_description(cursor, 'user_profiles')]
             if 'employee_id' not in columns:
-                from api.models import UserProfile
+                UserProfile = apps.get_model('api', 'UserProfile')
                 field = UserProfile._meta.get_field('employee_id')
                 schema_editor.add_field(UserProfile, field)
 
 
 def seed_and_backfill(apps, schema_editor):
-    from api.models import CompanyDetail, AppUser, UserProfile
+    CompanyDetail = apps.get_model('api', 'CompanyDetail')
+    AppUser = apps.get_model('api', 'AppUser')
+    UserProfile = apps.get_model('api', 'UserProfile')
 
     comp = CompanyDetail.objects.first()
     if not comp:
@@ -63,7 +65,7 @@ def seed_and_backfill(apps, schema_editor):
             eid = f"{prefix}{str(counter).zfill(digits)}{suffix}"
             user.employee_id = eid
             user.save(update_fields=['employee_id'])
-            if user.email:
+            if getattr(user, 'email', None):
                 UserProfile.objects.filter(email=user.email, employee_id='').update(employee_id=eid)
             counter += 1
 

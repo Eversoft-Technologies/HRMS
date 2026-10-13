@@ -1,0 +1,39 @@
+/* ============================================================
+   hrms-task-stats.css — Task Tracker (/employees/tasks) summary
+   cards on tablet and phone widths only.
+
+   responsive.css collapses every .stat-grid to two columns
+   (<=1024px) and one column (<=768px). The Task Tracker's grid is
+   tagged `.task-stats` in the bundle so that, on those widths, its
+   four cards (Total Tasks / Completed / In Progress / Overdue) stay
+   on a single row as equal-width cards. Desktop (>1024px) is
+   untouched, and so is every other page that uses .stat-grid.
+
+   theme-overrides.css sets `.content .stat-grid` to auto-fit columns,
+   so the selectors below carry `.content` to outrank it.
+   ============================================================ */
+
+@media (max-width: 1024px) {
+  .content .task-stats {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px;
+    width: 100%;
+  }
+  .task-stats .stat-card { min-width: 0; }
+  /* Labels such as "IN PROGRESS" wrap onto a second line instead of
+     overflowing the card. */
+  .task-stats .stat-label { white-space: normal; overflow-wrap: break-word; }
+  .task-stats .stat-value { overflow-wrap: break-word; }
+}
+
+@media (max-width: 768px) {
+  .content .task-stats { gap: 8px; }
+}
+
+@media (max-width: 480px) {
+  /* Four cards on a phone leave ~80px each; trim the inner padding so the
+     label and value keep room. Fonts and colors are unchanged. */
+  .content .task-stats { gap: 6px; }
+  .task-stats .stat-card { padding: 14px 8px; }
+}

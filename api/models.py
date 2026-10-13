@@ -190,9 +190,13 @@ class InterviewRecording(models.Model):
     tech_score = models.IntegerField(default=0)
     comm_score = models.IntegerField(default=0)
     integrity_score = models.IntegerField(default=0)
-    recording_data = models.TextField(null=True, blank=True)   # base64 video
-    video_buffer = models.BinaryField(null=True, blank=True)   # raw LONGBLOB
-    video_mime = models.CharField(max_length=100, null=True, blank=True)
+    recording_data = models.TextField(null=True, blank=True)   # base64 video (legacy)
+    video_buffer = models.BinaryField(null=True, blank=True)   # raw LONGBLOB (legacy)
+    video_file = models.CharField(max_length=500, null=True, blank=True)     # relative path on disk (e.g. interviews/interview_123.mp4)
+    video_url = models.CharField(max_length=500, null=True, blank=True)      # direct streaming URL
+    video_size = models.BigIntegerField(default=0, null=True, blank=True)    # file size in bytes
+    video_mime = models.CharField(max_length=100, null=True, blank=True)     # video/mp4 or video/webm
+    thumbnail_file = models.CharField(max_length=500, null=True, blank=True) # relative path to poster thumbnail
     transcript = models.TextField(null=True, blank=True)
     responses = models.JSONField(null=True, blank=True)
     ai_evaluation = models.JSONField(null=True, blank=True)

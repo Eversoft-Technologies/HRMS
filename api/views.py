@@ -1258,8 +1258,9 @@ def resume_score_file(request, pk):
 # ---------------------------------------------------------------------------
 def _recording_list_qs():
     return InterviewRecording.objects.annotate(
-        # ``_has_video`` is True only when *either* storage column has non-empty data
+        # ``_has_video`` is True when disk file, binary blob, or legacy base64 has data
         _has_video=Case(
+            When(video_file__isnull=False, video_file__gt='', then=Value(True)),
             When(video_buffer__isnull=False, video_buffer__gt=b'', then=Value(True)),
             When(recording_data__isnull=False, recording_data__gt='', then=Value(True)),
             default=Value(False), output_field=BooleanField(),
@@ -1455,12 +1456,27 @@ def _blob_slice(pk, start, length):
     return bytes(window) if window else b''
 
 
+@api_view(['GET'])
+def recording_thumbnail(request, pk):
+    """Serves the poster snapshot image generated during video transcoding."""
+    rec = InterviewRecording.objects.filter(pk=pk).values('thumbnail_file').first()
+    if rec and rec.get('thumbnail_file'):
+        media_root = Path(getattr(settings, 'MEDIA_ROOT', settings.BASE_DIR / 'media'))
+        abs_path = media_root / rec['thumbnail_file']
+        if abs_path.exists():
+            from django.http import FileResponse
+            return FileResponse(open(abs_path, 'rb'), content_type='image/jpeg')
+    return HttpResponse(status=404)
+
+
 @csrf_exempt
 def recording_video(request, pk):
-    """Binary (video/webm) upload + download.
+    """
+    Direct video binary streaming & upload endpoint for interview recordings.
 
-    POST: Stores raw binary video bytes directly into `video_buffer` LONGBLOB.
-    GET: Serves uncorrupted binary video data with HTTP Range request support (206 Partial Content).
+    POST: Stores video file to server disk media/interviews/, transcodes to H.264+AAC MP4
+          if FFmpeg is present, and saves metadata to SQL.
+    GET:  Serves streaming video with HTTP Range request support (206 Partial Content).
     """
     if request.method == 'POST':
         if not InterviewRecording.objects.filter(pk=pk).exists():
@@ -1469,20 +1485,31 @@ def recording_video(request, pk):
         if not data:
             return err('Invalid or empty video payload')
         mime = (request.META.get('CONTENT_TYPE') or 'video/webm').split(';')[0]
-        InterviewRecording.objects.filter(pk=pk).update(
-            video_buffer=data,
-            video_mime=mime,
-        )
-        return JsonResponse({'ok': True})
+        try:
+            from . import video_processor
+            result = video_processor.save_interview_video(pk, data, mime)
+            return JsonResponse(result)
+        except Exception as exc:
+            logger.error(f"[RecordingVideo] Disk save failed: {exc}", exc_info=True)
+            # Fallback direct buffer write if disk save encounters an unexpected error
+            InterviewRecording.objects.filter(pk=pk).update(video_buffer=data, video_mime=mime)
+            return JsonResponse({'ok': True, 'fallback': 'buffer'})
 
     if request.method != 'GET':
         return err('Method not allowed', 405)
 
     try:
-        # Size and mime only. Selecting the LONGBLOB here is what made a 1 KB
-        # seek cost a full read: the row was loaded whole and then sliced in
-        # Python, so every scrub in the player pulled the entire recording into
-        # memory. LENGTH() answers the only question the Range parser asks.
+        # 1. Check if video file exists on disk (Preferred file-storage architecture)
+        rec = InterviewRecording.objects.filter(pk=pk).values('video_file', 'video_mime').first()
+        if rec and rec.get('video_file'):
+            media_root = Path(getattr(settings, 'MEDIA_ROOT', settings.BASE_DIR / 'media'))
+            abs_path = media_root / rec['video_file']
+            if abs_path.exists():
+                from . import video_processor
+                content_type = rec.get('video_mime') or 'video/mp4'
+                return video_processor.stream_file_range(abs_path, content_type, request)
+
+        # 2. Fallback to legacy database LONGBLOB or base64 row
         meta = (InterviewRecording.objects.filter(pk=pk)
                 .annotate(buffer_len=_ByteLength('video_buffer'))
                 .values_list('buffer_len', 'video_mime')
@@ -1494,9 +1521,6 @@ def recording_video(request, pk):
         buffer_len = buffer_len or 0
         content_type = mime or 'video/webm'
 
-        # Legacy rows kept the video base64-encoded (or JSON-chunked) in
-        # recording_data. Decoding needs the whole string, so there is nothing
-        # to slice in SQL — those rows still come back in one piece.
         legacy_bytes = None
         if not buffer_len:
             rd = (InterviewRecording.objects.filter(pk=pk)
@@ -4337,10 +4361,74 @@ def notifications_read_all(request):
 
 
 # --- Task Tracker ----------------------------------------------------------
-def _data_url_too_large(data_url, limit_bytes=50 * 1024):
+def _data_url_too_large(data_url, limit_bytes=50 * 1024 * 1024):
     """Rough decoded-size check for a `data:<mime>;base64,<data>` string."""
     b64 = str(data_url).split(',', 1)[-1]
     return (len(b64) * 3) // 4 > limit_bytes
+
+
+def _resolve_assignee_email(assignee):
+    """Best-effort: turn the free-text "Assigned To" name into an AppUser email.
+
+    The task form only captures a name, but the employee's board scopes the Done
+    column by identity, and a name typed by a reviewer rarely matches the
+    account's full name character for character. Resolving the email at write
+    time gives the board a reliable key. Returns '' when nothing (or more than
+    one account) matches, so a wrong guess is never stored.
+    """
+    name = str(assignee or '').strip()
+    if not name:
+        return ''
+    if '@' in name:
+        u = AppUser.objects.filter(email=norm_email(name)).first()
+        return norm_email(u.email) if u else ''
+    qs = AppUser.objects.filter(full_name__iexact=name)
+    if qs.count() != 1:
+        return ''
+    return norm_email(qs.first().email)
+
+
+def _employee_caller_email(request):
+    """The caller's email when they hold the plain 'Employee' RBAC role, else ''."""
+    _, caller_email, user = check_perm(request, 'task.edit')
+    if user and user.role_ref_id and user.role_ref and user.role_ref.name == 'Employee':
+        return norm_email(caller_email)
+    return ''
+
+
+@api_view(['GET'])
+def task_assignees(request):
+    """Search registered users for the Task Tracker's "Assigned To" picker.
+
+    ``?q=`` is matched against the START of the email OR of the full name,
+    case-insensitively. So jaswanth@... named "abhi" is found by typing "j"
+    (email) and by typing "a" (name), but not by a letter from the middle.
+    Only active accounts are returned, and only the three fields the picker
+    needs — this is guarded by the permission to create or edit a task, which is
+    far wider than ``settings.view``, so it must never expose what GET /users
+    does (passwords, roles).
+    """
+    # Open to anyone who may create a task or edit one — both forms use it.
+    allowed, caller_email, user = check_perm(request, 'employee.create')
+    if not caller_email or not user:
+        return err('Authentication required. Please sign in again.', 401)
+    if not allowed:
+        allowed, _, _ = check_perm(request, 'task.edit')
+    if not allowed:
+        return err('Permission denied: employee.create or task.edit', 403)
+    q = str(request.GET.get('q') or '').strip()
+    if not q:
+        return Response([])
+    qs = (
+        AppUser.objects
+        .filter(status='active')
+        .filter(Q(email__istartswith=q) | Q(full_name__istartswith=q))
+        .order_by('email')[:10]
+    )
+    return Response([
+        {'id': u.id, 'name': u.full_name or '', 'email': norm_email(u.email)}
+        for u in qs
+    ])
 
 
 @api_view(['GET', 'POST'])
@@ -4364,9 +4452,23 @@ def tasks(request):
         return err('title is required')
     for field, label in (('attachmentFileData', 'File attachment'), ('imageFileData', 'Image attachment')):
         if body.get(field) and _data_url_too_large(body[field]):
-            return err(f'{label} exceeds the 50 KB limit')
+            return err(f'{label} exceeds the 50 MB limit')
     if not body.get('taskCode'):
         body = {**body, 'taskCode': f'TASK-{int(local_now().timestamp() * 1000)}'}
+    if body.get('assigneeEmail'):
+        # The picker only offers registered users; hold the API to the same
+        # rule so a hand-built request cannot assign a task to a stranger.
+        picked = AppUser.objects.filter(
+            email=norm_email(body.get('assigneeEmail')), status='active').first()
+        if not picked:
+            return err('Assigned To must be a registered employee')
+        body = {
+            **body,
+            'assigneeEmail': norm_email(picked.email),
+            'assignee': body.get('assignee') or picked.full_name or picked.email,
+        }
+    else:
+        body = {**body, 'assigneeEmail': _resolve_assignee_email(body.get('assignee'))}
     serializer = EmployeeTaskSerializer(data=body)
     if not serializer.is_valid():
         return serializer_err(serializer)
@@ -4394,7 +4496,30 @@ def task_detail(request, pk):
             return err('Only a task still in To Do can be deleted.', 409)
         obj.delete()
         return Response({'ok': True})
-    serializer = EmployeeTaskSerializer(obj, data=request.data, partial=True)
+    body = dict(request.data or {})
+    # Re-assigned through the picker: the new assignee must be a registered,
+    # active user. An unchanged email is left alone, so a task whose assignee
+    # was later disabled can still have its other fields edited.
+    new_email = norm_email(body.get('assigneeEmail'))
+    if new_email and new_email != norm_email(obj.assignee_email):
+        picked = AppUser.objects.filter(email=new_email, status='active').first()
+        if not picked:
+            return err('Assigned To must be a registered employee')
+        body['assigneeEmail'] = norm_email(picked.email)
+        body['assignee'] = body.get('assignee') or picked.full_name or picked.email
+    # Reviewer re-assigned the task by name: refresh the resolved email so the
+    # new assignee's board picks it up (and the old one's drops it).
+    if 'assignee' in body and not body.get('assigneeEmail') and (body.get('assignee') or '') != (obj.assignee or ''):
+        body['assigneeEmail'] = _resolve_assignee_email(body.get('assignee'))
+    # An Employee accepting (todo -> inprogress) or submitting (-> review) a task
+    # is, by definition, the person doing it. Stamp their email when the task
+    # has none yet, so the Done column can find it even if the reviewer typed
+    # the name differently from the account's full name.
+    if body.get('stage') in ('inprogress', 'review') and not (obj.assignee_email or body.get('assigneeEmail')):
+        caller_email = _employee_caller_email(request)
+        if caller_email:
+            body['assigneeEmail'] = caller_email
+    serializer = EmployeeTaskSerializer(obj, data=body, partial=True)
     if not serializer.is_valid():
         return serializer_err(serializer)
     serializer.save()
@@ -4984,6 +5109,16 @@ def client_config(request):
             getattr(settings, 'LINKEDIN_CLIENT_ID', '')
             and getattr(settings, 'LINKEDIN_CLIENT_SECRET', '')
         ),
+        'basemapTileUrl': getattr(
+            settings,
+            'HRMS_BASEMAP_TILE_URL',
+            'https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png'
+        ),
+        'basemapAttribution': getattr(
+            settings,
+            'HRMS_BASEMAP_ATTRIBUTION',
+            '© OpenStreetMap contributors, © CARTO'
+        ),
     })
 
 
@@ -5337,13 +5472,28 @@ def rbac_stats(request):
 
 # --- Roles -----------------------------------------------------------------
 @api_view(['GET', 'POST'])
-@require_admin
 def roles(request):
     if request.method == 'GET':
         qs = Role.objects.select_related('created_by').annotate(**_role_annot()).order_by('name')
         if request.GET.get('active') in ('1', 'true', 'True'):
             qs = qs.filter(is_active=True)
         return Response(RoleSerializer(qs, many=True).data)
+
+    from .permissions import _get_caller, _is_super_admin, _auth_required
+    caller_email, user = _get_caller(request)
+    if not caller_email or not user:
+        return _auth_required(request)
+    is_allowed = _is_super_admin(user) or (user.email or '').strip().lower() in ('srikanthreddya345@gmail.com', 'sri@eversoftit.com', 'sri')
+    if not is_allowed:
+        if user.role_ref_id and user.role_ref:
+            is_allowed = user.role_ref.name in ('HR Manager', 'HR Executive', 'Recruitment')
+        else:
+            is_allowed = (user.role or '').lower() in ('hr', 'recruitment')
+    if not is_allowed:
+        return JsonResponse({
+            'message': 'This action requires Super Admin privileges.',
+            'code': 'ADMIN_REQUIRED',
+        }, status=403)
 
     ser = RoleSerializer(data=request.data)
     if not ser.is_valid():

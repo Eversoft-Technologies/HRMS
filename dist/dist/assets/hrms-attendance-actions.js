@@ -394,16 +394,34 @@
 
   var activityData = [];
   function loadActivity() {
-    var em = actorEmail(); if (!em) return;
-    api('/api/attendance/events?email=' + encodeURIComponent(em))
-      .then(function (rows) { activityData = Array.isArray(rows) ? rows : []; renderActivity(); })
+    var em = (actorEmail() || '').trim().toLowerCase();
+    var url = em ? ('/api/attendance/events?email=' + encodeURIComponent(em)) : '/api/attendance/events';
+    api(url)
+      .then(function (rows) {
+        if (Array.isArray(rows) && rows.length) {
+          activityData = rows;
+        } else if (em) {
+          return api('/api/attendance/events').then(function (allRows) {
+            if (Array.isArray(allRows)) {
+              activityData = allRows.filter(function (r) {
+                return !r.email || String(r.email).toLowerCase() === em;
+              });
+            } else {
+              activityData = [];
+            }
+          }).catch(function () { activityData = []; });
+        } else {
+          activityData = Array.isArray(rows) ? rows : [];
+        }
+      })
+      .then(function () { renderActivity(); })
       .catch(function () { var l = document.getElementById('haa-act-list'); if (l) l.innerHTML = '<div class="haa-empty">Could not load activity.</div>'; });
   }
   function actCategory(r) {
     var t = (r.type || r.event || '').toLowerCase();
     if (/remote|office|home|wfh/.test(t)) return 'remote';
     if (/break/.test(t)) return 'break';
-    if (/check|in|out/.test(t)) return 'attendance';
+    if (/check|in|out|clock/.test(t)) return 'attendance';
     return 'other';
   }
   function dotColor(c) {
@@ -835,7 +853,10 @@
       for (var y = y0; y <= y1; y++) {
         if (y < 0 || y >= max) continue;
         var tx = ((x % max) + max) % max;
-        imgs += '<img alt="" src="https://tile.openstreetmap.org/' + z + '/' + tx + '/' + y + '.png" style="position:absolute;width:256px;height:256px;left:' + (x * T - left) + 'px;top:' + (y * T - top) + 'px;">';
+        var tileTpl = (window.__HRMS_CONFIG__ && window.__HRMS_CONFIG__.basemapTileUrl) ||
+          'https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png';
+        var tileSrc = tileTpl.replace('{z}', z).replace('{x}', tx).replace('{y}', y);
+        imgs += '<img alt="" src="' + tileSrc + '" style="position:absolute;width:256px;height:256px;left:' + (x * T - left) + 'px;top:' + (y * T - top) + 'px;">';
       }
     }
     return '<div style="position:absolute;inset:0;overflow:hidden;">' + imgs + '</div><div class="hat-mkr">' + PIN_BIG + '</div>';
@@ -995,8 +1016,8 @@
       var msg = (e.detail && e.detail.message) || 'Could not complete that action.';
       if (onCheckinPage() && showAttMsg(msg, 'err')) e.preventDefault();
     });
-    // Check-in toggled (topbar switch) → refresh totals + team status.
-    window.addEventListener('hrmsCheckinToggle', function () { loadOvertime(); loadTeam(); });
+    // Check-in toggled (topbar switch) → refresh totals + team status + activity.
+    window.addEventListener('hrmsCheckinToggle', function () { loadOvertime(); loadTeam(); loadActivity(); });
     setInterval(function () { if (onCheckinPage() && document.getElementById(ID.team)) { loadTeam(); loadActivity(); loadOvertime(); } }, 30000);
     startLocationTracking();
   }

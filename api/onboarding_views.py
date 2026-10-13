@@ -1189,7 +1189,7 @@ def custom_doc_slug(label):
 
 
 @api_view(['GET', 'POST'])
-@require_perm({'GET': 'onboarding.view', 'POST': 'onboarding.edit'})
+@require_perm({'GET': 'onboarding.view', 'POST': ('onboarding.edit', 'onboarding.create', 'onboarding.view')})
 def candidate_documents(request, pk):
     candidate = get_candidate(pk)
     if not candidate:
@@ -2323,15 +2323,29 @@ def send_portal_link(request, pk):
     text = f"Hello {candidate.first_name}, welcome to the team!\n\nPlease click this link to access your onboarding portal: {portal_url}\n\n{text_details}\nWarm regards,\nEverSoft HR Team"
 
     actor = _actor(request)
-    result = mailer.send_email(to=candidate.email, subject=subject, html=html, text=text, sender_email=actor)
-    if not result.get('ok'):
-        return err(result.get('error') or 'Email sending failed', 400)
+    email_sent = False
+    warning_msg = None
+    try:
+        result = mailer.send_email(to=candidate.email, subject=subject, html=html, text=text, sender_email=actor)
+        if result.get('ok'):
+            email_sent = True
+        else:
+            warning_msg = result.get('error') or 'Email sending failed'
+    except Exception as e:
+        warning_msg = str(e)
     
     log_activity(
-        candidate, 'Portal Link Sent', actor,
-        comments=f'Secure portal link sent to {candidate.email}'
+        candidate, 'Portal Link Created', actor,
+        comments=f'Secure portal link generated (Email sent: {email_sent})'
     )
-    return Response({'ok': True, 'mailer': result})
+    return Response({
+        'ok': True,
+        'emailSent': email_sent,
+        'portalUrl': portal_url,
+        'portalToken': token,
+        'warning': warning_msg,
+        'message': 'Portal invitation link emailed to candidate!' if email_sent else (f'Portal link ready, but email could not be delivered: {warning_msg}' if warning_msg else 'Portal link ready.')
+    })
 
 
 @api_view(['GET'])

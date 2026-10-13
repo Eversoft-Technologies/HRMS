@@ -64,6 +64,7 @@ urlpatterns = [
     path('interview-recordings', views.recordings),
     path('interview-recordings/<int:pk>', views.recording_detail),
     path('interview-recordings/<int:pk>/video', views.recording_video),
+    path('interview-recordings/<int:pk>/thumbnail', views.recording_thumbnail),
 
     path('question-sets', views.question_sets),
     path('question-sets/<str:set_id>', views.question_set_detail),
@@ -152,6 +153,7 @@ urlpatterns = [
 
     # Employees module — Task Tracker
     path('tasks', views.tasks),
+    path('tasks/assignees', views.task_assignees),
     path('tasks/<int:pk>', views.task_detail),
 
     # Employees module — Work Submissions

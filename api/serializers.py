@@ -483,21 +483,13 @@ class InterviewRecordingSerializer(serializers.ModelSerializer):
     def to_representation(self, instance):
         # ``_has_video`` / ``_has_recording`` are annotated by the list queryset
         # (which defers the heavy columns); fall back to the columns otherwise.
-        #
-        # The fallback MUST stay lazy. getattr(obj, name, default) evaluates its
-        # default eagerly, so `getattr(instance, '_has_video', instance.video_buffer)`
-        # read the deferred LONGBLOB on every row even when the annotation was
-        # present — one extra SELECT per row per column, pulling the whole video.
-        # Six recordings meant twelve blob queries and ~74 MB over the wire, which
-        # is what made GET /api/interview-recordings time out and 502 in production.
         has_video = getattr(instance, '_has_video', None)
         if has_video is None:                       # unannotated (detail view)
-            # True when either binary LONGBLOB *or* legacy base64 column has data.
-            has_video = (instance.video_buffer is not None
-                         or instance.recording_data is not None)
+            # True when disk file, binary LONGBLOB, or legacy base64 column has data.
+            has_video = bool(instance.video_file or instance.video_buffer is not None or instance.recording_data is not None)
         has_recording = getattr(instance, '_has_recording', None)
         if has_recording is None:
-            has_recording = instance.recording_data is not None
+            has_recording = bool(instance.recording_data is not None or instance.video_file)
 
         return {
             'id': instance.id,
@@ -512,6 +504,10 @@ class InterviewRecordingSerializer(serializers.ModelSerializer):
             'integrityScore': instance.integrity_score,
             'hasVideo': bool(has_video),
             'hasRecording': bool(has_recording),
+            'videoUrl': f"/api/interview-recordings/{instance.id}/video" if has_video else None,
+            'thumbnailUrl': f"/api/interview-recordings/{instance.id}/thumbnail" if getattr(instance, 'thumbnail_file', None) else None,
+            'videoSize': getattr(instance, 'video_size', 0) or 0,
+            'videoMime': getattr(instance, 'video_mime', None) or 'video/mp4',
             'transcript': instance.transcript,
             'responses': safe_list(instance.responses),
             'aiEvaluation': instance.ai_evaluation if isinstance(instance.ai_evaluation, dict) else {},
