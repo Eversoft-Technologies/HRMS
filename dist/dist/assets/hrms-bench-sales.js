@@ -1906,6 +1906,22 @@
         }
       }
     }
+
+    // Recruit can match its nested routes as well as its own route. When the
+    // current child has an exact nav link, make it the sole active item.
+    var recruitPath = String(location.pathname || '').replace(/\/+$/, '');
+    if (recruitPath.indexOf('/recruit/') === 0) {
+      var recruitSidebar = document.querySelector('.sidebar');
+      var currentRecruitLink = recruitSidebar &&
+        recruitSidebar.querySelector('a.nav-item[href="' + recruitPath + '"]');
+      if (currentRecruitLink) {
+        var activeRecruitLinks = recruitSidebar.querySelectorAll('a.nav-item.active');
+        for (var j = 0; j < activeRecruitLinks.length; j++) {
+          if (activeRecruitLinks[j] !== currentRecruitLink) activeRecruitLinks[j].classList.remove('active');
+        }
+        currentRecruitLink.classList.add('active');
+      }
+    }
   }
 
   /* ── routing ──────────────────────────────────────────────────────────

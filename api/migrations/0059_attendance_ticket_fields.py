@@ -7,6 +7,8 @@ already exist, while the state_operations keep Django's model state in sync.
 """
 from django.db import migrations, models
 
+from ._sqlite_compat import add_column_if_missing
+
 
 TABLE = 'attendance_corrections'
 COLUMNS = [
@@ -16,19 +18,8 @@ COLUMNS = [
 
 
 def add_columns(apps, schema_editor):
-    with schema_editor.connection.cursor() as cursor:
-        for name, ddl in COLUMNS:
-            cursor.execute(
-                """
-                SELECT COUNT(*) FROM information_schema.COLUMNS
-                 WHERE TABLE_SCHEMA = DATABASE()
-                   AND TABLE_NAME   = %s
-                   AND COLUMN_NAME  = %s
-                """,
-                [TABLE, name],
-            )
-            if cursor.fetchone()[0] == 0:
-                cursor.execute("ALTER TABLE `%s` ADD COLUMN `%s` %s" % (TABLE, name, ddl))
+    for name, ddl in COLUMNS:
+        add_column_if_missing(schema_editor.connection, TABLE, name, ddl)
 
 
 def noop(apps, schema_editor):

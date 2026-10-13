@@ -76,8 +76,8 @@ class RecordingVideoRangeTests(TestCase):
             reset_queries()
             self.client.get(self.url, HTTP_RANGE='bytes=0-1023')
             sql = ' '.join(q['sql'] for q in connection.queries)
-        self.assertIn('SUBSTRING', sql)
-        self.assertNotIn('SELECT `interview_recordings`.`video_buffer`', sql)
+        self.assertTrue('SUBSTRING' in sql or 'SUBSTR' in sql)
+        self.assertNotIn('SELECT "interview_recordings"."video_buffer"', sql)
 
     def test_missing_video_is_404_not_a_broken_stream(self):
         empty = InterviewRecording.objects.create(
