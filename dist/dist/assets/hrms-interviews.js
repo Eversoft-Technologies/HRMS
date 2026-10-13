@@ -218,7 +218,9 @@
       'html[data-theme="light"] .hrms-eml-hint{background:rgba(59,130,246,.05)!important;',
       '  border-color:rgba(59,130,246,.18)!important;color:#374151!important;}',
       '.hrms-iv-body{margin-top:4px;}',
-      '.hrms-iv-toolbar{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;}',
+      '.hrms-iv-toolbar{display:flex;gap:8px;margin-bottom:12px;padding-right:10px;box-sizing:border-box;flex-wrap:wrap;}',
+      '.hrms-iv-toolbar select{flex:0 1 150px;width:150px;min-width:0;max-width:45%;box-sizing:border-box;margin-right:2px;}',
+      '.hrms-iv-status-card .badge{display:inline-flex;align-items:center;justify-content:flex-start;text-align:left;width:96px;min-width:96px;height:24px;padding-left:10px;box-sizing:border-box;flex:0 0 96px;white-space:nowrap;}',
       '.hrms-iv-toolbar input,.hrms-iv-toolbar select{background:var(--bg3);border:1px solid var(--border2);border-radius:8px;padding:7px 10px;color:var(--text);font-size:12px;outline:none;}',
       '.hrms-iv-toolbar input{flex:1 1 140px;min-width:0;}',
       '.hrms-iv-toolbar input:focus,.hrms-iv-toolbar select:focus{border-color:var(--accent);}',
@@ -264,20 +266,7 @@
       '.hrms-iv-save{background:var(--accent);border:none;color:#fff;}',
       '.hrms-iv-save:disabled{opacity:.6;cursor:not-allowed;}',
       /* Equal-width status badges in the Recently Completed rows. */
-      '.hrms-iv-row .badge{min-width:88px;justify-content:center;}',
-      /* Follow-up Emails: fixed score column and action group so every row lines up
-         (the React row packs everything to the right; a "Sent" label is narrower
-         than a "Send" button, which shifted the row above it). */
-      '.hrms-iv-fu div[style*="width: 110px"]{justify-content:center!important;}',
-      '.hrms-iv-fu div[style*="width: 110px"] > span[style*="padding-left: 8px"]{padding-left:0!important;}',
-      '.hrms-iv-fu div[style*="width: 110px"] > .badge{min-width:92px;justify-content:center;}',
-      '.hrms-iv-fu div[style*="gap: 7px"]{min-width:176px;flex-shrink:0;justify-content:flex-end;}',
-      '.hrms-iv-fu div[style*="gap: 7px"] > .btn-primary,.hrms-iv-fu div[style*="gap: 7px"] > span{display:inline-flex;align-items:center;justify-content:center;min-width:68px;box-sizing:border-box;}',
-      '.hrms-iv-fu div[style*="gap: 7px"] > span{padding:5px 0;}',
-      '.hrms-iv-fu div[style*="gap: 5px"] > button{min-width:96px;}',
-      /* The wrench emoji is a grey glyph on the light theme; render it as a solid
-         accent-coloured silhouette there. */
-      'html[data-theme="light"] .hrms-iv-emoji{color:transparent;text-shadow:0 0 0 var(--accent);}'
+      '.hrms-iv-row .badge{min-width:88px;justify-content:center;}'
     ].join('');
     var st = document.createElement('style');
     st.id = STYLE_ID; st.textContent = css;
@@ -316,7 +305,11 @@
     var titles = document.querySelectorAll('.card-title');
     for (var i = 0; i < titles.length; i++) {
       if ((titles[i].textContent || '').trim() === title) {
-        return titles[i].closest('.card') || titles[i].parentNode;
+        var card = titles[i].closest('.card') || titles[i].parentNode;
+        if (title === 'Upcoming Interviews' || title === 'Recently Completed') {
+          card.classList.add('hrms-iv-status-card');
+        }
+        return card;
       }
     }
     return null;
@@ -473,7 +466,6 @@
   function enhanceFollowup() {
     var card = cardByTitle('Candidate Follow-up Status');
     if (!card) return;
-    card.classList.add('hrms-iv-fu');   // alignment rules in ensureStyle()
     var avs = card.querySelectorAll('.av');
     Array.prototype.forEach.call(avs, function (av) {
       var row = av.parentElement;
@@ -1280,13 +1272,6 @@
     decorateLinksTable();
     wireCopy();
     badgeCreateForm();
-    // "Technical Deep-Dive" in QUESTION STRUCTURE: split the wrench emoji out
-    // of the text node so the light theme can recolour it (see .hrms-iv-emoji).
-    document.querySelectorAll('.content div[style*="font-weight: 700"]').forEach(function (d) {
-      if (d.childNodes.length === 1 && d.firstChild.nodeType === 3 && d.textContent.indexOf('\uD83D\uDD27 ') === 0) {
-        d.innerHTML = '<span class="hrms-iv-emoji" aria-hidden="true">\uD83D\uDD27</span> ' + esc(d.textContent.slice(3));
-      }
-    });
     enhanceEmailPreview();
     if ((up || done || fu) && !loaded && !loading) load(false);
   }

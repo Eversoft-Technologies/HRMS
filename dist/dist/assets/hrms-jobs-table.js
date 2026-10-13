@@ -257,7 +257,7 @@
       R + ' .jt-status .jt-edit{opacity:0;font-size:11px;color:var(--accent,#38bdf8);}',
       R + ' .jt-status:hover .jt-edit{opacity:1;}',
       /* editable priority cell (colored badge) */
-      R + ' .jt-pri{display:inline-flex;align-items:center;gap:6px;cursor:pointer;background:rgba(255,255,255,0.06);border:1px solid var(--border2,rgba(255,255,255,0.15));border-radius:6px;padding:3px 9px;font-size:12px;font-weight:600;color:var(--text,#f1f5f9);transition:all .15s ease;}',
+      R + ' .jt-pri{display:inline-flex;align-items:center;justify-content:center;gap:6px;cursor:pointer;background:rgba(255,255,255,0.06);border:1px solid var(--border2,rgba(255,255,255,0.15));border-radius:6px;padding:3px 9px;width:92px;min-width:92px;box-sizing:border-box;white-space:nowrap;flex-shrink:0;font-size:12px;font-weight:600;color:var(--text,#f1f5f9);transition:all .15s ease;}',
       /* Hover keeps the theme's text colour (a hard-coded white vanished on the
          light theme) and tints with the accent, which shows on both themes. */
       R + ' .jt-pri:hover{background:rgba(79,142,247,0.12);border-color:var(--accent,#38bdf8);color:var(--text,#f1f5f9);}',
@@ -348,11 +348,10 @@
       MD + ' .jt-mf{display:flex;justify-content:flex-end;gap:10px;padding:14px 22px;border-top:1px solid var(--border2,#334155);}',
       '@keyframes jt-fade{from{opacity:0}to{opacity:1}}',
       '@keyframes jt-slide{from{transform:translateX(100%)}to{transform:translateX(0)}}',
-      /* Same width for every Priority / Status pill so the columns line up
-         ("Low" and "Critical" used to size to their text). */
-      R + ' .jt-pri{min-width:104px;box-sizing:border-box;}',
-      R + ' .jt-pri .jt-caret{margin-left:auto;}',
-      R + ' .jt-status .jt-pill{display:inline-block;min-width:110px;text-align:center;box-sizing:border-box;}'
+      /* Same width for every Status pill so the column lines up (the Priority
+         pill is fixed at 92px above). */
+      R + ' .jt-status .jt-pill{display:inline-block;min-width:110px;text-align:center;box-sizing:border-box;}',
+      '@media(max-width:768px){' + M + '{right:0;left:auto;max-width:calc(100vw - 24px);min-width:min(180px,calc(100vw - 24px));box-sizing:border-box;}}',
     ].join('');
     var st = document.createElement('style'); st.id = ID.style; st.textContent = css; document.head.appendChild(st);
   }

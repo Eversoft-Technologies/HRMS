@@ -8,22 +8,17 @@ missing, making it fully compatible with automated deploy pipelines (CI/CD).
 """
 from django.db import migrations
 
+from ._sqlite_compat import add_column_if_missing
+
 
 def add_last_read_at(apps, schema_editor):
     """Add last_read_at column if it does not already exist."""
-    with schema_editor.connection.cursor() as cursor:
-        cursor.execute(
-            """
-            SELECT COUNT(*) FROM information_schema.COLUMNS
-             WHERE TABLE_SCHEMA = DATABASE()
-               AND TABLE_NAME   = 'chat_members'
-               AND COLUMN_NAME  = 'last_read_at'
-            """
-        )
-        if cursor.fetchone()[0] == 0:
-            cursor.execute(
-                "ALTER TABLE `chat_members` ADD COLUMN `last_read_at` DATETIME NULL"
-            )
+    add_column_if_missing(
+        schema_editor.connection,
+        'chat_members',
+        'last_read_at',
+        '`last_read_at` DATETIME NULL',
+    )
 
 
 def noop(apps, schema_editor):

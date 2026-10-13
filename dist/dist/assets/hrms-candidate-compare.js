@@ -828,6 +828,9 @@
         R + ' .cc-table td{padding:8px 8px;font-size:12px;}' +
         R + ' .cc-table th{padding:8px 8px;}' +
         '.cc-quick-jobs-bar{overflow-x:auto;white-space:nowrap;-webkit-overflow-scrolling:touch;padding-bottom:4px;}' +
+        /* Resume viewer modal fills the screen */
+        '.cc-modal{width:100%;max-width:100%;max-height:94vh;box-sizing:border-box;}' +
+        '.cc-modal-h,.cc-modal-b{padding:12px;}' +
         /* KPI cards: two per row, compact */
         '.content .stat-grid.cc-stats{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-bottom:14px;}' +
         '.cc-stats .stat-card{padding:10px 12px;min-width:0;}' +
@@ -1939,7 +1942,11 @@
     var ex = document.getElementById(ID.menu); if (ex) { ex.remove(); return; }
     var menu = document.createElement('div'); menu.id = ID.menu;
     menu.innerHTML = '<button data-x="csv">⭳ Download CSV (.csv)</button><button data-x="xlsx">⭳ Download Excel (.xlsx)</button>';
-    btn.parentNode.appendChild(menu); menu.style.top = (btn.offsetTop + btn.offsetHeight + 6) + 'px'; menu.style.left = btn.offsetLeft + 'px';
+    btn.parentNode.appendChild(menu); menu.style.top = (btn.offsetTop + btn.offsetHeight + 6) + 'px';
+    // Keep the menu on screen: on a phone the Export button sits near the right
+    // edge, so a menu left-aligned to it would be clipped.
+    var bl = btn.getBoundingClientRect().left, over = bl + menu.offsetWidth + 8 - window.innerWidth;
+    menu.style.left = (btn.offsetLeft - Math.max(0, Math.min(over, bl - 8))) + 'px';
     menu.querySelector('[data-x="csv"]').addEventListener('click', function () { exportCsv(); menu.remove(); });
     menu.querySelector('[data-x="xlsx"]').addEventListener('click', function () { exportXlsx(); menu.remove(); });
     setTimeout(function () { document.addEventListener('click', function h() { var m = document.getElementById(ID.menu); if (m) m.remove(); document.removeEventListener('click', h); }); }, 0);
