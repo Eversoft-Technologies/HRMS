@@ -14,6 +14,8 @@ Reverse is a no-op — dropping message data on rollback is unacceptable.
 """
 from django.db import migrations
 
+from ._sqlite_compat import add_column_if_missing
+
 
 # (table, column, DDL)
 NEW_COLUMNS = [
@@ -39,21 +41,8 @@ NEW_COLUMNS = [
 def add_missing_columns(apps, schema_editor):
     """Add each column only where it is absent — idempotent and safe on DBs
     that were already patched by hand."""
-    with schema_editor.connection.cursor() as cursor:
-        for table, column, ddl in NEW_COLUMNS:
-            cursor.execute(
-                """
-                SELECT COUNT(*) FROM information_schema.COLUMNS
-                 WHERE TABLE_SCHEMA = DATABASE()
-                   AND TABLE_NAME   = %s
-                   AND COLUMN_NAME  = %s
-                """,
-                [table, column],
-            )
-            if cursor.fetchone()[0] == 0:
-                cursor.execute(
-                    'ALTER TABLE `%s` ADD COLUMN %s' % (table, ddl)
-                )
+    for table, column, ddl in NEW_COLUMNS:
+        add_column_if_missing(schema_editor.connection, table, column, ddl)
 
 
 def noop(apps, schema_editor):
