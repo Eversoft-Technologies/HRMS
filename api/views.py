@@ -32,7 +32,8 @@ from django.db.models.functions import Coalesce, Substr
 from django.http import HttpResponse, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 
-from rest_framework.decorators import api_view
+from rest_framework.decorators import api_view, parser_classes
+from rest_framework.parsers import MultiPartParser
 from rest_framework.response import Response
 
 from . import ai, mailer, social_poster
@@ -4821,6 +4822,63 @@ def bench_sales_profile_detail(request, pk):
             ) for c in new_certs
         ], batch_size=1)
     inst = _bench_sales_profile_qs().get(pk=inst.pk)
+    return Response(BenchSalesProfileSerializer(inst).data)
+
+
+# Upload slug -> (name, mime, data) columns for the single-document fields.
+_BENCH_SALES_UPLOAD_COLS = {
+    'resume': ('resume_file_name', 'resume_file_mime', 'resume_file_data'),
+    'dl-state-id': ('dl_state_id_file_name', 'dl_state_id_file_mime', 'dl_state_id_file_data'),
+    'i94': ('i94_file_name', 'i94_file_mime', 'i94_file_data'),
+}
+
+
+@api_view(['POST'])
+@parser_classes([MultiPartParser])
+@require_perm('recruitment.edit')
+def bench_sales_profile_upload(request, pk):
+    """Upload ONE document (resume / DL / I-94 / a certificate) to a profile as
+    multipart/form-data: ``field`` = resume | dl-state-id | i94 | certificate,
+    ``file`` = the PDF.
+
+    The New/Edit Profile form sends each file through here in its own request
+    instead of base64-inlining all of them in one JSON body: on the cPanel host
+    the web server rejects large JSON bodies with HTTP 413 before Django ever
+    sees them, and base64 inflates every file by a third on top. Storage is
+    unchanged — the file is still kept base64-in-row."""
+    import base64
+
+    obj = BenchSalesProfile.objects.only('id').filter(pk=pk).first()
+    if not obj:
+        return err('Profile not found', 404)
+    field = str(request.data.get('field') or '')
+    upload = request.FILES.get('file')
+    if not upload:
+        return err('file is required')
+    if not _is_pdf(upload.content_type, upload.name):
+        return err(f'{upload.name} is not a PDF — only PDF uploads are allowed.')
+    if upload.size > MAX_BENCH_SALES_FILE_BYTES:
+        return err(f'{upload.name} is larger than {MAX_BENCH_SALES_FILE_MB} MB — '
+                   f'each file must be {MAX_BENCH_SALES_FILE_MB} MB or smaller.')
+    mime = upload.content_type or 'application/pdf'
+    data = base64.b64encode(upload.read()).decode('ascii')
+
+    if field == 'certificate':
+        if obj.certificate_files.count() >= MAX_CERTIFICATES_PER_PROFILE:
+            return err(f'You can upload up to {MAX_CERTIFICATES_PER_PROFILE} certificates per profile.')
+        BenchSalesCertificate.objects.create(
+            profile=obj, file_name=upload.name, file_mime=mime, file_data=data,
+        )
+    elif field in _BENCH_SALES_UPLOAD_COLS:
+        name_col, mime_col, data_col = _BENCH_SALES_UPLOAD_COLS[field]
+        # Name/mime first, then the blob in its own UPDATE (see
+        # _store_bench_sales_file_data for why blobs are written one at a time).
+        BenchSalesProfile.objects.filter(pk=pk).update(**{name_col: upload.name, mime_col: mime})
+        _store_bench_sales_file_data(pk, {data_col: data})
+    else:
+        return err('field must be one of: resume, dl-state-id, i94, certificate')
+
+    inst = _bench_sales_profile_qs().get(pk=pk)
     return Response(BenchSalesProfileSerializer(inst).data)
 
 

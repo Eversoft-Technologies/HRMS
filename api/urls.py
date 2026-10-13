@@ -168,6 +168,7 @@ urlpatterns = [
     path('recruit/bench-sales', views.bench_sales_profiles),
     path('recruit/bench-sales/<int:pk>', views.bench_sales_profile_detail),
     path('recruit/bench-sales/<int:pk>/file/<str:field>', views.bench_sales_profile_file),
+    path('recruit/bench-sales/<int:pk>/upload', views.bench_sales_profile_upload),
     path('recruit/bench-sales/<int:pk>/certificates/<int:cert_id>', views.bench_sales_profile_certificate_detail),
     path('recruit/bench-sales/<int:pk>/certificates/<int:cert_id>/file', views.bench_sales_profile_certificate_file),
 
