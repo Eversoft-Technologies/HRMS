@@ -2,16 +2,16 @@
  * hrms-candidate-compare.js
  * ---------------------------------------------------------------------------
  * Replaces the "Candidate Comparison" card on the Resume Scoring page
- * (/recruit/resume-scoring) with a job-board-style data grid — WITHOUT a bundle
+ * (/recruit/resume-scoring) with a job-board-style data grid â€” WITHOUT a bundle
  * rebuild. Same house pattern as hrms-jobs-table.js.
  *
- *   • Own grid from /api/resume-scores (the React card is hidden while mounted).
- *   • Free-text search (name / role).
- *   • Per-column Excel-style filter popups (sort + value search + checklist).
- *   • "Edit Filters" drawer: predefined quick filters + custom "contains" rules.
- *   • Pagination (page size + first/prev/pages/next/last).
- *   • Row click → candidate detail modal (score rings, skills, gaps).
- *   • Export CSV.
+ *   â€¢ Own grid from /api/resume-scores (the React card is hidden while mounted).
+ *   â€¢ Free-text search (name / role).
+ *   â€¢ Per-column Excel-style filter popups (sort + value search + checklist).
+ *   â€¢ "Edit Filters" drawer: predefined quick filters + custom "contains" rules.
+ *   â€¢ Pagination (page size + first/prev/pages/next/last).
+ *   â€¢ Row click â†’ candidate detail modal (score rings, skills, gaps).
+ *   â€¢ Export CSV.
  *
  * Only the Candidate Comparison card is taken over; the JD input, resume
  * upload, and "Match Score" detail card on the same page are left untouched.
@@ -27,7 +27,7 @@
     drawer: 'hrms-cc-drawer', modal: 'hrms-cc-modal', menu: 'hrms-cc-exportmenu',
   };
 
-  // Grid columns. num → sorts/filters numerically and renders a score bar.
+  // Grid columns. num â†’ sorts/filters numerically and renders a score bar.
   var COLS = [
     { key: 'name', label: 'Candidate' },
     { key: 'role', label: 'Role' },
@@ -40,8 +40,8 @@
   ];
   var PAGE_SIZES = [10, 25, 50, 100];
   var PREDEF = [
-    ['all', 'All Candidates'], ['s90', 'Score ≥ 90'], ['s80', 'Score ≥ 80'],
-    ['s70', 'Score ≥ 70'], ['done', 'Format: Done'], ['pending', 'Format: Pending'],
+    ['all', 'All Candidates'], ['s90', 'Score â‰¥ 90'], ['s80', 'Score â‰¥ 80'],
+    ['s70', 'Score â‰¥ 70'], ['done', 'Format: Done'], ['pending', 'Format: Pending'],
     ['new', 'Newly Uploaded'],
   ];
 
@@ -54,7 +54,7 @@
     reactCount: -1,                     // last seen row count in the hidden React table
   };
 
-  /* ── helpers ──────────────────────────────────────────────────────────── */
+  /* â”€â”€ helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
   function onPage() { return location.pathname.replace(/\/+$/, '') === PATH; }
   function num(v) { var n = Number(v); return isFinite(n) ? n : 0; }
@@ -134,8 +134,9 @@
     return n;
   }
 
-  /* ── styles ───────────────────────────────────────────────────────────── */
-  function ensureStyle() {
+  /* â”€â”€ styles â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+
+function ensureStyle() {
     if (document.getElementById(ID.style)) return;
     var R = '#' + ID.root;
     var css =
@@ -152,7 +153,7 @@
       R + ' tbody tr:hover{background:var(--bg3);}' +
       R + ' .cc-av{display:flex;align-items:center;gap:7px;min-width:0;}' +
 
-      // Global (not root-scoped) so the detail/resume modal avatar styles too.
+      // Global avatar styles.
       '.cc-avc{width:28px;height:28px;border-radius:50%;background:var(--accent,#4f8ef7);color:#fff;font-size:11px;font-weight:700;display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;}' +
       R + ' .cc-nm{max-width:230px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}' +
       R + ' .cc-ic{background:transparent;border:0;cursor:pointer;font-size:13px;opacity:.5;padding:0 2px;line-height:1;color:var(--text2);flex:0 0 20px;width:20px;height:24px;display:inline-flex;align-items:center;justify-content:center;}' +
@@ -160,7 +161,6 @@
 
       R + ' .cc-badge{display:inline-block;font-size:11px;font-weight:600;padding:2px 8px;border-radius:99px;background:var(--bg3);border:1px solid var(--border2);color:var(--text2);}' +
       R + ' .cc-bar-t{height:7px;border-radius:99px;background:var(--border2);overflow:hidden;min-width:52px;display:inline-block;width:70px;vertical-align:middle;}' +
-      // display:block — an inline <span> ignores height/width, so the fill was invisible.
       R + ' .cc-bar-f{display:block;height:100%;border-radius:99px;}' +
       R + ' .cc-barn{font-size:11px;color:var(--text2);margin-left:6px;}' +
       R + ' .cc-view{padding:3px 10px;border:1px solid var(--border2);background:var(--bg3);border-radius:7px;color:var(--text2);font-size:11px;font-weight:600;cursor:pointer;}' +
@@ -174,11 +174,13 @@
       R + ' .cc-pg button:disabled{opacity:.4;cursor:not-allowed;}' +
       R + ' .cc-pg button.cur{background:var(--accent,#4f8ef7);color:#fff;border-color:var(--accent,#4f8ef7);}' +
       R + ' .cc-pg select{background:var(--bg3);border:1px solid var(--border2);border-radius:8px;color:var(--text);font:inherit;font-size:12px;padding:5px 6px;}' +
-      // global (body-appended) controls
+
+      // Global controls.
       '.cc-btn{padding:8px 12px;border:1px solid var(--border2);background:var(--bg3);border-radius:8px;color:var(--text);font:inherit;font-size:12px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:6px;}' +
       '.cc-btn.primary{background:var(--accent,#4f8ef7);border-color:var(--accent,#4f8ef7);color:#fff;}' +
       '.cc-btn.ghost{background:transparent;}' +
       '.cc-pill{font-size:10px;font-weight:700;background:var(--accent,#4f8ef7);color:#fff;border-radius:99px;padding:1px 6px;}' +
+
       '#' + ID.pop + '{position:absolute;z-index:10000;background:var(--bg2,#161b26);border:1px solid var(--border2);border-radius:10px;box-shadow:0 12px 34px rgba(0,0,0,.4);padding:10px;width:250px;font-size:12px;color:var(--text);}' +
       '#' + ID.pop + ' .cc-psort{display:flex;gap:6px;margin-bottom:8px;}' +
       '#' + ID.pop + ' .cc-psort button{flex:1;padding:6px;border:1px solid var(--border2);background:var(--bg3);border-radius:7px;color:var(--text2);font-size:11px;cursor:pointer;}' +
@@ -188,6 +190,7 @@
       '#' + ID.pop + ' .cc-pf{display:flex;gap:6px;}' +
       '#' + ID.pop + ' .cc-pf button{flex:1;padding:6px;border-radius:7px;border:1px solid var(--border2);background:var(--bg3);color:var(--text);font-size:11px;font-weight:600;cursor:pointer;}' +
       '#' + ID.pop + ' .cc-pf button.primary{background:var(--accent,#4f8ef7);border-color:var(--accent,#4f8ef7);color:#fff;}' +
+
       '.cc-ov{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9998;display:flex;}' +
       '.cc-dr{margin-left:auto;width:360px;max-width:92vw;height:100%;background:var(--bg2,#161b26);border-left:1px solid var(--border2);display:flex;flex-direction:column;}' +
       '.cc-dr-h{display:flex;align-items:center;padding:14px 16px;border-bottom:1px solid var(--border2);font-weight:700;color:var(--text);}' +
@@ -200,6 +203,7 @@
       '.cc-cf select{flex:0 0 120px;}.cc-cf input{flex:1;min-width:0;}' +
       '.cc-cfx{flex:0 0 auto;width:30px;border:1px solid var(--border2);border-radius:7px;background:var(--bg3);color:var(--text2);cursor:pointer;}' +
       '.cc-addf{margin-top:4px;padding:6px 10px;border:1px dashed var(--border2);border-radius:7px;background:transparent;color:var(--text2);font-size:12px;cursor:pointer;}' +
+
       '.cc-modal{margin:auto;width:560px;max-width:94vw;max-height:90vh;overflow:auto;background:var(--bg2,#161b26);border:1px solid var(--border2);border-radius:14px;}' +
       '.cc-modal-h{display:flex;align-items:center;gap:12px;padding:16px 18px;border-bottom:1px solid var(--border2);}' +
       '.cc-modal-b{padding:18px;}' +
@@ -229,23 +233,45 @@
       '#hrms-ai-card-overlay::-webkit-scrollbar-track{background:transparent;}' +
       '#hrms-ai-card-overlay::-webkit-scrollbar-thumb{background:var(--border2);border-radius:99px;}' +
       '#hrms-ai-card-overlay::-webkit-scrollbar-thumb:hover{background:var(--accent,#4f8ef7);}' +
+
       '#' + ID.menu + '{position:absolute;z-index:10000;background:var(--bg2,#161b26);border:1px solid var(--border2);border-radius:8px;box-shadow:0 10px 26px rgba(0,0,0,.4);overflow:hidden;}' +
       '#' + ID.menu + ' button{display:block;width:100%;text-align:left;padding:9px 14px;background:transparent;border:0;color:var(--text);font-size:12px;cursor:pointer;white-space:nowrap;}' +
-      '#' + ID.menu + ' button:hover{background:var(--bg3);}';
-      '#' + ID.menu + ' button:hover{background:var(--bg3);}';
-    var st = document.createElement('style'); st.id = ID.style; st.textContent = css;
-    document.head.appendChild(st);
-  }
+      '#' + ID.menu + ' button:hover{background:var(--bg3);}' +
 
-  /* ── render ───────────────────────────────────────────────────────────── */
+      /* Responsive layout for Resume Scoring on mobile */
+      R + ' #cc-tablewrap{width:100%;max-width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch;}' +
+      '@media(max-width:600px){' +
+      R + ' .cc-bar{display:flex;flex-wrap:wrap;gap:8px;}' +
+      R + ' .cc-title{flex:1 1 100%;}' +
+      R + ' .cc-search{flex:1 1 100%;width:100%;min-width:0;box-sizing:border-box;}' +
+      R + ' table{min-width:760px;}' +
+      R + ' .cc-pg{display:flex;flex-wrap:wrap;gap:6px;}' +
+      '.cc-dr{width:100%;max-width:100%;box-sizing:border-box;}' +
+      '.cc-modal{width:100%;max-width:100%;max-height:94vh;box-sizing:border-box;}' +
+      '.cc-modal-h,.cc-modal-b{padding:12px;}' +
+      '#hrms-ai-card-overlay{max-height:none;}' +
+      '}' +
+      '@media(max-width:390px){' +
+      R + ' .cc-search{font-size:16px;}' +
+      R + ' .cc-btn{padding:7px 9px;font-size:11px;}' +
+      R + ' .cc-pg button{min-width:27px;height:28px;padding:0 5px;}' +
+      '}';
+
+    var st = document.createElement('style');
+    st.id = ID.style;
+    st.textContent = css;
+    document.head.appendChild(st);
+}
+
+  /* â”€â”€ render â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
   function buildRoot() {
     var root = document.createElement('div'); root.id = ID.root;
     root.innerHTML =
       '<div class="cc-bar">' +
         '<span class="cc-title">' + CARD_TITLE + '<span class="cc-count" id="cc-count"></span></span>' +
-        '<input class="cc-search" id="cc-search" placeholder="Search name or role…">' +
-        '<button class="cc-btn" id="cc-filters">☰ Edit Filters</button>' +
-        '<button class="cc-btn ghost" id="cc-export">↓ Export</button>' +
+        '<input class="cc-search" id="cc-search" placeholder="Search name or roleâ€¦">' +
+        '<button class="cc-btn" id="cc-filters">â˜° Edit Filters</button>' +
+        '<button class="cc-btn ghost" id="cc-export">â†“ Export</button>' +
       '</div>' +
       '<div id="cc-tablewrap" style="overflow-x:auto"></div>' +
       '<div class="cc-pg" id="cc-pg"></div>';
@@ -259,7 +285,7 @@
     var root = document.getElementById(ID.root); if (!root) return;
     var wrap = root.querySelector('#cc-tablewrap'); if (!wrap) return;
 
-    if (!state.loaded) { wrap.innerHTML = '<div class="cc-empty">Loading candidates…</div>'; renderPg(0); setCount(); return; }
+    if (!state.loaded) { wrap.innerHTML = '<div class="cc-empty">Loading candidatesâ€¦</div>'; renderPg(0); setCount(); return; }
     var all = filtered(), total = all.length;
     if (!total) {
       wrap.innerHTML = '<div class="cc-empty">' + (state.rows.length ? 'No candidates match the current filters.' : 'No candidates scored yet.') + '</div>';
@@ -272,14 +298,14 @@
     var head = COLS.map(function (c) {
       var on = (state.sortKey === c.key) || state.colFilters[c.key];
       return '<th><span class="cc-th">' + esc(c.label) +
-        '<span class="cc-funnel' + (on ? ' on' : '') + '" data-f="' + c.key + '" title="Sort &amp; filter">▾</span></span></th>';
+        '<span class="cc-funnel' + (on ? ' on' : '') + '" data-f="' + c.key + '" title="Sort &amp; filter">â–¾</span></span></th>';
     }).join('') + '<th></th>';
 
     var body = rows.map(function (r) {
       return '<tr data-id="' + esc(r.id) + '">' +
         COLS.map(function (c) { return '<td>' + cell(r, c) + '</td>'; }).join('') +
         '<td style="text-align:right;white-space:nowrap">' +
-          '<button class="cc-btn primary" data-ai="' + esc(r.id) + '" style="padding:2px 8px;font-size:11px;margin-right:6px">✦ AI</button>' +
+          '<button class="cc-btn primary" data-ai="' + esc(r.id) + '" style="padding:2px 8px;font-size:11px;margin-right:6px">âœ¦ AI</button>' +
           '<button class="cc-view" data-view="' + esc(r.id) + '">View</button>' +
         '</td>' +
       '</tr>';
@@ -313,9 +339,9 @@
     var v = cellVal(r, c.key);
     if (c.key === 'name') {
       return '<span class="cc-av"><span class="cc-avc">' + esc(initials(r)) + '</span>' +
-        '<span class="cc-nm">' + esc(r.name || '—') + '</span>' +
-        '<button class="cc-ic" data-eye="' + esc(r.id) + '" title="View resume">👁</button>' +
-        '<button class="cc-ic" data-dl2="' + esc(r.id) + '" title="Download resume">⭳</button>' +
+        '<span class="cc-nm">' + esc(r.name || 'â€”') + '</span>' +
+        '<button class="cc-ic" data-eye="' + esc(r.id) + '" title="View resume">ðŸ‘</button>' +
+        '<button class="cc-ic" data-dl2="' + esc(r.id) + '" title="Download resume">â­³</button>' +
       '</span>';
     }
     if (c.score) { return '<b style="color:' + scoreColor(v) + '">' + num(v) + '</b>'; }
@@ -324,15 +350,15 @@
       return '<span class="cc-bar-t"><span class="cc-bar-f" style="width:' + Math.max(0, Math.min(100, n)) + '%;background:' + scoreColor(n) + '"></span></span><span class="cc-barn">' + n + '</span>';
     }
     if (c.key === 'source') { return '<span class="cc-badge">' + esc(v || 'Upload') + '</span>'; }
-    if (c.key === 'formatted') { return r.formatted ? '<span style="color:#22c55e">✓ Done</span>' : '<span style="color:var(--text3)">Pending</span>'; }
-    return esc(v || '—');
+    if (c.key === 'formatted') { return r.formatted ? '<span style="color:#22c55e">âœ“ Done</span>' : '<span style="color:var(--text3)">Pending</span>'; }
+    return esc(v || 'â€”');
   }
 
   function setCount(total) {
     var el = document.getElementById('cc-count'); if (!el) return;
     if (!state.loaded) { el.textContent = ''; return; }
     var t = total == null ? filtered().length : total;
-    el.textContent = '· ' + t + ' / ' + state.rows.length + ' shown';
+    el.textContent = 'Â· ' + t + ' / ' + state.rows.length + ' shown';
   }
 
   function renderPg(total, start, shown, pages) {
@@ -342,13 +368,13 @@
     var lo = Math.max(1, p - 2), hi = Math.min(pages, lo + 4); lo = Math.max(1, hi - 4);
     var nums = []; for (var i = lo; i <= hi; i++) nums.push(i);
     pg.innerHTML =
-      '<span>' + from + '–' + to + ' of ' + total + '</span>' +
+      '<span>' + from + 'â€“' + to + ' of ' + total + '</span>' +
       '<span class="cc-pgspacer"></span>' +
-      '<button data-pg="first"' + (p <= 1 ? ' disabled' : '') + '>«</button>' +
-      '<button data-pg="prev"' + (p <= 1 ? ' disabled' : '') + '>‹</button>' +
+      '<button data-pg="first"' + (p <= 1 ? ' disabled' : '') + '>Â«</button>' +
+      '<button data-pg="prev"' + (p <= 1 ? ' disabled' : '') + '>â€¹</button>' +
       nums.map(function (n) { return '<button data-pg="' + n + '"' + (n === p ? ' class="cur"' : '') + '>' + n + '</button>'; }).join('') +
-      '<button data-pg="next"' + (p >= pages ? ' disabled' : '') + '>›</button>' +
-      '<button data-pg="last"' + (p >= pages ? ' disabled' : '') + '>»</button>' +
+      '<button data-pg="next"' + (p >= pages ? ' disabled' : '') + '>â€º</button>' +
+      '<button data-pg="last"' + (p >= pages ? ' disabled' : '') + '>Â»</button>' +
       '<select id="cc-psize">' + PAGE_SIZES.map(function (s) { return '<option' + (s === state.pageSize ? ' selected' : '') + '>' + s + '</option>'; }).join('') + '</select>' +
       '<span>per page</span>';
     pg.querySelectorAll('[data-pg]').forEach(function (b) {
@@ -365,15 +391,15 @@
 
   function byId(id) { for (var i = 0; i < state.rows.length; i++) if (String(state.rows[i].id) === String(id)) return state.rows[i]; return null; }
 
-  /* ── per-column filter popup ──────────────────────────────────────────── */
+  /* â”€â”€ per-column filter popup â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
   function openColPopup(key, anchor) {
     closePopups();
     var values = distinct(key);
     var sel = state.colFilters[key] ? state.colFilters[key].slice() : values.slice();
     var pop = document.createElement('div'); pop.id = ID.pop;
     pop.innerHTML =
-      '<div class="cc-psort"><button data-s="1">↑ Sort A→Z</button><button data-s="-1">↓ Sort Z→A</button></div>' +
-      '<input class="cc-psearch" placeholder="Search values…">' +
+      '<div class="cc-psort"><button data-s="1">â†‘ Sort Aâ†’Z</button><button data-s="-1">â†“ Sort Zâ†’A</button></div>' +
+      '<input class="cc-psearch" placeholder="Search valuesâ€¦">' +
       '<div class="cc-pvals"><label class="cc-pv"><input type="checkbox" id="cc-pall"> <b>(Select all)</b></label><div id="cc-pvlist"></div></div>' +
       '<div class="cc-pf"><button class="primary" data-a="apply">Apply</button><button data-a="clear">Clear</button></div>';
     document.body.appendChild(pop);
@@ -415,14 +441,14 @@
   }
   function closePopups() { var p = document.getElementById(ID.pop); if (p) p.remove(); }
 
-  /* ── Edit Filters drawer ──────────────────────────────────────────────── */
+  /* â”€â”€ Edit Filters drawer â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
   function openFiltersDrawer() {
     closeDrawer();
     var predef = state.predef, custom = state.customFilters.map(function (c) { return { key: c.key, val: c.val }; });
     var ov = document.createElement('div'); ov.className = 'cc-ov'; ov.id = ID.drawer;
     ov.innerHTML =
       '<div class="cc-dr">' +
-        '<div class="cc-dr-h">Edit Filters<button class="cc-x" id="cc-dr-x" style="margin-left:auto">×</button></div>' +
+        '<div class="cc-dr-h">Edit Filters<button class="cc-x" id="cc-dr-x" style="margin-left:auto">Ã—</button></div>' +
         '<div class="cc-dr-b">' +
           '<div class="cc-fsec" style="margin-top:0">Pre-Defined Filters</div>' +
           '<div class="cc-pd" id="cc-pd">' + PREDEF.map(function (p) {
@@ -441,8 +467,8 @@
       host.innerHTML = custom.map(function (cf, i) {
         return '<div class="cc-cf">' +
           '<select data-i="' + i + '" data-k="key">' + COLS.map(function (c) { return '<option value="' + c.key + '"' + (c.key === cf.key ? ' selected' : '') + '>' + esc(c.label) + '</option>'; }).join('') + '</select>' +
-          '<input data-i="' + i + '" data-k="val" placeholder="contains…" value="' + esc(cf.val || '') + '">' +
-          '<button class="cc-cfx" data-x="' + i + '">×</button>' +
+          '<input data-i="' + i + '" data-k="val" placeholder="containsâ€¦" value="' + esc(cf.val || '') + '">' +
+          '<button class="cc-cfx" data-x="' + i + '">Ã—</button>' +
         '</div>';
       }).join('');
       host.querySelectorAll('select,input').forEach(function (el) {
@@ -470,7 +496,7 @@
   }
   function closeDrawer() { var d = document.getElementById(ID.drawer); if (d) d.remove(); }
 
-  /* ── view / download the stored resume text ───────────────────────────── */
+  /* â”€â”€ view / download the stored resume text â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
   // Only the extracted resume TEXT is stored server-side (the original PDF is
   // parsed client-side and never uploaded), so "view/download resume" operates
   // on resumeText, which the list endpoint already returns.
@@ -514,16 +540,16 @@
       '<div class="cc-modal">' +
         '<div class="cc-modal-h">' +
           '<span class="cc-avc" style="width:34px;height:34px;font-size:13px">' + esc(initials(r)) + '</span>' +
-          '<div style="flex:1;min-width:0"><div style="font-weight:700;color:var(--text)">' + esc(r.name || '—') + '</div>' +
+          '<div style="flex:1;min-width:0"><div style="font-weight:700;color:var(--text)">' + esc(r.name || 'â€”') + '</div>' +
             '<div style="font-size:11px;color:var(--text3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(r.fileName || 'Resume text') + '</div></div>' +
-          ((hasFile || txt) ? '<button class="cc-btn" id="cc-m-dl">⭳ Download</button>' : '') +
-          '<button class="cc-x" id="cc-m-x">×</button>' +
+          ((hasFile || txt) ? '<button class="cc-btn" id="cc-m-dl">â­³ Download</button>' : '') +
+          '<button class="cc-x" id="cc-m-x">Ã—</button>' +
         '</div>' +
         '<div class="cc-modal-b">' +
           (txt
             ? '<pre style="white-space:pre-wrap;word-break:break-word;font-size:12px;line-height:1.55;color:var(--text);margin:0;font-family:var(--font)">' + esc(txt) + '</pre>'
             : '<div style="padding:26px;text-align:center;color:var(--text3)">' +
-              (hasFile ? 'This file type can’t be previewed in the browser. Use Download to open it.' : 'No resume is stored for this candidate.') + '</div>') +
+              (hasFile ? 'This file type canâ€™t be previewed in the browser. Use Download to open it.' : 'No resume is stored for this candidate.') + '</div>') +
         '</div>' +
       '</div>';
     document.body.appendChild(ov);
@@ -567,7 +593,7 @@
       var extractedName = (r && r.name) || '';
       if (!extractedName) {
         var firstLine = (taResume.split('\n')[0] || '').trim();
-        extractedName = firstLine.split(/[-–—|,]/)[0].trim();
+        extractedName = firstLine.split(/[-â€“â€”|,]/)[0].trim();
       }
       return Promise.resolve({
         resumeText: taResume,
@@ -648,8 +674,8 @@
     overlay.style.width = '100%';
     overlay.innerHTML =
       '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:360px;width:100%;text-align:center;margin:auto" class="cc-ai-pulse">' +
-        '<div style="font-size:42px;margin-bottom:14px;color:#8b5cf6">✦</div>' +
-        '<div style="font-weight:700;font-size:16px;color:var(--text)">Running Rapid AI Semantic Analysis…</div>' +
+        '<div style="font-size:42px;margin-bottom:14px;color:#8b5cf6">âœ¦</div>' +
+        '<div style="font-weight:700;font-size:16px;color:var(--text)">Running Rapid AI Semantic Analysisâ€¦</div>' +
         '<div style="font-size:12px;color:var(--text3);margin-top:6px">Evaluating production depth &amp; domain fit via Claude</div>' +
       '</div>';
 
@@ -747,7 +773,7 @@
           '<div style="display:flex;align-items:center;gap:10px">' +
             '<span class="cc-avc" style="width:34px;height:34px;font-size:12px;background:linear-gradient(135deg,var(--accent2,#8b5cf6),var(--accent,#4f8ef7))">' + esc(initials({ name: name })) + '</span>' +
             '<div>' +
-              '<div style="font-weight:700;font-size:13px;color:var(--text)">' + esc(name) + ' <span class="cc-badge" style="margin-left:6px;font-size:10px;color:#8b5cf6;border-color:rgba(139,92,246,0.3);background:rgba(139,92,246,0.08)">✦ Claude AI</span></div>' +
+              '<div style="font-weight:700;font-size:13px;color:var(--text)">' + esc(name) + ' <span class="cc-badge" style="margin-left:6px;font-size:10px;color:#8b5cf6;border-color:rgba(139,92,246,0.3);background:rgba(139,92,246,0.08)">âœ¦ Claude AI</span></div>' +
               '<div style="font-size:11px;color:var(--text3);margin-top:2px">' + esc(role) + '</div>' +
             '</div>' +
           '</div>' +
@@ -772,15 +798,15 @@
         '</div>' +
       '</div>' +
 
-      (skills.length ? '<div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px">MATCHED SKILLS (' + skills.length + ')</div><div class="cc-chips" style="margin-bottom:12px">' + skills.map(function (s) { return '<span class="cc-chip str">✓ ' + esc(s) + '</span>'; }).join('') + '</div>' : '') +
+      (skills.length ? '<div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px">MATCHED SKILLS (' + skills.length + ')</div><div class="cc-chips" style="margin-bottom:12px">' + skills.map(function (s) { return '<span class="cc-chip str">âœ“ ' + esc(s) + '</span>'; }).join('') + '</div>' : '') +
 
-      (missing.length ? '<div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px">MISSING SKILLS (' + missing.length + ')</div><div class="cc-chips" style="margin-bottom:12px">' + missing.map(function (s) { return '<span class="cc-chip miss">✕ ' + esc(s) + '</span>'; }).join('') + '</div>' : '') +
+      (missing.length ? '<div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px">MISSING SKILLS (' + missing.length + ')</div><div class="cc-chips" style="margin-bottom:12px">' + missing.map(function (s) { return '<span class="cc-chip miss">âœ• ' + esc(s) + '</span>'; }).join('') + '</div>' : '') +
 
-      (res.executiveSummary ? '<div class="cc-brief-card"><b style="color:var(--accent,#4f8ef7)">✦ Hiring Brief:</b> ' + highlightBold(res.executiveSummary) + '</div>' : '') +
+      (res.executiveSummary ? '<div class="cc-brief-card"><b style="color:var(--accent,#4f8ef7)">âœ¦ Hiring Brief:</b> ' + highlightBold(res.executiveSummary) + '</div>' : '') +
 
-      (str.length ? '<div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px">KEY STRENGTHS</div><div class="cc-chips" style="margin-bottom:12px">' + str.map(function (s) { return '<span class="cc-chip str">✓ ' + highlightBold(s) + '</span>'; }).join('') + '</div>' : '') +
+      (str.length ? '<div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px">KEY STRENGTHS</div><div class="cc-chips" style="margin-bottom:12px">' + str.map(function (s) { return '<span class="cc-chip str">âœ“ ' + highlightBold(s) + '</span>'; }).join('') + '</div>' : '') +
 
-      (red.length ? '<div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px">GAPS &amp; RISKS</div><div class="cc-chips" style="margin-bottom:12px">' + red.map(function (s) { return '<span class="cc-chip miss">⚠ ' + highlightBold(s) + '</span>'; }).join('') + '</div>' : '');
+      (red.length ? '<div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px">GAPS &amp; RISKS</div><div class="cc-chips" style="margin-bottom:12px">' + red.map(function (s) { return '<span class="cc-chip miss">âš  ' + highlightBold(s) + '</span>'; }).join('') + '</div>' : '');
   }
 
   function downloadResume(r) {
@@ -800,11 +826,11 @@
   }
   function closeModal() { var m = document.getElementById(ID.modal); if (m) m.remove(); }
 
-  /* ── select a candidate into the page's React panels ──────────────────────
+  /* â”€â”€ select a candidate into the page's React panels â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
      The Match Score card and Resume Input are React-owned. Rather than reaching
      into React state, we reproduce the user's own actions: dispatch a click on
-     the matching (hidden) React comparison row — which the app handles to set
-     the selected candidate — and drive the resume textarea through its native
+     the matching (hidden) React comparison row â€” which the app handles to set
+     the selected candidate â€” and drive the resume textarea through its native
      value setter so React's onChange fires. Then scroll the panels into view. */
   function proxyClickReact(r) {
     var card = document.querySelector('[data-cc-hidden]') || reactCard();
@@ -855,18 +881,50 @@
     }
   }
 
-  /* ── export ───────────────────────────────────────────────────────────── */
-  function toggleExportMenu(btn) {
-    var ex = document.getElementById(ID.menu); if (ex) { ex.remove(); return; }
-    var menu = document.createElement('div'); menu.id = ID.menu;
-    menu.innerHTML = '<button data-x="csv">⭳ Download CSV (.csv)</button>';
+  /* â”€â”€ export â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+ function toggleExportMenu(btn) {
+    var ex = document.getElementById(ID.menu);
+    if (ex) {
+        ex.remove();
+        return;
+    }
+
+    var menu = document.createElement('div');
+    menu.id = ID.menu;
+
+    menu.innerHTML =
+        '<button data-x="csv">⬇ Download CSV (.csv)</button>';
+
     document.body.appendChild(menu);
+
     var rect = btn.getBoundingClientRect();
-    menu.style.top = (rect.bottom + window.scrollY + 6) + 'px';
-    menu.style.left = (rect.left + window.scrollX) + 'px';
-    menu.querySelector('[data-x="csv"]').addEventListener('click', function () { exportCsv(); menu.remove(); });
-    setTimeout(function () { document.addEventListener('click', function h() { var m = document.getElementById(ID.menu); if (m) m.remove(); document.removeEventListener('click', h); }); }, 0);
-  }
+
+    menu.style.position = 'absolute';
+    menu.style.top =
+        (rect.bottom + window.scrollY + 6) + 'px';
+
+    // Move the dropdown 100px to the left
+    menu.style.left =
+        (rect.left + window.scrollX - 100) + 'px';
+
+    menu.querySelector('[data-x="csv"]')
+        .addEventListener('click', function () {
+            exportCsv();
+            menu.remove();
+        });
+
+    setTimeout(function () {
+        document.addEventListener('click', function h(e) {
+            var m = document.getElementById(ID.menu);
+
+            if (m && !m.contains(e.target) && !btn.contains(e.target)) {
+                m.remove();
+            }
+
+            document.removeEventListener('click', h);
+        });
+    }, 0);
+}
   function exportCsv() {
     var head = COLS.map(function (c) { return c.label; }).concat(['Skills', 'Missing']);
     var q = function (v) { v = String(v == null ? '' : v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
@@ -874,13 +932,13 @@
       return COLS.map(function (c) { return String(cellVal(r, c.key)); })
         .concat([(r.skills || []).join('; '), (r.missing || []).join('; ')]).map(q).join(',');
     });
-    var csv = '﻿' + [head.map(q).join(',')].concat(body).join('\r\n');
+    var csv = 'ï»¿' + [head.map(q).join(',')].concat(body).join('\r\n');
     var b = new Blob([csv], { type: 'text/csv;charset=utf-8;' }), u = URL.createObjectURL(b), a = document.createElement('a');
     a.href = u; a.download = 'candidate-comparison.csv'; document.body.appendChild(a); a.click();
     setTimeout(function () { a.remove(); URL.revokeObjectURL(u); }, 100);
   }
 
-  /* ── mount ────────────────────────────────────────────────────────────── */
+  /* â”€â”€ mount â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
   function reactCard() {
     var titles = document.querySelectorAll('.card-title');
     for (var i = 0; i < titles.length; i++) {
@@ -921,7 +979,7 @@
     var scoreBtn = null;
     for (var i = 0; i < buttons.length; i++) {
       var t = (buttons[i].textContent || '').trim();
-      if (t.indexOf('Score Resume') !== -1 || t.indexOf('Scoring…') !== -1) {
+      if (t.indexOf('Score Resume') !== -1 || t.indexOf('Scoringâ€¦') !== -1) {
         scoreBtn = buttons[i];
         break;
       }
@@ -937,10 +995,10 @@
     optWrap.className = 'cc-toggle-wrap';
     optWrap.innerHTML =
       '<button id="hrms-toggle-std" class="cc-toggle-tab std ' + (curMode === 'std' ? 'active' : '') + '" title="Standard keyword and rule-based matching">' +
-        '✦ Score Resume' +
+        'âœ¦ Score Resume' +
       '</button>' +
       '<button id="hrms-toggle-ai" class="cc-toggle-tab ai ' + (curMode === 'ai' ? 'active' : '') + '" title="Deep semantic evaluation with Claude AI">' +
-        '✦ AI Deep Score' +
+        'âœ¦ AI Deep Score' +
       '</button>';
 
     var stdBtn = optWrap.querySelector('#hrms-toggle-std');
@@ -1029,8 +1087,8 @@
         overlay.style.width = '100%';
         overlay.innerHTML =
           '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;min-height:360px;width:100%;text-align:center;margin:auto" class="cc-ai-pulse">' +
-            '<div style="font-size:42px;margin-bottom:14px;color:#8b5cf6">✦</div>' +
-            '<div style="font-weight:700;font-size:16px;color:var(--text)">Analyzing Uploaded Resume…</div>' +
+            '<div style="font-size:42px;margin-bottom:14px;color:#8b5cf6">âœ¦</div>' +
+            '<div style="font-weight:700;font-size:16px;color:var(--text)">Analyzing Uploaded Resumeâ€¦</div>' +
             '<div style="font-size:12px;color:var(--text3);margin-top:6px">Evaluating candidate profile with Claude AI</div>' +
           '</div>';
 
@@ -1150,7 +1208,7 @@
   function ensureLayout() {
     if (!onPage()) { if (document.getElementById(ID.root)) unmount(); return; }
     ensureAIButtons();
-    var card = reactCard(); if (!card) return;             // no candidates yet → leave page as-is
+    var card = reactCard(); if (!card) return;             // no candidates yet â†’ leave page as-is
     ensureStyle();
 
     // Hide the React card and, if the candidate set changed, refresh our data.
@@ -1165,14 +1223,14 @@
     else if (count !== state.reactCount) { state.reactCount = count; loadData(); }
   }
 
-  /* ── capture the uploaded file & attach it to the save request ────────────
+  /* â”€â”€ capture the uploaded file & attach it to the save request â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
      The React scorer extracts text and never keeps the file bytes, so the
      save request carries only fileName. We read the file the moment it is
      selected, keep it keyed by name, and splice its base64 into the matching
-     POST /api/resume-scores body — so the real PDF/DOCX reaches the server. */
+     POST /api/resume-scores body â€” so the real PDF/DOCX reaches the server. */
   // name -> Promise<{data, mime}|null>. Storing the PROMISE (not the resolved
   // value) lets the POST interceptor AWAIT an in-flight read, so a fast upload
-  // that fires the save before the file finishes reading still gets its bytes —
+  // that fires the save before the file finishes reading still gets its bytes â€”
   // the earlier version stored only the resolved value and lost that race.
   var fileStash = {};
   function readFileB64(file) {
