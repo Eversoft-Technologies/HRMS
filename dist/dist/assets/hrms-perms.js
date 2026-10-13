@@ -321,6 +321,32 @@
     }
   }
 
+  function applyActiveNav() {
+    var currentPath = (location.pathname || '/').replace(/\/+$/, '') || '/';
+    var items = document.querySelectorAll('.nav-item[href]');
+    var paths = [];
+    var longestMatch = '';
+
+    for (var i = 0; i < items.length; i++) {
+      var href = items[i].getAttribute('href') || '';
+      if (href.charAt(0) !== '/') { paths.push(''); continue; }
+      var path = href.split(/[?#]/, 1)[0].replace(/\/+$/, '') || '/';
+      paths.push(path);
+      var matches = path === '/'
+        ? currentPath === '/'
+        : currentPath === path || currentPath.indexOf(path + '/') === 0;
+      if (matches && path.length > longestMatch.length) longestMatch = path;
+    }
+
+    for (var j = 0; j < items.length; j++) {
+      if (!paths[j]) continue;          // leave non-route menu links alone
+      var active = paths[j] === longestMatch && !!longestMatch;
+      items[j].classList.toggle('active', active);
+      if (active) items[j].setAttribute('aria-current', 'page');
+      else items[j].removeAttribute('aria-current');
+    }
+  }
+
   /* ── full-page access guard: block routes the role can't view ──────────── */
   /* The React bundle only tags a couple of buttons with data-perm, so hiding
      alone can't restrict whole pages. This finds the permission required by the
@@ -402,7 +428,14 @@
      the insert → React-reverts → observer → re-insert feedback loop that made
      the sidebar shake. */
   var _mo = null;
-  function _observe() { if (_mo) _mo.observe(document.body, { childList: true, subtree: true }); }
+  function _observe() {
+    if (_mo) _mo.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['class']
+    });
+  }
   /* Hide the whole "Action" column of the Leave / Work Submissions tables when
      the user lacks leave.action / submission.action (not just the buttons). The
      column is located by the Approve/Reject buttons it contains, so it works
@@ -466,6 +499,7 @@
         setHidden(el, known && !set.has(code), 'hrmsHidden');
       }
       applyNav();
+      applyActiveNav();
       applyRouteGuard();
       applyActions();
       gateActionColumns();

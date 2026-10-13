@@ -24,6 +24,8 @@ from datetime import timedelta
 
 from django.db import migrations
 
+from ._sqlite_compat import table_exists
+
 # The interview row is written first and the audit row moments later, so the
 # window is mostly *before* the audit stamp. A few seconds of slack after it
 # covers clock jitter between the two writes.
@@ -36,12 +38,9 @@ AMBIGUITY_GAP = timedelta(seconds=60)
 
 def _audit_rows(connection):
     """interview.created rows, or [] when the table is not in this database."""
+    if not table_exists(connection, 'audit_logs'):
+        return []
     with connection.cursor() as cur:
-        cur.execute(
-            "SELECT COUNT(*) FROM information_schema.tables "
-            "WHERE table_schema = DATABASE() AND table_name = 'audit_logs'")
-        if not cur.fetchone()[0]:
-            return []
         cur.execute(
             "SELECT actor_email, target, CAST(detail AS CHAR), created_at "
             "FROM audit_logs WHERE action = 'interview.created' ORDER BY created_at")
