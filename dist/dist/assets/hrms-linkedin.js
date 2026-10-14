@@ -366,7 +366,7 @@
           'border-radius:14px;width:min(680px,100%);max-height:92vh;display:flex;flex-direction:column;' +
           'box-shadow:0 20px 60px rgba(0,0,0,.45);font-family:inherit">' +
           '<div style="display:flex;align-items:center;gap:10px;padding:16px 20px;border-bottom:1px solid var(--border2,#1e293b)">' +
-            '<span style="color:#0a66c2">' + LI_ICON + '</span>' +
+            '<span style="color:var(--accent,#0a66c2)">' + LI_ICON + '</span>' +
             '<h3 style="margin:0;font-size:15px;font-weight:700;flex:1">Review your LinkedIn post</h3>' +
             '<button type="button" id="lir-x" style="background:none;border:none;color:inherit;font-size:22px;line-height:1;cursor:pointer;opacity:.6">×</button>' +
           '</div>' +
@@ -380,7 +380,7 @@
               'font:13px/1.6 inherit;padding:12px"></textarea>' +
             '<div style="display:flex;justify-content:space-between;gap:12px;margin-top:6px;font-size:12px;color:var(--text3,#94a3b8)">' +
               '<span id="lir-count"></span>' +
-              '<button type="button" id="lir-reset" style="background:none;border:none;color:#0a66c2;font:inherit;font-weight:600;cursor:pointer;padding:0">Reset to suggested text</button>' +
+              '<button type="button" id="lir-reset" style="background:none;border:none;color:var(--accent,#0a66c2);font:inherit;font-weight:600;cursor:pointer;padding:0">Reset to suggested text</button>' +
             '</div>' +
           '</div>' +
           '<div style="display:flex;align-items:center;gap:10px;padding:14px 20px;border-top:1px solid var(--border2,#1e293b)">' +

@@ -23,6 +23,21 @@
   var OVL_ID = 'tkap-ovl';
 
   function onPage() { return location.pathname.replace(/\/+$/, '') === TASKS_PATH; }
+
+  // Only the task view's OWN attachment image qualifies. Profile pictures are
+  // stored as base64 too, so "any data: <img>" also matched the top-right
+  // avatar, the sidebar avatar and the profile drawer: on the Task Tracker the
+  // avatar was swapped for a 🖼️ button and clicking it opened the picture in
+  // this preview instead of the profile drawer. The attachment carries its
+  // file name as alt; avatars have an empty alt and sit inside app chrome.
+  var CHROME = '.av, .topbar, .sidebar, [class*="avatar"], [class*="hrms-drawer"], [class*="hrms-"]';
+  function isTaskAttachment(el) {
+    if (!el || !el.closest) return false;
+    if (el.closest('#' + OVL_ID)) return false;         // our own preview
+    if (el.closest(CHROME)) return false;
+    if (el.tagName === 'IMG') return !!(el.getAttribute('alt') || '').trim() && /^data:/.test(el.getAttribute('src') || '');
+    return /^data:/.test(el.getAttribute('href') || '');
+  }
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
@@ -150,7 +165,7 @@
     var imgs = document.querySelectorAll('img[src^="data:"]');
     for (var i = 0; i < imgs.length; i++) {
       var img = imgs[i];
-      if (img.closest('#' + OVL_ID)) continue;         // our own preview image
+      if (!isTaskAttachment(img)) continue;             // avatars, our own preview, …
       if (img.dataset.tkapDone) continue;
       img.dataset.tkapDone = '1';
       img.style.display = 'none';
@@ -172,13 +187,13 @@
     if (e.target.closest && e.target.closest('#' + OVL_ID)) return;
 
     var a = e.target.closest && e.target.closest('a[download]');
-    if (a && !a.hasAttribute('data-tkap-download') && /^data:/.test(a.getAttribute('href') || '')) {
+    if (a && !a.hasAttribute('data-tkap-download') && isTaskAttachment(a)) {
       e.preventDefault(); e.stopPropagation();
       openPreview(a.getAttribute('download') || 'attachment', a.getAttribute('href'));
       return;
     }
     var img = e.target.closest && e.target.closest('img');
-    if (img && /^data:/.test(img.getAttribute('src') || '')) {
+    if (img && isTaskAttachment(img)) {
       e.preventDefault();
       openPreview(img.getAttribute('alt') || 'image', img.getAttribute('src'));
     }

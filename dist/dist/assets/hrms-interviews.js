@@ -218,11 +218,15 @@
       'html[data-theme="light"] .hrms-eml-hint{background:rgba(59,130,246,.05)!important;',
       '  border-color:rgba(59,130,246,.18)!important;color:#374151!important;}',
       '.hrms-iv-body{margin-top:4px;}',
-      '.hrms-iv-toolbar{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;}',
+      '.hrms-iv-toolbar{display:flex;gap:8px;margin-bottom:12px;padding-right:10px;box-sizing:border-box;flex-wrap:wrap;}',
+      '.hrms-iv-toolbar select{flex:0 1 150px;width:150px;min-width:0;max-width:45%;box-sizing:border-box;margin-right:2px;}',
+      '.hrms-iv-status-card .badge{display:inline-flex;align-items:center;justify-content:flex-start;text-align:left;width:96px;min-width:96px;height:24px;padding-left:10px;box-sizing:border-box;flex:0 0 96px;white-space:nowrap;}',
       '.hrms-iv-toolbar input,.hrms-iv-toolbar select{background:var(--bg3);border:1px solid var(--border2);border-radius:8px;padding:7px 10px;color:var(--text);font-size:12px;outline:none;}',
       '.hrms-iv-toolbar input{flex:1 1 140px;min-width:0;}',
       '.hrms-iv-toolbar input:focus,.hrms-iv-toolbar select:focus{border-color:var(--accent);}',
-      '.hrms-iv-scroll{max-height:300px;overflow-y:auto;}',
+      /* Six rows fit without a scrollbar; when one appears it sits in the card's
+         padding, so the toolbar selects and the rows keep the same right edge. */
+      '.hrms-iv-scroll{max-height:324px;overflow-y:auto;scrollbar-gutter:stable;margin-right:-12px;padding-right:12px;}',
       '.hrms-iv-row{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border2);}',
       '.hrms-iv-row:last-child{border-bottom:none;}',
       '.hrms-iv-av{flex-shrink:0;width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11.8px;font-weight:600;color:#fff;}',
@@ -260,7 +264,9 @@
       '.hrms-iv-acts button{padding:8px 16px;font-size:12px;font-weight:600;border-radius:7px;cursor:pointer;}',
       '.hrms-iv-cancel{background:transparent;border:1px solid var(--border2);color:var(--text3);}',
       '.hrms-iv-save{background:var(--accent);border:none;color:#fff;}',
-      '.hrms-iv-save:disabled{opacity:.6;cursor:not-allowed;}'
+      '.hrms-iv-save:disabled{opacity:.6;cursor:not-allowed;}',
+      /* Equal-width status badges in the Recently Completed rows. */
+      '.hrms-iv-row .badge{min-width:88px;justify-content:center;}'
     ].join('');
     var st = document.createElement('style');
     st.id = STYLE_ID; st.textContent = css;
@@ -299,7 +305,11 @@
     var titles = document.querySelectorAll('.card-title');
     for (var i = 0; i < titles.length; i++) {
       if ((titles[i].textContent || '').trim() === title) {
-        return titles[i].closest('.card') || titles[i].parentNode;
+        var card = titles[i].closest('.card') || titles[i].parentNode;
+        if (title === 'Upcoming Interviews' || title === 'Recently Completed') {
+          card.classList.add('hrms-iv-status-card');
+        }
+        return card;
       }
     }
     return null;

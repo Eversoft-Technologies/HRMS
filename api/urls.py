@@ -23,6 +23,7 @@ urlpatterns = [
     path('auth/linkedin/disconnect', linkedin_oauth.linkedin_disconnect),
 
     path('jobs', views.jobs),
+    path('jobs/next-code', views.job_next_code),
     path('jobs/<int:pk>', views.job_detail),
 
     # Reusable candidate follow-up email templates
@@ -118,6 +119,7 @@ urlpatterns = [
     path('attendance/geofence-check', views.attendance_geofence_check),
     path('attendance/location-reviews', views.attendance_location_reviews),
     path('attendance/map-feed', views.attendance_map_feed),
+    path('attendance/remind', views.attendance_remind),
     path('attendance/departure-policy', views.attendance_departure_policy),
     path('attendance/roster', views.attendance_roster),
     path('attendance/home-locations', views.attendance_home_locations),
@@ -170,6 +172,7 @@ urlpatterns = [
     path('recruit/bench-sales', views.bench_sales_profiles),
     path('recruit/bench-sales/<int:pk>', views.bench_sales_profile_detail),
     path('recruit/bench-sales/<int:pk>/file/<str:field>', views.bench_sales_profile_file),
+    path('recruit/bench-sales/<int:pk>/upload', views.bench_sales_profile_upload),
     path('recruit/bench-sales/<int:pk>/certificates/<int:cert_id>', views.bench_sales_profile_certificate_detail),
     path('recruit/bench-sales/<int:pk>/certificates/<int:cert_id>/file', views.bench_sales_profile_certificate_file),
 

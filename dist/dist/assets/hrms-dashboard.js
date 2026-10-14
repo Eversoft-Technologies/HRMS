@@ -77,6 +77,24 @@
       /* 3-Column Layout */
       '.hrms-dash-3col-row { display: grid; grid-template-columns: 1.15fr 1fr 1fr; gap: 16px; margin-bottom: 24px; align-items: stretch; }',
       '@media (max-width: 1100px) { .hrms-dash-3col-row { grid-template-columns: 1fr; } }',
+
+      /* Chart cards. Grid items default to min-width:auto, so a card could not
+         shrink below the canvas's last rendered width and ran off the right of
+         a phone screen; min-width:0 lets Chart.js resize to the card instead. */
+      '.hrms-dash-charts > .card, .hrms-dash-charts > .hrms-dash-pro-card { min-width: 0; overflow: hidden; }',
+      '.hrms-dash-charts canvas { max-width: 100% !important; }',
+      '.hrms-dept-body { min-width: 0; }',
+      '.hrms-dept-body > div { min-width: 0; }',
+      '@media (max-width: 768px) {' +
+        '.hrms-dash-charts { gap: 14px !important; margin-bottom: 18px !important; }' +
+        '.hrms-dash-chart-box { height: 210px !important; }' +
+        /* Department card: title row, then the Doughnut / Pie / Bar switch on its
+           own row; donut above the legend instead of beside it. */
+        '.hrms-dept-head { flex-wrap: wrap; gap: 8px; }' +
+        '.hrms-dept-head > .hrms-chart-controls { flex: 1 1 100%; }' +
+        '.hrms-dept-body { grid-template-columns: 1fr !important; gap: 10px !important; min-height: 0 !important; }' +
+        '.hrms-dept-body > div:first-child { height: 170px !important; }' +
+      '}',
       '.hrms-dash-pro-card { background: var(--bg2); border: 1px solid var(--border2); border-radius: 14px; padding: 16px 18px; box-shadow: 0 2px 10px rgba(0,0,0,0.02); display: flex; flex-direction: column; justify-content: space-between; }',
       '.hrms-pro-card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; min-height: 28px; }',
       '.hrms-pro-card-title { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 700; color: var(--text); letter-spacing: 0.5px; text-transform: uppercase; }',
@@ -119,7 +137,7 @@
       '.hrms-clear-search:hover { color: #ef4444; }',
       '.hrms-pill-group { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }',
       '.hrms-filter-pill { border: 1px solid var(--border2); background: var(--bg3); color: var(--text2); padding: 5px 12px; border-radius: 20px; font-size: 12px; font-weight: 500; cursor: pointer; transition: all 0.18s ease; display: inline-flex; align-items: center; gap: 6px; user-select: none; }',
-      '.hrms-filter-pill:hover { border-color: #6366f1; color: #4f46e5; transform: translateY(-1px); }',
+      '.hrms-filter-pill:hover { border-color: #6366f1; color: var(--accent, #4f46e5); transform: translateY(-1px); }',
       '.hrms-filter-pill.active { background: #4f46e5; color: #ffffff; border-color: #4f46e5; font-weight: 600; box-shadow: 0 2px 6px rgba(79, 70, 229, 0.3); }',
       '.hrms-pill-count { font-size: 10px; padding: 1px 6px; border-radius: 10px; background: rgba(0,0,0,0.12); color: inherit; }',
       '.hrms-filter-pill.active .hrms-pill-count { background: rgba(255,255,255,0.25); color: #ffffff; }',
@@ -128,7 +146,32 @@
       '.hrms-chart-switch-btn:hover { background: var(--bg2); color: var(--text); border-color: var(--border2); }',
       '.hrms-chart-switch-btn.active { background: #4f46e5; color: #ffffff; border-color: #4f46e5; }',
       '.hrms-table-header-sortable { cursor: pointer; user-select: none; transition: color 0.15s ease; }',
-      '.hrms-table-header-sortable:hover { color: #4f46e5 !important; }'
+      '.hrms-table-header-sortable:hover { color: var(--accent, #4f46e5) !important; }',
+
+      /* Live Employee Directory table. Only palette variables (--text, --text2,
+         --bg3, --success, --danger) so both themes stay legible; the old inline
+         styles leaned on --text1 / --bg1, which the theme never defines. */
+      '.hrms-dir-table { width: 100%; border-collapse: collapse; text-align: left; }',
+      '.hrms-dir-table thead tr { background: var(--bg3); border-bottom: 1px solid var(--border2); }',
+      '.hrms-dir-table th { padding: 12px 10px; font-size: 11px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; color: var(--text2); white-space: nowrap; }',
+      '.hrms-dir-row { border-bottom: 1px solid var(--border2); cursor: pointer; transition: background 0.15s ease; }',
+      '.hrms-dir-row:last-child { border-bottom: none; }',
+      '.hrms-dir-row:hover { background: var(--bg3); }',
+      '.hrms-dir-row td { padding: 12px 10px; vertical-align: middle; font-size: 12px; color: var(--text2); }',
+      '.hrms-dir-code { display: inline-block; background: rgba(79, 142, 247, 0.12); color: var(--accent); border: 1px solid rgba(79, 142, 247, 0.3); border-radius: 6px; padding: 3px 8px; font-size: 11px; font-weight: 700; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; letter-spacing: 0.5px; }',
+      '.hrms-dir-person { display: flex; align-items: center; gap: 10px; min-width: 0; }',
+      '.hrms-dir-avatar { width: 32px; height: 32px; border-radius: 50%; background: linear-gradient(135deg, #4f46e5, #06b6d4); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; flex-shrink: 0; box-shadow: 0 2px 5px rgba(79, 70, 229, 0.25); }',
+      '.hrms-dir-name { font-size: 13px; font-weight: 600; color: var(--text); line-height: 1.25; }',
+      '.hrms-dir-email { font-size: 11px; color: var(--text2); line-height: 1.25; margin-top: 2px; }',
+      '.hrms-dir-dept { font-weight: 500; }',
+      '.hrms-dir-role { font-weight: 600; color: var(--text); }',
+      '.hrms-dir-badge { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 12px; font-size: 11px; font-weight: 600; line-height: 1.4; white-space: nowrap; }',
+      '.hrms-dir-badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }',
+      '.hrms-dir-badge.active { background: rgba(34, 211, 165, 0.14); color: var(--success, #15a37f); border: 1px solid rgba(34, 211, 165, 0.35); }',
+      '.hrms-dir-badge.inactive { background: rgba(247, 95, 79, 0.14); color: var(--danger, #d94835); border: 1px solid rgba(247, 95, 79, 0.35); }',
+      '.hrms-dir-date { white-space: nowrap; }',
+      '.hrms-dir-action { font-size: 12px; font-weight: 600; color: var(--accent); white-space: nowrap; }',
+      '.hrms-dir-row:hover .hrms-dir-action { text-decoration: underline; }'
     ].join('\n');
     document.head.appendChild(style);
   }
@@ -304,35 +347,26 @@
 
     return filteredEmployees.map(function (emp) {
       var isAct = emp.status === 'Active';
-      var badgeBg = isAct ? 'background:#dcfce7;color:#15803d;border:1px solid #bbf7d0;' : 'background:#fee2e2;color:#b91c1c;border:1px solid #fecaca;';
       var empCode = emp.employeeId || ('EV-' + String(emp.id).padStart(4, '0'));
-      return '<tr style="border-bottom:1px solid var(--border2,#f1f5f9);cursor:pointer;transition:background 0.15s ease;" onmouseover="this.style.background=\'var(--bg1,#f8fafc)\'" onmouseout="this.style.background=\'transparent\'" onclick="location.href=\'/hr/hris/' + emp.id + '\'">' +
-        '<td style="padding:12px 10px;">' +
-          '<span style="background:rgba(79,142,247,0.1);color:var(--accent,#4f8ef7);border:1px solid rgba(79,142,247,0.25);border-radius:6px;padding:3px 8px;font-size:11px;font-weight:700;font-family:monospace;letter-spacing:0.5px;">' +
-            esc(empCode) +
-          '</span>' +
-        '</td>' +
-        '<td style="padding:12px 10px;">' +
-          '<div style="display:flex;align-items:center;gap:10px;">' +
-            '<div style="width:32px;height:32px;border-radius:50%;background:linear-gradient(135deg, #4f46e5, #06b6d4);color:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0;box-shadow:0 2px 5px rgba(79, 70, 229, 0.2);">' +
-              esc(emp.initials || getInitials(emp.name, emp.email)) +
-            '</div>' +
-            '<div>' +
-              '<div style="font-size:13px;font-weight:600;color:var(--text,#0f172a);">' + esc(emp.name) + '</div>' +
-              '<div style="font-size:11px;color:var(--text3,#64748b);">' + esc(emp.email) + '</div>' +
+      // A row with no stored name still needs a readable first line.
+      var nameText = emp.name || String(emp.email || '').split('@')[0] || '\u2014';
+      return '<tr class="hrms-dir-row" onclick="location.href=\'/hr/hris/' + emp.id + '\'">' +
+        '<td><span class="hrms-dir-code">' + esc(empCode) + '</span></td>' +
+        '<td>' +
+          '<div class="hrms-dir-person">' +
+            '<div class="hrms-dir-avatar">' + esc(emp.initials || getInitials(emp.name, emp.email)) + '</div>' +
+            '<div style="min-width:0;">' +
+              '<div class="hrms-dir-name">' + esc(nameText) + '</div>' +
+              '<div class="hrms-dir-email">' + esc(emp.email) + '</div>' +
             '</div>' +
           '</div>' +
         '</td>' +
-        '<td style="padding:12px 10px;font-size:12px;color:var(--text2,#475569);font-weight:500;">' + esc(emp.department) + '</td>' +
-        '<td style="padding:12px 10px;font-size:12px;color:var(--text,#1e293b);font-weight:500;">' + esc(emp.role) + '</td>' +
-        '<td style="padding:12px 10px;">' +
-          '<span style="padding:3px 10px;border-radius:12px;font-size:11px;font-weight:600;display:inline-block;' + badgeBg + '">' + esc(emp.status) + '</span>' +
-        '</td>' +
-        '<td style="padding:12px 10px;font-size:12px;color:var(--text2,#64748b);">' + esc(emp.location) + '</td>' +
-        '<td style="padding:12px 10px;font-size:12px;color:var(--text3,#94a3b8);">' + esc(emp.joinDate) + '</td>' +
-        '<td style="padding:12px 10px;text-align:right;">' +
-          '<span style="font-size:12px;color:#4f46e5;font-weight:600;display:inline-flex;align-items:center;gap:4px;">View →</span>' +
-        '</td>' +
+        '<td class="hrms-dir-dept">' + esc(emp.department) + '</td>' +
+        '<td class="hrms-dir-role">' + esc(emp.role) + '</td>' +
+        '<td><span class="hrms-dir-badge ' + (isAct ? 'active' : 'inactive') + '">' + esc(emp.status) + '</span></td>' +
+        '<td>' + esc(emp.location) + '</td>' +
+        '<td class="hrms-dir-date">' + esc(emp.joinDate) + '</td>' +
+        '<td style="text-align:right;"><span class="hrms-dir-action">View \u2192</span></td>' +
       '</tr>';
     }).join('');
   }
@@ -521,19 +555,19 @@
       '</div>' +
 
       // Grid 2: Charts
-      '<div class="grid-2 mb-16" style="gap:18px;margin-bottom:24px;">' +
+      '<div class="grid-2 mb-16 hrms-dash-charts" style="gap:18px;margin-bottom:24px;">' +
         // Headcount Growth Chart
         '<div class="card" style="box-shadow: 0 4px 14px rgba(0,0,0,0.03);">' +
           '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">' +
             '<div class="card-title" style="margin-bottom:0;display:flex;align-items:center;gap:8px;"><span class="hrms-pro-card-accent-bar"></span><span style="font-size:12px;font-weight:700;color:var(--text);letter-spacing:0.5px;text-transform:uppercase;">HEADCOUNT &amp; HIRING GROWTH (6 MONTHS)</span></div>' +
             '<span style="font-size:11px;color:var(--text2);font-weight:600;">Monthly Trend</span>' +
           '</div>' +
-          '<div style="position:relative;height:250px;"><canvas id="dash-chart-headcount"></canvas></div>' +
+          '<div class="hrms-dash-chart-box" style="position:relative;height:250px;"><canvas id="dash-chart-headcount"></canvas></div>' +
         '</div>' +
 
         // Professional Department Breakdown Card
         '<div class="hrms-dash-pro-card" style="box-shadow: 0 4px 14px rgba(0,0,0,0.03);">' +
-          '<div class="hrms-pro-card-header" style="align-items:flex-start;margin-bottom:8px;">' +
+          '<div class="hrms-pro-card-header hrms-dept-head" style="align-items:flex-start;margin-bottom:8px;">' +
             '<div>' +
               '<div class="hrms-pro-card-title">' +
                 '<span class="hrms-pro-card-accent-bar"></span>' +
@@ -549,7 +583,7 @@
               '<button type="button" class="hrms-pro-pill-btn' + (state.deptChartType === 'bar' ? ' active' : '') + '" data-chart-type="bar">Bar</button>' +
             '</div>' +
           '</div>' +
-          '<div style="display:grid;grid-template-columns:1fr 1fr;align-items:center;gap:20px;min-height:200px;">' +
+          '<div class="hrms-dept-body" style="display:grid;grid-template-columns:1fr 1fr;align-items:center;gap:20px;min-height:200px;">' +
             '<div style="position:relative;height:190px;width:100%;display:flex;align-items:center;justify-content:center;">' +
               '<canvas id="dash-chart-dept"></canvas>' +
             '</div>' +
@@ -637,7 +671,7 @@
         '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px;">' +
           '<div>' +
             '<div class="card-title" style="margin-bottom:2px;">Live Employee Directory</div>' +
-            '<div id="dash-employee-count" style="font-size:12px;color:var(--text3,#64748b);">Showing ' + filteredEmployees.length + ' of ' + (d.employees || []).length + ' registered employees</div>' +
+            '<div id="dash-employee-count" style="font-size:12px;color:var(--text2,#64748b);">Showing ' + filteredEmployees.length + ' of ' + (d.employees || []).length + ' registered employees</div>' +
           '</div>' +
           '<div style="display:flex;align-items:center;gap:10px;">' +
             '<button type="button" id="hrms-dash-reset-filters" class="btn-sm" style="font-size:11px;color:#ef4444;background:transparent;border:1px solid #fecaca;padding:5px 10px;border-radius:6px;cursor:pointer;' + (hasActiveFilters ? '' : 'display:none;') + '">✕ Reset Filters</button>' +
@@ -679,17 +713,17 @@
 
         // Table
         '<div class="table-wrap" style="overflow-x:auto;">' +
-          '<table style="width:100%;border-collapse:collapse;text-align:left;">' +
+          '<table class="hrms-dir-table">' +
             '<thead>' +
-              '<tr style="border-bottom:1px solid var(--border,#e2e8f0);background:var(--bg1,#f8fafc);">' +
-                '<th class="hrms-table-header-sortable" data-sort="employeeId" data-label="EMP ID" style="padding:12px 10px;font-size:11px;color:var(--text2,#64748b);font-weight:700;letter-spacing:0.5px;">EMP ID ' + (state.sortColumn === 'employeeId' ? (state.sortAsc ? '▲' : '▼') : '') + '</th>' +
-                '<th class="hrms-table-header-sortable" data-sort="name" data-label="EMPLOYEE" style="padding:12px 10px;font-size:11px;color:var(--text2,#64748b);font-weight:700;letter-spacing:0.5px;">EMPLOYEE ' + (state.sortColumn === 'name' ? (state.sortAsc ? '▲' : '▼') : '') + '</th>' +
-                '<th class="hrms-table-header-sortable" data-sort="department" data-label="DEPARTMENT" style="padding:12px 10px;font-size:11px;color:var(--text2,#64748b);font-weight:700;letter-spacing:0.5px;">DEPARTMENT ' + (state.sortColumn === 'department' ? (state.sortAsc ? '▲' : '▼') : '') + '</th>' +
-                '<th class="hrms-table-header-sortable" data-sort="role" data-label="DESIGNATION" style="padding:12px 10px;font-size:11px;color:var(--text2,#64748b);font-weight:700;letter-spacing:0.5px;">DESIGNATION ' + (state.sortColumn === 'role' ? (state.sortAsc ? '▲' : '▼') : '') + '</th>' +
-                '<th class="hrms-table-header-sortable" data-sort="status" data-label="STATUS" style="padding:12px 10px;font-size:11px;color:var(--text2,#64748b);font-weight:700;letter-spacing:0.5px;">STATUS ' + (state.sortColumn === 'status' ? (state.sortAsc ? '▲' : '▼') : '') + '</th>' +
-                '<th class="hrms-table-header-sortable" data-sort="location" data-label="LOCATION" style="padding:12px 10px;font-size:11px;color:var(--text2,#64748b);font-weight:700;letter-spacing:0.5px;">LOCATION ' + (state.sortColumn === 'location' ? (state.sortAsc ? '▲' : '▼') : '') + '</th>' +
-                '<th class="hrms-table-header-sortable" data-sort="joinDate" data-label="JOIN DATE" style="padding:12px 10px;font-size:11px;color:var(--text2,#64748b);font-weight:700;letter-spacing:0.5px;">JOIN DATE ' + (state.sortColumn === 'joinDate' ? (state.sortAsc ? '▲' : '▼') : '') + '</th>' +
-                '<th style="padding:12px 10px;font-size:11px;color:var(--text2,#64748b);font-weight:700;letter-spacing:0.5px;text-align:right;">ACTION</th>' +
+              '<tr>' +
+                '<th class="hrms-table-header-sortable" data-sort="employeeId" data-label="EMP ID">EMP ID ' + (state.sortColumn === 'employeeId' ? (state.sortAsc ? '▲' : '▼') : '') + '</th>' +
+                '<th class="hrms-table-header-sortable" data-sort="name" data-label="EMPLOYEE">EMPLOYEE ' + (state.sortColumn === 'name' ? (state.sortAsc ? '▲' : '▼') : '') + '</th>' +
+                '<th class="hrms-table-header-sortable" data-sort="department" data-label="DEPARTMENT">DEPARTMENT ' + (state.sortColumn === 'department' ? (state.sortAsc ? '▲' : '▼') : '') + '</th>' +
+                '<th class="hrms-table-header-sortable" data-sort="role" data-label="DESIGNATION">DESIGNATION ' + (state.sortColumn === 'role' ? (state.sortAsc ? '▲' : '▼') : '') + '</th>' +
+                '<th class="hrms-table-header-sortable" data-sort="status" data-label="STATUS">STATUS ' + (state.sortColumn === 'status' ? (state.sortAsc ? '▲' : '▼') : '') + '</th>' +
+                '<th class="hrms-table-header-sortable" data-sort="location" data-label="LOCATION">LOCATION ' + (state.sortColumn === 'location' ? (state.sortAsc ? '▲' : '▼') : '') + '</th>' +
+                '<th class="hrms-table-header-sortable" data-sort="joinDate" data-label="JOIN DATE">JOIN DATE ' + (state.sortColumn === 'joinDate' ? (state.sortAsc ? '▲' : '▼') : '') + '</th>' +
+                '<th style="text-align:right;">ACTION</th>' +
               '</tr>' +
             '</thead>' +
             '<tbody id="dash-employee-tbody">' +

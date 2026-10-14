@@ -119,6 +119,90 @@ html[data-theme="light"] .topbar-search {
   border-color: #dce3ee;
 }
 
+/* The F2F interviewer setup's "How it works" callout has a hard-coded
+   light-blue background. Give it a dark surface and foreground in dark mode. */
+html[data-theme="dark"] div[style*="236, 245, 255"] {
+  background: var(--bg2) !important;
+  border-color: rgba(79, 142, 247, 0.32) !important;
+  color: var(--text) !important;
+}
+html[data-theme="dark"] div[style*="236, 245, 255"] > div {
+  color: var(--text) !important;
+}
+
+/* Make the Technical Deep-Dive wrench stand out against the light question card. */
+html[data-theme="light"] #root .content div[style*="background: var(--bg3)"][style*="border: 1px solid var(--border2)"] > div[style*="font-size: 11px"][style*="font-weight: 600"] + div[style*="padding: 6px 0px"] + div[style*="padding: 6px 0px"] > div:nth-child(2) > div:first-child::first-letter {
+  font-size: 11px;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='%232f6fe0' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94L14.7 6.3z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 11px 11px;
+}
+
+/* Center the share-link empty state in the available height of its card. */
+#root .card > div[style*="text-align: center"][style*="padding: 36px 0px"]:has(> div[style*="font-size: 26px"]) {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 340px;
+  box-sizing: border-box;
+  padding: 20px;
+}
+
+/* Keep the score column on a shared vertical track across candidate rows.
+   Action groups vary between reviewed and unreviewed candidates. */
+#root .content div[style*="width: 110px"]:has(> .badge[style*="font-size: 10px"]) {
+  justify-content: flex-start;
+}
+#root .content div[style*="width: 110px"]:has(> .badge[style*="font-size: 10px"]) > .badge {
+  width: 96px;
+  box-sizing: border-box;
+  justify-content: center;
+  white-space: nowrap;
+}
+#root .content div[style*="padding: 13px 0px"]:has(> div[style*="width: 110px"] > .badge[style*="font-size: 10px"]) {
+  display: grid !important;
+  grid-template-columns: 34px minmax(0, 1fr) 110px 261px 150px 28px;
+  gap: 8px !important;
+}
+#root .content div[style*="padding: 13px 0px"]:has(> div[style*="width: 110px"] > .badge[style*="font-size: 10px"]) > div:nth-child(4) {
+  display: grid !important;
+  grid-template-columns: 80px 89px 82px;
+  gap: 5px !important;
+}
+#root .content div[style*="padding: 13px 0px"]:has(> div[style*="width: 110px"] > .badge[style*="font-size: 10px"]) > div:nth-child(4) > button {
+  width: 100%;
+  box-sizing: border-box;
+  white-space: nowrap;
+}
+#root .content div[style*="padding: 13px 0px"]:has(> div[style*="width: 110px"] > .badge[style*="font-size: 10px"]) > div:nth-child(5) {
+  display: grid !important;
+  grid-template-columns: 71px 71px;
+  gap: 7px !important;
+}
+#root .content div[style*="padding: 13px 0px"]:has(> div[style*="width: 110px"] > .badge[style*="font-size: 10px"]) > div:nth-child(5) > button:not(.btn-primary) {
+  grid-column: 1;
+}
+#root .content div[style*="padding: 13px 0px"]:has(> div[style*="width: 110px"] > .badge[style*="font-size: 10px"]) > div:nth-child(5) > button.btn-primary {
+  grid-column: 2;
+  width: 71px;
+  box-sizing: border-box;
+  white-space: nowrap;
+}
+#root .content div[style*="padding: 13px 0px"]:has(> div[style*="width: 110px"] > .badge[style*="font-size: 10px"]) > .hrms-iv-fu-note {
+  margin-left: 0;
+}
+
+@media (max-width: 768px) {
+  #root .content div[style*="padding: 13px 0px"]:has(> div[style*="width: 110px"] > .badge[style*="font-size: 10px"]) {
+    display: flex !important;
+    flex-wrap: wrap !important;
+  }
+}
+
 /* Primary buttons get a touch of depth and a hover lift. */
 html[data-theme="light"] .btn-primary {
   box-shadow: 0 1px 2px rgba(47, 111, 224, 0.28);
@@ -2788,67 +2872,12 @@ html[data-theme="light"] div[style*="position: fixed"]:has(span:is([style*="Pipe
   margin: 6px auto !important;
 }
 
+/* Sidebar: the nav marks every link whose path prefixes the URL, so "Recruit"
+   lit up together with "F2F Interview". Only the most specific link (the last
+   active sibling) keeps the highlight; hrms-sidebar.js enforces the same. */
+.sidebar .nav-item.active:has(~ .nav-item.active) { color: var(--text2); background: transparent; border-left-color: transparent; font-weight: 400; }
+.sidebar .nav-item.active:has(~ .nav-item.active):hover { color: var(--text); background: rgba(79, 142, 247, 0.05); }
 
-
-
-/* Smallest phones (320–360px): cards are ~65px, so "APPROVED" needs a
-   touch less tracking to fit on one line. Padding and type size are left
-   to the square-card rule above, which scales them with the screen. */
-@media (max-width: 360px) {
-  .wsq .wsq-kpis { gap: 6px !important; }
-  .wsq .wsq-kpis > div > div > div:first-child > div:nth-child(1) {
-    letter-spacing: .2px !important;
-  }
-}
-
-
-/* --- wsq: one type scale for the whole page on phones ----------------
-   The summary boxes at the top were tuned first; everything below them
-   used eleven different sizes (9.5px-19px) picked one by one, so the
-   page read as uneven. This puts the rest of the page on one scale, in
-   proportion with the boxes:
-
-       section title   15-16px   (the one heading)
-       body / titles   12px      (submission title, button)
-       secondary       11px      (legend, subtitle, tabs, names, cells)
-       small           10px      (description, pills, actions, status)
-       micro           9px       (table header, counters, avatars)
-
-   Sizes scale gently with the screen (clamp), like the boxes do. The
-   search box is left alone: on iPhone, an input under 16px makes the
-   page zoom in when it is tapped. */
-@media (max-width: 640px) {
-  /* status legend under the boxes */
-  .wsq .wsq-legend, .wsq .wsq-legend * { font-size: clamp(10.5px, 2.9vw, 11.5px) !important; }
-
-  /* "Submission Queue" header */
-  .wsq .wsq-head h2 { font-size: clamp(15px, 4.1vw, 16px) !important; line-height: 1.3 !important; }
-  .wsq .wsq-head p  { font-size: clamp(10.5px, 2.9vw, 11.5px) !important; line-height: 1.45 !important; }
-  .wsq .wsq-head button { font-size: 12px !important; padding: 9px 16px !important; }
-  .wsq .wsq-head button span { font-size: 13px !important; }
-
-  /* All / Pending / In Review tabs */
-  .wsq .wsq-tabs button { font-size: 11px !important; }
-  .wsq .wsq-tabs button span { font-size: 9px !important; }
-
-  /* the queue */
-  .wsq .wsq-hrow th, .wsq thead th { font-size: 9px !important; letter-spacing: .5px !important; }
-  .wsq tbody td { font-size: 11px !important; }
-  .wsq tbody td:nth-child(1) > div > div:first-child,
-  .wsq tbody td:nth-child(5) > div > div:first-child { font-size: 9px !important; }
-  .wsq tbody td:nth-child(1) > div > span,
-  .wsq tbody td:nth-child(5) > div > span { font-size: 11px !important; }
-  .wsq tbody td:nth-child(2) span { font-size: 10px !important; }        /* type pill   */
-  .wsq tbody td:nth-child(3) div { font-size: 10px !important; }         /* description */
-  .wsq tbody td div[style*="font-size: 13px"][style*="font-weight: 700"] { font-size: 12px !important; } /* title */
-  .wsq tbody td span[style*="font-size: 11.5px"] { font-size: 10px !important; } /* status pill */
-  .wsq tbody td span[style*="font-size: 14px"] { font-size: 11px !important; }   /* empty-cell dash */
-  .wsq tbody td:nth-child(3) span { font-size: 9.5px !important; }       /* attachment  */
-  .wsq tbody td span[style*="font-weight: 800"] { font-size: 12px !important; line-height: 1 !important; } /* score */
-  .wsq tbody td .subs-why-btn { font-size: 10px !important; }           /* status      */
-  .wsq tbody td .subs-why-btn span { font-size: 8.5px !important; }
-  .wsq tbody td:nth-child(8) > div > button { font-size: 10px !important; }
-
-  /* pager */
-  .wsq .wsq-pager, .wsq .wsq-pager * { font-size: 11px !important; }
-}
+/* AI Interviewer candidate list: Active / Completed / Scheduled badges share
+   one width. */
+.content .badge:has(+ .btn-primary) { min-width: 92px; justify-content: center; text-align: center; }

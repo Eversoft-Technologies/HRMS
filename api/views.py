@@ -33,7 +33,8 @@ from django.db.models.functions import Coalesce, Substr
 from django.http import HttpResponse, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 
-from rest_framework.decorators import api_view
+from rest_framework.decorators import api_view, parser_classes
+from rest_framework.parsers import MultiPartParser
 from rest_framework.response import Response
 
 from . import ai, mailer, social_poster
@@ -79,6 +80,8 @@ from .models import (
 )
 from .serializers import (
     DATETIME_FMT,
+    job_title_problem,
+    salary_range_problem,
     AppUserSerializer,
     AttendanceEventSerializer,
     CompanySerializer,
@@ -345,7 +348,7 @@ def jobs(request):
         if remote and remote.lower() in ('true', '1'):
             qs = qs.filter(is_remote=True)
         if search:
-            qs = qs.filter(Q(title__icontains=search) | Q(dept__icontains=search))
+            qs = qs.filter(Q(title__icontains=search) | Q(dept__icontains=search) | Q(code__icontains=search))
         return Response(JobPostSerializer(qs, many=True).data)
 
     body = request.data
@@ -384,6 +387,17 @@ def job_detail(request, pk):
         return Response({'ok': True})
 
     data = request.data or {}
+    # Same rules as JobPostSerializer, since this path writes the columns
+    # directly (Job Board inline edits). Only a changed value is checked, so
+    # a post saved before the rules can still have its status edited.
+    if 'title' in data and (data['title'] or '') != (job.title or ''):
+        problem = job_title_problem(data['title'])
+        if problem:
+            return err(problem)
+    if 'salary' in data and (data['salary'] or '') != (job.salary or ''):
+        problem = salary_range_problem(data['salary'])
+        if problem:
+            return err(problem)
     text_fields = ['title', 'dept', 'location', 'type', 'salary', 'status', 'priority', 'description']
     changed = False
     for f in text_fields:
@@ -402,9 +416,24 @@ def job_detail(request, pk):
     if 'statusComment' in data:
         job.status_comment = data['statusComment'] or ''
         changed = True
+    if 'code' in data:
+        new_code = str(data['code'] or '').strip().upper()
+        if new_code and JobPost.objects.filter(code__iexact=new_code).exclude(pk=job.pk).exists():
+            return err(f'Job code {new_code} is already used by another job post.', 409)
+        job.code = new_code          # blank -> re-assigned on save
+        changed = True
     if changed:
         job.save()
     return Response(JobPostSerializer(job).data)
+
+
+@api_view(['GET'])
+@require_perm('recruitment.view')
+def job_next_code(request):
+    """The code a new job gets if the poster leaves Job Code blank. Shown as
+    the field's placeholder; never reserved, so two open forms cannot collide
+    (the real assignment happens in JobPost.save())."""
+    return Response({'code': JobPost.next_code()})
 
 
 def html_to_text(html):
@@ -1205,14 +1234,31 @@ def resume_scores(request):
     return Response(data, status=201 if created else 200)
 
 
-@api_view(['GET'])
+@api_view(['GET', 'PATCH', 'PUT', 'DELETE'])
 @require_perm('recruitment.view')
 def resume_score_detail(request, pk):
-    """A single resume including its stored file — kept out of the list endpoint
-    so the base64 blob is fetched only when actually viewing/downloading."""
+    """A single resume: retrieve details/file, update format/fields, or delete."""
     rs = ResumeScore.objects.filter(pk=pk).first()
     if not rs:
         return err('Resume not found', 404)
+
+    if request.method == 'DELETE':
+        rs.delete()
+        return Response({'ok': True, 'id': pk, 'message': 'Resume deleted successfully.'})
+
+    if request.method in ('PATCH', 'PUT'):
+        body = request.data
+        if 'formatted' in body:
+            rs.formatted = bool(body['formatted'])
+        if 'name' in body and body['name']:
+            rs.name = body['name']
+        if 'role' in body and body['role']:
+            rs.role = body['role']
+        if 'score' in body and body['score'] is not None:
+            rs.score = int(body['score'])
+        rs.save()
+        return Response(ResumeScoreSerializer(rs).data)
+
     return Response({
         'id': rs.id,
         'name': rs.name,
@@ -1220,6 +1266,9 @@ def resume_score_detail(request, pk):
         'fileMime': rs.file_mime or '',
         'fileData': rs.file_data or '',
         'resumeText': rs.resume_text or '',
+        'formatted': bool(rs.formatted),
+        'score': rs.score,
+        'role': rs.role,
     })
 
 
@@ -1238,7 +1287,12 @@ def resume_score_file(request, pk):
     if not rs:
         return HttpResponse('Resume not found', status=404)
     if not rs.file_data:
-        return HttpResponse('No file stored for this resume', status=404)
+        if rs.resume_text:
+            resp = HttpResponse(rs.resume_text, content_type='text/plain; charset=utf-8')
+            resp['Content-Disposition'] = f'inline; filename="{rs.file_name or f"resume_{pk}.txt"}"'
+            resp['Access-Control-Allow-Origin'] = '*'
+            return resp
+        return HttpResponse('No file or text stored for this resume', status=404)
 
     try:
         raw = base64.b64decode(rs.file_data)
@@ -1609,8 +1663,16 @@ def question_set_detail(request, set_id):
 # ---------------------------------------------------------------------------
 @api_view(['GET'])
 def ai_status(request):
+    """Is the AI service usable from this server? `detail` says why not
+    (host unreachable, retired model, bad key), so production can be checked
+    from a browser without the server log."""
     available = ai.check_ai_key_valid(request.headers.get('x-api-key'))
-    return Response({'available': available})
+    return Response({
+        'available': available,
+        'model': ai.GENERATION_MODEL,
+        'validationModel': ai.VALIDATION_MODEL,
+        'detail': 'ok' if available else (ai.ai_status_detail() or 'Anthropic API key check failed'),
+    })
 
 
 @api_view(['POST'])
@@ -1659,8 +1721,8 @@ def ai_score_resume(request):
     name = (body.get('name') or body.get('candidateName') or '').strip()
     role = (body.get('role') or body.get('jobRole') or 'Software Professional').strip()
 
-    if not resume_text:
-        return err('resumeText is required for AI scoring', 400)
+    if not resume_text or len(resume_text.strip()) < 20:
+        return err('The uploaded resume is empty or contains no readable text. Please upload or paste a valid resume.', 400)
 
     try:
         eval_result = ai.score_resume_ai(
@@ -1671,9 +1733,9 @@ def ai_score_resume(request):
             request_key=request.headers.get('x-api-key'),
         )
     except ai.AIUnavailable as exc:
-        return JsonResponse({'error': {'message': exc.message}}, status=exc.status)
+        return JsonResponse({'error': str(exc.message), 'message': str(exc.message)}, status=exc.status)
     except Exception as exc:
-        return err(f'AI Resume evaluation failed: {str(exc)}', 500)
+        return JsonResponse({'error': str(exc), 'message': str(exc)}, status=500)
 
     # If saveToDb requested or qualifying score with file payload, persist to DB
     if body.get('saveToDb') or body.get('save_to_db'):
@@ -1700,7 +1762,9 @@ def ai_score_resume(request):
             'aiSummary': eval_result.get('executiveSummary') or '',
             'aiStrengths': eval_result.get('strengths') or [],
             'aiGaps': eval_result.get('redFlags') or [],
-            'aiEvaluated': True,
+            # A heuristic fallback is stored, but never labelled as AI-evaluated.
+            'aiEvaluated': not eval_result.get('aiFallback'),
+            'jobCode': body.get('jobCode') or body.get('job_code') or '',
         }
         serializer = ResumeScoreSerializer(data=save_payload)
         if serializer.is_valid():
@@ -4148,6 +4212,66 @@ def attendance_map_feed(request):
         })
 
 
+@api_view(['POST'])
+@require_perm('attendance.edit')
+def attendance_remind(request):
+    """Send attendance check-in reminder notification(s) to absent staff.
+
+    Accepts:
+      - email: str (single employee)
+      - emails: list[str] (batch remind)
+      - name: str (optional)
+    """
+    body = request.data or {}
+    emails_to_remind = []
+
+    if body.get('emails') and isinstance(body.get('emails'), list):
+        for em in body.get('emails'):
+            n_em = norm_email(em)
+            if n_em:
+                emails_to_remind.append((n_em, ''))
+    elif body.get('email'):
+        n_em = norm_email(body.get('email'))
+        if n_em:
+            emails_to_remind.append((n_em, str(body.get('name') or '').strip()))
+
+    if not emails_to_remind:
+        return err('Employee email is required')
+
+    today_str = local_now().strftime('%A, %b %d')
+    sent_count = 0
+
+    for email, name in emails_to_remind:
+        display_name = name or email.split('@')[0]
+        # 1. In-app Notification for employee
+        create_notification(
+            recipient=email,
+            title='⏰ Attendance Check-in Reminder',
+            message=f"Hi {display_name}, you have not logged attendance for today ({today_str}). Please check in or submit a WFH / leave request.",
+            notification_type='warning',
+            link='/employees/check-in',
+        )
+        # 2. External broadcast if available
+        try:
+            from api.services.notification_service import NotificationService
+            NotificationService.send_notification(
+                recipient_email=email,
+                title='⏰ Attendance Check-in Reminder',
+                message=f"Reminder: You have not logged attendance for today ({today_str}). Please open HRMS to check in.",
+                notification_type='warning',
+                link='/employees/check-in',
+            )
+        except Exception:
+            pass
+        sent_count += 1
+
+    return Response({
+        'ok': True,
+        'sentCount': sent_count,
+        'message': f"Sent {sent_count} check-in reminder{'s' if sent_count != 1 else ''}."
+    })
+
+
 @api_view(['GET', 'POST'])
 def attendance_departure_policy(request):
     """Configuration for Auto Check-Out on Geofence Departure."""
@@ -4957,6 +5081,63 @@ def bench_sales_profile_detail(request, pk):
             ) for c in new_certs
         ], batch_size=1)
     inst = _bench_sales_profile_qs().get(pk=inst.pk)
+    return Response(BenchSalesProfileSerializer(inst).data)
+
+
+# Upload slug -> (name, mime, data) columns for the single-document fields.
+_BENCH_SALES_UPLOAD_COLS = {
+    'resume': ('resume_file_name', 'resume_file_mime', 'resume_file_data'),
+    'dl-state-id': ('dl_state_id_file_name', 'dl_state_id_file_mime', 'dl_state_id_file_data'),
+    'i94': ('i94_file_name', 'i94_file_mime', 'i94_file_data'),
+}
+
+
+@api_view(['POST'])
+@parser_classes([MultiPartParser])
+@require_perm('recruitment.edit')
+def bench_sales_profile_upload(request, pk):
+    """Upload ONE document (resume / DL / I-94 / a certificate) to a profile as
+    multipart/form-data: ``field`` = resume | dl-state-id | i94 | certificate,
+    ``file`` = the PDF.
+
+    The New/Edit Profile form sends each file through here in its own request
+    instead of base64-inlining all of them in one JSON body: on the cPanel host
+    the web server rejects large JSON bodies with HTTP 413 before Django ever
+    sees them, and base64 inflates every file by a third on top. Storage is
+    unchanged — the file is still kept base64-in-row."""
+    import base64
+
+    obj = BenchSalesProfile.objects.only('id').filter(pk=pk).first()
+    if not obj:
+        return err('Profile not found', 404)
+    field = str(request.data.get('field') or '')
+    upload = request.FILES.get('file')
+    if not upload:
+        return err('file is required')
+    if not _is_pdf(upload.content_type, upload.name):
+        return err(f'{upload.name} is not a PDF — only PDF uploads are allowed.')
+    if upload.size > MAX_BENCH_SALES_FILE_BYTES:
+        return err(f'{upload.name} is larger than {MAX_BENCH_SALES_FILE_MB} MB — '
+                   f'each file must be {MAX_BENCH_SALES_FILE_MB} MB or smaller.')
+    mime = upload.content_type or 'application/pdf'
+    data = base64.b64encode(upload.read()).decode('ascii')
+
+    if field == 'certificate':
+        if obj.certificate_files.count() >= MAX_CERTIFICATES_PER_PROFILE:
+            return err(f'You can upload up to {MAX_CERTIFICATES_PER_PROFILE} certificates per profile.')
+        BenchSalesCertificate.objects.create(
+            profile=obj, file_name=upload.name, file_mime=mime, file_data=data,
+        )
+    elif field in _BENCH_SALES_UPLOAD_COLS:
+        name_col, mime_col, data_col = _BENCH_SALES_UPLOAD_COLS[field]
+        # Name/mime first, then the blob in its own UPDATE (see
+        # _store_bench_sales_file_data for why blobs are written one at a time).
+        BenchSalesProfile.objects.filter(pk=pk).update(**{name_col: upload.name, mime_col: mime})
+        _store_bench_sales_file_data(pk, {data_col: data})
+    else:
+        return err('field must be one of: resume, dl-state-id, i94, certificate')
+
+    inst = _bench_sales_profile_qs().get(pk=pk)
     return Response(BenchSalesProfileSerializer(inst).data)
 
 
