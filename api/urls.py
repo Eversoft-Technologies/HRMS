@@ -191,7 +191,9 @@ urlpatterns = [
     path('me/permissions', views.my_permissions),
 
     path('dashboard/stats', views.dashboard_stats),
+    path('directory', views.directory_search),
     path('config', views.client_config),
+    path('integrations/status', views.integrations_status),
     path('health', views.health),
 
     # Recruitment KPI Dashboard

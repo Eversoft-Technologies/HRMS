@@ -58,7 +58,14 @@
     catch (_) { return ""; }
   }
   function hiddenForRole() { return roleName() === "employee"; }
-  function canShow() { return !!session() && !onCandidatePage() && !hiddenForRole(); }
+  /* Never on the sign-in / sign-up / password screens. Signing out is a SPA
+     navigation, so the session check alone left the button floating on the
+     login page until the next 8-second tick noticed. */
+  function onAuthPage() {
+    return !!document.querySelector(".auth-wrap") ||
+      /^\/(login|reset-password)(\/|$)/.test(location.pathname);
+  }
+  function canShow() { return !!session() && !onCandidatePage() && !hiddenForRole() && !onAuthPage(); }
 
   // ====================================================================
   // Publisher (candidate)
@@ -455,6 +462,12 @@
     var placeMo = new MutationObserver(function () {
       placeMo.disconnect();
       try { place(); } catch (_) {}
+      // Route changes (sign-out, sign-in) show up here first; don't wait for
+      // the next tick to hide or show the button.
+      try {
+        var want = canShow() ? "flex" : "none";
+        if (btn.style.display !== want) btn.style.display = want;
+      } catch (_) {}
       placeMo.observe(document.body, { childList: true, subtree: true });
     });
     placeMo.observe(document.body, { childList: true, subtree: true });

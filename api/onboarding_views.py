@@ -1090,6 +1090,18 @@ def candidate_work_authorization(request, pk):
     if auth_type not in AUTH_TYPES:
         return err(f"authType must be one of: {', '.join(AUTH_TYPES)}")
 
+    # "Other" must say what it is; any other type has nothing to say, so a
+    # value left over from before the type changed is cleared.
+    other = ' '.join(str(body.get('authTypeOther') or '').split())
+    if auth_type == 'Other':
+        if not other:
+            return err('Specify the other work authorization type')
+        if len(other) > 120:
+            return err('The other work authorization type must be 120 characters or fewer')
+    else:
+        other = ''
+    body = {**body, 'authTypeOther': other}
+
     status_val = (body.get('status') or 'Pending').strip()
     if status_val not in AUTH_STATUSES:
         return err(f"status must be one of: {', '.join(AUTH_STATUSES)}")
@@ -1152,7 +1164,7 @@ def candidate_work_authorization(request, pk):
         set_stage(candidate, 'documents', 'In Progress', actor)
         log_activity(
             candidate, 'Work Authorization Updated', actor,
-            comments=f'{auth_type} ({status_val})',
+            comments=f"{auth_type}{': ' + other if other else ''} ({status_val})",
             old_value=before,
             new_value=WorkAuthorizationSerializer(auth).data,
         )
@@ -1458,7 +1470,7 @@ def candidate_verification(request, pk):
             'Onboarding approval pending',
             f'{candidate.first_name} {candidate.last_name}'.strip()
             + ' passed HR verification and is awaiting your approval.',
-            link=f'/onboarding/candidates/{candidate.id}',
+            link=f'/onboarding/candidates/{candidate.id}?tab=approval',
         )
 
     data = HrVerificationSerializer(verification).data
@@ -1529,7 +1541,7 @@ def candidate_approval(request, pk):
             + f' was {action.lower()} by {actor}.'
             + (f' Comments: {comments}' if comments else ''),
             'success' if action == 'Approved' else 'warning',
-            link=f'/onboarding/candidates/{candidate.id}',
+            link=f'/onboarding/candidates/{candidate.id}?tab=approval',
         )
 
     return Response(ManagerApprovalSerializer(approval).data, status=201)
@@ -1896,6 +1908,7 @@ def work_authorization_list(request):
         days = (a.expiry_date - today).days if (a and a.expiry_date) else None
         row.update({
             'authType': (a.auth_type or '') if a else '',
+            'authTypeOther': (a.auth_type_other or '') if a else '',
             'status': (a.status or '') if a else '',
             'expiryDate': a.expiry_date.strftime('%Y-%m-%d') if (a and a.expiry_date) else None,
             'daysToExpiry': days,

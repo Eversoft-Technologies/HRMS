@@ -2,7 +2,6 @@
   'use strict';
 
   var STORAGE_KEY = 'hrms_session';
-  var WRAPPER_ID = 'hrms-notifications-wrapper';
   var BUTTON_ID = 'hrms-notifications-btn';
   var PANEL_ID = 'hrms-notifications-panel';
   var SEARCH_ID = 'hrms-notifications-search';
@@ -15,9 +14,12 @@
 
   var state = {
     items: [],
-    filter: 'all',
+    // Unread by default: a notification you have opened has done its job, so
+    // it leaves the list. Nothing is deleted — All / Read still show it.
+    filter: 'unread',
     search: '',
     selected: {},
+    activeId: null,   // the notification just clicked, while the panel is open
   };
 
   function actorEmail() {
@@ -47,60 +49,6 @@
     return null;
   }
 
-  function buildIcon() {
-    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="16" height="16"><path d="M14 17h5"></path><path d="M5 17h5"></path><path d="M8 17V10a4 4 0 1 1 8 0v7"></path><path d="M10 17h4"></path></svg>';
-  }
-
-  function createButton() {
-    var wrap = document.createElement('div');
-    wrap.id = WRAPPER_ID;
-    wrap.style.position = 'relative';
-    wrap.style.display = 'inline-flex';
-
-    var btn = document.createElement('button');
-    btn.id = BUTTON_ID;
-    btn.type = 'button';
-    btn.setAttribute('aria-label', 'Notifications');
-    btn.style.display = 'inline-flex';
-    btn.style.alignItems = 'center';
-    btn.style.justifyContent = 'center';
-    btn.style.width = '38px';
-    btn.style.height = '38px';
-    btn.style.borderRadius = '999px';
-    btn.style.border = '1px solid var(--border, rgba(255,255,255,0.16))';
-    btn.style.background = 'var(--surface2, rgba(255,255,255,0.08))';
-    btn.style.color = 'var(--text1, #e5e7eb)';
-    btn.style.cursor = 'pointer';
-    btn.style.position = 'relative';
-    btn.innerHTML = buildIcon();
-
-    var badge = document.createElement('span');
-    badge.id = 'hrms-notifications-badge';
-    badge.textContent = '0';
-    badge.style.position = 'absolute';
-    badge.style.top = '-2px';
-    badge.style.right = '-2px';
-    badge.style.minWidth = '18px';
-    badge.style.height = '18px';
-    badge.style.padding = '0 5px';
-    badge.style.fontSize = '10px';
-    badge.style.lineHeight = '18px';
-    badge.style.borderRadius = '999px';
-    badge.style.background = 'var(--accent, #4f8ef7)';
-    badge.style.color = '#fff';
-    badge.style.display = 'none';
-
-    btn.appendChild(badge);
-    btn.addEventListener('click', function (e) {
-      e.preventDefault();
-      e.stopPropagation();
-      togglePanel();
-    });
-
-    wrap.appendChild(btn);
-    return { wrap: wrap, btn: btn, badge: badge };
-  }
-
   function createPanel() {
     var panel = document.createElement('div');
     panel.id = PANEL_ID;
@@ -124,10 +72,10 @@
         <button type="button" id="hrms-notifications-close" style="border:none;background:none;color:var(--text2,#94a3b8);cursor:pointer;font-size:12px;">Close</button>
       </div>
       <div style="display:flex;gap:8px;align-items:center;padding:10px 12px;border-bottom:1px solid var(--border, rgba(255,255,255,0.12));">
-        <input id="${SEARCH_ID}" placeholder="Search notifications..." style="flex:1;min-width:120px;background:var(--surface2,rgba(255,255,255,0.06));border:1px solid var(--border,rgba(255,255,255,0.10));border-radius:10px;padding:8px 10px;color:var(--text1);font-size:12px;" />
-        <select id="${FILTER_ID}" style="background:var(--surface2,rgba(255,255,255,0.06));border:1px solid var(--border,rgba(255,255,255,0.10));border-radius:10px;padding:8px 10px;color:var(--text1);font-size:12px;">
+        <input id="${SEARCH_ID}" placeholder="Search notifications..." style="flex:1;min-width:120px;background:var(--surface2,rgba(255,255,255,0.06));border:1px solid var(--border,rgba(255,255,255,0.10));border-radius:10px;padding:8px 10px;color:var(--text);font-size:12px;" />
+        <select id="${FILTER_ID}" style="background:var(--surface2,rgba(255,255,255,0.06));border:1px solid var(--border,rgba(255,255,255,0.10));border-radius:10px;padding:8px 10px;color:var(--text);font-size:12px;">
+          <option value="unread" selected>Unread</option>
           <option value="all">All</option>
-          <option value="unread">Unread</option>
           <option value="read">Read</option>
         </select>
       </div>
@@ -137,9 +85,9 @@
           Select all
         </label>
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
-          <button id="${MARK_READ_ID}" type="button" style="border:1px solid var(--border,rgba(255,255,255,0.10));background:var(--surface2,rgba(255,255,255,0.06));color:var(--text1);border-radius:10px;padding:8px 10px;font-size:12px;cursor:pointer;">Mark all read</button>
-          <button id="${DELETE_SELECTED_ID}" type="button" style="border:1px solid var(--border,rgba(255,255,255,0.10));background:var(--surface2,rgba(255,255,255,0.06));color:var(--text1);border-radius:10px;padding:8px 10px;font-size:12px;cursor:pointer;">Delete selected</button>
-          <button id="${CLEAR_ALL_ID}" type="button" style="border:1px solid var(--border,rgba(255,255,255,0.10));background:var(--surface2,rgba(255,255,255,0.06));color:var(--text1);border-radius:10px;padding:8px 10px;font-size:12px;cursor:pointer;">Clear all</button>
+          <button id="${MARK_READ_ID}" type="button" style="border:1px solid var(--border,rgba(255,255,255,0.10));background:var(--surface2,rgba(255,255,255,0.06));color:var(--text);border-radius:10px;padding:8px 10px;font-size:12px;cursor:pointer;">Mark all read</button>
+          <button id="${DELETE_SELECTED_ID}" type="button" style="border:1px solid var(--border,rgba(255,255,255,0.10));background:var(--surface2,rgba(255,255,255,0.06));color:var(--text);border-radius:10px;padding:8px 10px;font-size:12px;cursor:pointer;">Delete selected</button>
+          <button id="${CLEAR_ALL_ID}" type="button" style="border:1px solid var(--border,rgba(255,255,255,0.10));background:var(--surface2,rgba(255,255,255,0.06));color:var(--text);border-radius:10px;padding:8px 10px;font-size:12px;cursor:pointer;">Clear all</button>
         </div>
       </div>
       <div id="hrms-notifications-list" style="max-height:280px;overflow:auto;padding:8px 8px 12px;"></div>
@@ -187,7 +135,12 @@
     var items = state.items || [];
     var q = normalizeString(state.search);
     if (state.filter === 'unread') {
-      items = items.filter(function (item) { return item.isRead === false; });
+      // The one just clicked stays on screen while you are still looking at
+      // the panel; it drops out once the panel closes.
+      items = items.filter(function (item) {
+        return item.isRead === false ||
+          (state.activeId != null && String(state.activeId) === String(item.id));
+      });
     } else if (state.filter === 'read') {
       items = items.filter(function (item) { return item.isRead === true; });
     }
@@ -217,7 +170,10 @@
     var list = document.getElementById('hrms-notifications-list');
     if (!list) return;
     if (!items || !items.length) {
-      list.innerHTML = '<div style="padding:18px 10px;font-size:13px;color:var(--text2,#94a3b8);text-align:center;">No notifications match your search or filter.</div>';
+      var caughtUp = state.filter === 'unread' && !state.search;
+      list.innerHTML = '<div style="padding:18px 10px;font-size:13px;color:var(--text2,#94a3b8);text-align:center;">' +
+        (caughtUp ? 'You’re all caught up. Opened notifications are under <b>All</b> / <b>Read</b>.'
+                  : 'No notifications match your search or filter.') + '</div>';
       return;
     }
 
@@ -231,8 +187,22 @@
       row.style.padding = '10px 10px 12px';
       row.style.borderRadius = '10px';
       row.style.marginBottom = '6px';
-      row.style.background = item.isRead ? 'transparent' : 'rgba(79, 142, 247, 0.12)';
-      row.style.border = '1px solid var(--border, rgba(255,255,255,0.10))';
+      var active = state.activeId != null && String(state.activeId) === String(item.id);
+      var restBg = item.isRead ? 'transparent' : 'rgba(79, 142, 247, 0.12)';
+      row.setAttribute('data-nid', item.id);
+      row.style.transition = 'background-color .15s ease, border-color .15s ease, box-shadow .15s ease';
+      if (active) {
+        // The one you clicked: unmistakable, and still marked when you come
+        // back to the panel after it took you to the page.
+        row.style.background = 'rgba(79, 142, 247, 0.20)';
+        row.style.border = '1.5px solid var(--accent, #4f8ef7)';
+        row.style.boxShadow = '0 0 0 3px rgba(79, 142, 247, 0.18)';
+      } else {
+        row.style.background = restBg;
+        row.style.border = '1px solid var(--border, rgba(255,255,255,0.10))';
+        row.addEventListener('mouseenter', function () { row.style.background = 'rgba(79, 142, 247, 0.08)'; });
+        row.addEventListener('mouseleave', function () { row.style.background = restBg; });
+      }
 
       var checkboxWrap = document.createElement('div');
       checkboxWrap.style.display = 'flex';
@@ -255,19 +225,18 @@
       content.style.cursor = 'pointer';
       content.style.display = 'flex';
       content.style.flexDirection = 'column';
+      var target = resolveLink(item);
       content.addEventListener('click', function () {
         if (!item.id) return;
+        state.activeId = item.id;
         if (!item.isRead) {
           markRead(item.id);
           item.isRead = true;
         }
         renderPanel();
-        if (item.link) {
-          try {
-            window.history.pushState(null, '', item.link);
-            window.dispatchEvent(new CustomEvent('hrmsNavigate', { detail: { path: item.link } }));
-            window.dispatchEvent(new PopStateEvent('popstate'));
-          } catch (_) {}
+        if (target) {
+          hidePanel();
+          openTarget(target);
         }
       });
 
@@ -288,6 +257,22 @@
       meta.style.fontSize = '11px';
       meta.style.marginTop = '8px';
       meta.style.color = 'var(--text3,#64748b)';
+
+      if (active) {
+        var last = document.createElement('span');
+        last.textContent = '  ·  Last opened';
+        last.style.color = 'var(--accent,#4f8ef7)';
+        last.style.fontWeight = '600';
+        meta.appendChild(last);
+      }
+      if (target && !active) {
+        var open = document.createElement('span');
+        open.textContent = '  ·  Open ›';
+        open.style.color = 'var(--accent,#4f8ef7)';
+        open.style.fontWeight = '600';
+        meta.appendChild(open);
+        content.title = 'Go to this notification';
+      }
 
       content.appendChild(title);
       content.appendChild(message);
@@ -315,10 +300,162 @@
     });
   }
 
+  /* ── Where a notification leads ─────────────────────────────────────────
+     The server stores a link per notification: a path, optionally with
+       ?focus=<text>   scroll to + highlight the row/card containing that text
+       ?admin=<tab>    open the Attendance Settings overlay on that tab
+       ?tab=<tab>      (onboarding) open the candidate drawer on that tab
+     Older rows predate some of these links, so they are inferred from the
+     title — the server only ever rewrote them to a bare page path. */
+  var TITLE_ROUTES = [
+    [/(off-site|away-from-home) check-in awaiting|out-of-office check-in needs|home location awaiting/i, '/employees/checkin?admin=reviews'],
+    [/\bwfh\b|work-from-home/i, '/employees/checkin?focus=Work+From+Home'],
+    [/attendance correction/i, '/employees/leave'],
+  ];
+  var KEYWORD_ROUTES = [
+    [/leave/i, '/employees/leave'],
+    [/submission/i, '/employees/submissions'],
+    [/task/i, '/employees/tasks'],
+    [/interview/i, '/recruit/interview'],
+    [/onboarding/i, '/onboarding'],
+    [/check-?in|check-?out|attendance|break|overtime|working day|work arrangement|home location/i, '/employees/attendance'],
+  ];
+
+  function resolveLink(item) {
+    var link = String(item.link || '').trim();
+    // Only same-app paths: '/x', never '//host' or 'javascript:'.
+    if (link && (link.charAt(0) !== '/' || link.charAt(1) === '/')) link = '';
+    var generic = !link || link === '/attendance' || link === '/employees/attendance';
+    if (generic) {
+      for (var i = 0; i < TITLE_ROUTES.length; i++) {
+        if (TITLE_ROUTES[i][0].test(item.title || '')) return TITLE_ROUTES[i][1];
+      }
+    }
+    if (link === '/attendance') return '/employees/attendance';
+    if (link) return link;
+    for (var j = 0; j < KEYWORD_ROUTES.length; j++) {
+      // Title only: message bodies mention other modules in passing.
+      if (KEYWORD_ROUTES[j][0].test(item.title || '')) return KEYWORD_ROUTES[j][1];
+    }
+    return '';
+  }
+
+  var focusTimer = null;
+
+  function openTarget(link) {
+    var url;
+    try { url = new URL(link, location.origin); } catch (_) { return; }
+    if (url.origin !== location.origin) return;
+    var path = url.pathname.replace(/\/+$/, '') || '/';
+    var q = url.searchParams;
+
+    var ob = path.match(/^\/onboarding(\/.*)?$/);
+    if (ob) {
+      // The onboarding pages are a sidecar React doesn't know about; a popstate
+      // would make React Router bounce to '/'. Let that script navigate.
+      var sub = ob[1] || '';
+      var cand = sub.match(/^\/candidates\/(\d+)$/);
+      if (window.__hrmsOnboardingOpen) {
+        window.__hrmsOnboardingOpen(cand ? '/candidates' : sub, cand ? Number(cand[1]) : null, q.get('tab') || undefined);
+      } else {
+        window.location.assign(path);
+      }
+    } else if (location.pathname.replace(/\/+$/, '') !== path) {
+      try {
+        window.history.pushState({}, '', path);
+        window.dispatchEvent(new CustomEvent('hrmsNavigate', { detail: { path: path } }));
+        window.dispatchEvent(new PopStateEvent('popstate'));
+      } catch (_) {
+        window.location.assign(path);
+        return;
+      }
+    }
+
+    var admin = q.get('admin');
+    if (admin) {
+      whenReady(function () { return window.__hrmsOpenAttendanceAdmin; }, function (openAdmin) {
+        openAdmin(admin);
+      });
+    }
+    var focus = q.get('focus');
+    if (focus) focusOn(focus, path);
+  }
+
+  /* Poll for fn() to return something truthy (pages render, then fetch). */
+  function whenReady(fn, then, ms) {
+    var deadline = Date.now() + (ms || 8000);
+    (function tick() {
+      var v = null;
+      try { v = fn(); } catch (_) {}
+      if (v) { then(v); return; }
+      if (Date.now() < deadline) setTimeout(tick, 200);
+    })();
+  }
+
+  function isVisible(el) {
+    return !!(el.offsetParent || el.getClientRects().length);
+  }
+
+  /* The smallest visible row/card on the page whose text contains `text`. */
+  function findFocusTarget(text) {
+    var root = document.querySelector('.main') || document.body;
+    var needle = text.toLowerCase();
+    var groups = ['tr', '[role="row"]', 'li', '[class*="card" i]', '[class*="item" i]', '[class*="row" i]'];
+    for (var g = 0; g < groups.length; g++) {
+      var els = root.querySelectorAll(groups[g]);
+      var best = null;
+      var bestLen = Infinity;
+      for (var i = 0; i < els.length; i++) {
+        var el = els[i];
+        if (el.closest('#' + PANEL_ID) || el.closest('.topbar')) continue;
+        var t = (el.textContent || '').toLowerCase();
+        if (t.indexOf(needle) === -1 || t.length >= bestLen || !isVisible(el)) continue;
+        best = el;
+        bestLen = t.length;
+      }
+      if (best) return best;
+    }
+    return null;
+  }
+
+  function focusOn(text, path) {
+    if (focusTimer) clearTimeout(focusTimer);
+    var deadline = Date.now() + 8000;
+    (function tick() {
+      // Stop if the user has moved on to another page meanwhile.
+      if ((location.pathname.replace(/\/+$/, '') || '/') !== path) return;
+      var el = findFocusTarget(text);
+      if (!el) {
+        if (Date.now() < deadline) focusTimer = setTimeout(tick, 250);
+        return;
+      }
+      highlight(el);
+    })();
+  }
+
+  function highlight(el) {
+    try { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (_) { el.scrollIntoView(); }
+    var prev = { outline: el.style.outline, offset: el.style.outlineOffset, shadow: el.style.boxShadow, transition: el.style.transition };
+    el.style.transition = 'box-shadow 0.4s ease, outline-color 0.4s ease';
+    el.style.outline = '2px solid var(--accent, #4f8ef7)';
+    el.style.outlineOffset = '2px';
+    el.style.boxShadow = '0 0 0 6px rgba(79, 142, 247, 0.18)';
+    setTimeout(function () {
+      el.style.outline = prev.outline;
+      el.style.outlineOffset = prev.offset;
+      el.style.boxShadow = prev.shadow;
+      setTimeout(function () { el.style.transition = prev.transition; }, 450);
+    }, 2800);
+  }
+
   function renderPanel() {
     var visible = filteredItems();
     renderList(visible);
     updateSelectAllControl();
+    if (state.activeId != null) {
+      var activeRow = document.querySelector('#hrms-notifications-list [data-nid="' + state.activeId + '"]');
+      if (activeRow) activeRow.scrollIntoView({ block: 'nearest' });
+    }
   }
 
   function fetchNotifications(opts) {
@@ -461,6 +598,8 @@
     var panel = document.getElementById(PANEL_ID);
     if (!panel) return;
     panel.style.display = 'none';
+    // Closing ends the "just clicked" highlight, so next time it is gone.
+    state.activeId = null;
   }
 
   function togglePanel() {
@@ -489,7 +628,7 @@
     }
     if (filter) {
       filter.addEventListener('change', function (e) {
-        state.filter = e.target.value || 'all';
+        state.filter = e.target.value || 'unread';
         renderPanel();
       });
     }
@@ -519,80 +658,91 @@
     }
   }
 
-  function injectWidget() {
-    if (document.getElementById(BUTTON_ID)) return;
-    var topbar = document.querySelector('.topbar') || document.querySelector('[class*="topbar" i]') || document.querySelector('header');
-    var existing = findExistingBell();
-    // Wait for the app's real top-bar bell to render before enhancing it.
-    // Falling back to document.body too early creates a duplicate floating bell.
-    if ((!topbar || !existing) && (injectWidget._t = (injectWidget._t || 0) + 1) < 30) {
-      setTimeout(injectWidget, 400);
-      return;
+  /* The app's own topbar bell is what we enhance. React renders it only on
+     signed-in pages and may re-create it (sign-in, layout changes), so rather
+     than binding once at load — which used to give up after ~12s on the login
+     page, fall back to a hidden bell of our own, and leave the real one dead
+     after sign-in — adopt whichever bell is in the topbar right now, and
+     handle clicks by delegation so a re-created bell keeps working. */
+  function adoptBell() {
+    var current = document.getElementById(BUTTON_ID);
+    if (current && current.isConnected && current.closest('.topbar')) return current;
+    var bell = findExistingBell();
+    if (!bell) return null;
+    bell.id = BUTTON_ID;
+    bell.setAttribute('aria-label', 'Notifications');
+    bell.style.position = bell.style.position || 'relative';
+    if (!bell.querySelector('#hrms-notifications-badge')) {
+      var stale = document.getElementById('hrms-notifications-badge');
+      if (stale) stale.remove();
+      var badge = document.createElement('span');
+      badge.id = 'hrms-notifications-badge';
+      badge.textContent = '0';
+      badge.style.position = 'absolute';
+      badge.style.top = '-2px';
+      badge.style.right = '-2px';
+      badge.style.minWidth = '18px';
+      badge.style.height = '18px';
+      badge.style.padding = '0 5px';
+      badge.style.fontSize = '10px';
+      badge.style.lineHeight = '18px';
+      badge.style.borderRadius = '999px';
+      badge.style.background = 'var(--danger, #ef4444)';
+      badge.style.color = '#fff';
+      badge.style.display = 'none';
+      bell.appendChild(badge);
     }
-    if (!topbar) topbar = document.body;
-    var btn;
-    var badge;
-    if (existing) {
-      btn = existing;
-      btn.id = BUTTON_ID;
-      btn.setAttribute('aria-label', 'Notifications');
-      btn.style.position = btn.style.position || 'relative';
-      badge = document.getElementById('hrms-notifications-badge');
-      if (!badge) {
-        badge = document.createElement('span');
-        badge.id = 'hrms-notifications-badge';
-        badge.textContent = '0';
-        badge.style.position = 'absolute';
-        badge.style.top = '-2px';
-        badge.style.right = '-2px';
-        badge.style.minWidth = '18px';
-        badge.style.height = '18px';
-        badge.style.padding = '0 5px';
-        badge.style.fontSize = '10px';
-        badge.style.lineHeight = '18px';
-        badge.style.borderRadius = '999px';
-        badge.style.background = 'var(--danger, #ef4444)';
-        badge.style.color = '#fff';
-        badge.style.display = 'none';
-        btn.appendChild(badge);
-      }
-      btn.addEventListener('click', function (e) {
-        e.preventDefault();
-        e.stopPropagation();
-        togglePanel();
-      });
-    } else {
-      var ui = createButton();
-      if (topbar === document.body) {
-        document.body.appendChild(ui.wrap);
-        ui.wrap.style.position = 'fixed';
-        ui.wrap.style.top = '16px';
-        ui.wrap.style.right = '16px';
-        ui.wrap.style.zIndex = '2200';
-      } else {
-        topbar.appendChild(ui.wrap);
-      }
-      btn = ui.btn;
-      badge = ui.badge;
-    }
+    // A new bell (e.g. just signed in) should show the current count at once.
+    fetchNotifications({ background: false });
+    return bell;
+  }
 
+  function start() {
     var panel = createPanel();
     document.body.appendChild(panel);
     wirePanel(panel, panel);
 
+    // Capture phase: runs before React's own handler and before the
+    // outside-click handler below, whichever bell element is current.
     document.addEventListener('click', function (e) {
       var target = e.target;
       if (!target || !target.closest) return;
+      if (target.closest('#' + BUTTON_ID)) {
+        e.preventDefault();
+        e.stopPropagation();
+        togglePanel();
+      }
+    }, true);
+
+    document.addEventListener('click', function (e) {
+      var target = e.target;
+      if (!target || !target.closest) return;
+      // Clicking a notification re-renders the list, so by the time the click
+      // bubbles here its target may already be detached — that is a click
+      // inside the panel, not outside it.
+      if (!target.isConnected) return;
       if (target.closest('#' + PANEL_ID) || target.closest('#' + BUTTON_ID)) return;
       hidePanel();
     });
 
     window.addEventListener('resize', function () {
-      var panel = document.getElementById(PANEL_ID);
-      if (panel && panel.style.display === 'block' && btn) {
-        positionPanel(panel, btn);
-      }
+      var p = document.getElementById(PANEL_ID);
+      var btn = document.getElementById(BUTTON_ID);
+      if (p && p.style.display === 'block' && btn) positionPanel(p, btn);
     });
+
+    adoptBell();
+    var queued = false;
+    new MutationObserver(function () {
+      if (queued) return;
+      queued = true;
+      setTimeout(function () {
+        queued = false;
+        var bell = adoptBell();
+        // Signed out / no topbar: don't leave the panel floating.
+        if (!bell) hidePanel();
+      }, 50);
+    }).observe(document.body, { childList: true, subtree: true });
 
     fetchNotifications({ background: false });
     setInterval(fetchNotifications, REFRESH_MS);
@@ -612,11 +762,9 @@
 
   function init() {
     if (document.readyState === 'loading') {
-      document.addEventListener('DOMContentLoaded', function () {
-        injectWidget();
-      });
+      document.addEventListener('DOMContentLoaded', start);
     } else {
-      injectWidget();
+      start();
     }
   }
 
