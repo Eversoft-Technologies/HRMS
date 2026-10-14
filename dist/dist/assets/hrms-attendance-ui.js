@@ -795,7 +795,10 @@
       '.hram-card{margin-top:14px}' +
       '.hram-pill-row{display:flex;gap:8px;margin:10px 0 12px;flex-wrap:wrap}' +
       '.hram-pill{padding:6px 12px;border-radius:999px;border:1px solid var(--border2,#e5e7eb);background:var(--bg3,#f9fafb);font-size:12px;font-weight:600;color:var(--text2,#4b5563);cursor:pointer}' +
-      '.hram-pill.active{background:var(--text,#111827);color:#fff;border-color:var(--text,#111827)}' +
+      /* Accent, not the text colour, as the active background: on the dark theme
+         --text is near-white, which left white text on a white pill. */
+      '.hram-pill.active{background:var(--accent,#4f8ef7);color:#fff;border-color:var(--accent,#4f8ef7)}' +
+      '.hram-pill.active .hram-pill-count{opacity:.9}' +
       '.hram-pill-count{opacity:.75}' +
       '.hram-attn-row{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--border2,#f3f4f6)}' +
       '.hram-attn-row:last-child{border-bottom:none}' +

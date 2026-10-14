@@ -58,7 +58,14 @@
     catch (_) { return ""; }
   }
   function hiddenForRole() { return roleName() === "employee"; }
-  function canShow() { return !!session() && !onCandidatePage() && !hiddenForRole(); }
+  /* Never on the sign-in / sign-up / password screens. Signing out is a SPA
+     navigation, so the session check alone left the button floating on the
+     login page until the next 8-second tick noticed. */
+  function onAuthPage() {
+    return !!document.querySelector(".auth-wrap") ||
+      /^\/(login|reset-password)(\/|$)/.test(location.pathname);
+  }
+  function canShow() { return !!session() && !onCandidatePage() && !hiddenForRole() && !onAuthPage(); }
 
   // ====================================================================
   // Publisher (candidate)
@@ -259,7 +266,7 @@
       '<div data-stage style="display:none;margin-top:14px;">' +
       '<video data-video autoplay playsinline style="width:100%;border-radius:12px;background:#000;aspect-ratio:16/9;"></video>' +
       '<div data-cc style="margin-top:10px;background:rgba(0,0,0,0.55);border:1px solid #1e293b;border-radius:8px;padding:8px 12px;max-height:120px;overflow-y:auto;">' +
-      '<div style="font-size:10px;color:#64748b;margin-bottom:3px;">🎤 Live Captions</div>' +
+      '<div style="font-size:10px;color:var(--text2,#64748b);margin-bottom:3px;">🎤 Live Captions</div>' +
       '<div data-cc-q style="font-size:11px;color:#94a3b8;margin-bottom:4px;font-style:italic;"></div>' +
       '<div data-cc-t style="font-size:14px;color:#e2e8f0;line-height:1.5;">Waiting for the candidate to speak…</div>' +
       '</div>' +
@@ -304,7 +311,7 @@
       if (window.HRMSNet) { if (r.status === 0) { window.HRMSNet.failed("live"); return; } window.HRMSNet.succeeded("live"); }
       var rows = (r.ok && Array.isArray(r.data)) ? r.data : [];
       if (!rows.length) {
-        listEl.innerHTML = '<div style="text-align:center;color:#64748b;padding:34px 0;font-size:14px;">' +
+        listEl.innerHTML = '<div style="text-align:center;color:var(--text2,#64748b);padding:34px 0;font-size:14px;">' +
           'No interviews are live right now.<br><span style="font-size:12px;">' +
           'When a candidate starts their AI interview, it appears here.</span></div>';
         return;
@@ -367,7 +374,11 @@
     // Styled to sit inline in the topbar, where "Ask AI" used to be. The
     // floating-pill styling is applied only if no topbar is found (see place()).
     css(btn, {
-      position: "static", zIndex: "998",
+      // No z-index while inline: the topbar is a flex container, and a flex
+      // item's z-index stacks it above page overlays such as the Job Board's
+      // Edit Filters / Edit Columns drawers (BUG-HRMS-UI-002). The floating
+      // pill variant (no topbar) sets its own z-index in place().
+      position: "static", zIndex: "auto",
       background: "linear-gradient(135deg,#f43f5e,#a855f7)", color: "#fff",
       border: "none", borderRadius: "999px", padding: "7px 10px", cursor: "pointer",
       fontFamily: "'Segoe UI',Arial,sans-serif", fontWeight: "700", fontSize: "12px",
@@ -425,7 +436,7 @@
           if (btn.parentNode !== document.body) document.body.appendChild(btn);
           btn.classList.remove("hrms-live-mini");   // standalone: keep the label
           css(btn, {
-            position: "fixed", right: "20px", bottom: "84px",
+            position: "fixed", right: "20px", bottom: "84px", zIndex: "998",
             borderRadius: "30px", padding: "12px 18px", fontSize: "13px",
             boxShadow: "0 8px 24px rgba(244,63,94,0.45)"
           });
@@ -434,7 +445,7 @@
         var bell = bar.querySelector('[title*="notif" i]');
         if (btn.parentNode === bar && (!bell || btn.nextElementSibling === bell)) return;
         css(btn, {
-          position: "static", right: "auto", bottom: "auto",
+          position: "static", right: "auto", bottom: "auto", zIndex: "auto",
           borderRadius: "999px", padding: "7px 10px", fontSize: "12px",
           boxShadow: "0 2px 10px rgba(244,63,94,0.32)"
         });
@@ -455,6 +466,12 @@
     var placeMo = new MutationObserver(function () {
       placeMo.disconnect();
       try { place(); } catch (_) {}
+      // Route changes (sign-out, sign-in) show up here first; don't wait for
+      // the next tick to hide or show the button.
+      try {
+        var want = canShow() ? "flex" : "none";
+        if (btn.style.display !== want) btn.style.display = want;
+      } catch (_) {}
       placeMo.observe(document.body, { childList: true, subtree: true });
     });
     placeMo.observe(document.body, { childList: true, subtree: true });

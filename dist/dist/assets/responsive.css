@@ -136,15 +136,21 @@
   /* Content breathing room */
   .content { padding: 16px 14px; }
 
-  /* Collapse every multi-column grid to a single column */
-  .stat-grid,
-  .grid-2,
-  .grid-3,
-  .grid-2-1,
-  .grid-1-2,
-  .kanban {
-    grid-template-columns: 1fr;
-  }
+  
+/* Keep statistic cards horizontal on mobile */
+.stat-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+  gap: 5px;
+}
+
+/* Keep other grids in a single column on mobile */
+.grid-2,
+.grid-3,
+.grid-2-1,
+.grid-1-2,
+.kanban {
+  grid-template-columns: 1fr;
+}
 
   /* Section headers stack (title above the action button) */
   .sec-head { flex-direction: column; align-items: stretch; gap: 12px; }
@@ -248,4 +254,41 @@
 
   /* On the tiniest screens stack the filters one per row. */
   .hr-toolbar > select { flex: 1 1 100% !important; }
+}
+
+/* ------------------------------------------------------------
+   Phones (<= 480px, e.g. 375x940): compact cards on every page
+   - Two stat cards per row instead of one tall card each.
+     theme-overrides.css sets `.content .stat-grid` to auto-fit
+     200px columns (specificity 0,2,0), which collapses to ONE
+     column on a phone, so these selectors match that specificity
+     and win by loading later.
+   - Less padding on ordinary cards.
+   - The slide-in quick-view panels (Pipeline / Recruiter Quick
+     View: React inline styles, fixed, 320px wide, right:0 when
+     open) fill the screen width.
+   ------------------------------------------------------------ */
+@media (max-width: 480px) {
+  .content .stat-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    margin-bottom: 14px;
+  }
+  .content .stat-card { padding: 10px 12px; min-width: 0; }
+  .content .stat-label { font-size: 9.5px; letter-spacing: .4px; margin-bottom: 4px; white-space: normal; }
+  .content .stat-value { font-size: 22px; }
+  .content .stat-sub,
+  .content .stat-trend { font-size: 10px; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .content .card { padding: 12px; }
+  .content .card-title { font-size: 13px; margin-bottom: 10px; }
+
+  div[style*="position: fixed"][style*="width: 320px"][style*="right: 0px"] {
+    width: 100vw !important;
+    max-width: 100% !important;
+    left: 0 !important;
+  }
+
+  /* Account drawer (avatar menu): full width on phones. */
+  .hrms-drawer { width: 100vw; max-width: 100%; }
 }
