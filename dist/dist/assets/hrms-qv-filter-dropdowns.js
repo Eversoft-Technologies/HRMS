@@ -3,8 +3,20 @@
 
   var ROUTE = '/recruit/interview';
   var GROUPS = ['Actions', 'Outcome', 'Scope'];
-  var PORTAL_ID = 'hrms-qv-filter-dropdowns';
   var frame = 0;
+  var observedDrawer = null;
+  var drawerObserver = null;
+
+  function removeInjectedSelects() {
+    var selects = document.querySelectorAll('select[data-hrms-qv-filter]');
+    for (var i = 0; i < selects.length; i++) selects[i].remove();
+  }
+
+  function stopObservingDrawer() {
+    if (drawerObserver) drawerObserver.disconnect();
+    observedDrawer = null;
+    drawerObserver = null;
+  }
 
   function currentDrawer() {
     var headings = document.querySelectorAll('span');
@@ -44,17 +56,23 @@
     return label + (count ? ' (' + count + ')' : '');
   }
 
-  function ensurePortal() {
-    var portal = document.getElementById(PORTAL_ID);
-    if (portal) return portal;
-    portal = document.createElement('div');
-    portal.id = PORTAL_ID;
-    portal.style.cssText = 'position:fixed;inset:0;z-index:1001;pointer-events:none;';
-    document.body.appendChild(portal);
-    return portal;
+  function observeDrawer(drawer) {
+    if (observedDrawer === drawer) return;
+    stopObservingDrawer();
+    if (!drawer) return;
+
+    observedDrawer = drawer;
+    drawerObserver = new MutationObserver(scheduleSync);
+    drawerObserver.observe(drawer, {
+      attributes: true,
+      attributeFilter: ['class'],
+      characterData: true,
+      childList: true,
+      subtree: true
+    });
   }
 
-  function renderGroup(portal, group) {
+  function renderGroup(group) {
     var chips = group.element.querySelectorAll('.chip');
     if (!chips.length) return;
 
@@ -69,14 +87,16 @@
 
     for (var i = 0; i < chips.length; i++) chips[i].style.display = 'none';
 
-    var select = portal.querySelector('[data-filter="' + group.title + '"]');
+    var select = group.element.querySelector('select[data-hrms-qv-filter]');
     if (!select) {
       select = document.createElement('select');
       select.setAttribute('data-filter', group.title);
+      select.setAttribute('data-hrms-qv-filter', '1');
       select.setAttribute('aria-label', group.title);
       select.style.cssText = [
-        'position:fixed',
-        'pointer-events:auto',
+        'display:block',
+        'flex:1 1 auto',
+        'min-width:0',
         'box-sizing:border-box',
         'height:32px',
         'padding:6px 9px',
@@ -97,10 +117,11 @@
         })[0];
         if (!activeGroup) return;
         var activeChips = activeGroup.element.querySelectorAll('.chip');
-        var chosen = activeChips[Number(select.value)];
+        var activeSelect = activeGroup.element.querySelector('select[data-hrms-qv-filter]');
+        var chosen = activeChips[Number(activeSelect && activeSelect.value)];
         if (chosen) chosen.click();
       });
-      portal.appendChild(select);
+      group.element.appendChild(select);
     }
 
     var labels = [];
@@ -122,31 +143,26 @@
       select.__hrmsOptions = signature;
     }
     select.value = String(activeIndex);
-
-    var rect = group.element.getBoundingClientRect();
-    select.style.left = (rect.left + 70) + 'px';
-    select.style.top = (rect.top + (rect.height - 32) / 2) + 'px';
-    select.style.width = Math.max(100, rect.width - 78) + 'px';
   }
 
   function sync() {
     frame = 0;
     if (location.pathname.replace(/\/+$/, '') !== ROUTE) {
-      var oldPortal = document.getElementById(PORTAL_ID);
-      if (oldPortal) oldPortal.remove();
+      stopObservingDrawer();
+      removeInjectedSelects();
       return;
     }
 
-    var drawer = currentDrawer();
+    var drawer = observedDrawer && observedDrawer.isConnected
+      ? observedDrawer
+      : currentDrawer();
+    observeDrawer(drawer);
     var groups = drawer ? filterGroups(drawer) : [];
-    var portal = document.getElementById(PORTAL_ID);
     if (!groups.length) {
-      if (portal) portal.remove();
       return;
     }
 
-    portal = ensurePortal();
-    for (var i = 0; i < groups.length; i++) renderGroup(portal, groups[i]);
+    for (var i = 0; i < groups.length; i++) renderGroup(groups[i]);
   }
 
   function scheduleSync() {
@@ -155,16 +171,16 @@
   }
 
   function start() {
-    var observer = new MutationObserver(scheduleSync);
-    observer.observe(document.body, {
-      attributes: true,
-      attributeFilter: ['class'],
-      characterData: true,
-      childList: true,
-      subtree: true
+    var pageObserver = new MutationObserver(scheduleSync);
+    pageObserver.observe(document.body, { childList: true, subtree: true });
+    window.addEventListener('popstate', function () {
+      removeInjectedSelects();
+      scheduleSync();
     });
-    window.addEventListener('resize', scheduleSync);
-    window.addEventListener('scroll', scheduleSync, true);
+    window.addEventListener('hrmsNavigate', function () {
+      removeInjectedSelects();
+      scheduleSync();
+    });
     scheduleSync();
   }
 

@@ -903,11 +903,45 @@
   }
 
   /* ── Build Synchronized Transcript Component ────────────────────────── */
-  function createTranscriptPanel(responses, duration, onSeek) {
+  function createTranscriptPanel(responses, duration, onSeek, transcript) {
     var panel = document.createElement('div');
     panel.className = 'hvp-trans-panel';
 
     var items = Array.isArray(responses) ? responses : [];
+    if (items.length === 0 && typeof transcript === 'string' && transcript.trim()) {
+      items = transcript.split(/\n\s*\n(?=Q\d+\b)/).map(function (block) {
+        var lines = block.trim().split(/\r?\n/);
+        var header = lines.shift() || '';
+        var headerMatch = header.match(/^Q(\d+)(?:\s*[·|]\s*(.*))?$/);
+
+        if (!headerMatch) {
+          return { transcriptOnly: true, transcript: block.trim() };
+        }
+
+        var questionLines = [];
+        var answerLines = [];
+        var currentSection = 'question';
+        lines.forEach(function (line) {
+          var evaMatch = line.match(/^\s*Eva:\s*/i);
+          var candidateMatch = line.match(/^\s*Candidate:\s*/i);
+          if (evaMatch) {
+            currentSection = 'question';
+            questionLines.push(line.slice(evaMatch[0].length));
+          } else if (candidateMatch) {
+            currentSection = 'answer';
+            answerLines.push(line.slice(candidateMatch[0].length));
+          } else {
+            (currentSection === 'answer' ? answerLines : questionLines).push(line);
+          }
+        });
+
+        return {
+          stageGroup: headerMatch[2] || '',
+          q: questionLines.join('\n').trim() || 'Interview response',
+          transcript: answerLines.join('\n').trim() || block.trim()
+        };
+      });
+    }
     var totalItems = items.length || 1;
     var dur = duration || 1;
 
@@ -949,11 +983,12 @@
       var stageLabel = r.stageGroup ? ' · ' + r.stageGroup : '';
       card.innerHTML = [
         '<div class="hvp-trans-item-head">',
-        '  <span class="hvp-trans-qtag">Q' + (idx + 1) + stageLabel + '</span>',
+        '  <span class="hvp-trans-qtag">' + (r.transcriptOnly ? 'Transcript' : 'Q' + (idx + 1) + stageLabel) + '</span>',
         '  <span class="hvp-trans-time-pill">⏱ ' + formatSeconds(estimatedStartSec) + '</span>',
         '</div>',
-        '<div class="hvp-trans-q"><strong>Eva:</strong> ' + escapeHtml(r.q || '—') + '</div>',
-        '<div class="hvp-trans-a"><strong>Candidate:</strong> ' + escapeHtml(r.transcript || '(no speech detected)') + '</div>'
+        r.transcriptOnly
+          ? '<div class="hvp-trans-a"><strong>Transcript:</strong> ' + escapeHtml(r.transcript) + '</div>'
+          : '<div class="hvp-trans-q"><strong>Eva:</strong> ' + escapeHtml(r.q || '—') + '</div><div class="hvp-trans-a"><strong>Candidate:</strong> ' + escapeHtml(r.transcript || '(no speech detected)') + '</div>'
       ].join('');
 
       card.addEventListener('click', function () {
@@ -1101,7 +1136,7 @@
 
     transcriptPanel = createTranscriptPanel(meta.responses, rawDuration, function (targetSec) {
       playerInstance.seekTo(targetSec);
-    });
+    }, meta.transcript);
     transSlot.appendChild(transcriptPanel.element);
 
     function closeModal() {

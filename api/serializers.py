@@ -586,6 +586,27 @@ class InterviewRecordingSerializer(serializers.ModelSerializer):
         if has_recording is None:
             has_recording = bool(instance.recording_data is not None or instance.video_file)
 
+        if self.context.get('summary'):
+            return {
+                'id': instance.id,
+                'candidateName': instance.candidate_name,
+                'candidateEmail': instance.candidate_email,
+                'role': instance.role,
+                'duration': instance.duration,
+                'verdict': instance.verdict,
+                'totalScore': instance.total_score,
+                'techScore': instance.tech_score,
+                'commScore': instance.comm_score,
+                'integrityScore': instance.integrity_score,
+                'hasVideo': bool(has_video),
+                'hasRecording': bool(has_recording),
+                'videoUrl': f"/api/interview-recordings/{instance.id}/video" if has_video else None,
+                'thumbnailUrl': f"/api/interview-recordings/{instance.id}/thumbnail" if getattr(instance, 'thumbnail_file', None) else None,
+                'videoSize': getattr(instance, 'video_size', 0) or 0,
+                'videoMime': getattr(instance, 'video_mime', None) or 'video/mp4',
+                'createdAt': instance.created_at.strftime(DATETIME_FMT) if instance.created_at else None,
+            }
+
         return {
             'id': instance.id,
             'candidateName': instance.candidate_name,
