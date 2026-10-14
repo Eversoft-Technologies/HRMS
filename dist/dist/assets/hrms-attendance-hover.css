@@ -1,0 +1,72 @@
+/* ============================================================
+   hrms-attendance-hover.css — hover feedback for the Organization
+   Attendance admin view (/employees/attendance).
+
+   The view's root div carries `.hrms-att-admin` (added in the bundle);
+   the sidecar cards from hrms-attendance-ui.js carry `.hram-card`.
+   Everything here is scoped to those, so no other module changes.
+   The treatment mirrors the Dashboard's `.hrms-dash` cards so the app
+   feels consistent: a small lift, a soft shadow, an accent-tinted edge.
+   ============================================================ */
+
+/* ---------- KPI cards (Present Today … Avg Hours/Day) ---------- */
+.hrms-att-admin .stat-card {
+  cursor: default;
+  transition: transform .2s cubic-bezier(.22, 1, .36, 1),
+              box-shadow .2s ease, border-color .2s ease;
+}
+.hrms-att-admin .stat-card::before {
+  transition: height .2s ease, opacity .2s ease;
+}
+.hrms-att-admin .stat-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 10px 26px rgba(12, 20, 40, .18);
+  border-color: color-mix(in srgb, var(--accent) 26%, var(--border2));
+}
+.hrms-att-admin .stat-card:hover::before { height: 3px; }
+.hrms-att-admin .stat-card .stat-value {
+  transition: transform .2s cubic-bezier(.22, 1, .36, 1);
+  transform-origin: left center;
+}
+.hrms-att-admin .stat-card:hover .stat-value { transform: scale(1.04); }
+
+/* ---------- section cards (Live Team Presence, Today's Attendance,
+              Monthly Summary, Requires Attention, History, Rates…) ---------- */
+.hrms-att-admin .card,
+.hram-card {
+  transition: transform .2s cubic-bezier(.22, 1, .36, 1),
+              box-shadow .2s ease, border-color .2s ease;
+}
+.hrms-att-admin .card:hover,
+.hram-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 26px rgba(12, 20, 40, .14);
+  border-color: color-mix(in srgb, var(--accent) 20%, var(--border2));
+}
+
+/* ---------- rows inside the attendance lists ---------- */
+.hrms-att-admin tbody tr,
+.hram-card tbody tr {
+  transition: background-color .15s ease;
+}
+.hrms-att-admin tbody tr:hover,
+.hram-card tbody tr:hover {
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+
+/* ---------- presence legend pills ---------- */
+.hrms-att-admin .badge {
+  transition: transform .15s ease, box-shadow .15s ease;
+}
+.hrms-att-admin .card:hover .badge:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(12, 20, 40, .18);
+}
+
+/* ---------- touch devices: no hover state, so no lift ---------- */
+@media (hover: none) {
+  .hrms-att-admin .stat-card:hover,
+  .hrms-att-admin .card:hover,
+  .hram-card:hover { transform: none; box-shadow: none; }
+  .hrms-att-admin .stat-card:hover .stat-value { transform: none; }
+}
