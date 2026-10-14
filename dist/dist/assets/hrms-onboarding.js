@@ -66,6 +66,11 @@
     { key: 'sponsorshipRequired', label: 'Sponsorship required', type: 'checkbox', width: 'full', core: true },
   ];
   var AUTH_TYPES = ['F1', 'H1B', 'GC EAD', 'US Citizen', 'H4 EAD', 'Other'];
+  /* "Other" is stored with what it actually is (authTypeOther); show both. */
+  function authTypeLabel(r) {
+    if (!r || !r.authType) return '';
+    return r.authType === 'Other' && r.authTypeOther ? 'Other: ' + r.authTypeOther : r.authType;
+  }
   var AUTH_STATUSES = ['Active', 'Pending', 'Expired', 'Extension Filed', 'Transferred', 'Rejected'];
   var CAND_STATUSES = ['Draft', 'Pending Verification', 'Pending Approval', 'Approved', 'Rejected', 'Onboarded'];
   var DOC_TYPES = [['ssn', 'SSN', 1], ['driver_license', 'Driver License', 0],
@@ -849,7 +854,7 @@
 
   function cell(row, key) {
     if (key === 'status') return badge(row.status, statusKind(row.status));
-    if (key === 'authType') return row.authType ? badge(row.authType, 'neutral') : '<span class="ob-empty-val">-</span>';
+    if (key === 'authType') return row.authType ? badge(authTypeLabel(row), 'neutral') : '<span class="ob-empty-val">-</span>';
     if (key === 'authExpiryDate') {
       if (!row.authExpiryDate) return '<span class="ob-empty-val">-</span>';
       var d = daysTo(row.authExpiryDate);
@@ -1014,7 +1019,7 @@
         ['candidate', 'Candidate'],
         ['email', 'Email'],
         ['authType', 'Type', function (r) {
-          return r.authType ? badge(r.authType, 'neutral') : badge('Not set', 'warn');
+          return r.authType ? badge(authTypeLabel(r), 'neutral') : badge('Not set', 'warn');
         }],
         ['status', 'Status', function (r) {
           return r.status ? badge(r.status, statusKind(r.status)) : '<span class="ob-empty-val">-</span>';
@@ -1564,7 +1569,13 @@
       return wrap + lab + '<select class="ob-sel" id="wa-type"' + dis + '><option value="">Select…</option>' +
         AUTH_TYPES.map(function (t) {
           return '<option' + (a.authType === t ? ' selected' : '') + '>' + t + '</option>';
-        }).join('') + '</select></div>';
+        }).join('') + '</select>' +
+        // Shown only while the type is "Other": what that other type is.
+        '<div id="wa-type-other-wrap" style="margin-top:10px;' + (a.authType === 'Other' ? '' : 'display:none') + '">' +
+          '<label class="ob-lb" for="wa-type-other">Specify other type <span class="req">*</span></label>' +
+          '<input class="ob-in" id="wa-type-other" maxlength="120" placeholder="e.g. L-1, TN, O-1, E-3" value="' +
+            esc(a.authTypeOther || '') + '"' + dis + '>' +
+        '</div></div>';
     }
     if (f.key === 'status') {
       return wrap + lab + '<select class="ob-sel" id="wa-status"' + dis + '>' +
@@ -1662,8 +1673,16 @@
           box.querySelectorAll('input, select, textarea').forEach(function (i) { i.disabled = true; });
         }
       }
-      el.querySelector('#wa-type').addEventListener('change', renderDyn);
+      function syncOther(focus) {
+        var wrapEl = el.querySelector('#wa-type-other-wrap');
+        if (!wrapEl) return;
+        var isOther = el.querySelector('#wa-type').value === 'Other';
+        wrapEl.style.display = isOther ? '' : 'none';
+        if (isOther && focus) { var oi = el.querySelector('#wa-type-other'); if (oi && !oi.value) oi.focus(); }
+      }
+      el.querySelector('#wa-type').addEventListener('change', function () { renderDyn(); syncOther(true); });
       renderDyn();
+      syncOther(false);
 
       var fieldsBtn = el.querySelector('#wa-fields');
       if (fieldsBtn) fieldsBtn.addEventListener('click', function () { openFormBuilder('workAuth'); });
@@ -1673,10 +1692,18 @@
         var e = el.querySelector('#wa-e');
         var type = el.querySelector('#wa-type').value;
         if (!type) { e.textContent = 'Select a work authorization type.'; return; }
+        var otherIn = el.querySelector('#wa-type-other');
+        var otherVal = otherIn ? otherIn.value.trim() : '';
+        if (type === 'Other' && !otherVal) {
+          e.textContent = 'Specify the other work authorization type.';
+          if (otherIn) otherIn.focus();
+          return;
+        }
         save.disabled = true;
         e.textContent = '';
         var body = {
           authType: type,
+          authTypeOther: type === 'Other' ? otherVal : '',
           details: collectCustom(el.querySelector('#wa-dyn')),
           customFields: collectCustom(el.querySelector('#wa-custom')),
         };
@@ -1690,6 +1717,7 @@
           .then(function (res) {
             toast('Work authorization saved');
             c.authType = type;
+            c.authTypeOther = body.authTypeOther;
             if (body.status) c.status = 'In Progress';
             if (body.expiryDate) c.authExpiryDate = body.expiryDate;
             refreshDetail();
@@ -3564,6 +3592,7 @@
         head: spec.cols.map(function (c) { return c[1]; }),
         body: stageRows(spec).map(function (r) {
           return spec.cols.map(function (c) {
+            if (c[0] === 'authType') return authTypeLabel(r);
             var v = r[c[0]];
             if (Array.isArray(v)) return v.join(', ');
             if (typeof v === 'boolean') return v ? 'Yes' : 'No';
@@ -3583,6 +3612,7 @@
             var fd = fmtDate(r[k]); return fd === '—' ? '' : fd;
           }
           if (k === 'progress') return progressPct(r) + '%';
+          if (k === 'authType') return authTypeLabel(r);
           var v = r[k];
           return String(v == null ? '' : v);
         });
@@ -4064,6 +4094,14 @@
     // redirect), so nudge the access guard by hand.
     if (window.__hrmsApplyGuard) window.__hrmsApplyGuard();
   }
+
+  /* Deep link for notifications: go to an onboarding page and, optionally,
+     open one candidate's drawer on a given tab. Uses our own navigate() —
+     a popstate would wake React Router and bounce us to '/'. */
+  window.__hrmsOnboardingOpen = function (page, candidateId, tab) {
+    navigate(page || '');
+    if (candidateId) openDetail(candidateId, tab);
+  };
 
   function onNavClick(e) {
     var a = e.target && e.target.closest ? e.target.closest('a.nav-item') : null;

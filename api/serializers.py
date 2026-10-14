@@ -1862,6 +1862,7 @@ class OnboardingCandidateSerializer(serializers.ModelSerializer):
             # Denormalised summaries so the candidates table renders from one
             # call instead of an extra fetch per row.
             'authType': (auth.auth_type or '') if auth else '',
+            'authTypeOther': (auth.auth_type_other or '') if auth else '',
             'authStatus': (auth.status or '') if auth else '',
             'authExpiryDate': auth.expiry_date.strftime(DATE_FMT) if (auth and auth.expiry_date) else None,
             'verificationStatus': (verification.status or 'Pending') if verification else 'Pending',
@@ -1884,13 +1885,15 @@ class WorkAuthorizationSerializer(serializers.ModelSerializer):
     """The authorization plus its type-specific ``details`` blob, flattened into
     one object. The split across two tables is a storage concern, not an API one."""
     authType = serializers.CharField(source='auth_type', required=False, allow_blank=True, default='')
+    authTypeOther = serializers.CharField(source='auth_type_other', required=False, allow_blank=True,
+                                          max_length=120, default='')
     expiryDate = serializers.DateField(source='expiry_date', required=False, allow_null=True)
     receiptNumber = serializers.CharField(source='receipt_number', required=False, allow_blank=True, default='')
     sponsorshipRequired = serializers.BooleanField(source='sponsorship_required', required=False, default=False)
 
     class Meta:
         model = WorkAuthorization
-        fields = ['id', 'authType', 'status', 'expiryDate', 'receiptNumber', 'sponsorshipRequired']
+        fields = ['id', 'authType', 'authTypeOther', 'status', 'expiryDate', 'receiptNumber', 'sponsorshipRequired']
         read_only_fields = ['id']
         extra_kwargs = {'status': {'required': False, 'default': 'Pending'}}
 
@@ -1900,6 +1903,7 @@ class WorkAuthorizationSerializer(serializers.ModelSerializer):
             'id': instance.id,
             'candidateId': instance.candidate_id,
             'authType': instance.auth_type or '',
+            'authTypeOther': instance.auth_type_other or '',
             'status': instance.status or 'Pending',
             'expiryDate': instance.expiry_date.strftime(DATE_FMT) if instance.expiry_date else None,
             'receiptNumber': instance.receipt_number or '',
@@ -2322,7 +2326,15 @@ class ChatMessageSerializer(serializers.ModelSerializer):
         # message list. Empty when deleted or when there's no attachment.
         if getattr(obj, "is_deleted", False):
             return ""
-        if getattr(obj, "attachment_path", None) or obj.attachment_data:
+        if getattr(obj, "attachment_path", None):
+            return f"/api/chat/attachment/{obj.id}"
+        # The message list defers the attachment_data blob and annotates
+        # has_attachment_blob instead; touching obj.attachment_data there would
+        # load the blob back, one query per message.
+        has_blob = getattr(obj, "has_attachment_blob", None)
+        if has_blob is None:
+            has_blob = bool(obj.attachment_data)
+        if has_blob:
             return f"/api/chat/attachment/{obj.id}"
         return ""
 

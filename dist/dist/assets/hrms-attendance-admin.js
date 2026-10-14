@@ -2338,8 +2338,10 @@
   }
 
   /* ── open / close ────────────────────────────────────────────────────── */
-  function open() {
-    if (document.getElementById(OVERLAY_ID)) return;
+  /* tab is optional: notifications deep-link straight to e.g. 'reviews'. */
+  function open(tab) {
+    if (typeof tab === 'string' && tab) state.tab = tab;
+    if (document.getElementById(OVERLAY_ID)) { render(); return; }
     injectStyle();
     var back = document.createElement('div');
     back.id = OVERLAY_ID;

@@ -21,12 +21,13 @@ import os
 import re
 import secrets
 from datetime import datetime, time, timedelta
+from urllib.parse import urlencode
 
 from django.conf import settings
 from django.db import transaction
 from django.db.models import (
-    BinaryField, BooleanField, Case, CharField, Count, F, Func, IntegerField,
-    OuterRef, Q, Subquery, Sum, Value, When,
+    BinaryField, BooleanField, Case, CharField, Count, ExpressionWrapper, F, Func,
+    IntegerField, OuterRef, Q, Subquery, Sum, Value, When,
 )
 from django.db.models.functions import Coalesce, Substr
 from django.http import HttpResponse, JsonResponse
@@ -250,6 +251,16 @@ def _creator_q(value, also_name=''):
     if name:
         legacy = legacy | Q(interviewer__iexact=name)
     return q | (Q(created_by_email='') & legacy)
+
+
+def focus_link(path, text):
+    """A notification link that also names the record to scroll to and highlight
+    once the page opens (read by hrms-notifications.js; routers ignore it)."""
+    text = str(text or '').strip()[:80]
+    # Notification.link is 255 chars; non-ASCII titles triple in size encoded.
+    while text and len(path) + len(urlencode({'focus': text})) + 1 > 255:
+        text = text[:-5].rstrip()
+    return f'{path}?{urlencode({"focus": text})}' if text else path
 
 
 def create_notification(recipient, title, message, notification_type='info', link=''):
@@ -2772,7 +2783,7 @@ def attendance_check_in(request):
                     + (f'{round(home_dist)} m from their registered home'
                        if home_dist is not None else 'away from their registered home')
                     + f'. Reason: "{reason}"',
-                    '/attendance',
+                    '/employees/checkin?admin=reviews',
                 )
                 return Response({
                     'message': 'Your reason has been sent to HR. You will be able '
@@ -2878,7 +2889,7 @@ def attendance_check_in(request):
                 + (f'{round(distance)} m from {nearest.name}' if (distance is not None and nearest)
                    else 'from an unverified location')
                 + f'. Reason: "{reason}"',
-                '/attendance',
+                '/employees/checkin?admin=reviews',
             )
             create_notification(
                 email,
@@ -2930,7 +2941,7 @@ def attendance_check_in(request):
             'Out-of-office check-in needs approval',
             f'{obj.employee_name or email} checked in outside the office at '
             f'{now.strftime("%H:%M")}. Reason given: "{reason}"',
-            '/attendance',
+            '/employees/checkin?admin=reviews',
         )
 
     create_notification(
@@ -3562,7 +3573,7 @@ def attendance_home_locations(request):
         f'{email} registered a home location'
         + (f' (GPS ±{round(accuracy)} m)' if accuracy else '')
         + '. Confirm it before their work-from-home check-ins can be verified.',
-        '/attendance',
+        '/employees/checkin?admin=reviews',
     )
     return Response(_home_json(row), status=201)
 
@@ -4343,14 +4354,14 @@ def leave(request):
         'Leave request submitted',
         'Your leave request has been submitted and is awaiting approval.',
         'info',
-        '/employees/leave',
+        focus_link('/employees/leave', inst.type),
     )
     emp_name = inst.employee_name or email
     notify_approvers(
         'leave.action',
         'New leave request',
         f"{emp_name} has requested leave ({inst.type}) from {inst.from_date} to {inst.to_date}.",
-        '/employees/leave',
+        focus_link('/employees/leave', emp_name),
     )
     return Response(serializer.data, status=201)
 
@@ -4603,7 +4614,7 @@ def tasks(request):
             'New task assigned',
             f"You have been assigned a new task: {body.get('title', 'Task')}",
             'info',
-            '/employees/tasks',
+            focus_link('/employees/tasks', body.get('title')),
         )
     return Response(serializer.data, status=201)
 
@@ -4691,14 +4702,14 @@ def submissions(request):
         'Work submission created',
         f"Your work submission '{inst.title}' has been submitted for review.",
         'info',
-        '/employees/submissions',
+        focus_link('/employees/submissions', inst.title),
     )
     emp_name = inst.employee_name or email
     notify_approvers(
         'submission.action',
         'New work submission',
         f"{emp_name} has submitted a new work item: '{inst.title}'.",
-        '/employees/submissions',
+        focus_link('/employees/submissions', inst.title),
     )
     return Response(serializer.data, status=201)
 
@@ -4828,7 +4839,7 @@ def submission_detail(request, pk):
             'Work submission update',
             f"Your work submission '{inst.title}' has been {new_status.lower()}.",
             'success' if new_status.lower() == 'approved' else 'warning',
-            '/employees/submissions',
+            focus_link('/employees/submissions', inst.title),
         )
     # Stamp the reviewer on an approve/reject when the client didn't supply one.
     if need != 'employee.edit' and not str(request.data.get('reviewer') or '').strip() and user:
@@ -5245,6 +5256,50 @@ def client_config(request):
     })
 
 
+@api_view(['GET'])
+@require_perm('settings.manage')
+def integrations_status(request):
+    """What Settings → Integrations shows: the integrations this server really
+    has, and whether each is set up.
+
+    Only booleans and non-secret details (provider name, sender address, model
+    name, map host) — never a key, token or password. LinkedIn is per user, so
+    its connected/disconnected state comes from /api/auth/linkedin/status; this
+    only says whether the server has LinkedIn app credentials at all.
+    """
+    import os
+    from urllib.parse import urlparse
+    from . import mailer
+
+    try:
+        email_cfg = mailer.get_email_settings(norm_email(request.headers.get('X-User-Email') or ''))
+    except Exception:
+        email_cfg = None
+    email_provider = ''
+    if email_cfg:
+        email_provider = 'Resend' if email_cfg.get('type') == 'resend' else 'SMTP'
+
+    tiles = getattr(settings, 'HRMS_BASEMAP_TILE_URL', '') or ''
+    return Response({
+        'email': {
+            'configured': bool(email_cfg),
+            'provider': email_provider,
+            'fromEmail': (email_cfg or {}).get('from_email', ''),
+        },
+        'googleSignIn': {'configured': bool(os.environ.get('GOOGLE_CLIENT_ID', '').strip())},
+        'linkedin': {'configured': bool(
+            getattr(settings, 'LINKEDIN_CLIENT_ID', '') and getattr(settings, 'LINKEDIN_CLIENT_SECRET', ''))},
+        'ai': {
+            'configured': bool(os.environ.get('ANTHROPIC_API_KEY') or os.environ.get('VITE_ANTHROPIC_API_KEY')),
+            'model': ai.GENERATION_MODEL,
+        },
+        'maps': {
+            'configured': bool(tiles),
+            'host': (urlparse(tiles.replace('{s}', 'a')).hostname or '') if tiles else '',
+        },
+    })
+
+
 # ---------------------------------------------------------------------------
 # Health
 # ---------------------------------------------------------------------------
@@ -5365,7 +5420,101 @@ def _role_annot():
 
 
 # --- Dashboard stats -------------------------------------------------------
+# Most employees the Dashboard response embeds. Search is NOT limited by this:
+# directory_search() filters server-side across every account.
+DIRECTORY_MAX = 500
+
+# The columns a directory search can be scoped to — the same fields the
+# Dashboard directory table and the topbar's "Search in" chips are built from.
+DIRECTORY_FIELDS = ('employeeId', 'name', 'department', 'role', 'status', 'location', 'joinDate')
+
+
+def _directory_rows(users):
+    """Directory rows (the shape the Dashboard table renders) for these AppUsers.
+
+    One shared builder, so the Dashboard's embedded directory and the search
+    endpoint can never disagree about what an employee's name/department/status
+    is. Callers should pass users with ``select_related('role_ref')`` — the
+    department/designation fall back to the role's name, and without the join
+    that is one extra query per employee.
+    """
+    profiles = {p.email: p for p in UserProfile.objects.all()}
+    rows = []
+    for u in users:
+        p = profiles.get(u.email)
+        role_name = u.role_ref.name if u.role_ref else ''
+        full_name = (f"{p.first_name} {p.last_name}".strip() if p and (p.first_name or p.last_name) else '') or u.full_name or u.email.split('@')[0]
+        dept = (p.department if p and p.department else '') or role_name or (u.role.title() if u.role else 'General')
+        designation = (p.designation if p and p.designation else '') or role_name or (u.role.title() if u.role else 'General')
+        loc = (p.address if p and p.address else '') or 'Office'
+        if len(loc) > 25:
+            loc = loc[:25] + '…'
+        join_date = u.created_at.strftime('%b %Y') if u.created_at else 'Recent'
+
+        employee_id = u.employee_id or (p.employee_id if p else '')
+        if not employee_id:
+            employee_id = f"EV-{str(u.id).zfill(4)}"
+
+        rows.append({
+            'id': u.id,
+            'employeeId': employee_id,
+            'name': full_name,
+            'email': u.email,
+            'initials': u.initials or (full_name[:2].upper() if full_name else 'EM'),
+            'department': dept,
+            'role': designation,
+            'status': 'Active' if u.status == 'active' else 'Inactive',
+            'location': loc,
+            'joinDate': join_date,
+        })
+    return rows
+
+
 @api_view(['GET'])
+@require_perm({})
+def directory_search(request):
+    """Search the employee directory across EVERY account (the topbar search).
+
+    ``q``      text to look for (case-insensitive substring)
+    ``field``  optional: only match this column — one of DIRECTORY_FIELDS
+    ``limit``  rows to return, default 8, at most 50
+
+    Matching runs over the same display values the Dashboard table shows
+    (department falls back to the role name, status is Active/Inactive, and so
+    on), so what a "Search in" chip scopes to is exactly what the user can see.
+    Anyone who may see the Dashboard or the employee module may use it; an
+    unidentified caller is refused by require_perm before this body runs.
+    """
+    if not (check_perm(request, 'dashboard.view')[0] or check_perm(request, 'employee.view')[0]):
+        return err("You don't have access to the employee directory.", 403)
+
+    q = (request.GET.get('q') or '').strip().lower()
+    field = (request.GET.get('field') or '').strip()
+    if field and field not in DIRECTORY_FIELDS:
+        return err('Unknown field "%s". Use one of: %s.' % (field, ', '.join(DIRECTORY_FIELDS)), 400)
+    try:
+        limit = max(1, min(int(request.GET.get('limit') or 8), 50))
+    except (TypeError, ValueError):
+        limit = 8
+
+    rows = _directory_rows(AppUser.objects.select_related('role_ref').order_by('id'))
+    if q:
+        def hit(r):
+            if field:
+                return q in str(r.get(field) or '').lower()
+            return (any(q in str(r.get(k) or '').lower() for k in DIRECTORY_FIELDS)
+                    or q in str(r.get('email') or '').lower())
+        rows = [r for r in rows if hit(r)]
+
+    return Response({'employees': rows[:limit], 'total': len(rows), 'limit': limit})
+
+
+# The Dashboard used to be fully open: an anonymous GET returned the company
+# record, the payroll figure and the employee directory. It now needs
+# dashboard.view — the same permission the UI already uses to decide who may
+# open the Dashboard route at all.
+@api_view(['GET'])
+@require_perm('dashboard.view')
 def dashboard_stats(request):
     """
     Main System Dashboard Overview API.
@@ -5517,38 +5666,14 @@ def dashboard_stats(request):
             {'initial': 'S', 'isCheckIn': True, 'color': '#10b981', 'dot': '#10b981', 'title': 'sri — Check In', 'sub': 'At 03:39 PM (Nellore)'}
         ]
 
-    # 9. Real Employee Directory (Top 25 users with profile details)
-    users_qs = AppUser.objects.order_by('id')[:25]
-    user_emails = [u.email for u in users_qs]
-    prof_map = {p.email: p for p in UserProfile.objects.filter(email__in=user_emails)}
-
-    employee_directory = []
-    for u in users_qs:
-        p = prof_map.get(u.email)
-        full_name = (f"{p.first_name} {p.last_name}".strip() if p and (p.first_name or p.last_name) else '') or u.full_name or u.email.split('@')[0]
-        dept = (p.department if p and p.department else '') or (u.role_ref.name if u.role_ref else '') or (u.role.title() if u.role else 'General')
-        designation = (p.designation if p and p.designation else '') or (u.role_ref.name if u.role_ref else '') or u.role.title()
-        loc = (p.address if p and p.address else '') or 'Office'
-        if len(loc) > 25:
-            loc = loc[:25] + '…'
-        join_date = u.created_at.strftime('%b %Y') if u.created_at else 'Recent'
-
-        employee_id = u.employee_id or (p.employee_id if p else '')
-        if not employee_id:
-            employee_id = f"EV-{str(u.id).zfill(4)}"
-
-        employee_directory.append({
-            'id': u.id,
-            'employeeId': employee_id,
-            'name': full_name,
-            'email': u.email,
-            'initials': u.initials or (full_name[:2].upper() if full_name else 'EM'),
-            'department': dept,
-            'role': designation,
-            'status': 'Active' if u.status == 'active' else 'Inactive',
-            'location': loc,
-            'joinDate': join_date
-        })
+    # 9. Real Employee Directory. This used to be the first 25 accounts, but
+    # the Dashboard's own directory labels itself "Showing N of <this list's
+    # length> registered employees" — so with 57 users it read "25 of 25"
+    # beside a header card saying 57, and anyone past #25 simply could not be
+    # found or searched. It now carries everyone, up to DIRECTORY_MAX; the
+    # response says when that cap was hit rather than silently truncating.
+    employee_directory = _directory_rows(
+        AppUser.objects.select_related('role_ref').order_by('id')[:DIRECTORY_MAX])
 
     company_obj = get_or_create_company_details()
 
@@ -5573,6 +5698,10 @@ def dashboard_stats(request):
         'departments': dept_list,
         'highlights': highlights,
         'employees': employee_directory,
+        # The list above is capped at DIRECTORY_MAX; these let a client tell a
+        # complete directory from a truncated one instead of guessing.
+        'employeesTotal': total_users,
+        'employeesTruncated': total_users > DIRECTORY_MAX,
         'serverTime': now.strftime('%I:%M:%S %p')
     })
 
@@ -6678,7 +6807,7 @@ def wfh_requests(request):
         'attendance.approve_wfh',
         'New WFH Request',
         f"{inst.employee_name or email} has requested WFH from {inst.from_date} to {inst.to_date}.",
-        '/employees/attendance',
+        '/employees/checkin?focus=Work+From+Home',
     )
     return Response(ser.data, status=201)
 
@@ -6704,7 +6833,7 @@ def wfh_request_detail(request, pk):
                 f'WFH Request {status_val}',
                 f'Your WFH request has been {status_val.lower()} by HR.',
                 'success' if status_val == 'Approved' else 'warning',
-                '/employees/attendance',
+                '/employees/checkin?focus=Work+From+Home',
             )
         return Response(ser.data)
     return Response(WfhRequestSerializer(obj).data)
@@ -6732,7 +6861,7 @@ def attendance_corrections(request):
         'settings.manage',
         'New Attendance Correction Request',
         f"{inst.employee_name or email} has requested a correction for {inst.attendance_date}.",
-        '/employees/attendance',
+        '/employees/leave',
     )
     return Response(ser.data, status=201)
 
@@ -6800,7 +6929,7 @@ def attendance_correction_detail(request, pk):
                 'Attendance Correction Approved',
                 f'Your attendance correction for {inst.attendance_date} was approved and applied.',
                 'success',
-                '/employees/attendance',
+                '/employees/leave',
             )
         elif status_val == 'Rejected':
             create_notification(
@@ -6808,7 +6937,7 @@ def attendance_correction_detail(request, pk):
                 'Attendance Correction Rejected',
                 f'Your attendance correction for {inst.attendance_date} was rejected.',
                 'warning',
-                '/employees/attendance',
+                '/employees/leave',
             )
         return Response(ser.data)
     return Response(AttendanceCorrectionSerializer(obj).data)
@@ -7205,47 +7334,88 @@ def _last_preview(msg):
 
 
 def _room_payload(room, viewer):
-    members_qs = list(ChatMember.objects.filter(room_id=room.id))
-    mem_emails = [m.employee_email for m in members_qs]
-    admin_map = {m.employee_email: bool(getattr(m, "is_admin", False)) for m in members_qs}
-    directory = _contacts_directory(set(mem_emails))
-    last = ChatMessage.objects.filter(room_id=room.id).order_by("-created_at").first()
-    unread = (
-        ChatMessage.objects.filter(room_id=room.id, is_read=False)
-        .exclude(sender_email=viewer)
-        .count()
-    )
-    is_group = bool(room.is_group)
-    display_name = room.name
-    other_email = ""
-    if not is_group:
-        other_email = next((e for e in mem_emails if e != viewer), "")
-        info = directory.get(other_email)
-        if info:
-            display_name = info["name"]
+    return _rooms_payload([room], viewer)[0]
 
-    def member_obj(e):
-        base = dict(directory.get(e, {"email": e, "name": e, "initials": make_initials(e), "profilePic": ""}))
-        base["is_admin"] = admin_map.get(e, False)
-        return base
 
-    return {
-        "id": room.id,
-        "name": room.name,
-        "display_name": display_name,
-        "is_group": is_group,
-        "is_private": bool(room.is_private),
-        "created_by": room.created_by,
-        "members": [member_obj(e) for e in mem_emails],
-        "member_emails": mem_emails,
-        "admin_emails": [e for e in mem_emails if admin_map.get(e)],
-        "viewer_is_admin": admin_map.get(viewer, False),
-        "other_email": other_email,
-        "last_message": _last_preview(last),
-        "last_sender": last.sender_email if last else "",
-        "last_time": _fmt_dt(last.created_at) if last else None,
-        "unread": unread,
+# Columns the room list needs from a room's last message. Never the
+# attachment_data blob: older attachments keep their whole file base64-encoded
+# in that column, and loading it just to build a one-line preview was moving
+# megabytes per room on every 5-second sidebar poll.
+_LAST_MSG_FIELDS = ("id", "room_id", "sender_email", "message", "created_at",
+                    "is_deleted", "attachment_name")
+
+
+def _rooms_payload(rooms, viewer):
+    """Sidebar payloads for many rooms in a fixed handful of queries.
+
+    This used to run ~6 queries per room (members, three for the contact
+    directory, last message, unread count). The sidebar polls it every 5s per
+    open chat tab, so on a remote MySQL it kept the few cPanel workers busy and
+    opening a conversation queued behind it. Same output, batched.
+    """
+    rooms = list(rooms)
+    if not rooms:
+        return []
+    ids = [r.id for r in rooms]
+
+    members_by_room = {}
+    for m in ChatMember.objects.filter(room_id__in=ids).order_by("id"):
+        members_by_room.setdefault(m.room_id, []).append(m)
+    directory = _contacts_directory(
+        {m.employee_email for ms in members_by_room.values() for m in ms})
+
+    latest = (ChatMessage.objects.filter(room_id=OuterRef("pk"))
+              .order_by("-created_at", "-id").values("id")[:1])
+    last_ids = dict(ChatRoom.objects.filter(id__in=ids)
+                    .annotate(last_id=Subquery(latest)).values_list("id", "last_id"))
+    last_by_room = {
+        m.room_id: m for m in ChatMessage.objects
+        .filter(id__in=[i for i in last_ids.values() if i]).only(*_LAST_MSG_FIELDS)
     }
+    unread_by_room = dict(
+        ChatMessage.objects.filter(room_id__in=ids, is_read=False)
+        .exclude(sender_email=viewer)
+        .values("room_id").annotate(n=Count("id")).values_list("room_id", "n")
+    )
+
+    out = []
+    for room in rooms:
+        members_qs = members_by_room.get(room.id, [])
+        mem_emails = [m.employee_email for m in members_qs]
+        admin_map = {m.employee_email: bool(getattr(m, "is_admin", False)) for m in members_qs}
+        last = last_by_room.get(room.id)
+        is_group = bool(room.is_group)
+        display_name = room.name
+        other_email = ""
+        if not is_group:
+            other_email = next((e for e in mem_emails if e != viewer), "")
+            info = directory.get(other_email)
+            if info:
+                display_name = info["name"]
+
+        def member_obj(e, admin_map=admin_map):
+            base = dict(directory.get(e, {"email": e, "name": e, "initials": make_initials(e), "profilePic": ""}))
+            base["is_admin"] = admin_map.get(e, False)
+            return base
+
+        out.append({
+            "id": room.id,
+            "name": room.name,
+            "display_name": display_name,
+            "is_group": is_group,
+            "is_private": bool(room.is_private),
+            "created_by": room.created_by,
+            "members": [member_obj(e) for e in mem_emails],
+            "member_emails": mem_emails,
+            "admin_emails": [e for e in mem_emails if admin_map.get(e)],
+            "viewer_is_admin": admin_map.get(viewer, False),
+            "other_email": other_email,
+            "last_message": _last_preview(last),
+            "last_sender": last.sender_email if last else "",
+            "last_time": _fmt_dt(last.created_at) if last else None,
+            "unread": unread_by_room.get(room.id, 0),
+        })
+    return out
 
 
 @api_view(["GET", "POST"])
@@ -7299,7 +7469,7 @@ def chat_rooms(request):
         ChatMember.objects.filter(employee_email=email).values_list("room_id", flat=True)
     )
     rooms = ChatRoom.objects.filter(id__in=room_ids)
-    out = [_room_payload(r, email) for r in rooms]
+    out = _rooms_payload(rooms, email)
     out.sort(key=lambda x: (x["last_time"] or ""), reverse=True)
     return Response(out)
 
@@ -7315,8 +7485,16 @@ def chat_messages(request, room_id):
         # Drop any pins older than 30 days before serializing (backend-enforced
         # expiry — the frontend never has to police it).
         _expire_stale_pins(room_id)
+        # defer() the attachment_data blob (legacy attachments keep the whole
+        # file base64-encoded there): the list only needs to know whether one
+        # exists, which MySQL answers without sending the bytes. The file itself
+        # is fetched on demand from /api/chat/attachment/<id>.
         msgs = list(
             ChatMessage.objects.filter(room_id=room_id)
+            .defer("attachment_data")
+            .annotate(has_attachment_blob=ExpressionWrapper(
+                Q(attachment_data__isnull=False) & ~Q(attachment_data=""),
+                output_field=BooleanField()))
             .select_related("room")
             .order_by("created_at")
         )
@@ -7326,16 +7504,20 @@ def chat_messages(request, room_id):
         # room up to "now", then compute a `seen` flag for the viewer's OWN
         # messages: in a channel it's Seen only once EVERY other member has read
         # past it; in a 1:1 it's Seen once the other person has.
+        #
+        # ``peek=1`` is the sidebar's hover prefetch: the room is not open yet,
+        # so it must not mark anything read (or flip the sender's "Seen").
         now = _chat_now()
+        peek = str(request.GET.get("peek") or "").lower() in ("1", "true", "yes")
         members = list(ChatMember.objects.filter(room_id=room_id))
-        if viewer:
+        if viewer and not peek:
             ChatMember.objects.filter(room_id=room_id, employee_email=viewer).update(last_read_at=now)
             ChatMessage.objects.filter(room_id=room_id, is_read=False).exclude(
                 sender_email=viewer
             ).update(is_read=True)
         reads = {}
         for m in members:
-            reads[m.employee_email] = now if m.employee_email == viewer else m.last_read_at
+            reads[m.employee_email] = now if (m.employee_email == viewer and not peek) else m.last_read_at
         for i, msg in enumerate(msgs):
             seen = False
             if viewer and msg.sender_email == viewer and not msg.is_deleted:

@@ -23,6 +23,9 @@
  *     additionally hide rows whose chosen column does not match. The result is
  *     the intersection, i.e. "matches, in this column".
  *   - Work Submissions is skipped — it has its own built-in panel.
+ *   - The shared topbar search ("Search anything…") is skipped too — it now
+ *     has its own real employee-search dropdown, wired directly in the app
+ *     bundle rather than through this column-scoping helper.
  *   - Every entry point is wrapped so a failure here can never break a page.
  */
 (function () {
@@ -370,6 +373,7 @@
     var ph = el.getAttribute('placeholder') || '';
     if (!/search/i.test(ph)) return false;
     if (el.closest && el.closest('.subs-search')) return false;   // has its own
+    if (el.closest && el.closest('.topbar-search')) return false; // has its own (real employee search)
     return true;
   }
 

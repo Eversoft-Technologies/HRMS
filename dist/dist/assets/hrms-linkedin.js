@@ -205,16 +205,25 @@
     if (!popup) { showToast('Allow popups to connect LinkedIn.', 'error'); return; }
     // Poll for the popup closing as a fallback to postMessage.
     var iv = setInterval(function () {
-      if (popup.closed) { clearInterval(iv); setTimeout(function () { refreshStatus(row); }, 400); }
+      if (popup.closed) {
+        clearInterval(iv);
+        setTimeout(function () { if (row) refreshStatus(row); notifyChanged(); }, 400);
+      }
     }, 700);
   }
 
   function doDisconnect(row) {
     var email = currentEmail();
-    if (!email) return;
-    apiPost('/auth/linkedin/disconnect', { userEmail: email })
-      .then(function () { showToast('LinkedIn disconnected.'); refreshStatus(row); })
+    if (!email) return Promise.resolve();
+    return apiPost('/auth/linkedin/disconnect', { userEmail: email })
+      .then(function () { showToast('LinkedIn disconnected.'); if (row) refreshStatus(row); notifyChanged(); })
       .catch(function () { showToast('Could not disconnect. Try again.', 'error'); });
+  }
+
+  // Lets other screens (Settings → Integrations) refresh when the connection
+  // changes, wherever the change was made.
+  function notifyChanged() {
+    try { window.dispatchEvent(new CustomEvent('hrmsLinkedInChanged')); } catch (e) {}
   }
 
   // postMessage from the OAuth popup (api/linkedin_oauth._popup_result)
@@ -225,6 +234,7 @@
       d.ok ? 'success' : 'error');
     var row = document.getElementById(ROW_ID);
     if (row) setTimeout(function () { refreshStatus(row); }, 300);
+    setTimeout(notifyChanged, 300);
   });
 
   // -------------------------------------------------------------------------
@@ -424,6 +434,10 @@
   window.HRMSLinkedIn = {
     currentEmail: currentEmail,
     review: review,
+    // Same popup flow and disconnect as the Email Configuration row; listen
+    // for 'hrmsLinkedInChanged' to learn the outcome.
+    connect: function () { doConnect(null); },
+    disconnect: function () { return doDisconnect(null); },
     // -> Promise<{configured, connected, expired, name}>; never rejects, so
     // callers can treat an unreachable backend as simply "not connected".
     status: function () {
