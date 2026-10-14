@@ -29,6 +29,11 @@
   var ROOT_ID = "hcx-root";
 
   // ───────────────────────────────────────────── state
+  // Messages kept in the DOM when a conversation opens, and how many more
+  // each "Show earlier messages" click adds.
+  var MSG_WINDOW = 60;
+  var MSG_PAGE = 100;
+
   var state = {
     me: { email: "", name: "" },
     contacts: [],
@@ -57,6 +62,11 @@
     toolsOpen: false,  // composer "^" tools menu open?
     camStream: null,   // active getUserMedia stream while the camera is open
     onlineByEmail: {}, // email -> true when that person is currently checked in
+    msgCache: {},      // roomId -> last message list seen, so reopening is instant
+    showCount: 60,     // how many of the newest messages are in the DOM (see renderMessages)
+    keepScroll: false, // next renderMessages() must not jump to the bottom
+    forceBottom: false,// next renderMessages() must end at the bottom (open / own send)
+    prefetchAt: {},    // roomId -> when we last prefetched it (hover / touch)
   };
 
   // ───────────────────────────────────────────── helpers: session / api
@@ -354,6 +364,8 @@
       "#" + ROOT_ID + " .hcx-row .hcx-rt{font-size:11px;color:var(--hcx-muted);}",
       "#" + ROOT_ID + " .hcx-badge{min-width:18px;height:18px;padding:0 5px;border-radius:99px;background:var(--hcx-primary);color:#fff;font-size:10.5px;font-weight:700;display:flex;align-items:center;justify-content:center;}",
       "#" + ROOT_ID + " .hcx-empty{padding:26px 16px;text-align:center;color:var(--hcx-muted);font-size:13px;}",
+      "#" + ROOT_ID + " .hcx-more{display:block;margin:4px auto 10px;padding:6px 14px;border-radius:999px;border:1px solid var(--hcx-border);background:var(--hcx-surface);color:var(--hcx-muted);font:inherit;font-size:12px;cursor:pointer;}",
+      "#" + ROOT_ID + " .hcx-more:hover{color:var(--hcx-text);background:var(--hcx-hover);}",
       "#" + ROOT_ID + " .hcx-empty small{display:block;margin-top:4px;font-size:12px;opacity:.8;}",
 
       // avatar
@@ -1082,6 +1094,8 @@
     state.pending = [];
     state.editingId = null;
     state.msgSearch = { q: "", matches: [], idx: -1 };
+    state.showCount = MSG_WINDOW;
+    state.forceBottom = true;
     state.replyingTo = null;
     state.pendingFile = null; // drop any staged attachment when switching rooms
     state.toolsOpen = false;
@@ -1096,6 +1110,16 @@
     syncTabs();
     if (state.root) state.root.classList.add("show-convo");
 
+    // Show what we already have for this room straight away (from an earlier
+    // visit or a hover prefetch); loadMessages() then refreshes it. Only
+    // server-confirmed messages are reused — an optimistic one from a previous
+    // visit is either in the fresh list by now or failed.
+    var cached = state.msgCache[room.id];
+    if (cached && cached.length) {
+      state.messages = cached.filter(function (m) { return m.id != null; });
+      state.messages.forEach(function (m) { state.knownIds["id_" + m.id] = true; });
+      renderMessages();
+    }
     loadMessages(room.id);
     loadMeetings(room.id);
     connectWS(room.id);
@@ -1180,11 +1204,29 @@
   }
 
   // ───────────────────────────────────────────── messages
+  // Warm the cache for a room the pointer/finger is on, so the click that
+  // usually follows opens it instantly. `peek=1` tells the server not to mark
+  // the room read — hovering is not reading. At most once per room per 15s.
+  function prefetchRoom(roomId) {
+    if (!roomId || String(roomId) === String(state.activeRoomId) || !state.me.email) return;
+    var now = new Date().getTime();
+    if (state.prefetchAt[roomId] && now - state.prefetchAt[roomId] < 15000) return;
+    state.prefetchAt[roomId] = now;
+    apiGet("/api/chat/messages/" + roomId + "?peek=1&email=" + encodeURIComponent(state.me.email))
+      .then(function (list) {
+        if (!Array.isArray(list) || String(state.activeRoomId) === String(roomId)) return;
+        list.forEach(stampMsg);
+        state.msgCache[roomId] = list;
+      })
+      .catch(function () { delete state.prefetchAt[roomId]; });
+  }
+
   function loadMessages(roomId) {
     apiGet("/api/chat/messages/" + roomId + "?email=" + encodeURIComponent(state.me.email))
       .then(function (list) {
         if (String(state.activeRoomId) !== String(roomId)) return;
         state.messages = Array.isArray(list) ? list : [];
+        state.msgCache[roomId] = state.messages;  // same array: later pushes land in the cache too
         state.knownIds = {};
         state.messages.forEach(function (m) {
           stampMsg(m);
@@ -1217,11 +1259,23 @@
       area.innerHTML = '<div class="hcx-empty" style="margin:auto">No messages yet. Say hello! 👋</div>';
       return;
     }
-    var html = "";
+    // Where the reader is, so a background re-render (poll / socket / read
+    // receipts) doesn't yank someone reading older messages to the bottom.
+    var prevTop = area.scrollTop;
+    var wasAtBottom = area.scrollHeight - area.scrollTop - area.clientHeight < 120;
+    // Only the newest `showCount` messages go into the DOM. Rendering a whole
+    // history rebuilt thousands of nodes (≈15 per message) on every open, fetch
+    // and poll — about a third of a second for 400 messages on a desktop and
+    // far more on a phone. Older ones are a click away, and search / jump-to
+    // widen the window themselves (ensureRendered).
+    var start = Math.max(0, state.messages.length - state.showCount);
+    var html = start > 0
+      ? '<button type="button" class="hcx-more" data-act="show-earlier">Show earlier messages (' + start + ")</button>"
+      : "";
     var curDay = null;
     var prevSender = null;
     var isCh = state.activeRoom && !!state.activeRoom.is_group;
-    state.messages.forEach(function (m) {
+    state.messages.slice(start).forEach(function (m) {
       var d = dayLabelOf(msgDate(m));
       if (d !== curDay) {
         curDay = d;
@@ -1238,7 +1292,36 @@
     }
     reapplySearchHighlights();
     renderPins();
-    scrollBottom();
+    if (state.keepScroll) {
+      state.keepScroll = false;          // the caller positions the view itself
+    } else if (state.forceBottom || wasAtBottom) {
+      state.forceBottom = false;
+      scrollBottom();                    // following the conversation: stay pinned
+    } else {
+      area.scrollTop = prevTop;          // reading history: stay where you are
+    }
+  }
+
+  // Widen the rendered window so message `id` is in the DOM. Returns true when
+  // it had to re-render (the caller then looks the row up again).
+  function ensureRendered(id) {
+    var idx = state.messages.findIndex(function (x) { return String(x.id) === String(id); });
+    var start = Math.max(0, state.messages.length - state.showCount);
+    if (idx === -1 || idx >= start) return false;
+    state.showCount = state.messages.length - idx + 20;
+    state.keepScroll = true;
+    renderMessages();
+    return true;
+  }
+
+  // "Show earlier messages": add a page above, keeping the view where it was.
+  function showEarlier() {
+    var area = areaEl();
+    var fromBottom = area ? area.scrollHeight - area.scrollTop : 0;
+    state.showCount += MSG_PAGE;
+    state.keepScroll = true;
+    renderMessages();
+    if (area) area.scrollTop = area.scrollHeight - fromBottom;
   }
 
   function reapplySearchHighlights() {
@@ -1356,7 +1439,11 @@
 
   function scrollBottom() {
     var area = areaEl();
-    if (area) requestAnimationFrame(function () { area.scrollTop = area.scrollHeight; });
+    if (!area) return;
+    // Now, so a re-render right after this one sees "at bottom"; and again
+    // next frame, once images/fonts have settled the final height.
+    area.scrollTop = area.scrollHeight;
+    requestAnimationFrame(function () { area.scrollTop = area.scrollHeight; });
   }
 
   function ingestMessage(m) {
@@ -1499,6 +1586,7 @@
   }
 
   function jumpToMessage(id) {
+    ensureRendered(id);
     var row = state.root.querySelector('.hcx-msg[data-mid="' + id + '"]');
     if (!row) return;
     row.scrollIntoView({ block: "center", behavior: "smooth" });
@@ -1591,6 +1679,7 @@
     stampMsg(temp);
     state.messages.push(temp);
     state.pending.push({ message: text, att: "", ref: temp });
+    state.forceBottom = true;
     renderMessages();
     bumpRoomPreview(state.activeRoomId, temp);
 
@@ -1766,6 +1855,7 @@
     stampMsg(temp);
     state.messages.push(temp);
     state.pending.push({ message: caption, att: file.name, ref: temp });
+    state.forceBottom = true;
     renderMessages();
     bumpRoomPreview(state.activeRoomId, temp);
 
@@ -2607,6 +2697,7 @@
       }
       if (act === "msg-unpin") { e.stopPropagation(); pinMessage(actEl.getAttribute("data-mid"), false); return; }
       if (act === "jump") { jumpToMessage(actEl.getAttribute("data-mid")); return; }
+      if (act === "show-earlier") { showEarlier(); return; }
       if (act === "reply-cancel") return cancelReply();
       if (act === "edit-save") return saveEdit();
       if (act === "edit-cancel") return cancelEdit();
@@ -2644,6 +2735,16 @@
         return;
       }
     });
+
+    // Prefetch a conversation as soon as the pointer or a finger lands on it.
+    function prefetchFromEvent(e) {
+      var t = e.target;
+      var row = t && t.closest ? t.closest(".hcx-row") : null;
+      if (row && row.getAttribute("data-room")) prefetchRoom(row.getAttribute("data-room"));
+    }
+    root.addEventListener("mouseover", prefetchFromEvent);
+    root.addEventListener("touchstart", prefetchFromEvent, { passive: true });
+    root.addEventListener("focusin", prefetchFromEvent);
 
     // File picker
     root.addEventListener("change", function (e) {
@@ -2850,6 +2951,7 @@
     state.root.querySelectorAll(".hcx-msg.match-current").forEach(function (el) { el.classList.remove("match-current"); });
     if (s.idx < 0 || !s.matches.length) return;
     var id = s.matches[s.idx];
+    ensureRendered(id);
     var row = state.root.querySelector('.hcx-msg[data-mid="' + id + '"]');
     if (row) {
       row.classList.add("match-current");

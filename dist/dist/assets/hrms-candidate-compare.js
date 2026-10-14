@@ -597,6 +597,7 @@
       /* Controls are GLOBAL (not root-scoped) so drawers/modals mounted on <body> get them too. */
       '.cc-btn{display:inline-flex;align-items:center;gap:6px;background:var(--bg3,#1e293b);border:1px solid var(--border2,#334155);border-radius:9px;padding:8px 14px;color:var(--text,#f8fafc);font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;white-space:nowrap;transition:all .15s;}',
       '.cc-btn:hover{border-color:var(--accent,#38bdf8);color:var(--accent,#38bdf8);}',
+      '.cc-btn:active{transform:scale(0.94);filter:brightness(.92);}',
       '.cc-btn.primary{background:var(--accent,#38bdf8);color:#fff;border-color:var(--accent,#38bdf8);}',
       '.cc-btn.primary:hover{filter:brightness(1.1);border-color:var(--accent,#38bdf8);color:#fff;}',
       '.cc-btn.ghost{background:transparent;color:var(--text2,#cbd5e1);}',

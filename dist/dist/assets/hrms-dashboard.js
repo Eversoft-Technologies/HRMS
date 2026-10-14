@@ -214,8 +214,26 @@
     }
   }
 
+  /* After a failed fetch, wait before trying again.
+
+     The page re-attempts a fetch on every DOM mutation while the dashboard is
+     not mounted, the 15s timer, window focus and tab visibility. That was
+     harmless while the endpoint always answered 200, but a refusal (401/403 —
+     the endpoint now requires dashboard.view) or an outage left the dashboard
+     unmounted, so every mutation fired another request: a retry storm against
+     a server that had just said no. A refusal now cools down for a minute, any
+     other failure for a few seconds. The cooldown is tied to the signed-in
+     account, so switching users never inherits the previous user's "no". */
+  var RETRY_AUTH_MS = 60000;
+  var RETRY_OTHER_MS = 5000;
+
+  function coolingDown() {
+    return !!state.retryAfter && Date.now() < state.retryAfter && state.retryFor === getEmail();
+  }
+
   function fetchDashboardStats() {
     if (state.inFlightPromise) return state.inFlightPromise;
+    if (coolingDown()) return Promise.resolve();
     state.loading = true;
     var headers = {
       'Accept': 'application/json',
@@ -228,10 +246,15 @@
 
     state.inFlightPromise = fetch('/api/dashboard/stats', { headers: headers })
       .then(function (r) {
-        if (!r.ok) throw new Error('HTTP ' + r.status);
+        if (!r.ok) {
+          var httpErr = new Error('HTTP ' + r.status);
+          httpErr.status = r.status;
+          throw httpErr;
+        }
         return r.json();
       })
       .then(function (data) {
+        state.retryAfter = 0;
         state.data = data;
         setCachedStats(data);
         state.lastUpdated = new Date();
@@ -242,6 +265,9 @@
       })
       .catch(function (err) {
         console.warn('[HRMS Dashboard] Fetch warning:', err);
+        var refused = err && (err.status === 401 || err.status === 403);
+        state.retryAfter = Date.now() + (refused ? RETRY_AUTH_MS : RETRY_OTHER_MS);
+        state.retryFor = getEmail();
         state.loading = false;
         state.inFlightPromise = null;
       });

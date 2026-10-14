@@ -1257,6 +1257,9 @@ class WorkAuthorization(models.Model):
     )
     # F1 | H1B | GC EAD | US Citizen | H4 EAD | Other
     auth_type = models.CharField(max_length=32, default='', blank=True, db_index=True)
+    # What "Other" actually is (e.g. "L-1", "TN", "O-1"). Required when
+    # auth_type is Other, and cleared for every other type.
+    auth_type_other = models.CharField(max_length=120, default='', blank=True)
     # Active | Pending | Expired | Extension Filed | Transferred | Rejected
     status = models.CharField(max_length=32, default='Pending', db_index=True)
     expiry_date = models.DateField(null=True, blank=True, db_index=True)

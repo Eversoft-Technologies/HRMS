@@ -93,7 +93,8 @@
 
         // Hard redirect after a short pause so React can pick up the auth state
         setTimeout(function () {
-          window.location.href = '/dashboard';
+          // The Dashboard is the app root; '/dashboard' is not a route.
+          window.location.href = '/';
         }, 600);
       })
       .catch(function (err) {

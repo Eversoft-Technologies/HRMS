@@ -7,6 +7,14 @@
    The theme is always an explicit light or dark choice; there is no
    "follow the OS" mode.
    ============================================================ */
+/* --text1 is not a theme token, but several sidecars (recruit KPIs, the
+   pipeline card, older inline styles) wrote var(--text1, <fallback>) as if it
+   were — so they rendered the fallback: black text in dark mode, white in
+   light. Alias it to the real primary-text token so both themes work. */
+:root {
+  --text1: var(--text);
+}
+
   /* Calendar fill tokens — Leave Management holidays grid.
    Dark: low-alpha tint with the hue as text, so weekends don't swamp the card.
    Light overrides these with solid fills in the block below. */
@@ -2129,6 +2137,17 @@ div:has(> #hrms-kpi-btn) button svg {
   .topbar .hrms-ci-wrap { max-width: 78px; overflow: hidden; }
 }
 
+/* --- wsq summary cards on tablet --------------------------------
+   Like Task Tracker (hrms-task-stats.css): up to 1024px the four cards
+   stay on one row as equal columns instead of auto-fit wrapping 3 + 1. */
+@media (max-width: 1024px) {
+  .wsq .wsq-kpis {
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+    gap: 12px !important;
+  }
+  .wsq .wsq-kpis > div { min-width: 0; }
+}
+
 /* --- wsq: the queue as cards, not a table -----------------------
    Eight columns will not fit a phone, and a sideways-scrolling table
    hides half the record behind a swipe — you cannot see a submission's
@@ -2140,50 +2159,80 @@ div:has(> #hrms-kpi-btn) button svg {
    The column labels come from nth-child rather than data-label
    attributes, so the markup stays exactly as the desktop table. */
 @media (max-width: 640px) {
-  /* One KPI per line, as a compact band.
+  /* Real structure, confirmed against the rendered card (one level deeper
+     than it first looks — the header row is the card's only child, not a
+     sibling of one):
 
-     Two-up fitted, but at 320px every label broke over two lines — "PENDING
-     REVIEW", "All submissions", "Awaiting first look" each wrapped — which
-     read worse than one clean row.
+         card > row > [ textColumn(label, value, caption), iconBadge ]
 
-     Stacking would normally cost a lot of scrolling, so the card is laid out
-     along one line instead of down three: label, number, icon. The card's
-     real structure is
-
-         card > row > [ column(label, number, caption), iconBadge ]
-
-     so both wrappers are flattened with display:contents, which lifts the
-     four leaves into the card's own flex line without touching the markup. */
+     Every selector below is written against that, not guessed. */
+  /* Phone: the Task Tracker's summary row exactly — four equal cards on
+     ONE line: coloured top edge, label and the big number. At ~80px a card
+     cannot fit the icon BESIDE the label, so the row stacks: a smaller icon
+     tile on top, then label and number. The caption only repeated the label,
+     so it goes; the label wraps the way "IN PROGRESS" does on Task Tracker. */
   .wsq .wsq-kpis {
-    grid-template-columns: 1fr !important;
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
     gap: 8px !important;
   }
+  /* Square cards. Each card is exactly as tall as it is wide, and the
+     content is centred vertically inside it. Text is sized from the
+     screen width (vw) with a floor and a ceiling, so it shrinks on a
+     narrow phone and grows on a wide one in step with the card. */
   .wsq .wsq-kpis > div {
-    padding: 11px 14px !important;
+    min-width: 0;
+    aspect-ratio: 1 / 1;
+    height: auto !important;
+    min-height: 0 !important;
+    padding: clamp(6px, 2vw, 9px) clamp(6px, 1.9vw, 8px) !important;
     border-radius: 12px !important;
     display: flex !important;
-    align-items: center !important;
-    gap: 12px;
+    flex-direction: column;
+    justify-content: center;
+    overflow: hidden;
   }
   .wsq .wsq-kpis > div > div,
-  .wsq .wsq-kpis > div > div > div:first-child { display: contents !important; }
-
-  /* label — takes the slack, and stays on one line */
+  .wsq .wsq-kpis > div > div > div:first-child { min-width: 0; }
+  /* row: [text, icon] -> icon on top, text below */
+  .wsq .wsq-kpis > div > div {
+    flex-direction: column-reverse !important;
+    align-items: flex-start !important;
+    justify-content: flex-start !important;
+    gap: clamp(2px, .9vw, 6px);
+  }
   .wsq .wsq-kpis > div > div > div:first-child > div:nth-child(1) {
-    order: 1; flex: 1 1 auto; min-width: 0;
-    font-size: 10.5px !important; letter-spacing: .5px;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    font-size: clamp(7px, 2.1vw, 10px) !important;
+    font-weight: 600 !important;
+    letter-spacing: .3px !important;
+    line-height: 1.25 !important;
+    /* wrap between words ("PENDING / REVIEW"), never inside one */
+    white-space: normal !important;
+    overflow-wrap: normal !important;
+    word-break: keep-all !important;
+    /* Every label reserves two lines, so a label that wraps ("PENDING /
+       REVIEW") no longer pushes its number below the others: all four
+       numbers sit on one straight line. */
+    min-height: 2.45em !important;
   }
-  /* the number — the point of the card, so it keeps its weight */
-  .wsq .wsq-kpis > div > div > div:first-child > div:nth-child(2) {
-    order: 2; flex: 0 0 auto;
-    font-size: 24px !important; line-height: 1 !important; margin: 0 !important;
+  .wsq .wsq-kpis > div div[style*="font-size: 32px"],
+  .wsq .wsq-kpis > div div[style*="fontSize: 32"] {
+    font-size: clamp(13px, 4.2vw, 19px) !important;
+    font-weight: 700 !important;
+    letter-spacing: -.2px !important;
+    line-height: 1.1 !important;
+    margin: 2px 0 0 !important;
+    overflow-wrap: break-word;
   }
-  /* the caption repeats the label in more words; it is the first thing to go */
   .wsq .wsq-kpis > div > div > div:first-child > div:nth-child(3) { display: none !important; }
-  /* the icon badge closes the line */
   .wsq .wsq-kpis > div > div > div:last-child {
-    order: 3; flex: 0 0 auto; transform: scale(.8); transform-origin: center right;
+    display: inline-flex !important;
+    padding: clamp(2px, .9vw, 5px) !important;
+    border-radius: 6px !important;
+    flex: 0 0 auto;
+  }
+  .wsq .wsq-kpis > div > div > div:last-child svg {
+    width: clamp(11px, 3.2vw, 16px);
+    height: clamp(11px, 3.2vw, 16px);
   }
 
   /* The queue stays a table on a phone, scrolling sideways inside its own

@@ -44,7 +44,7 @@
     var U = window.__hrmsUI;
     var g = U.g, n = U.n, B = U.B, Us = U.Us, Gn = U.Gn, Hs = U.Hs, le = U.le,
         cn = U.cn, Qe = U.Qe, Bt = U.Bt, Vs = U.Vs, Dr = U.Dr, Et = U.Et;
-    const[L,sL]=g.useState([]),[ld,sld]=g.useState(!0),[er,ser]=g.useState(""),[wr,swr]=g.useState(""),[op,so]=g.useState(!1),[bz,sb]=g.useState(!1),[fm,sf]=g.useState({type:"Casual Leave",fromDate:"",toDate:"",reason:""}),[fe,sfe]=g.useState(""),[q,sq]=g.useState(""),[flt,sflt]=g.useState("All"),[srt,ssrt]=g.useState("newest"),[bal,sbal]=g.useState([]),[exp,sexp]=g.useState(null),[cf,scf]=g.useState(null),[more,smore]=g.useState({}),[hd,shd]=g.useState(null),[per,sper]=g.useState("today");
+    const[L,sL]=g.useState([]),[ld,sld]=g.useState(!0),[er,ser]=g.useState(""),[wr,swr]=g.useState(""),[op,so]=g.useState(!1),[bz,sb]=g.useState(!1),[fm,sf]=g.useState({type:"Casual Leave",fromDate:"",toDate:"",reason:""}),[fe,sfe]=g.useState(""),[q,sq]=g.useState(""),[flt,sflt]=g.useState("All"),[srt,ssrt]=g.useState("newest"),[bal,sbal]=g.useState([]),[exp,sexp]=g.useState(null),[cf,scf]=g.useState(null),[more,smore]=g.useState({}),[hd,shd]=g.useState(null),[per,sper]=g.useState("today"),[cm,scm]=g.useState((new Date).getMonth());
     /* Missed Clock-Out — cor holds the correction requests: MY own normally,
        everyone's once appr resolves true. The mop/mfm/mfe/mbz quartet mirrors
        op/fm/fe/bz on the Apply Leave form; crj/crn/cre mirror cf on its
@@ -250,13 +250,18 @@
   var types=g.useMemo(function(){var a=[];L.forEach(function(z){var t=z.type||"Other",f=null;for(var i=0;i<a.length;i++){if(a[i].type===t){f=a[i];break}}if(!f){f={type:t,n:0,days:0};a.push(f)}f.n++;f.days+=z.days||0});a.sort(function(x,y){return y.n-x.n});return a},[L]);
   var maxT=types.reduce(function(m,t){return Math.max(m,t.n)},0)||1;
 
-  /* ---- 45-day holiday calendar, weekday-aligned ---- */
-  var HOL_DAYS=45;
-  /* 45 cells rebuilt on every render before this was memoised — the single
-     biggest cost of a keystroke anywhere on the page. */
-  var cal=g.useMemo(function(){var a=[];for(var hi=0;hi<HOL_DAYS;hi++){var hdt=shift(TODAY,hi),hh=HMAP[hdt]||null;a.push({d:hdt,h:hh,w:!hh&&isWknd(hdt)})}return a},[TODAY]);
-  var calLead=g.useMemo(function(){return dObj(TODAY).getDay()},[TODAY]);
-  var calSpan=g.useMemo(function(){var a=dObj(cal[0].d),b=dObj(cal[cal.length-1].d);var s=MN[a.getMonth()];return a.getMonth()===b.getMonth()?s+" "+b.getFullYear():s+" – "+MN[b.getMonth()]+" "+b.getFullYear()},[cal]);
+  /* ---- 12-month holiday calendar, one month at a time ----
+     Covers January–December of the current year; cm is the month index shown
+     (starts on the current month) and the ‹ › arrows step it, disabled at the
+     ends of the year. Weekday-aligned by padding the first week. */
+  var CAL_Y=dObj(TODAY).getFullYear();
+  var MNF=["January","February","March","April","May","June","July","August","September","October","November","December"];
+  /* Memoised so a keystroke elsewhere on the page doesn't rebuild the month. */
+  var cal=g.useMemo(function(){var a=[],nd=new Date(CAL_Y,cm+1,0).getDate();for(var hi=1;hi<=nd;hi++){var hdt=CAL_Y+"-"+pad(cm+1)+"-"+pad(hi),hh=HMAP[hdt]||null;a.push({d:hdt,h:hh,w:!hh&&isWknd(hdt)})}return a},[CAL_Y,cm]);
+  var calLead=g.useMemo(function(){return new Date(CAL_Y,cm,1).getDay()},[CAL_Y,cm]);
+  var calSpan=MNF[cm]+" "+CAL_Y;
+  var calHols=cal.filter(function(c){return c.h}).length;
+  var calNav=function(dir,lbl){var dis=dir<0?cm<=0:cm>=11;return n.jsx("button",{type:"button","aria-label":lbl,title:lbl,disabled:dis,onClick:function(){shd(null);scm(function(m){return Math.max(0,Math.min(11,m+dir))})},style:{width:28,height:28,display:"inline-flex",alignItems:"center",justifyContent:"center",borderRadius:7,border:"1px solid var(--border2)",background:"var(--bg3)",color:"var(--text)",fontFamily:"inherit",fontSize:16,lineHeight:1,cursor:dis?"not-allowed":"pointer",opacity:dis?.4:1},children:dir<0?"‹":"›"})};
 
   /* ---- small render helpers ---- */
   /* Section labels and helper text inside Who's Out / Holidays. This has been
@@ -479,10 +484,12 @@
                   n.jsxs("div",{className:"card",style:{flex:"2 1 360px",minWidth:0},children:[
                         n.jsxs("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,flexWrap:"wrap",marginBottom:4},children:[
                               n.jsx("div",{className:"card-title",style:{marginBottom:0,color:LBL},children:"Holidays"}),
-                              n.jsx("div",{style:{fontSize:12,color:LBL,marginLeft:"auto"},children:calSpan})]}),
+                              n.jsxs("div",{style:{display:"flex",alignItems:"center",gap:8,marginLeft:"auto"},children:[calNav(-1,"Previous month"),
+                                    n.jsx("div",{"aria-live":"polite",style:{fontSize:12.5,fontWeight:600,color:LBL,minWidth:112,textAlign:"center"},children:calSpan}),calNav(1,"Next month")]})]}),
                         n.jsx("div",{style:{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:4,marginTop:14},children:["S","M","T","W","T","F","S"].map(function(w,i){return n.jsx("div",{style:{fontSize:10,fontWeight:700,letterSpacing:.6,textAlign:"center",color:LBL,paddingBottom:2},children:w},"wd"+i)})}),
                         n.jsxs("div",{style:{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:4},children:[Array.from({length:calLead},function(_,i){return n.jsx("div",{},"pad"+i)}),cal.map(function(c,i){return holCell(c,(calLead+i)%7)})]}),
-                        n.jsxs("div",{style:{display:"flex",gap:14,fontSize:11,color:LBL,marginTop:10,flexWrap:"wrap"},children:[legend("var(--cal-holiday-dot)","Holiday"),legend("var(--cal-weekend-dot)","Weekend")]})]})]}),
+                        n.jsxs("div",{style:{display:"flex",gap:14,fontSize:11,color:LBL,marginTop:10,flexWrap:"wrap"},children:[legend("var(--cal-holiday-dot)","Holiday"),legend("var(--cal-weekend-dot)","Weekend"),
+                              n.jsx("span",{style:{marginLeft:"auto"},children:calHols?calHols+(calHols===1?" holiday":" holidays")+" this month":"No holidays this month"})]})]})]}),
             n.jsxs("div",{className:"grid-2 mb-16",children:[
                   n.jsxs("div",{className:"card",children:[
                         n.jsxs("div",{style:{display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:10},children:[
