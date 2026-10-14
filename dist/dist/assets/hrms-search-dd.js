@@ -23,6 +23,9 @@
  *     additionally hide rows whose chosen column does not match. The result is
  *     the intersection, i.e. "matches, in this column".
  *   - Work Submissions is skipped — it has its own built-in panel.
+ *   - The shared topbar search ("Search anything…") is skipped too — it now
+ *     has its own real employee-search dropdown, wired directly in the app
+ *     bundle rather than through this column-scoping helper.
  *   - Every entry point is wrapped so a failure here can never break a page.
  */
 (function () {
@@ -88,7 +91,7 @@
     var out = [];
     var ths = table.querySelectorAll('thead tr th');
     for (var i = 0; i < ths.length; i++) {
-      var label = (ths[i].textContent || '').trim();
+      var label = (ths[i].textContent || '').replace(/[▼▲]/g, '').trim();
       /* skip checkbox / action / icon-only columns — nothing to search in */
       if (!label || label.length > 24 || /^actions?$/i.test(label)) continue;
       out.push({ i: i, label: label });
@@ -115,7 +118,10 @@
         var hide = false;
         if (st.col >= 0 && term && row.children.length > st.col) {
           var cell = row.children[st.col];
-          hide = ((cell && cell.textContent) || '').toLowerCase().indexOf(term) === -1;
+          var cellTxt = ((cell && cell.textContent) || '').toLowerCase();
+          var cellNoComma = cellTxt.replace(/,/g, '');
+          var termNoComma = term.replace(/,/g, '');
+          hide = cellTxt.indexOf(term) === -1 && cellNoComma.indexOf(termNoComma) === -1;
         }
         if (hide) {
           if (!row.hasAttribute(MARK)) {
@@ -204,6 +210,15 @@
     return sec;
   }
 
+  function esc(s) {
+    return String(s || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
   /* ── find matching suggestions on current page ──────────────────────── */
   function findSuggestions(query) {
     query = String(query || '').trim().toLowerCase();
@@ -274,12 +289,14 @@
       wrap.appendChild(chip('All fields', st.col === -1, function () {
         st.col = -1;
         clearScope(input);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
         render(input);
       }));
       cols.forEach(function (c) {
         wrap.appendChild(chip(c.label, st.col === c.i, function () {
           st.col = c.i;
           applyScope(input);
+          input.dispatchEvent(new Event('input', { bubbles: true }));
           render(input);
         }));
       });
@@ -356,6 +373,7 @@
     var ph = el.getAttribute('placeholder') || '';
     if (!/search/i.test(ph)) return false;
     if (el.closest && el.closest('.subs-search')) return false;   // has its own
+    if (el.closest && el.closest('.topbar-search')) return false; // has its own (real employee search)
     return true;
   }
 

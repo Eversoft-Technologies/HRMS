@@ -185,8 +185,11 @@
 
   function api(path, opts) {
     opts = opts || {};
-    if (opts.body && typeof opts.body !== 'string') opts.body = JSON.stringify(opts.body);
-    var hdrs = { 'Content-Type': 'application/json' };
+    // FormData (file uploads) must go out as-is so the browser sets the
+    // multipart Content-Type with its boundary.
+    var isForm = typeof FormData !== 'undefined' && opts.body instanceof FormData;
+    if (opts.body && !isForm && typeof opts.body !== 'string') opts.body = JSON.stringify(opts.body);
+    var hdrs = isForm ? {} : { 'Content-Type': 'application/json' };
     var em = sessionEmail();
     if (em) hdrs['X-User-Email'] = em;
     opts.headers = Object.assign(hdrs, opts.headers || {});
@@ -195,7 +198,12 @@
         var d = null;
         if (t) { try { d = JSON.parse(t); } catch (_) { d = t; } }
         if (!r.ok) {
-          var e = new Error((d && (d.message || d.error || d.detail)) || ('HTTP ' + r.status));
+          // A 413 comes from the web server in front of Django (HTML body),
+          // so there is no JSON message to show — explain it instead.
+          var msg = r.status === 413
+            ? 'The file is too large for the server to accept — try a smaller PDF.'
+            : ((d && typeof d === 'object' && (d.message || d.error || d.detail)) || ('HTTP ' + r.status));
+          var e = new Error(msg);
           e.status = r.status;
           throw e;
         }
@@ -228,23 +236,6 @@
   }
   function fmtDate(s) { return s ? String(s).slice(0, 10) : '—'; }
   function fmtDateTime(s) { return s ? String(s).replace('T', ' ').slice(0, 16) : '—'; }
-
-  /* Reads a File (from a <input type=file>) as base64, for Bench Sales'
-     Resume/DL/State ID/I-94 uploads — sent as plain JSON (name/mime/base64
-     data) rather than multipart, since the rest of this API already speaks
-     JSON and there is no bundler here to pull in a multipart/form helper. */
-  function readFileAsBase64(file) {
-    return new Promise(function (resolve, reject) {
-      var reader = new FileReader();
-      reader.onload = function () {
-        var result = String(reader.result || '');
-        var comma = result.indexOf(',');
-        resolve({ name: file.name, mime: file.type || 'application/octet-stream', data: comma !== -1 ? result.slice(comma + 1) : result });
-      };
-      reader.onerror = function () { reject(reader.error || new Error('Failed to read ' + file.name)); };
-      reader.readAsDataURL(file);
-    });
-  }
 
   /* Downloads a Bench Sales document (resume/DL/I-94) via fetch rather than a
      plain <a href> link: this API authenticates same-origin /api/ requests by
@@ -310,6 +301,11 @@
       'color:var(--muted,#8a9bb8);border-bottom:1px solid var(--border,#2a3446);white-space:nowrap;',
       'position:sticky;top:0;z-index:2;background:var(--bg2,#141b26)}',
       '.bss-table td{padding:11px 14px;border-bottom:1px solid var(--border2,#1d2634);white-space:nowrap}',
+      /* Tech Stack tends to run long (many comma-separated skills) — give it
+         roughly double the width of a normal column, but still clip with an
+         ellipsis rather than wrapping/stretching the table; the full value
+         shows in the detail drawer on row click (row2('Tech Stack', ...)). */
+      '.bss-table th.bss-col-tech,.bss-table td.bss-col-tech{max-width:260px;min-width:260px;overflow:hidden;text-overflow:ellipsis}',
       '.bss-table tbody tr{cursor:pointer}',
       '.bss-table tbody tr:hover{background:var(--bg3,#1c2433)}',
       '.bss-table tbody tr:last-child td{border-bottom:none}',
@@ -547,10 +543,14 @@
     if (!cols.length) {
       return '<div class="bss-empty2"><div class="big">📋</div>Select at least one column in Manage Columns.</div>';
     }
-    var head = cols.map(function (c) { return '<th>' + esc(salesColLabel(c.key)) + '</th>'; }).join('');
+    var head = cols.map(function (c) {
+      return '<th' + (c.key === 'techStack' ? ' class="bss-col-tech"' : '') + '>' + esc(salesColLabel(c.key)) + '</th>';
+    }).join('');
     var body = rows.map(function (r) {
       return '<tr class="bss-tr" data-id="' + r.id + '">' +
-        cols.map(function (c) { return '<td>' + salesCell(r, c.key) + '</td>'; }).join('') +
+        cols.map(function (c) {
+          return '<td' + (c.key === 'techStack' ? ' class="bss-col-tech"' : '') + '>' + salesCell(r, c.key) + '</td>';
+        }).join('') +
       '</tr>';
     }).join('');
     return '<div class="bss-wrap"><table class="bss-table"><thead><tr>' + head + '</tr></thead><tbody>' + body + '</tbody></table></div>';
@@ -975,10 +975,10 @@
 
   /* ── Bench Sales — New / Edit Profile form ────────────────────────────────
      Same two-column grid + Save/Cancel footer as the Bench Submissions form
-     below, plus three file inputs (Resume, DL (Optional)/State ID, I-94)
-     read client-side as base64 (readFileAsBase64) and sent as plain JSON —
-     leaving a file input empty on Edit keeps whatever is already stored,
-     since the PUT is applied server-side as a partial update. */
+     below, plus three file inputs (Resume, DL (Optional)/State ID, I-94) and
+     certificates. Text fields are saved as JSON first, then each file is
+     uploaded in its own multipart request (POST .../upload) — leaving a file
+     input empty on Edit keeps whatever is already stored. */
   function openSalesProfileModal(row) {
     closeOverlay();
     var isEdit = !!row;
@@ -1012,6 +1012,11 @@
     // discard the first. Removed via the × next to its name, same as an
     // already-uploaded certificate.
     var pendingCertFiles = [];
+    // A saved value outside WORK_AUTH_TYPES is a custom "Other" entry: show it
+    // as Other with the text pre-filled.
+    var savedAuth = row.workAuthorization || '';
+    var authSel = !savedAuth ? '' : (WORK_AUTH_TYPES.indexOf(savedAuth) !== -1 ? savedAuth : 'Other');
+    var authOther = authSel === 'Other' && savedAuth !== 'Other' ? savedAuth : '';
     function certListItemHtml(name, removeAttr) {
       return '<div style="display:flex;align-items:center;justify-content:space-between;background:var(--bg3,#1c2433);border:1px solid var(--border,#2a3446);border-radius:6px;padding:4px 8px;font-size:12px">' +
         '<span>' + esc(name || 'certificate') + '</span>' +
@@ -1049,8 +1054,13 @@
           field('bsam-exp', 'Experience', 'text', row.experience, true) +
           '<div><label class="bss-lb">Work Authorization <span class="req">*</span></label><select class="bss-sel" id="bsam-auth"><option value="">Select…</option>' +
             WORK_AUTH_TYPES.map(function (a) {
-              return '<option' + (row.workAuthorization === a ? ' selected' : '') + '>' + a + '</option>';
-            }).join('') + '</select></div>' +
+              return '<option' + (authSel === a ? ' selected' : '') + '>' + a + '</option>';
+            }).join('') + '</select>' +
+            // "Other" reveals a free-text box; the typed value is what gets
+            // saved as workAuthorization (max 40 chars, the column's width).
+            '<input class="bss-in" id="bsam-auth-other" type="text" maxlength="40" placeholder="Specify work authorization" ' +
+              'value="' + esc(authOther) + '" style="margin-top:6px' + (authSel === 'Other' ? '' : ';display:none') + '">' +
+          '</div>' +
           field('bsam-email', 'Mail Id', 'email', row.email, true) +
           field('bsam-contact', 'Contact No', 'text', row.contactNo, true) +
           fileField('bsam-resume', 'Resume', row.resumeFileName, true) +
@@ -1077,7 +1087,7 @@
       var rm = e.target && e.target.closest ? e.target.closest('[data-certremove]') : null;
       if (rm) {
         e.stopPropagation();
-        if (!isEdit || !row.id) return;
+        if (!row.id) return;
         var certId = Number(rm.getAttribute('data-certremove'));
         if (!window.confirm('Remove this certificate?')) return;
         api('/recruit/bench-sales/' + row.id + '/certificates/' + certId, { method: 'DELETE' }).then(function () {
@@ -1104,6 +1114,11 @@
       pendingCertFiles = pendingCertFiles.concat(picked);
       renderCertList();
     });
+    ov.querySelector('#bsam-auth').addEventListener('change', function () {
+      var other = ov.querySelector('#bsam-auth-other');
+      other.style.display = this.value === 'Other' ? '' : 'none';
+      if (this.value === 'Other') other.focus();
+    });
     ov.querySelector('#bsam-x').addEventListener('click', closeOverlay);
     ov.querySelector('#bsam-cancel').addEventListener('click', closeOverlay);
 
@@ -1117,21 +1132,26 @@
       for (var r = 0; r < required.length; r++) {
         if (!v(required[r][0])) { e.textContent = required[r][1] + ' is required.'; return; }
       }
+      var auth = v('bsam-auth');
+      if (auth === 'Other') {
+        auth = v('bsam-auth-other');
+        if (!auth) { e.textContent = 'Please specify the work authorization.'; return; }
+      }
       if (!isValidEmail(v('bsam-email'))) {
         e.textContent = 'Mail Id must be a valid email address (e.g. name@example.com).'; return;
       }
 
       var fileInputs = [
-        { id: 'bsam-resume', prefix: 'resume', label: 'Resume', required: true },
-        { id: 'bsam-dl', prefix: 'dlStateId', label: 'DL (Optional)/State ID', required: false },
-        { id: 'bsam-i94', prefix: 'i94', label: 'I-94', required: true },
+        { id: 'bsam-resume', prefix: 'resume', slug: 'resume', label: 'Resume', required: true },
+        { id: 'bsam-dl', prefix: 'dlStateId', slug: 'dl-state-id', label: 'DL (Optional)/State ID', required: false },
+        { id: 'bsam-i94', prefix: 'i94', slug: 'i94', label: 'I-94', required: true },
       ];
       for (var i = 0; i < fileInputs.length; i++) {
         var inp = ov.querySelector('#' + fileInputs[i].id);
         var f = inp && inp.files && inp.files[0];
         if (f && !isPdfFile(f)) { e.textContent = fileInputs[i].label + ' must be a PDF file.'; return; }
         if (f && isTooLarge(f)) { e.textContent = fileInputs[i].label + ': ' + tooLargeMsg(f); return; }
-        if (fileInputs[i].required && !f && !(isEdit && row[fileInputs[i].prefix + 'FileName'])) {
+        if (fileInputs[i].required && !f && !row[fileInputs[i].prefix + 'FileName']) {
           e.textContent = fileInputs[i].label + ' is required.'; return;
         }
       }
@@ -1152,38 +1172,59 @@
 
       var payload = {
         name: v('bsam-name'), techStack: v('bsam-tech'), experience: v('bsam-exp'),
-        workAuthorization: v('bsam-auth'), email: v('bsam-email'), contactNo: v('bsam-contact'),
+        workAuthorization: auth, email: v('bsam-email'), contactNo: v('bsam-contact'),
       };
-      var reads = fileInputs.map(function (f) {
+      // Text fields go first as JSON; then every file is sent on its own as
+      // multipart (POST .../upload). One JSON body carrying all the PDFs as
+      // base64 was rejected by the live server with HTTP 413.
+      var uploads = [];
+      fileInputs.forEach(function (f) {
         var inp2 = ov.querySelector('#' + f.id);
         var file = inp2 && inp2.files && inp2.files[0];
-        if (!file) return Promise.resolve();
-        return readFileAsBase64(file).then(function (r) {
-          payload[f.prefix + 'FileName'] = r.name;
-          payload[f.prefix + 'FileMime'] = r.mime;
-          payload[f.prefix + 'FileData'] = r.data;
-        });
+        if (file) uploads.push({ field: f.slug, file: file, label: f.label });
       });
-      var certReads = newCertFiles.map(function (file) {
-        return readFileAsBase64(file).then(function (r) {
-          return { fileName: r.name, fileMime: r.mime, fileData: r.data };
+      newCertFiles.slice().forEach(function (file) {
+        uploads.push({ field: 'certificate', file: file, label: 'Certificate' });
+      });
+
+      var saveText = row.id
+        ? api('/recruit/bench-sales/' + row.id, { method: 'PUT', body: payload })
+        : api('/recruit/bench-sales', { method: 'POST', body: payload });
+      var chain = saveText.then(function (saved) {
+        // From here on the profile exists — a retry after a failed upload
+        // PUTs to it instead of creating a duplicate.
+        Object.assign(row, saved);
+      });
+      uploads.forEach(function (u, idx) {
+        chain = chain.then(function () {
+          btn.textContent = 'Uploading ' + (idx + 1) + ' of ' + uploads.length + '…';
+          var fd = new FormData();
+          fd.append('field', u.field);
+          fd.append('file', u.file, u.file.name);
+          return api('/recruit/bench-sales/' + row.id + '/upload', { method: 'POST', body: fd })
+            .catch(function (err) { throw new Error(u.label + ' (' + u.file.name + '): ' + err.message); });
+        }).then(function (saved) {
+          Object.assign(row, saved);
+          if (u.field === 'certificate') {
+            var at = pendingCertFiles.indexOf(u.file);
+            if (at !== -1) pendingCertFiles.splice(at, 1);
+          } else {
+            ov.querySelector('#' + fileInputs.filter(function (f) { return f.slug === u.field; })[0].id).value = '';
+          }
+          renderCertList();
         });
       });
 
-      Promise.all(reads).then(function () {
-        return Promise.all(certReads);
-      }).then(function (certs) {
-        payload.certificates = certs;
-        return isEdit
-          ? api('/recruit/bench-sales/' + row.id, { method: 'PUT', body: payload })
-          : api('/recruit/bench-sales', { method: 'POST', body: payload });
-      }).then(function () {
+      chain.then(function () {
         closeOverlay();
         toast(isEdit ? 'Profile updated' : 'Profile created');
         loadSalesProfiles();
       }).catch(function (err) {
         btn.disabled = false;
-        e.textContent = err.message || 'Failed to save — check the selected files and try again.';
+        btn.textContent = row.id && !isEdit ? 'Retry' : (isEdit ? 'Save Changes' : 'Create Profile');
+        e.textContent = (row.id && !isEdit ? 'Profile saved, but an upload failed — ' : '') +
+          (err.message || 'Failed to save — check the selected files and try again.');
+        loadSalesProfiles();
       });
     });
   }

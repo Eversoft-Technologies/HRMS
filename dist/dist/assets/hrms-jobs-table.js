@@ -4,6 +4,8 @@
  * Replaces the Job Board (/recruit/job-board) built-in table with a
  * Ceipal-style data grid (no bundle rebuild):
  *   • Own table from /api/jobs (shown by default; the app's table is hidden).
+ *   • Job Code column (JobPost.code, e.g. JOB-101) — the handle Resume Scoring
+ *     uses to pull a post's description in; editable on Post Job, else auto.
  *   • Edit Column drawer (show/hide + drag reorder), persisted to localStorage.
  *   • Per-column Excel-style filter popups (sort + search + value checklist).
  *   • Per-row Job Status editor (modal) → PATCH /api/jobs/:id.
@@ -25,6 +27,7 @@
   function priColor(v) { for (var i = 0; i < PRIORITIES.length; i++) if (PRIORITIES[i].v === v) return PRIORITIES[i].c; return '#8a9bb8'; }
 
   var COLS = [
+    { key: 'code', label: 'Job Code' },
     { key: 'title', label: 'Job Title' }, { key: 'dept', label: 'Department' },
     { key: 'location', label: 'Location' }, { key: 'type', label: 'Type' },
     { key: 'status', label: 'Status', def: 'Active' }, { key: 'priority', label: 'Priority', def: 'Normal' },
@@ -36,7 +39,7 @@
   ];
   var DEFAULT_HIDDEN = { description: 1, customFields: 1 };
   // JobPost's built-in columns — every other Form-Builder field is a custom column.
-  var CORE_FIELD = { title: 1, dept: 1, location: 1, type: 1, salary: 1, openings: 1, priority: 1, status: 1, remote: 1, description: 1 };
+  var CORE_FIELD = { code: 1, title: 1, dept: 1, location: 1, type: 1, salary: 1, openings: 1, priority: 1, status: 1, remote: 1, description: 1 };
   var STATUS_OPTIONS = ['Active', 'Cancelled', 'Closed', 'Filled', 'Hold by Client', 'On Hold'];
   var PAGE_SIZES = [25, 50, 100, 200];
   var TECH = ['engineering', 'data & analytics', 'data', 'design'];
@@ -122,6 +125,8 @@
     // Carry over previously-saved custom-field columns (schema-reconciled later).
     if (Array.isArray(saved)) saved.forEach(function (c) { if (c && c.key && c.key.indexOf('cf:') === 0 && !cols.some(function (x) { return x.key === c.key; })) cols.push({ key: c.key, on: c.on !== false }); });
     if (Array.isArray(saved) && saved.length) cols.sort(function (a, b) { var ao = byKey[a.key] ? byKey[a.key].ord : 999, bo = byKey[b.key] ? byKey[b.key].ord : 999; return ao - bo; });
+    // Prefs saved before Job Code existed would park it at the end; lead with it.
+    if (Array.isArray(saved) && saved.length && !byKey.code) { for (var ci = 0; ci < cols.length; ci++) if (cols[ci].key === 'code') { cols.unshift(cols.splice(ci, 1)[0]); break; } }
     state.cols = cols;
   }
   function saveColPrefs() { try { localStorage.setItem(LS_KEY, JSON.stringify(state.cols)); } catch (_) {} }
@@ -143,14 +148,54 @@
       default: return true;
     }
   }
+  function jobMatchesTerm(job, colKey, q) {
+    if (!q) return true;
+    var v = cellVal(job, colKey);
+    var str = String(v == null ? '' : v).toLowerCase();
+    if (str.indexOf(q) !== -1) return true;
+    if (colKey === 'salary') {
+      var numOnlyStr = str.replace(/,/g, '');
+      var numOnlyQ = q.replace(/,/g, '');
+      if (numOnlyStr.indexOf(numOnlyQ) !== -1) return true;
+      var digitsStr = str.replace(/[^\d]/g, '');
+      var digitsQ = q.replace(/[^\d]/g, '');
+      if (digitsQ && digitsStr.indexOf(digitsQ) !== -1) return true;
+    }
+    if (colKey === 'remote') {
+      var isRem = !!job.remote || !!job.is_remote || str === 'yes';
+      if ((q === 'yes' || q === 'true' || q === 'remote') && isRem) return true;
+      if ((q === 'no' || q === 'false' || q === 'onsite') && !isRem) return true;
+    }
+    return false;
+  }
   function filteredJobs() {
-    var q = state.search.toLowerCase();
+    var q = state.search.toLowerCase().trim();
+    var sddInput = document.getElementById('jt-search');
+    var sddCol = (sddInput && sddInput.__sdd && typeof sddInput.__sdd.col === 'number') ? sddInput.__sdd.col : -1;
+    var cols = shownCols();
+    var targetCol = (sddCol >= 0 && sddCol < cols.length) ? cols[sddCol] : null;
+
     var rows = state.jobs.filter(function (x) {
-      if (q && !(('' + (x.title || '')).toLowerCase().indexOf(q) !== -1 || ('' + (x.dept || '')).toLowerCase().indexOf(q) !== -1 || ('' + (x.location || '')).toLowerCase().indexOf(q) !== -1)) return false;
+      if (q) {
+        if (targetCol) {
+          if (!jobMatchesTerm(x, targetCol.key, q)) return false;
+        } else {
+          var matched = false;
+          for (var cIdx = 0; cIdx < cols.length; cIdx++) {
+            if (jobMatchesTerm(x, cols[cIdx].key, q)) {
+              matched = true;
+              break;
+            }
+          }
+          if (!matched) return false;
+        }
+      }
       for (var k in state.colFilters) { if (state.colFilters[k] && state.colFilters[k].indexOf(String(cellVal(x, k))) === -1) return false; }
       if (state.predef !== 'all' && !matchPredef(x)) return false;
       if (state.buFilter && state.buFilter.indexOf(String(x.dept || '')) === -1) return false;
-      for (var i = 0; i < state.customFilters.length; i++) { var cf = state.customFilters[i]; if (cf.val && String(cellVal(x, cf.key)).toLowerCase().indexOf(cf.val.toLowerCase()) === -1) return false; }
+      // Same matcher as the search box, so a Salary rule reads 3,00,000 and
+      // 300000 alike (BUG-HRMS-FILT-001).
+      for (var i = 0; i < state.customFilters.length; i++) { var cf = state.customFilters[i]; if (cf.val && !jobMatchesTerm(x, cf.key, cf.val.toLowerCase().trim())) return false; }
       return true;
     });
     if (state.sortKey) {
@@ -158,7 +203,7 @@
       rows = rows.slice().sort(function (a, b) {
         var av = a[state.sortKey], bv = b[state.sortKey];
         if (c.num) return ((+av || 0) - (+bv || 0)) * state.sortDir;
-        return String(av == null ? '' : av).localeCompare(String(bv == null ? '' : bv)) * state.sortDir;
+        return String(av == null ? '' : av).localeCompare(String(bv == null ? '' : bv), undefined, { numeric: true }) * state.sortDir;
       });
     }
     return rows;
@@ -198,20 +243,24 @@
       R + ' .jt-funnel.on{color:var(--accent,#38bdf8);background:rgba(56,189,248,0.12);border-color:rgba(56,189,248,0.3);}',
       R + ' .jt-table td{padding:11px 14px;border-bottom:1px solid var(--border2,#334155);color:var(--text,#f1f5f9);white-space:nowrap;}',
       R + ' .jt-table td.jt-title{color:var(--text,#ffffff);font-weight:600;}',
+      R + ' .jt-code{display:inline-block;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11.5px;font-weight:700;letter-spacing:.3px;color:var(--accent,#38bdf8);background:rgba(56,189,248,.12);border:1px solid rgba(56,189,248,.3);border-radius:6px;padding:2px 8px;}',
       R + ' .jt-table td.jt-center{text-align:center;}',
       R + ' .jt-table td.jt-cf{white-space:normal;max-width:340px;}',
       R + ' .jt-cf-chip{display:inline-block;background:var(--bg3,#1e293b);border:1px solid var(--border2,#334155);border-radius:6px;padding:2px 8px;margin:2px 4px 2px 0;font-size:11px;color:var(--text2,#cbd5e1);}',
       R + ' .jt-cf-chip b{color:var(--text,#f8fafc);font-weight:600;}',
       R + ' .jt-cf-empty{color:var(--text3,#94a3b8);}',
       R + ' .jt-md .jt-cf-chip{margin:2px 4px 2px 0;}',
-      R + ' .jt-table tr:hover td{background:rgba(255,255,255,.05);}',
+      R + ' .jt-table tr:hover td{background:rgba(79,142,247,.06);}',
+      'html[data-theme="light"] ' + R + ' .jt-table tr:hover td{background:rgba(0,0,0,.04);}',
       R + ' .jt-status{display:inline-flex;align-items:center;gap:6px;cursor:pointer;border:1px dashed transparent;border-radius:999px;padding:2px 6px;}',
       R + ' .jt-status:hover{border-color:var(--border2,#475569);}',
       R + ' .jt-status .jt-edit{opacity:0;font-size:11px;color:var(--accent,#38bdf8);}',
       R + ' .jt-status:hover .jt-edit{opacity:1;}',
       /* editable priority cell (colored badge) */
-      R + ' .jt-pri{display:inline-flex;align-items:center;gap:6px;cursor:pointer;background:rgba(255,255,255,0.06);border:1px solid var(--border2,rgba(255,255,255,0.15));border-radius:6px;padding:3px 9px;font-size:12px;font-weight:600;color:var(--text,#f1f5f9);transition:all .15s ease;}',
-      R + ' .jt-pri:hover{background:rgba(255,255,255,0.14);border-color:var(--accent,#38bdf8);color:#ffffff;}',
+      R + ' .jt-pri{display:inline-flex;align-items:center;justify-content:center;gap:6px;cursor:pointer;background:rgba(255,255,255,0.06);border:1px solid var(--border2,rgba(255,255,255,0.15));border-radius:6px;padding:3px 9px;width:92px;min-width:92px;box-sizing:border-box;white-space:nowrap;flex-shrink:0;font-size:12px;font-weight:600;color:var(--text,#f1f5f9);transition:all .15s ease;}',
+      /* Hover keeps the theme's text colour (a hard-coded white vanished on the
+         light theme) and tints with the accent, which shows on both themes. */
+      R + ' .jt-pri:hover{background:rgba(79,142,247,0.12);border-color:var(--accent,#38bdf8);color:var(--text,#f1f5f9);}',
       R + ' .jt-pdot{width:8px;height:8px;border-radius:50%;flex-shrink:0;box-shadow:0 0 4px rgba(0,0,0,.4);}',
       R + ' .jt-caret{font-size:9px;color:var(--text2,#cbd5e1);opacity:.85;margin-left:2px;}',
       R + ' .jt-pri:hover .jt-caret{opacity:1;color:var(--accent,#38bdf8);}',
@@ -298,7 +347,11 @@
       MD + ' .jt-mrow textarea{min-height:70px;resize:vertical;}',
       MD + ' .jt-mf{display:flex;justify-content:flex-end;gap:10px;padding:14px 22px;border-top:1px solid var(--border2,#334155);}',
       '@keyframes jt-fade{from{opacity:0}to{opacity:1}}',
-      '@keyframes jt-slide{from{transform:translateX(100%)}to{transform:translateX(0)}}'
+      '@keyframes jt-slide{from{transform:translateX(100%)}to{transform:translateX(0)}}',
+      /* Same width for every Status pill so the column lines up (the Priority
+         pill is fixed at 92px above). */
+      R + ' .jt-status .jt-pill{display:inline-block;min-width:110px;text-align:center;box-sizing:border-box;}',
+      '@media(max-width:768px){' + M + '{right:0;left:auto;max-width:calc(100vw - 24px);min-width:min(180px,calc(100vw - 24px));box-sizing:border-box;}}',
     ].join('');
     var st = document.createElement('style'); st.id = ID.style; st.textContent = css; document.head.appendChild(st);
   }
@@ -324,7 +377,7 @@
     var ICON_COLUMNS = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="5.5" height="16" rx="1"/><rect x="9.5" y="4" width="5.5" height="16" rx="1"/><rect x="16" y="4" width="5" height="16" rx="1"/></svg>';
     root.innerHTML =
       '<div class="jt-bar">' +
-        '<input class="jt-search" id="jt-search" placeholder="Search jobs, department, location…">' +
+        '<input class="jt-search" id="jt-search" placeholder="Search jobs, job code, department, location…">' +
         '<div style="position:relative"><button class="jt-btn" id="jt-export">⭳ Export ▾</button></div>' +
         '<button class="jt-icon" id="jt-editfilters" title="Edit Filters">' + ICON_SLIDERS + '</button>' +
         '<button class="jt-icon" id="jt-editcolumns" title="Edit Column">' + ICON_COLUMNS + '</button>' +
@@ -367,6 +420,7 @@
         var v = cellVal(job, c.key);
         var isCenter = (c.key === 'applicants' || c.key === 'openings' || c.key === 'remote');
         var tdCenterCls = isCenter ? ' jt-center' : '';
+        if (c.key === 'code') return '<td>' + (v ? '<span class="jt-code">' + esc(v) + '</span>' : '<span class="jt-cf-empty">—</span>') + '</td>';
         if (c.key === 'title') return '<td class="jt-title">' + esc(v) + '</td>';
         if (c.key === 'status') return '<td><span class="jt-status" data-edit="' + job.id + '"><span class="jt-pill ' + esc(String(v).toLowerCase().replace(/\s+/g, '')) + '">' + esc(v) + '</span><span class="jt-edit">✎</span></span></td>';
         if (c.key === 'priority') return '<td><span class="jt-pri" data-pri="' + job.id + '" title="Set priority"><span class="jt-pdot" style="background:' + priColor(v) + '"></span>' + esc(v) + '<span class="jt-caret">▾</span></span></td>';
@@ -603,6 +657,7 @@
       '<div class="jt-md" style="width:540px"><div class="jt-mh"><h3>Post a Job</h3><button class="jt-x" id="pj-x">×</button></div>' +
       '<div class="jt-mb" style="max-height:70vh;overflow-y:auto">' +
         row('Title', '<input id="pj-title" placeholder="e.g. Data Analyst">', true) +
+        row('Job Code', '<input id="pj-code" placeholder="Leave blank to auto-generate">') +
         row('Department', '<input id="pj-dept" placeholder="e.g. Engineering">', true) +
         row('Location', '<input id="pj-location" placeholder="e.g. Hyderabad">', true) +
         row('Type', '<select id="pj-type"><option value="">Select Type</option><option value="Full-time">Full-time</option><option value="Part-time">Part-time</option><option value="Contract">Contract</option><option value="Internship">Internship</option></select>', true) +
@@ -631,6 +686,8 @@
     ov.querySelector('#pj-x').addEventListener('click', close);
     ov.querySelector('#pj-cancel').addEventListener('click', close);
     setupLinkedInRow(ov);
+    // Show the code a blank field will get; it is only reserved on save.
+    api('/api/jobs/next-code').then(function (d) { var c = ov.querySelector('#pj-code'); if (d && d.code && c && !c.value) c.placeholder = 'Auto: ' + d.code + ' (or enter your own)'; }).catch(function () {});
     ov.querySelector('#pj-save').addEventListener('click', function () {
       var title = val('pj-title'), dept = val('pj-dept'), location = val('pj-location'), type = val('pj-type'), salary = val('pj-salary'), openings = parseInt(val('pj-openings'), 10), priority = val('pj-priority'), status = val('pj-status'), desc = val('pj-desc'), msg = ov.querySelector('#pj-msg');
       if (!title || !dept || !location || !type || !salary || isNaN(openings) || openings < 1 || !priority || !status || !desc) {
@@ -640,7 +697,7 @@
       var li = ov.querySelector('#pj-li');
       var shareToLinkedIn = !!(li && li.checked && !li.disabled);
       var btn = ov.querySelector('#pj-save');
-      var body = { title: title, dept: dept, location: location, type: type, salary: salary, openings: openings || 1, priority: priority, status: status, remote: ov.querySelector('#pj-remote').value === 'true', description: desc, autoPost: shareToLinkedIn };
+      var body = { code: val('pj-code').toUpperCase(), title: title, dept: dept, location: location, type: type, salary: salary, openings: openings || 1, priority: priority, status: status, remote: ov.querySelector('#pj-remote').value === 'true', description: desc, autoPost: shareToLinkedIn };
       // Tells the backend whose LinkedIn to post under. Without it the job is
       // still created, just never shared.
       var email = currentUserEmail();
@@ -726,7 +783,12 @@
     var ex = document.getElementById(ID.menu); if (ex) { ex.remove(); return; }
     var menu = document.createElement('div'); menu.id = ID.menu;
     menu.innerHTML = '<button data-x="csv">⭳ Download CSV (.csv)</button><button data-x="xlsx">⭳ Download Excel (.xlsx)</button>';
-    btn.parentNode.appendChild(menu); menu.style.top = (btn.offsetTop + btn.offsetHeight + 6) + 'px'; menu.style.left = btn.offsetLeft + 'px';
+    btn.parentNode.appendChild(menu); menu.style.top = (btn.offsetTop + btn.offsetHeight + 6) + 'px';
+    // Keep the menu on screen: on a phone the Export button sits by the right
+    // edge, so a menu left-aligned to it would be clipped. Shift it left by
+    // the overflow, never past the left edge.
+    var bl = btn.getBoundingClientRect().left, over = bl + menu.offsetWidth + 8 - window.innerWidth;
+    menu.style.left = (btn.offsetLeft - Math.max(0, Math.min(over, bl - 8))) + 'px';
     menu.querySelector('[data-x="csv"]').addEventListener('click', function () { exportCsv(); menu.remove(); });
     menu.querySelector('[data-x="xlsx"]').addEventListener('click', function () { exportXlsx(); menu.remove(); });
     setTimeout(function () { document.addEventListener('click', function h() { var m = document.getElementById(ID.menu); if (m) m.remove(); document.removeEventListener('click', h); }); }, 0);

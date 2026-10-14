@@ -3,6 +3,7 @@ Models mapped 1:1 onto the existing MySQL tables created by the original
 Node/Express server. Table and column names match exactly so the same
 database can be used without migrating data.
 """
+import re
 from decimal import Decimal
 from django.db import models
 from django.utils import timezone
@@ -10,7 +11,15 @@ from django.utils import timezone
 from .timeutil import local_now
 
 
+JOB_CODE_PREFIX = 'JOB-'
+JOB_CODE_START = 101
+
+
 class JobPost(models.Model):
+    # Human-readable requisition code ("JOB-101"). Shown as its own Job Board
+    # column and used by Resume Scoring to load this post's description by
+    # code. Assigned sequentially on first save when the poster leaves it blank.
+    code = models.CharField(max_length=40, unique=True, blank=True, default='')
     title = models.CharField(max_length=255)
     dept = models.CharField(max_length=255)
     location = models.CharField(max_length=255, default='', blank=True)
@@ -33,6 +42,23 @@ class JobPost(models.Model):
     class Meta:
         db_table = 'job_posts'
         ordering = ['id']
+
+    @classmethod
+    def next_code(cls):
+        """The next free sequential code: one past the highest JOB-<n> in use."""
+        pattern = re.compile(r'^' + re.escape(JOB_CODE_PREFIX) + r'(\d+)$', re.I)
+        top = JOB_CODE_START - 1
+        for code in cls.objects.filter(code__istartswith=JOB_CODE_PREFIX).values_list('code', flat=True):
+            m = pattern.match(code or '')
+            if m:
+                top = max(top, int(m.group(1)))
+        return '%s%d' % (JOB_CODE_PREFIX, top + 1)
+
+    def save(self, *args, **kwargs):
+        self.code = (self.code or '').strip().upper()
+        if not self.code:
+            self.code = JobPost.next_code()
+        super().save(*args, **kwargs)
 
 
 class JobFormTemplate(models.Model):
@@ -146,6 +172,9 @@ class ResumeScore(models.Model):
     name = models.CharField(max_length=255)
     initials = models.CharField(max_length=10)
     role = models.CharField(max_length=255)
+    # JobPost.code the resume was scored against (stamped by the Resume Scoring
+    # page from its Job Code picker), so the comparison grid can show it.
+    job_code = models.CharField(max_length=40, default='', blank=True, db_index=True)
     score = models.IntegerField(default=0)
     technical = models.IntegerField(default=0)
     experience = models.IntegerField(default=0)
@@ -1228,6 +1257,9 @@ class WorkAuthorization(models.Model):
     )
     # F1 | H1B | GC EAD | US Citizen | H4 EAD | Other
     auth_type = models.CharField(max_length=32, default='', blank=True, db_index=True)
+    # What "Other" actually is (e.g. "L-1", "TN", "O-1"). Required when
+    # auth_type is Other, and cleared for every other type.
+    auth_type_other = models.CharField(max_length=120, default='', blank=True)
     # Active | Pending | Expired | Extension Filed | Transferred | Rejected
     status = models.CharField(max_length=32, default='Pending', db_index=True)
     expiry_date = models.DateField(null=True, blank=True, db_index=True)
