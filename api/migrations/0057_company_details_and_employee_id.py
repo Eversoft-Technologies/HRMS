@@ -16,14 +16,16 @@ def create_tables_and_columns_if_not_exists(apps, schema_editor):
             columns = [col.name if hasattr(col, 'name') else col[0] for col in connection.introspection.get_table_description(cursor, 'app_users')]
             if 'employee_id' not in columns:
                 AppUser = apps.get_model('api', 'AppUser')
-                field = AppUser._meta.get_field('employee_id')
+                field = models.CharField(max_length=64, default='', blank=True, db_index=True)
+                field.set_attributes_from_name('employee_id')
                 schema_editor.add_field(AppUser, field)
 
         if 'user_profiles' in tables:
             columns = [col.name if hasattr(col, 'name') else col[0] for col in connection.introspection.get_table_description(cursor, 'user_profiles')]
             if 'employee_id' not in columns:
                 UserProfile = apps.get_model('api', 'UserProfile')
-                field = UserProfile._meta.get_field('employee_id')
+                field = models.CharField(max_length=64, default='', blank=True, db_index=True)
+                field.set_attributes_from_name('employee_id')
                 schema_editor.add_field(UserProfile, field)
 
 
