@@ -75,7 +75,7 @@ class NotificationService:
             employee_email,
             'Late Check-In Alert',
             f'You checked in {late_minutes} minutes late (Expected: {shift_start_time})',
-            'warning'
+            'warning', '/employees/attendance'
         )
 
         email_subject = 'Late Check-In Notification'
@@ -107,7 +107,7 @@ HRMS System"""
             employee_email,
             'Break Limit Exceeded',
             f'Total break time ({total_break_minutes}m) exceeded daily limit ({max_break_minutes}m)',
-            'error'
+            'error', '/employees/attendance'
         )
 
         email_subject = 'Break Limit Exceeded'
@@ -139,7 +139,7 @@ HRMS System"""
             employee_email,
             'Overtime Limit Alert',
             f'Overtime ({overtime_hours:.1f}h) may exceed limit ({limit_hours:.1f}h)',
-            'warning'
+            'warning', '/employees/attendance'
         )
 
         email_subject = 'Overtime Limit Alert'
@@ -180,7 +180,8 @@ HRMS System"""
             employee_email,
             title,
             message,
-            notification_type
+            notification_type,
+            '/employees/checkin?focus=Work+From+Home'
         )
 
         email_subject = f'Work-From-Home Request {status}'
@@ -219,7 +220,8 @@ HRMS System"""
             employee_email,
             title,
             message,
-            notification_type
+            notification_type,
+            '/employees/leave'
         )
 
         email_subject = f'Attendance Correction {status}'

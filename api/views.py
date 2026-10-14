@@ -21,18 +21,20 @@ import os
 import re
 import secrets
 from datetime import datetime, time, timedelta
+from urllib.parse import urlencode
 
 from django.conf import settings
 from django.db import transaction
 from django.db.models import (
-    BinaryField, BooleanField, Case, CharField, Count, F, Func, IntegerField,
-    OuterRef, Q, Subquery, Sum, Value, When,
+    BinaryField, BooleanField, Case, CharField, Count, ExpressionWrapper, F, Func,
+    IntegerField, OuterRef, Q, Subquery, Sum, Value, When,
 )
 from django.db.models.functions import Coalesce, Substr
 from django.http import HttpResponse, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 
-from rest_framework.decorators import api_view
+from rest_framework.decorators import api_view, parser_classes
+from rest_framework.parsers import MultiPartParser
 from rest_framework.response import Response
 
 from . import ai, mailer, social_poster
@@ -78,6 +80,8 @@ from .models import (
 )
 from .serializers import (
     DATETIME_FMT,
+    job_title_problem,
+    salary_range_problem,
     AppUserSerializer,
     AttendanceEventSerializer,
     CompanySerializer,
@@ -249,6 +253,16 @@ def _creator_q(value, also_name=''):
     return q | (Q(created_by_email='') & legacy)
 
 
+def focus_link(path, text):
+    """A notification link that also names the record to scroll to and highlight
+    once the page opens (read by hrms-notifications.js; routers ignore it)."""
+    text = str(text or '').strip()[:80]
+    # Notification.link is 255 chars; non-ASCII titles triple in size encoded.
+    while text and len(path) + len(urlencode({'focus': text})) + 1 > 255:
+        text = text[:-5].rstrip()
+    return f'{path}?{urlencode({"focus": text})}' if text else path
+
+
 def create_notification(recipient, title, message, notification_type='info', link=''):
     email = norm_email(recipient)
     if not email:
@@ -334,7 +348,7 @@ def jobs(request):
         if remote and remote.lower() in ('true', '1'):
             qs = qs.filter(is_remote=True)
         if search:
-            qs = qs.filter(Q(title__icontains=search) | Q(dept__icontains=search))
+            qs = qs.filter(Q(title__icontains=search) | Q(dept__icontains=search) | Q(code__icontains=search))
         return Response(JobPostSerializer(qs, many=True).data)
 
     body = request.data
@@ -373,6 +387,17 @@ def job_detail(request, pk):
         return Response({'ok': True})
 
     data = request.data or {}
+    # Same rules as JobPostSerializer, since this path writes the columns
+    # directly (Job Board inline edits). Only a changed value is checked, so
+    # a post saved before the rules can still have its status edited.
+    if 'title' in data and (data['title'] or '') != (job.title or ''):
+        problem = job_title_problem(data['title'])
+        if problem:
+            return err(problem)
+    if 'salary' in data and (data['salary'] or '') != (job.salary or ''):
+        problem = salary_range_problem(data['salary'])
+        if problem:
+            return err(problem)
     text_fields = ['title', 'dept', 'location', 'type', 'salary', 'status', 'priority', 'description']
     changed = False
     for f in text_fields:
@@ -391,9 +416,24 @@ def job_detail(request, pk):
     if 'statusComment' in data:
         job.status_comment = data['statusComment'] or ''
         changed = True
+    if 'code' in data:
+        new_code = str(data['code'] or '').strip().upper()
+        if new_code and JobPost.objects.filter(code__iexact=new_code).exclude(pk=job.pk).exists():
+            return err(f'Job code {new_code} is already used by another job post.', 409)
+        job.code = new_code          # blank -> re-assigned on save
+        changed = True
     if changed:
         job.save()
     return Response(JobPostSerializer(job).data)
+
+
+@api_view(['GET'])
+@require_perm('recruitment.view')
+def job_next_code(request):
+    """The code a new job gets if the poster leaves Job Code blank. Shown as
+    the field's placeholder; never reserved, so two open forms cannot collide
+    (the real assignment happens in JobPost.save())."""
+    return Response({'code': JobPost.next_code()})
 
 
 def html_to_text(html):
@@ -1194,14 +1234,31 @@ def resume_scores(request):
     return Response(data, status=201 if created else 200)
 
 
-@api_view(['GET'])
+@api_view(['GET', 'PATCH', 'PUT', 'DELETE'])
 @require_perm('recruitment.view')
 def resume_score_detail(request, pk):
-    """A single resume including its stored file — kept out of the list endpoint
-    so the base64 blob is fetched only when actually viewing/downloading."""
+    """A single resume: retrieve details/file, update format/fields, or delete."""
     rs = ResumeScore.objects.filter(pk=pk).first()
     if not rs:
         return err('Resume not found', 404)
+
+    if request.method == 'DELETE':
+        rs.delete()
+        return Response({'ok': True, 'id': pk, 'message': 'Resume deleted successfully.'})
+
+    if request.method in ('PATCH', 'PUT'):
+        body = request.data
+        if 'formatted' in body:
+            rs.formatted = bool(body['formatted'])
+        if 'name' in body and body['name']:
+            rs.name = body['name']
+        if 'role' in body and body['role']:
+            rs.role = body['role']
+        if 'score' in body and body['score'] is not None:
+            rs.score = int(body['score'])
+        rs.save()
+        return Response(ResumeScoreSerializer(rs).data)
+
     return Response({
         'id': rs.id,
         'name': rs.name,
@@ -1209,6 +1266,9 @@ def resume_score_detail(request, pk):
         'fileMime': rs.file_mime or '',
         'fileData': rs.file_data or '',
         'resumeText': rs.resume_text or '',
+        'formatted': bool(rs.formatted),
+        'score': rs.score,
+        'role': rs.role,
     })
 
 
@@ -1227,7 +1287,12 @@ def resume_score_file(request, pk):
     if not rs:
         return HttpResponse('Resume not found', status=404)
     if not rs.file_data:
-        return HttpResponse('No file stored for this resume', status=404)
+        if rs.resume_text:
+            resp = HttpResponse(rs.resume_text, content_type='text/plain; charset=utf-8')
+            resp['Content-Disposition'] = f'inline; filename="{rs.file_name or f"resume_{pk}.txt"}"'
+            resp['Access-Control-Allow-Origin'] = '*'
+            return resp
+        return HttpResponse('No file or text stored for this resume', status=404)
 
     try:
         raw = base64.b64decode(rs.file_data)
@@ -1598,8 +1663,16 @@ def question_set_detail(request, set_id):
 # ---------------------------------------------------------------------------
 @api_view(['GET'])
 def ai_status(request):
+    """Is the AI service usable from this server? `detail` says why not
+    (host unreachable, retired model, bad key), so production can be checked
+    from a browser without the server log."""
     available = ai.check_ai_key_valid(request.headers.get('x-api-key'))
-    return Response({'available': available})
+    return Response({
+        'available': available,
+        'model': ai.GENERATION_MODEL,
+        'validationModel': ai.VALIDATION_MODEL,
+        'detail': 'ok' if available else (ai.ai_status_detail() or 'Anthropic API key check failed'),
+    })
 
 
 @api_view(['POST'])
@@ -1648,8 +1721,8 @@ def ai_score_resume(request):
     name = (body.get('name') or body.get('candidateName') or '').strip()
     role = (body.get('role') or body.get('jobRole') or 'Software Professional').strip()
 
-    if not resume_text:
-        return err('resumeText is required for AI scoring', 400)
+    if not resume_text or len(resume_text.strip()) < 20:
+        return err('The uploaded resume is empty or contains no readable text. Please upload or paste a valid resume.', 400)
 
     try:
         eval_result = ai.score_resume_ai(
@@ -1660,9 +1733,9 @@ def ai_score_resume(request):
             request_key=request.headers.get('x-api-key'),
         )
     except ai.AIUnavailable as exc:
-        return JsonResponse({'error': {'message': exc.message}}, status=exc.status)
+        return JsonResponse({'error': str(exc.message), 'message': str(exc.message)}, status=exc.status)
     except Exception as exc:
-        return err(f'AI Resume evaluation failed: {str(exc)}', 500)
+        return JsonResponse({'error': str(exc), 'message': str(exc)}, status=500)
 
     # If saveToDb requested or qualifying score with file payload, persist to DB
     if body.get('saveToDb') or body.get('save_to_db'):
@@ -1689,7 +1762,9 @@ def ai_score_resume(request):
             'aiSummary': eval_result.get('executiveSummary') or '',
             'aiStrengths': eval_result.get('strengths') or [],
             'aiGaps': eval_result.get('redFlags') or [],
-            'aiEvaluated': True,
+            # A heuristic fallback is stored, but never labelled as AI-evaluated.
+            'aiEvaluated': not eval_result.get('aiFallback'),
+            'jobCode': body.get('jobCode') or body.get('job_code') or '',
         }
         serializer = ResumeScoreSerializer(data=save_payload)
         if serializer.is_valid():
@@ -2708,7 +2783,7 @@ def attendance_check_in(request):
                     + (f'{round(home_dist)} m from their registered home'
                        if home_dist is not None else 'away from their registered home')
                     + f'. Reason: "{reason}"',
-                    '/attendance',
+                    '/employees/checkin?admin=reviews',
                 )
                 return Response({
                     'message': 'Your reason has been sent to HR. You will be able '
@@ -2814,7 +2889,7 @@ def attendance_check_in(request):
                 + (f'{round(distance)} m from {nearest.name}' if (distance is not None and nearest)
                    else 'from an unverified location')
                 + f'. Reason: "{reason}"',
-                '/attendance',
+                '/employees/checkin?admin=reviews',
             )
             create_notification(
                 email,
@@ -2866,7 +2941,7 @@ def attendance_check_in(request):
             'Out-of-office check-in needs approval',
             f'{obj.employee_name or email} checked in outside the office at '
             f'{now.strftime("%H:%M")}. Reason given: "{reason}"',
-            '/attendance',
+            '/employees/checkin?admin=reviews',
         )
 
     create_notification(
@@ -3498,7 +3573,7 @@ def attendance_home_locations(request):
         f'{email} registered a home location'
         + (f' (GPS ±{round(accuracy)} m)' if accuracy else '')
         + '. Confirm it before their work-from-home check-ins can be verified.',
-        '/attendance',
+        '/employees/checkin?admin=reviews',
     )
     return Response(_home_json(row), status=201)
 
@@ -4137,6 +4212,66 @@ def attendance_map_feed(request):
         })
 
 
+@api_view(['POST'])
+@require_perm('attendance.edit')
+def attendance_remind(request):
+    """Send attendance check-in reminder notification(s) to absent staff.
+
+    Accepts:
+      - email: str (single employee)
+      - emails: list[str] (batch remind)
+      - name: str (optional)
+    """
+    body = request.data or {}
+    emails_to_remind = []
+
+    if body.get('emails') and isinstance(body.get('emails'), list):
+        for em in body.get('emails'):
+            n_em = norm_email(em)
+            if n_em:
+                emails_to_remind.append((n_em, ''))
+    elif body.get('email'):
+        n_em = norm_email(body.get('email'))
+        if n_em:
+            emails_to_remind.append((n_em, str(body.get('name') or '').strip()))
+
+    if not emails_to_remind:
+        return err('Employee email is required')
+
+    today_str = local_now().strftime('%A, %b %d')
+    sent_count = 0
+
+    for email, name in emails_to_remind:
+        display_name = name or email.split('@')[0]
+        # 1. In-app Notification for employee
+        create_notification(
+            recipient=email,
+            title='⏰ Attendance Check-in Reminder',
+            message=f"Hi {display_name}, you have not logged attendance for today ({today_str}). Please check in or submit a WFH / leave request.",
+            notification_type='warning',
+            link='/employees/check-in',
+        )
+        # 2. External broadcast if available
+        try:
+            from api.services.notification_service import NotificationService
+            NotificationService.send_notification(
+                recipient_email=email,
+                title='⏰ Attendance Check-in Reminder',
+                message=f"Reminder: You have not logged attendance for today ({today_str}). Please open HRMS to check in.",
+                notification_type='warning',
+                link='/employees/check-in',
+            )
+        except Exception:
+            pass
+        sent_count += 1
+
+    return Response({
+        'ok': True,
+        'sentCount': sent_count,
+        'message': f"Sent {sent_count} check-in reminder{'s' if sent_count != 1 else ''}."
+    })
+
+
 @api_view(['GET', 'POST'])
 def attendance_departure_policy(request):
     """Configuration for Auto Check-Out on Geofence Departure."""
@@ -4219,14 +4354,14 @@ def leave(request):
         'Leave request submitted',
         'Your leave request has been submitted and is awaiting approval.',
         'info',
-        '/employees/leave',
+        focus_link('/employees/leave', inst.type),
     )
     emp_name = inst.employee_name or email
     notify_approvers(
         'leave.action',
         'New leave request',
         f"{emp_name} has requested leave ({inst.type}) from {inst.from_date} to {inst.to_date}.",
-        '/employees/leave',
+        focus_link('/employees/leave', emp_name),
     )
     return Response(serializer.data, status=201)
 
@@ -4479,7 +4614,7 @@ def tasks(request):
             'New task assigned',
             f"You have been assigned a new task: {body.get('title', 'Task')}",
             'info',
-            '/employees/tasks',
+            focus_link('/employees/tasks', body.get('title')),
         )
     return Response(serializer.data, status=201)
 
@@ -4567,14 +4702,14 @@ def submissions(request):
         'Work submission created',
         f"Your work submission '{inst.title}' has been submitted for review.",
         'info',
-        '/employees/submissions',
+        focus_link('/employees/submissions', inst.title),
     )
     emp_name = inst.employee_name or email
     notify_approvers(
         'submission.action',
         'New work submission',
         f"{emp_name} has submitted a new work item: '{inst.title}'.",
-        '/employees/submissions',
+        focus_link('/employees/submissions', inst.title),
     )
     return Response(serializer.data, status=201)
 
@@ -4704,7 +4839,7 @@ def submission_detail(request, pk):
             'Work submission update',
             f"Your work submission '{inst.title}' has been {new_status.lower()}.",
             'success' if new_status.lower() == 'approved' else 'warning',
-            '/employees/submissions',
+            focus_link('/employees/submissions', inst.title),
         )
     # Stamp the reviewer on an approve/reject when the client didn't supply one.
     if need != 'employee.edit' and not str(request.data.get('reviewer') or '').strip() and user:
@@ -4949,6 +5084,63 @@ def bench_sales_profile_detail(request, pk):
     return Response(BenchSalesProfileSerializer(inst).data)
 
 
+# Upload slug -> (name, mime, data) columns for the single-document fields.
+_BENCH_SALES_UPLOAD_COLS = {
+    'resume': ('resume_file_name', 'resume_file_mime', 'resume_file_data'),
+    'dl-state-id': ('dl_state_id_file_name', 'dl_state_id_file_mime', 'dl_state_id_file_data'),
+    'i94': ('i94_file_name', 'i94_file_mime', 'i94_file_data'),
+}
+
+
+@api_view(['POST'])
+@parser_classes([MultiPartParser])
+@require_perm('recruitment.edit')
+def bench_sales_profile_upload(request, pk):
+    """Upload ONE document (resume / DL / I-94 / a certificate) to a profile as
+    multipart/form-data: ``field`` = resume | dl-state-id | i94 | certificate,
+    ``file`` = the PDF.
+
+    The New/Edit Profile form sends each file through here in its own request
+    instead of base64-inlining all of them in one JSON body: on the cPanel host
+    the web server rejects large JSON bodies with HTTP 413 before Django ever
+    sees them, and base64 inflates every file by a third on top. Storage is
+    unchanged — the file is still kept base64-in-row."""
+    import base64
+
+    obj = BenchSalesProfile.objects.only('id').filter(pk=pk).first()
+    if not obj:
+        return err('Profile not found', 404)
+    field = str(request.data.get('field') or '')
+    upload = request.FILES.get('file')
+    if not upload:
+        return err('file is required')
+    if not _is_pdf(upload.content_type, upload.name):
+        return err(f'{upload.name} is not a PDF — only PDF uploads are allowed.')
+    if upload.size > MAX_BENCH_SALES_FILE_BYTES:
+        return err(f'{upload.name} is larger than {MAX_BENCH_SALES_FILE_MB} MB — '
+                   f'each file must be {MAX_BENCH_SALES_FILE_MB} MB or smaller.')
+    mime = upload.content_type or 'application/pdf'
+    data = base64.b64encode(upload.read()).decode('ascii')
+
+    if field == 'certificate':
+        if obj.certificate_files.count() >= MAX_CERTIFICATES_PER_PROFILE:
+            return err(f'You can upload up to {MAX_CERTIFICATES_PER_PROFILE} certificates per profile.')
+        BenchSalesCertificate.objects.create(
+            profile=obj, file_name=upload.name, file_mime=mime, file_data=data,
+        )
+    elif field in _BENCH_SALES_UPLOAD_COLS:
+        name_col, mime_col, data_col = _BENCH_SALES_UPLOAD_COLS[field]
+        # Name/mime first, then the blob in its own UPDATE (see
+        # _store_bench_sales_file_data for why blobs are written one at a time).
+        BenchSalesProfile.objects.filter(pk=pk).update(**{name_col: upload.name, mime_col: mime})
+        _store_bench_sales_file_data(pk, {data_col: data})
+    else:
+        return err('field must be one of: resume, dl-state-id, i94, certificate')
+
+    inst = _bench_sales_profile_qs().get(pk=pk)
+    return Response(BenchSalesProfileSerializer(inst).data)
+
+
 @api_view(['DELETE'])
 @require_perm('recruitment.edit')
 def bench_sales_profile_certificate_detail(request, pk, cert_id):
@@ -5061,6 +5253,50 @@ def client_config(request):
             'HRMS_BASEMAP_ATTRIBUTION',
             '© OpenStreetMap contributors, © CARTO'
         ),
+    })
+
+
+@api_view(['GET'])
+@require_perm('settings.manage')
+def integrations_status(request):
+    """What Settings → Integrations shows: the integrations this server really
+    has, and whether each is set up.
+
+    Only booleans and non-secret details (provider name, sender address, model
+    name, map host) — never a key, token or password. LinkedIn is per user, so
+    its connected/disconnected state comes from /api/auth/linkedin/status; this
+    only says whether the server has LinkedIn app credentials at all.
+    """
+    import os
+    from urllib.parse import urlparse
+    from . import mailer
+
+    try:
+        email_cfg = mailer.get_email_settings(norm_email(request.headers.get('X-User-Email') or ''))
+    except Exception:
+        email_cfg = None
+    email_provider = ''
+    if email_cfg:
+        email_provider = 'Resend' if email_cfg.get('type') == 'resend' else 'SMTP'
+
+    tiles = getattr(settings, 'HRMS_BASEMAP_TILE_URL', '') or ''
+    return Response({
+        'email': {
+            'configured': bool(email_cfg),
+            'provider': email_provider,
+            'fromEmail': (email_cfg or {}).get('from_email', ''),
+        },
+        'googleSignIn': {'configured': bool(os.environ.get('GOOGLE_CLIENT_ID', '').strip())},
+        'linkedin': {'configured': bool(
+            getattr(settings, 'LINKEDIN_CLIENT_ID', '') and getattr(settings, 'LINKEDIN_CLIENT_SECRET', ''))},
+        'ai': {
+            'configured': bool(os.environ.get('ANTHROPIC_API_KEY') or os.environ.get('VITE_ANTHROPIC_API_KEY')),
+            'model': ai.GENERATION_MODEL,
+        },
+        'maps': {
+            'configured': bool(tiles),
+            'host': (urlparse(tiles.replace('{s}', 'a')).hostname or '') if tiles else '',
+        },
     })
 
 
@@ -5184,7 +5420,101 @@ def _role_annot():
 
 
 # --- Dashboard stats -------------------------------------------------------
+# Most employees the Dashboard response embeds. Search is NOT limited by this:
+# directory_search() filters server-side across every account.
+DIRECTORY_MAX = 500
+
+# The columns a directory search can be scoped to — the same fields the
+# Dashboard directory table and the topbar's "Search in" chips are built from.
+DIRECTORY_FIELDS = ('employeeId', 'name', 'department', 'role', 'status', 'location', 'joinDate')
+
+
+def _directory_rows(users):
+    """Directory rows (the shape the Dashboard table renders) for these AppUsers.
+
+    One shared builder, so the Dashboard's embedded directory and the search
+    endpoint can never disagree about what an employee's name/department/status
+    is. Callers should pass users with ``select_related('role_ref')`` — the
+    department/designation fall back to the role's name, and without the join
+    that is one extra query per employee.
+    """
+    profiles = {p.email: p for p in UserProfile.objects.all()}
+    rows = []
+    for u in users:
+        p = profiles.get(u.email)
+        role_name = u.role_ref.name if u.role_ref else ''
+        full_name = (f"{p.first_name} {p.last_name}".strip() if p and (p.first_name or p.last_name) else '') or u.full_name or u.email.split('@')[0]
+        dept = (p.department if p and p.department else '') or role_name or (u.role.title() if u.role else 'General')
+        designation = (p.designation if p and p.designation else '') or role_name or (u.role.title() if u.role else 'General')
+        loc = (p.address if p and p.address else '') or 'Office'
+        if len(loc) > 25:
+            loc = loc[:25] + '…'
+        join_date = u.created_at.strftime('%b %Y') if u.created_at else 'Recent'
+
+        employee_id = u.employee_id or (p.employee_id if p else '')
+        if not employee_id:
+            employee_id = f"EV-{str(u.id).zfill(4)}"
+
+        rows.append({
+            'id': u.id,
+            'employeeId': employee_id,
+            'name': full_name,
+            'email': u.email,
+            'initials': u.initials or (full_name[:2].upper() if full_name else 'EM'),
+            'department': dept,
+            'role': designation,
+            'status': 'Active' if u.status == 'active' else 'Inactive',
+            'location': loc,
+            'joinDate': join_date,
+        })
+    return rows
+
+
 @api_view(['GET'])
+@require_perm({})
+def directory_search(request):
+    """Search the employee directory across EVERY account (the topbar search).
+
+    ``q``      text to look for (case-insensitive substring)
+    ``field``  optional: only match this column — one of DIRECTORY_FIELDS
+    ``limit``  rows to return, default 8, at most 50
+
+    Matching runs over the same display values the Dashboard table shows
+    (department falls back to the role name, status is Active/Inactive, and so
+    on), so what a "Search in" chip scopes to is exactly what the user can see.
+    Anyone who may see the Dashboard or the employee module may use it; an
+    unidentified caller is refused by require_perm before this body runs.
+    """
+    if not (check_perm(request, 'dashboard.view')[0] or check_perm(request, 'employee.view')[0]):
+        return err("You don't have access to the employee directory.", 403)
+
+    q = (request.GET.get('q') or '').strip().lower()
+    field = (request.GET.get('field') or '').strip()
+    if field and field not in DIRECTORY_FIELDS:
+        return err('Unknown field "%s". Use one of: %s.' % (field, ', '.join(DIRECTORY_FIELDS)), 400)
+    try:
+        limit = max(1, min(int(request.GET.get('limit') or 8), 50))
+    except (TypeError, ValueError):
+        limit = 8
+
+    rows = _directory_rows(AppUser.objects.select_related('role_ref').order_by('id'))
+    if q:
+        def hit(r):
+            if field:
+                return q in str(r.get(field) or '').lower()
+            return (any(q in str(r.get(k) or '').lower() for k in DIRECTORY_FIELDS)
+                    or q in str(r.get('email') or '').lower())
+        rows = [r for r in rows if hit(r)]
+
+    return Response({'employees': rows[:limit], 'total': len(rows), 'limit': limit})
+
+
+# The Dashboard used to be fully open: an anonymous GET returned the company
+# record, the payroll figure and the employee directory. It now needs
+# dashboard.view — the same permission the UI already uses to decide who may
+# open the Dashboard route at all.
+@api_view(['GET'])
+@require_perm('dashboard.view')
 def dashboard_stats(request):
     """
     Main System Dashboard Overview API.
@@ -5336,38 +5666,14 @@ def dashboard_stats(request):
             {'initial': 'S', 'isCheckIn': True, 'color': '#10b981', 'dot': '#10b981', 'title': 'sri — Check In', 'sub': 'At 03:39 PM (Nellore)'}
         ]
 
-    # 9. Real Employee Directory (Top 25 users with profile details)
-    users_qs = AppUser.objects.order_by('id')[:25]
-    user_emails = [u.email for u in users_qs]
-    prof_map = {p.email: p for p in UserProfile.objects.filter(email__in=user_emails)}
-
-    employee_directory = []
-    for u in users_qs:
-        p = prof_map.get(u.email)
-        full_name = (f"{p.first_name} {p.last_name}".strip() if p and (p.first_name or p.last_name) else '') or u.full_name or u.email.split('@')[0]
-        dept = (p.department if p and p.department else '') or (u.role_ref.name if u.role_ref else '') or (u.role.title() if u.role else 'General')
-        designation = (p.designation if p and p.designation else '') or (u.role_ref.name if u.role_ref else '') or u.role.title()
-        loc = (p.address if p and p.address else '') or 'Office'
-        if len(loc) > 25:
-            loc = loc[:25] + '…'
-        join_date = u.created_at.strftime('%b %Y') if u.created_at else 'Recent'
-
-        employee_id = u.employee_id or (p.employee_id if p else '')
-        if not employee_id:
-            employee_id = f"EV-{str(u.id).zfill(4)}"
-
-        employee_directory.append({
-            'id': u.id,
-            'employeeId': employee_id,
-            'name': full_name,
-            'email': u.email,
-            'initials': u.initials or (full_name[:2].upper() if full_name else 'EM'),
-            'department': dept,
-            'role': designation,
-            'status': 'Active' if u.status == 'active' else 'Inactive',
-            'location': loc,
-            'joinDate': join_date
-        })
+    # 9. Real Employee Directory. This used to be the first 25 accounts, but
+    # the Dashboard's own directory labels itself "Showing N of <this list's
+    # length> registered employees" — so with 57 users it read "25 of 25"
+    # beside a header card saying 57, and anyone past #25 simply could not be
+    # found or searched. It now carries everyone, up to DIRECTORY_MAX; the
+    # response says when that cap was hit rather than silently truncating.
+    employee_directory = _directory_rows(
+        AppUser.objects.select_related('role_ref').order_by('id')[:DIRECTORY_MAX])
 
     company_obj = get_or_create_company_details()
 
@@ -5392,6 +5698,10 @@ def dashboard_stats(request):
         'departments': dept_list,
         'highlights': highlights,
         'employees': employee_directory,
+        # The list above is capped at DIRECTORY_MAX; these let a client tell a
+        # complete directory from a truncated one instead of guessing.
+        'employeesTotal': total_users,
+        'employeesTruncated': total_users > DIRECTORY_MAX,
         'serverTime': now.strftime('%I:%M:%S %p')
     })
 
@@ -6497,7 +6807,7 @@ def wfh_requests(request):
         'attendance.approve_wfh',
         'New WFH Request',
         f"{inst.employee_name or email} has requested WFH from {inst.from_date} to {inst.to_date}.",
-        '/employees/attendance',
+        '/employees/checkin?focus=Work+From+Home',
     )
     return Response(ser.data, status=201)
 
@@ -6523,7 +6833,7 @@ def wfh_request_detail(request, pk):
                 f'WFH Request {status_val}',
                 f'Your WFH request has been {status_val.lower()} by HR.',
                 'success' if status_val == 'Approved' else 'warning',
-                '/employees/attendance',
+                '/employees/checkin?focus=Work+From+Home',
             )
         return Response(ser.data)
     return Response(WfhRequestSerializer(obj).data)
@@ -6551,7 +6861,7 @@ def attendance_corrections(request):
         'settings.manage',
         'New Attendance Correction Request',
         f"{inst.employee_name or email} has requested a correction for {inst.attendance_date}.",
-        '/employees/attendance',
+        '/employees/leave',
     )
     return Response(ser.data, status=201)
 
@@ -6619,7 +6929,7 @@ def attendance_correction_detail(request, pk):
                 'Attendance Correction Approved',
                 f'Your attendance correction for {inst.attendance_date} was approved and applied.',
                 'success',
-                '/employees/attendance',
+                '/employees/leave',
             )
         elif status_val == 'Rejected':
             create_notification(
@@ -6627,7 +6937,7 @@ def attendance_correction_detail(request, pk):
                 'Attendance Correction Rejected',
                 f'Your attendance correction for {inst.attendance_date} was rejected.',
                 'warning',
-                '/employees/attendance',
+                '/employees/leave',
             )
         return Response(ser.data)
     return Response(AttendanceCorrectionSerializer(obj).data)
@@ -7024,47 +7334,88 @@ def _last_preview(msg):
 
 
 def _room_payload(room, viewer):
-    members_qs = list(ChatMember.objects.filter(room_id=room.id))
-    mem_emails = [m.employee_email for m in members_qs]
-    admin_map = {m.employee_email: bool(getattr(m, "is_admin", False)) for m in members_qs}
-    directory = _contacts_directory(set(mem_emails))
-    last = ChatMessage.objects.filter(room_id=room.id).order_by("-created_at").first()
-    unread = (
-        ChatMessage.objects.filter(room_id=room.id, is_read=False)
-        .exclude(sender_email=viewer)
-        .count()
-    )
-    is_group = bool(room.is_group)
-    display_name = room.name
-    other_email = ""
-    if not is_group:
-        other_email = next((e for e in mem_emails if e != viewer), "")
-        info = directory.get(other_email)
-        if info:
-            display_name = info["name"]
+    return _rooms_payload([room], viewer)[0]
 
-    def member_obj(e):
-        base = dict(directory.get(e, {"email": e, "name": e, "initials": make_initials(e), "profilePic": ""}))
-        base["is_admin"] = admin_map.get(e, False)
-        return base
 
-    return {
-        "id": room.id,
-        "name": room.name,
-        "display_name": display_name,
-        "is_group": is_group,
-        "is_private": bool(room.is_private),
-        "created_by": room.created_by,
-        "members": [member_obj(e) for e in mem_emails],
-        "member_emails": mem_emails,
-        "admin_emails": [e for e in mem_emails if admin_map.get(e)],
-        "viewer_is_admin": admin_map.get(viewer, False),
-        "other_email": other_email,
-        "last_message": _last_preview(last),
-        "last_sender": last.sender_email if last else "",
-        "last_time": _fmt_dt(last.created_at) if last else None,
-        "unread": unread,
+# Columns the room list needs from a room's last message. Never the
+# attachment_data blob: older attachments keep their whole file base64-encoded
+# in that column, and loading it just to build a one-line preview was moving
+# megabytes per room on every 5-second sidebar poll.
+_LAST_MSG_FIELDS = ("id", "room_id", "sender_email", "message", "created_at",
+                    "is_deleted", "attachment_name")
+
+
+def _rooms_payload(rooms, viewer):
+    """Sidebar payloads for many rooms in a fixed handful of queries.
+
+    This used to run ~6 queries per room (members, three for the contact
+    directory, last message, unread count). The sidebar polls it every 5s per
+    open chat tab, so on a remote MySQL it kept the few cPanel workers busy and
+    opening a conversation queued behind it. Same output, batched.
+    """
+    rooms = list(rooms)
+    if not rooms:
+        return []
+    ids = [r.id for r in rooms]
+
+    members_by_room = {}
+    for m in ChatMember.objects.filter(room_id__in=ids).order_by("id"):
+        members_by_room.setdefault(m.room_id, []).append(m)
+    directory = _contacts_directory(
+        {m.employee_email for ms in members_by_room.values() for m in ms})
+
+    latest = (ChatMessage.objects.filter(room_id=OuterRef("pk"))
+              .order_by("-created_at", "-id").values("id")[:1])
+    last_ids = dict(ChatRoom.objects.filter(id__in=ids)
+                    .annotate(last_id=Subquery(latest)).values_list("id", "last_id"))
+    last_by_room = {
+        m.room_id: m for m in ChatMessage.objects
+        .filter(id__in=[i for i in last_ids.values() if i]).only(*_LAST_MSG_FIELDS)
     }
+    unread_by_room = dict(
+        ChatMessage.objects.filter(room_id__in=ids, is_read=False)
+        .exclude(sender_email=viewer)
+        .values("room_id").annotate(n=Count("id")).values_list("room_id", "n")
+    )
+
+    out = []
+    for room in rooms:
+        members_qs = members_by_room.get(room.id, [])
+        mem_emails = [m.employee_email for m in members_qs]
+        admin_map = {m.employee_email: bool(getattr(m, "is_admin", False)) for m in members_qs}
+        last = last_by_room.get(room.id)
+        is_group = bool(room.is_group)
+        display_name = room.name
+        other_email = ""
+        if not is_group:
+            other_email = next((e for e in mem_emails if e != viewer), "")
+            info = directory.get(other_email)
+            if info:
+                display_name = info["name"]
+
+        def member_obj(e, admin_map=admin_map):
+            base = dict(directory.get(e, {"email": e, "name": e, "initials": make_initials(e), "profilePic": ""}))
+            base["is_admin"] = admin_map.get(e, False)
+            return base
+
+        out.append({
+            "id": room.id,
+            "name": room.name,
+            "display_name": display_name,
+            "is_group": is_group,
+            "is_private": bool(room.is_private),
+            "created_by": room.created_by,
+            "members": [member_obj(e) for e in mem_emails],
+            "member_emails": mem_emails,
+            "admin_emails": [e for e in mem_emails if admin_map.get(e)],
+            "viewer_is_admin": admin_map.get(viewer, False),
+            "other_email": other_email,
+            "last_message": _last_preview(last),
+            "last_sender": last.sender_email if last else "",
+            "last_time": _fmt_dt(last.created_at) if last else None,
+            "unread": unread_by_room.get(room.id, 0),
+        })
+    return out
 
 
 @api_view(["GET", "POST"])
@@ -7118,7 +7469,7 @@ def chat_rooms(request):
         ChatMember.objects.filter(employee_email=email).values_list("room_id", flat=True)
     )
     rooms = ChatRoom.objects.filter(id__in=room_ids)
-    out = [_room_payload(r, email) for r in rooms]
+    out = _rooms_payload(rooms, email)
     out.sort(key=lambda x: (x["last_time"] or ""), reverse=True)
     return Response(out)
 
@@ -7134,8 +7485,16 @@ def chat_messages(request, room_id):
         # Drop any pins older than 30 days before serializing (backend-enforced
         # expiry — the frontend never has to police it).
         _expire_stale_pins(room_id)
+        # defer() the attachment_data blob (legacy attachments keep the whole
+        # file base64-encoded there): the list only needs to know whether one
+        # exists, which MySQL answers without sending the bytes. The file itself
+        # is fetched on demand from /api/chat/attachment/<id>.
         msgs = list(
             ChatMessage.objects.filter(room_id=room_id)
+            .defer("attachment_data")
+            .annotate(has_attachment_blob=ExpressionWrapper(
+                Q(attachment_data__isnull=False) & ~Q(attachment_data=""),
+                output_field=BooleanField()))
             .select_related("room")
             .order_by("created_at")
         )
@@ -7145,16 +7504,20 @@ def chat_messages(request, room_id):
         # room up to "now", then compute a `seen` flag for the viewer's OWN
         # messages: in a channel it's Seen only once EVERY other member has read
         # past it; in a 1:1 it's Seen once the other person has.
+        #
+        # ``peek=1`` is the sidebar's hover prefetch: the room is not open yet,
+        # so it must not mark anything read (or flip the sender's "Seen").
         now = _chat_now()
+        peek = str(request.GET.get("peek") or "").lower() in ("1", "true", "yes")
         members = list(ChatMember.objects.filter(room_id=room_id))
-        if viewer:
+        if viewer and not peek:
             ChatMember.objects.filter(room_id=room_id, employee_email=viewer).update(last_read_at=now)
             ChatMessage.objects.filter(room_id=room_id, is_read=False).exclude(
                 sender_email=viewer
             ).update(is_read=True)
         reads = {}
         for m in members:
-            reads[m.employee_email] = now if m.employee_email == viewer else m.last_read_at
+            reads[m.employee_email] = now if (m.employee_email == viewer and not peek) else m.last_read_at
         for i, msg in enumerate(msgs):
             seen = False
             if viewer and msg.sender_email == viewer and not msg.is_deleted:

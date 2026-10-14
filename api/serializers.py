@@ -13,6 +13,8 @@ circular import, since ``views`` imports from here.
 """
 import json
 import os
+import re
+import unicodedata
 
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.validators import EmailValidator
@@ -202,7 +204,66 @@ class NotificationSerializer(serializers.ModelSerializer):
         fields = ['id', 'recipient', 'title', 'message', 'notificationType', 'isRead', 'link', 'createdAt']
 
 
+# Job post input rules shared by the create serializer and the PATCH view.
+# Titles are letters only (BUG-HRMS-JOB-001): no numbers, no emojis (the
+# job_posts table stores 4-byte characters as "?"), no symbols beyond the
+# separators real titles need (Front-End, UI/UX, C++, C#, Sr., R&D).
+# Salary: a two-number range must not run backwards (BUG-HRMS-JOB-002).
+TITLE_SEPARATORS = "-/&.,'+#()"
+_SALARY_SCALE = {
+    'k': 1e3, 'l': 1e5, 'lac': 1e5, 'lakh': 1e5, 'lakhs': 1e5, 'lpa': 1e5,
+    'm': 1e6, 'mn': 1e6, 'cr': 1e7, 'crore': 1e7,
+}
+_SALARY_RANGE = re.compile(
+    r'(\d[\d,]*(?:\.\d+)?)\s*([a-z]*)\s*(?:-|\u2013|\u2014|to)\s*[^\d\s]*\s*(\d[\d,]*(?:\.\d+)?)\s*([a-z]*)',
+    re.I,
+)
+
+
+def job_title_problem(title):
+    """Why a job title is not acceptable, or '' when it is."""
+    text = (title or '').strip()
+    if not text:
+        return 'Job title is required.'
+    if any(ord(ch) > 0xFFFF for ch in text):
+        return 'Job title cannot contain emojis or special symbols.'
+    # Unicode categories: L = letter, M = combining mark (part of a letter in
+    # Indic scripts and the like), N = number.
+    cats = [unicodedata.category(ch)[0] for ch in text]
+    if 'N' in cats:
+        return 'Job title cannot contain numbers; use letters only.'
+    for ch, cat in zip(text, cats):
+        if cat in ('L', 'M') or ch.isspace() or ch in TITLE_SEPARATORS:
+            continue
+        return "Job title can contain only letters, spaces and - / & . , ' + # ( )."
+    if 'L' not in cats:
+        return 'Job title must contain letters.'
+    return ''
+
+
+def salary_range_problem(salary):
+    """Why a salary string is not acceptable, or '' when it is. Only a
+    two-number range ("$ 50000 - 80000", "3,00,000 - 5,00,000", "10-12 LPA")
+    is checked; free text such as "Negotiable" passes."""
+    m = _SALARY_RANGE.search(str(salary or ''))
+    if not m:
+        return ''
+    lo_unit = (m.group(2) or m.group(4)).lower()
+    hi_unit = (m.group(4) or m.group(2)).lower()
+    try:
+        lo = float(m.group(1).replace(',', '')) * _SALARY_SCALE.get(lo_unit, 1)
+        hi = float(m.group(3).replace(',', '')) * _SALARY_SCALE.get(hi_unit, 1)
+    except ValueError:
+        return ''
+    if lo > hi:
+        return 'Maximum salary must be greater than or equal to the minimum salary.'
+    return ''
+
+
 class JobPostSerializer(serializers.ModelSerializer):
+    # Blank = auto-assigned by JobPost.save(); uniqueness is checked here so
+    # a clash is a readable 400 rather than a database error.
+    code = serializers.CharField(required=False, allow_blank=True, allow_null=True, default='', max_length=40)
     remote = serializers.BooleanField(source='is_remote', required=False, default=False)
     description = serializers.CharField(
         required=False, allow_blank=True, allow_null=True, default='',
@@ -213,7 +274,7 @@ class JobPostSerializer(serializers.ModelSerializer):
     class Meta:
         model = JobPost
         fields = [
-            'id', 'title', 'dept', 'location', 'type', 'salary', 'applicants',
+            'id', 'code', 'title', 'dept', 'location', 'type', 'salary', 'applicants',
             'color', 'description', 'openings', 'remote', 'status', 'priority',
             'customFields', 'createdAt',
         ]
@@ -230,6 +291,7 @@ class JobPostSerializer(serializers.ModelSerializer):
     def to_representation(self, instance):
         return {
             'id': instance.id,
+            'code': instance.code or '',
             'title': instance.title,
             'dept': instance.dept,
             'location': instance.location,
@@ -246,6 +308,30 @@ class JobPostSerializer(serializers.ModelSerializer):
             'customFields': instance.custom_fields or {},
             'createdAt': instance.created_at.strftime(DATETIME_FMT) if instance.created_at else None,
         }
+
+    def validate_title(self, value):
+        value = (value or '').strip()
+        problem = job_title_problem(value)
+        if problem:
+            raise serializers.ValidationError(problem)
+        return value
+
+    def validate_salary(self, value):
+        value = (value or '').strip()
+        problem = salary_range_problem(value)
+        if problem:
+            raise serializers.ValidationError(problem)
+        return value
+
+    def validate_code(self, value):
+        value = (value or '').strip().upper()
+        if value:
+            clash = JobPost.objects.filter(code__iexact=value)
+            if self.instance is not None:
+                clash = clash.exclude(pk=self.instance.pk)
+            if clash.exists():
+                raise serializers.ValidationError('Job code %s is already used by another job post.' % value)
+        return value
 
     def create(self, validated_data):
         openings = to_int(validated_data.get('openings', 1), 1)
@@ -365,6 +451,7 @@ class ResumeScoreSerializer(serializers.ModelSerializer):
     aiStrengths = serializers.JSONField(source='ai_strengths', required=False, allow_null=True)
     aiGaps = serializers.JSONField(source='ai_gaps', required=False, allow_null=True)
     aiEvaluated = serializers.BooleanField(source='ai_evaluated', required=False, default=False)
+    jobCode = serializers.CharField(source='job_code', required=False, allow_blank=True, allow_null=True, default='')
 
     class Meta:
         model = ResumeScore
@@ -372,7 +459,7 @@ class ResumeScoreSerializer(serializers.ModelSerializer):
             'id', 'name', 'initials', 'role', 'score', 'technical', 'experience',
             'domain', 'gap', 'skills', 'missing', 'formatted', 'source',
             'uploaded', 'fileName', 'fileMime', 'fileData', 'resumeText', 'jdText',
-            'aiSummary', 'aiStrengths', 'aiGaps', 'aiEvaluated',
+            'aiSummary', 'aiStrengths', 'aiGaps', 'aiEvaluated', 'jobCode',
         ]
         read_only_fields = ['id']
         extra_kwargs = {
@@ -413,7 +500,15 @@ class ResumeScoreSerializer(serializers.ModelSerializer):
             'aiStrengths': safe_list(instance.ai_strengths),
             'aiGaps': safe_list(instance.ai_gaps),
             'aiEvaluated': bool(instance.ai_evaluated),
+            'jobCode': instance.job_code or '',
+            # When the row was scored / last re-scored: the Job Code picker's
+            # "recently used" strip orders codes by this.
+            'createdAt': instance.created_at.isoformat() if instance.created_at else None,
+            'updatedAt': instance.updated_at.isoformat() if instance.updated_at else None,
         }
+
+    def validate_jobCode(self, value):
+        return (value or '').strip().upper()[:40]
 
     def create(self, validated_data):
         # Accept file uploads in resume scoring payloads without requiring a
@@ -1767,6 +1862,7 @@ class OnboardingCandidateSerializer(serializers.ModelSerializer):
             # Denormalised summaries so the candidates table renders from one
             # call instead of an extra fetch per row.
             'authType': (auth.auth_type or '') if auth else '',
+            'authTypeOther': (auth.auth_type_other or '') if auth else '',
             'authStatus': (auth.status or '') if auth else '',
             'authExpiryDate': auth.expiry_date.strftime(DATE_FMT) if (auth and auth.expiry_date) else None,
             'verificationStatus': (verification.status or 'Pending') if verification else 'Pending',
@@ -1789,13 +1885,15 @@ class WorkAuthorizationSerializer(serializers.ModelSerializer):
     """The authorization plus its type-specific ``details`` blob, flattened into
     one object. The split across two tables is a storage concern, not an API one."""
     authType = serializers.CharField(source='auth_type', required=False, allow_blank=True, default='')
+    authTypeOther = serializers.CharField(source='auth_type_other', required=False, allow_blank=True,
+                                          max_length=120, default='')
     expiryDate = serializers.DateField(source='expiry_date', required=False, allow_null=True)
     receiptNumber = serializers.CharField(source='receipt_number', required=False, allow_blank=True, default='')
     sponsorshipRequired = serializers.BooleanField(source='sponsorship_required', required=False, default=False)
 
     class Meta:
         model = WorkAuthorization
-        fields = ['id', 'authType', 'status', 'expiryDate', 'receiptNumber', 'sponsorshipRequired']
+        fields = ['id', 'authType', 'authTypeOther', 'status', 'expiryDate', 'receiptNumber', 'sponsorshipRequired']
         read_only_fields = ['id']
         extra_kwargs = {'status': {'required': False, 'default': 'Pending'}}
 
@@ -1805,6 +1903,7 @@ class WorkAuthorizationSerializer(serializers.ModelSerializer):
             'id': instance.id,
             'candidateId': instance.candidate_id,
             'authType': instance.auth_type or '',
+            'authTypeOther': instance.auth_type_other or '',
             'status': instance.status or 'Pending',
             'expiryDate': instance.expiry_date.strftime(DATE_FMT) if instance.expiry_date else None,
             'receiptNumber': instance.receipt_number or '',
@@ -2227,7 +2326,15 @@ class ChatMessageSerializer(serializers.ModelSerializer):
         # message list. Empty when deleted or when there's no attachment.
         if getattr(obj, "is_deleted", False):
             return ""
-        if getattr(obj, "attachment_path", None) or obj.attachment_data:
+        if getattr(obj, "attachment_path", None):
+            return f"/api/chat/attachment/{obj.id}"
+        # The message list defers the attachment_data blob and annotates
+        # has_attachment_blob instead; touching obj.attachment_data there would
+        # load the blob back, one query per message.
+        has_blob = getattr(obj, "has_attachment_blob", None)
+        if has_blob is None:
+            has_blob = bool(obj.attachment_data)
+        if has_blob:
             return f"/api/chat/attachment/{obj.id}"
         return ""
 

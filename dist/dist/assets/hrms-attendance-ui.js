@@ -261,6 +261,9 @@
     el.className = 'card hram-card hram-history';
     var range = '30';
     var statusFilter = 'all';
+    var customFrom = daysAgoStr(30), customTo = todayStr(), rangeErr = '';
+    function rangeFrom() { return range === 'custom' ? customFrom : daysAgoStr(Number(range)); }
+    function rangeTo() { return range === 'custom' ? customTo : todayStr(); }
     var search = '';
     var rows = [];
     var loaded = false;
@@ -309,7 +312,16 @@
               '<option value="7"' + (range === '7' ? ' selected' : '') + '>Last 7 days</option>' +
               '<option value="30"' + (range === '30' ? ' selected' : '') + '>Last 30 days</option>' +
               '<option value="90"' + (range === '90' ? ' selected' : '') + '>Last 90 days</option>' +
+            '<option value="custom"' + (range === 'custom' ? ' selected' : '') + '>Custom range</option>' +
             '</select>' +
+            (range !== 'custom' ? '' :
+              '<span class="hram-custom">' +
+                '<input type="date" class="hram-from" value="' + esc(customFrom) + '" max="' + todayStr() + '" aria-label="From date">' +
+                '<span class="hram-range-sep">to</span>' +
+                '<input type="date" class="hram-to" value="' + esc(customTo) + '" max="' + todayStr() + '" aria-label="To date">' +
+                '<button type="button" class="hram-btn hram-apply">Apply</button>' +
+                (rangeErr ? '<span class="hram-range-err">' + esc(rangeErr) + '</span>' : '') +
+              '</span>') +
             '<select class="hram-status">' +
               '<option value="all">All statuses</option>' +
               '<option value="present"' + (statusFilter === 'present' ? ' selected' : '') + '>Present</option>' +
@@ -347,7 +359,16 @@
             (list.length > 200 ? '<div class="hram-caption">Showing first 200 of ' + list.length + ' rows — narrow the range or search to see more.</div>' : '')));
 
       var rangeSel = el.querySelector('.hram-range');
-      if (rangeSel) rangeSel.addEventListener('change', function () { range = rangeSel.value; load(); });
+      if (rangeSel) rangeSel.addEventListener('change', function () { range = rangeSel.value; rangeErr = ''; load(); });
+      var fromIn = el.querySelector('.hram-from'), toIn = el.querySelector('.hram-to'), applyBtn = el.querySelector('.hram-apply');
+      if (fromIn) fromIn.addEventListener('change', function () { customFrom = fromIn.value; });
+      if (toIn) toIn.addEventListener('change', function () { customTo = toIn.value; });
+      if (applyBtn) applyBtn.addEventListener('click', function () {
+        if (!customFrom || !customTo) { rangeErr = 'Pick both dates.'; render(); return; }
+        if (customFrom > customTo) { rangeErr = 'From date must be on or before To date.'; render(); return; }
+        if (customTo > todayStr()) { rangeErr = 'To date cannot be in the future.'; render(); return; }
+        rangeErr = ''; load();
+      });
       var statusSel = el.querySelector('.hram-status');
       if (statusSel) statusSel.addEventListener('change', function () { statusFilter = statusSel.value; render(); });
       var searchInput = el.querySelector('.hram-search');
@@ -369,7 +390,7 @@
 
     function load() {
       loaded = false; render();
-      api('/api/attendance?from=' + daysAgoStr(Number(range)) + '&to=' + todayStr())
+      api('/api/attendance?from=' + rangeFrom() + '&to=' + rangeTo())
         .then(function (data) {
           rows = (Array.isArray(data) ? data : []).sort(function (a, b) { return (b.date || '').localeCompare(a.date || ''); });
           loaded = true; render();
@@ -774,7 +795,10 @@
       '.hram-card{margin-top:14px}' +
       '.hram-pill-row{display:flex;gap:8px;margin:10px 0 12px;flex-wrap:wrap}' +
       '.hram-pill{padding:6px 12px;border-radius:999px;border:1px solid var(--border2,#e5e7eb);background:var(--bg3,#f9fafb);font-size:12px;font-weight:600;color:var(--text2,#4b5563);cursor:pointer}' +
-      '.hram-pill.active{background:var(--text,#111827);color:#fff;border-color:var(--text,#111827)}' +
+      /* Accent, not the text colour, as the active background: on the dark theme
+         --text is near-white, which left white text on a white pill. */
+      '.hram-pill.active{background:var(--accent,#4f8ef7);color:#fff;border-color:var(--accent,#4f8ef7)}' +
+      '.hram-pill.active .hram-pill-count{opacity:.9}' +
       '.hram-pill-count{opacity:.75}' +
       '.hram-attn-row{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--border2,#f3f4f6)}' +
       '.hram-attn-row:last-child{border-bottom:none}' +
@@ -791,6 +815,11 @@
       '.hram-history-controls{display:flex;gap:8px;flex-wrap:wrap}' +
       '.hram-history-controls select,.hram-history-controls input{padding:6px 9px;border:1px solid var(--border2,#d1d5db);border-radius:6px;font-size:12px;background:var(--bg,#fff);color:var(--text,#111827)}' +
       '.hram-history-controls input.hram-search{width:190px}' +
+      '.hram-custom{display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap}' +
+      '.hram-history-controls input[type=date]{min-width:0;width:138px}' +
+      'html[data-theme="dark"] .hram-history-controls input[type=date]{color-scheme:dark}' +
+      '.hram-range-sep{font-size:12px;color:var(--text3,#9ca3af)}' +
+      '.hram-range-err{font-size:11px;color:var(--danger,#ef4444);flex-basis:100%}' +
       '.hram-btn{padding:6px 12px;border-radius:6px;border:1px solid var(--border2,#d1d5db);background:var(--bg,#fff);color:var(--text,#111827);font-size:12px;font-weight:600;cursor:pointer}' +
       '.hram-btn:hover{background:var(--bg3,#f3f4f6)}' +
       '.hram-table-wrap{overflow-x:auto;overflow-y:auto;max-height:480px}' +
@@ -886,6 +915,9 @@
   function EmployeeAttendanceHistoryWidget(email) {
     var el = document.createElement('div');
     var range = '30', statusFilter = 'all', rows = [], loaded = false;
+    var customFrom = daysAgoStr(30), customTo = todayStr(), rangeErr = '';
+    function rangeFrom() { return range === 'custom' ? customFrom : daysAgoStr(Number(range)); }
+    function rangeTo() { return range === 'custom' ? customTo : todayStr(); }
 
     function filtered() {
       return rows.filter(function (r) {
@@ -923,7 +955,16 @@
               '<option value="7"' + (range === '7' ? ' selected' : '') + '>Last 7 days</option>' +
               '<option value="30"' + (range === '30' ? ' selected' : '') + '>Last 30 days</option>' +
               '<option value="90"' + (range === '90' ? ' selected' : '') + '>Last 90 days</option>' +
+            '<option value="custom"' + (range === 'custom' ? ' selected' : '') + '>Custom range</option>' +
             '</select>' +
+            (range !== 'custom' ? '' :
+              '<span class="hram-custom">' +
+                '<input type="date" class="hram-from" value="' + esc(customFrom) + '" max="' + todayStr() + '" aria-label="From date">' +
+                '<span class="hram-range-sep">to</span>' +
+                '<input type="date" class="hram-to" value="' + esc(customTo) + '" max="' + todayStr() + '" aria-label="To date">' +
+                '<button type="button" class="hram-btn hram-apply">Apply</button>' +
+                (rangeErr ? '<span class="hram-range-err">' + esc(rangeErr) + '</span>' : '') +
+              '</span>') +
             '<select class="hram-status">' +
               '<option value="all">All statuses</option>' +
               '<option value="present"' + (statusFilter === 'present' ? ' selected' : '') + '>Present</option>' +
@@ -952,7 +993,16 @@
             '</tbody></table></div>'));
 
       var rangeSel = el.querySelector('.hram-range');
-      if (rangeSel) rangeSel.addEventListener('change', function () { range = rangeSel.value; load(); });
+      if (rangeSel) rangeSel.addEventListener('change', function () { range = rangeSel.value; rangeErr = ''; load(); });
+      var fromIn = el.querySelector('.hram-from'), toIn = el.querySelector('.hram-to'), applyBtn = el.querySelector('.hram-apply');
+      if (fromIn) fromIn.addEventListener('change', function () { customFrom = fromIn.value; });
+      if (toIn) toIn.addEventListener('change', function () { customTo = toIn.value; });
+      if (applyBtn) applyBtn.addEventListener('click', function () {
+        if (!customFrom || !customTo) { rangeErr = 'Pick both dates.'; render(); return; }
+        if (customFrom > customTo) { rangeErr = 'From date must be on or before To date.'; render(); return; }
+        if (customTo > todayStr()) { rangeErr = 'To date cannot be in the future.'; render(); return; }
+        rangeErr = ''; load();
+      });
       var statusSel = el.querySelector('.hram-status');
       if (statusSel) statusSel.addEventListener('change', function () { statusFilter = statusSel.value; render(); });
       var exportBtn = el.querySelector('.hram-export');
@@ -961,7 +1011,7 @@
 
     function load() {
       loaded = false; render();
-      api('/api/attendance?email=' + encodeURIComponent(email) + '&from=' + daysAgoStr(Number(range)) + '&to=' + todayStr())
+      api('/api/attendance?email=' + encodeURIComponent(email) + '&from=' + rangeFrom() + '&to=' + rangeTo())
         .then(function (data) {
           rows = (Array.isArray(data) ? data : []).sort(function (a, b) { return (b.date || '').localeCompare(a.date || ''); });
           loaded = true; render();

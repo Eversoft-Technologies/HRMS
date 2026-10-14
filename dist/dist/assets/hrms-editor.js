@@ -76,7 +76,7 @@
       '  padding:12px 14px;min-height:230px;font:12px/1.6 ui-monospace,Consolas,monospace;',
       '  outline:none;resize:vertical;white-space:pre}',
       '.hrms-ed-src:focus{border-color:#0a66c2}',
-      '.hrms-ed-area a{color:#0a66c2}',
+      '.hrms-ed-area a{color:var(--accent,#0a66c2)}',
       '.hrms-ed-area ul,.hrms-ed-area ol{padding-left:22px;margin:6px 0}'
     ].join('');
     document.head.appendChild(s);

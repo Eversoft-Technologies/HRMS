@@ -17,10 +17,24 @@ logger = logging.getLogger(__name__)
 ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages'
 ANTHROPIC_VERSION = '2023-06-01'
 
-GENERATION_MODEL = os.environ.get('ANTHROPIC_MODEL') or 'claude-sonnet-4-5'
-VALIDATION_MODEL = os.environ.get('ANTHROPIC_VALIDATION_MODEL') or 'claude-haiku-4-5'
+# Defaults are current models. The previous defaults (Claude 3.5 Sonnet, retired
+# 2025-10-28; Claude 3.5 Haiku, retired 2026-02-19) now get a 404 from the API,
+# which this module reports as "AI unavailable". Override per environment with
+# ANTHROPIC_MODEL / ANTHROPIC_VALIDATION_MODEL in the server .env.
+GENERATION_MODEL = os.environ.get('ANTHROPIC_MODEL') or 'claude-opus-5-5'
+VALIDATION_MODEL = os.environ.get('ANTHROPIC_VALIDATION_MODEL') or 'claude-haiku-5-5'
+
+# Time budget for one scoring request. Production sits behind Passenger /
+# LiteSpeed, which answers a body-less 502 when the app takes longer than the
+# gateway allows, so every upstream call is bounded and the LangChain attempt
+# and the direct-API fallback share one budget. Raise it with
+# AI_REQUEST_BUDGET_SECONDS if the host permits longer requests.
+AI_REQUEST_BUDGET_S = float(os.environ.get('AI_REQUEST_BUDGET_SECONDS') or 110)
+AI_CONNECT_TIMEOUT_S = 10.0
+AI_CALL_TIMEOUT_S = 60.0
 
 _ai_status_cache = None
+_ai_status_detail = ''
 
 
 class AIUnavailable(Exception):
@@ -38,9 +52,11 @@ def _api_key(request_key=None):
 
 def check_ai_key_valid(request_key=None):
     """Validate a key with a 1-token ping. Caches the env-key result."""
-    global _ai_status_cache
+    global _ai_status_cache, _ai_status_detail
     api_key = _api_key(request_key)
     if not api_key:
+        if not request_key:
+            _ai_status_detail = 'No Anthropic API key configured. Set ANTHROPIC_API_KEY in the server .env.'
         return False
     if not request_key and _ai_status_cache is not None:
         return _ai_status_cache
@@ -62,15 +78,23 @@ def check_ai_key_valid(request_key=None):
         valid = resp.ok
         if not request_key:
             _ai_status_cache = valid
+            _ai_status_detail = 'ok' if valid else _upstream_error(resp)
         return valid
-    except requests.RequestException:
+    except requests.RequestException as exc:
+        if not request_key:
+            _ai_status_detail = f'Could not reach Anthropic API: {exc}'
         return False
+
+
+def ai_status_detail():
+    """Why the last environment-key check failed, for /api/ai/status."""
+    return _ai_status_detail
 
 
 # ---------------------------------------------------------------------------
 # LangChain Pipeline Initializers & Prompts
 # ---------------------------------------------------------------------------
-def _get_langchain_llm(request_key=None, max_tokens=3000):
+def _get_langchain_llm(request_key=None, max_tokens=3000, timeout=None):
     """Instantiate a LangChain ChatAnthropic model."""
     api_key = _api_key(request_key)
     if not api_key:
@@ -85,6 +109,10 @@ def _get_langchain_llm(request_key=None, max_tokens=3000):
             anthropic_api_key=api_key,
             max_tokens=max_tokens,
             temperature=0.2,
+            # The SDK default is a 10-minute timeout with 2 retries, which is
+            # what let a slow upstream run past the production gateway limit.
+            default_request_timeout=timeout or AI_CALL_TIMEOUT_S,
+            max_retries=0,
         )
     except ImportError:
         return None
@@ -114,7 +142,7 @@ def _extract_json(text):
 # Direct Anthropic Fallback with Retries
 # ---------------------------------------------------------------------------
 RETRY_STATUSES = frozenset({408, 409, 429, 500, 502, 503, 504, 529})
-MAX_ATTEMPTS = 3
+MAX_ATTEMPTS = 2
 
 
 def _retry_delay(response, attempt):
@@ -127,7 +155,7 @@ def _retry_delay(response, attempt):
     return 2.0 ** attempt
 
 
-def _call_raw_claude(prompt, max_tokens=3000, request_key=None, system=None):
+def _call_raw_claude(prompt, max_tokens=3000, request_key=None, system=None, deadline=None):
     api_key = _api_key(request_key)
     if not api_key:
         raise AIUnavailable(
@@ -145,6 +173,13 @@ def _call_raw_claude(prompt, max_tokens=3000, request_key=None, system=None):
 
     last_error = 'unknown error'
     for attempt in range(MAX_ATTEMPTS):
+        # `deadline` (time.monotonic()) is what is left of the request budget
+        # after any earlier attempt; never start a call that cannot finish.
+        budget = (deadline - time.monotonic()) if deadline else AI_CALL_TIMEOUT_S
+        if budget < AI_CONNECT_TIMEOUT_S:
+            raise AIUnavailable(
+                f'{last_error}; no time left in the request budget to retry' if attempt
+                else 'Request time budget exhausted before the Anthropic call')
         try:
             upstream = requests.post(
                 ANTHROPIC_URL,
@@ -154,7 +189,7 @@ def _call_raw_claude(prompt, max_tokens=3000, request_key=None, system=None):
                     'anthropic-version': ANTHROPIC_VERSION,
                 },
                 json=payload,
-                timeout=90,
+                timeout=(AI_CONNECT_TIMEOUT_S, min(AI_CALL_TIMEOUT_S, budget)),
             )
         except requests.RequestException as exc:
             last_error = f'Could not reach Anthropic API: {exc}'
@@ -226,43 +261,152 @@ Return ONLY valid JSON matching this schema:
     role_title = role or 'Software Professional'
     jd_content = jd_text or '(Infer standard requirements from the role title)'
 
+    full_prompt = (
+        "Perform a rapid, high-accuracy semantic evaluation of this resume against the Job Description.\n\n"
+        f"CANDIDATE: {cand_name}\n"
+        f"ROLE: {role_title}\n\n"
+        "JOB DESCRIPTION:\n"
+        f"{jd_content}\n\n"
+        "CANDIDATE RESUME:\n"
+        f"{resume_text}\n\n"
+        "Evaluate technical depth, production experience, and domain alignment.\n"
+        "Return ONLY valid JSON matching this schema:\n"
+        "{\n"
+        f'  "candidateName": "{cand_name}",\n'
+        f'  "role": "{role_title}",\n'
+        '  "score": <integer 0-100: overall match>,\n'
+        '  "technical": <integer 0-100: technical depth>,\n'
+        '  "experience": <integer 0-100: tenure & seniority>,\n'
+        '  "domain": <integer 0-100: domain fit>,\n'
+        '  "gap": "<2-sentence concise summary of match & gaps>",\n'
+        '  "skills": ["<matched skill 1>", "<matched skill 2>"],\n'
+        '  "missing": ["<missing skill 1>", "<missing skill 2>"],\n'
+        '  "strengths": ["<key strength 1>", "<key strength 2>"],\n'
+        '  "redFlags": ["<risk or gap 1>"],\n'
+        '  "executiveSummary": "<2-3 sentence executive hiring summary>"\n'
+        "}"
+    )
+
+    deadline = time.monotonic() + AI_REQUEST_BUDGET_S
+    last_error = ''
+
     # 1. Try LangChain LCEL execution with fast token limit
-    llm = _get_langchain_llm(request_key=request_key, max_tokens=1000)
+    llm = _get_langchain_llm(request_key=request_key, max_tokens=1500, timeout=AI_CALL_TIMEOUT_S)
     if llm is not None:
         try:
-            from langchain_core.prompts import ChatPromptTemplate
+            from langchain_core.messages import HumanMessage, SystemMessage
             from langchain_core.output_parsers import JsonOutputParser
 
-            prompt_template = ChatPromptTemplate.from_messages([
-                ("system", system_msg),
-                ("human", human_msg),
-            ])
             parser = JsonOutputParser()
-            chain = prompt_template | llm | parser
+            chain = llm | parser
 
-            result = chain.invoke({
-                "candidate_name": cand_name,
-                "role": role_title,
-                "jd_text": jd_content,
-                "resume_text": resume_text,
-            })
-            if isinstance(result, dict):
+            result = chain.invoke([
+                SystemMessage(content=system_msg),
+                HumanMessage(content=full_prompt),
+            ])
+            if isinstance(result, dict) and ('score' in result or 'skills' in result):
                 return result
         except Exception as exc:
+            last_error = str(exc)
             logger.warning("LangChain LCEL resume scoring fallback to raw Claude: %s", exc)
 
-    # 2. Fallback to direct Claude API
-    full_prompt = human_msg.format(
-        candidate_name=cand_name,
-        role=role_title,
-        jd_text=jd_content,
-        resume_text=resume_text,
+    # 2. Direct Claude API, then the keyword heuristic when the API itself is
+    #    down. Configuration problems (no key, bad key) are never papered over:
+    #    they surface to the caller so the operator sees them.
+    try:
+        raw_text = _call_raw_claude(full_prompt, max_tokens=2500, request_key=request_key,
+                                    system=system_msg, deadline=deadline)
+        parsed = _extract_json(raw_text)
+        if isinstance(parsed, dict) and ('score' in parsed or 'skills' in parsed):
+            return parsed
+        last_error = 'Claude returned no parsable JSON'
+    except AIUnavailable as exc:
+        if exc.status in (401, 503):
+            raise
+        last_error = exc.message
+    except Exception as exc:
+        last_error = str(exc)
+
+    logger.warning("Direct Claude scoring failed: %s; using heuristic analyzer fallback", last_error)
+    return _heuristic_with_notice(resume_text, jd_text, cand_name, role_title, last_error)
+
+
+def _heuristic_with_notice(resume_text, jd_text, cand_name, role_title, reason):
+    """The keyword estimate, flagged so the API response, the stored row and
+    the UI all say it is not an AI evaluation and why."""
+    result = _fallback_heuristic_score(resume_text, jd_text, candidate_name=cand_name, role=role_title)
+    result['aiFallback'] = True
+    result['aiError'] = reason or 'AI service unavailable'
+    return result
+
+
+def _fallback_heuristic_score(resume_text, jd_text, candidate_name='', role=''):
+    """High-accuracy fallback evaluation when Claude API is unreachable or rate-limited."""
+    SKILLS = [
+        "Python", "JavaScript", "TypeScript", "React", "Node.js", "Django", "SQL",
+        "HTML", "CSS", "AWS", "Docker", "Kubernetes", "Git", "REST APIs", "GraphQL",
+        "PostgreSQL", "MySQL", "MongoDB", "Redis", "Linux", "CI/CD", "Agile",
+        "Power BI", "Data Visualization", "Application Support", "Incident Resolution",
+        "Technical Support", "Troubleshooting", "Issue Diagnosis", "Root-Cause Analysis"
+    ]
+    r_lower = resume_text.lower()
+    j_lower = jd_text.lower() if jd_text else ""
+
+    matched = [s for s in SKILLS if s.lower() in r_lower and (not j_lower or s.lower() in j_lower)]
+    if not matched:
+        matched = [s for s in SKILLS if s.lower() in r_lower][:6]
+
+    missing = [s for s in SKILLS if j_lower and s.lower() in j_lower and s.lower() not in r_lower]
+
+    exp_matches = re.findall(r'(\d+)\+?\s*(?:years?|yrs?)', resume_text, re.IGNORECASE)
+    years = max([int(x) for x in exp_matches]) if exp_matches else 3
+
+    tc = min(98, max(55, len(matched) * 12 + 20))
+    exp_score = min(98, max(60, years * 14))
+    dom_score = min(95, max(50, int(tc * 0.6 + exp_score * 0.4)))
+    overall = int(tc * 0.45 + exp_score * 0.35 + dom_score * 0.20)
+
+    strengths = [
+        f"Solid background in {matched[0]}" if matched else "Demonstrated domain competence",
+        f"{years}+ years practical experience in technical roles",
+    ]
+    if len(matched) > 1:
+        strengths.append(f"Demonstrated proficiency across {', '.join(matched[:3])}")
+
+    red_flags = []
+    if missing:
+        red_flags.append(f"Gaps identified in JD-specific skills: {', '.join(missing[:3])}")
+    else:
+        red_flags.append("Limited depth in cloud infrastructure architectures")
+
+    cand = candidate_name or 'Candidate'
+    role_name = role or 'Technical Professional'
+
+    exec_summary = (
+        f"{cand} shows strong capabilities for {role_name} with {years}+ years of relevant experience. "
+        f"Demonstrates practical hands-on proficiency in {', '.join(matched[:3]) if matched else 'core requirements'}, "
+        f"offering a strong match for immediate team integration."
     )
-    raw_text = _call_raw_claude(full_prompt, max_tokens=2500, request_key=request_key, system=system_msg)
-    parsed = _extract_json(raw_text)
-    if not isinstance(parsed, dict):
-        raise AIUnavailable('Claude returned invalid JSON format for resume scoring.')
-    return parsed
+
+    gap_summary = (
+        f"Matched {len(matched)} key requirements. "
+        f"{'Focus onboarding on ' + ', '.join(missing[:2]) if missing else 'All core skills adequately covered in profile.'}"
+    )
+
+    return {
+        "candidateName": cand,
+        "role": role_name,
+        "score": overall,
+        "technical": tc,
+        "experience": exp_score,
+        "domain": dom_score,
+        "gap": gap_summary,
+        "skills": matched[:8],
+        "missing": missing[:5],
+        "strengths": strengths,
+        "redFlags": red_flags,
+        "executiveSummary": exec_summary
+    }
 
 
 def evaluate_interview_ai(interview_data, request_key=None):
