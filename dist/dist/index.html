@@ -78,7 +78,152 @@
        pages (Work Submissions especially) empty until a second reload. Loaded
        first and not deferred, so the patch exists before any app code runs. -->
   <script src="/assets/hrms-actor.js?v=2"></script>
-  <script type="module" crossorigin src="/assets/index-DCh6bk0Rv4.js?v=84"></script>
+  <script src="/assets/hrms-recording-list.js?v=1"></script>
+  <script>
+    (function () {
+      function updateInterviewPlaceholders() {
+        var isInterviewPage = location.pathname.replace(/\/+$/, '').indexOf('/recruit/interview') === 0;
+        if (!isInterviewPage) {
+          var hiddenRows = document.querySelectorAll('.card > [data-hrms-interview-placeholder]');
+          Array.prototype.forEach.call(hiddenRows, function (row) {
+            row.style.display = row.getAttribute('data-hrms-interview-placeholder');
+            row.removeAttribute('data-hrms-interview-placeholder');
+          });
+          return;
+        }
+        Array.prototype.forEach.call(document.querySelectorAll('.card-title'), function (title) {
+          var name = (title.textContent || '').trim();
+          if (name !== 'Upcoming Interviews' && name !== 'Recently Completed') return;
+          var card = title.closest('.card') || title.parentNode;
+          Array.prototype.forEach.call(card.children, function (row) {
+            if (row === title || row.id === 'hrms-iv-up' || row.id === 'hrms-iv-done') return;
+            if (!row.hasAttribute('data-hrms-interview-placeholder')) {
+              row.setAttribute('data-hrms-interview-placeholder', row.style.display);
+            }
+            if (row.style.display !== 'none') row.style.display = 'none';
+          });
+        });
+      }
+      new MutationObserver(updateInterviewPlaceholders).observe(document.documentElement, {
+        childList: true, subtree: true, attributes: true, attributeFilter: ['style']
+      });
+      window.addEventListener('popstate', updateInterviewPlaceholders);
+      window.addEventListener('hrmsNavigate', updateInterviewPlaceholders);
+      updateInterviewPlaceholders();
+    })();
+  </script>
+  <script>
+    (function () {
+      var key = 'hrms-last-route';
+      var rootPaths = { '/': true, '/index.html': true, '/dashboard': true };
+      function currentRoute() {
+        return location.pathname + location.search + location.hash;
+      }
+      function saveRoute() {
+        try {
+          var route = currentRoute();
+          if (!rootPaths[location.pathname]) sessionStorage.setItem(key, route);
+          else sessionStorage.removeItem(key);
+        } catch (error) {
+          console.warn('[HRMS route restore] Could not access session storage:', error);
+        }
+      }
+
+      var navigation = performance.getEntriesByType('navigation')[0];
+      var isReload = navigation && navigation.type === 'reload';
+      if (isReload && rootPaths[location.pathname]) {
+        try {
+          var lastRoute = sessionStorage.getItem(key);
+          if (lastRoute && !rootPaths[lastRoute.split(/[?#]/)[0]]) {
+            history.replaceState(history.state, '', lastRoute);
+          }
+        } catch (error) {
+          console.warn('[HRMS route restore] Could not restore the previous route:', error);
+        }
+      } else {
+        saveRoute();
+      }
+
+      ['pushState', 'replaceState'].forEach(function (method) {
+        var original = history[method];
+        history[method] = function () {
+          var result = original.apply(this, arguments);
+          saveRoute();
+          return result;
+        };
+      });
+      window.addEventListener('popstate', saveRoute);
+    })();
+  </script>
+  <script>
+    (function () {
+      var key = 'hrms-reload-followup-panel';
+      var followupTitle = 'Candidate Follow-up Status';
+
+      function findFollowupPanel() {
+        var titles = document.querySelectorAll('.card-title');
+        for (var i = 0; i < titles.length; i++) {
+          if ((titles[i].textContent || '').trim() === followupTitle) {
+            return titles[i].closest('.card') || titles[i].parentNode;
+          }
+        }
+        return null;
+      }
+
+      function savePanelOnReload() {
+        if (location.pathname.replace(/\/+$/, '') !== '/recruit/interview') return;
+        var panel = findFollowupPanel();
+        if (!panel) return;
+        var rect = panel.getBoundingClientRect();
+        var isVisible = rect.top < window.innerHeight && rect.bottom > 0;
+        try {
+          if (isVisible) sessionStorage.setItem(key, '1');
+          else sessionStorage.removeItem(key);
+        } catch (error) {
+          console.warn('[HRMS panel restore] Could not save follow-up panel state:', error);
+        }
+      }
+      window.addEventListener('pagehide', savePanelOnReload);
+
+      if (location.pathname.replace(/\/+$/, '') !== '/recruit/interview') {
+        try {
+          sessionStorage.removeItem(key);
+        } catch (error) {
+          console.warn('[HRMS panel restore] Could not clear follow-up panel state:', error);
+        }
+        return;
+      }
+
+      var navigation = performance.getEntriesByType('navigation')[0];
+      if (!navigation || navigation.type !== 'reload') return;
+
+      try {
+        if (sessionStorage.getItem(key) !== '1') return;
+        sessionStorage.removeItem(key);
+      } catch (error) {
+        console.warn('[HRMS panel restore] Could not read follow-up panel state:', error);
+        return;
+      }
+
+      var restored = false;
+      function restorePanel() {
+        if (restored) return;
+        var panel = findFollowupPanel();
+        if (!panel) return;
+        restored = true;
+        observer.disconnect();
+        panel.scrollIntoView({ block: 'start' });
+      }
+
+      var observer = new MutationObserver(restorePanel);
+      observer.observe(document.documentElement, { childList: true, subtree: true });
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', restorePanel, { once: true });
+      }
+      restorePanel();
+    })();
+  </script>
+  <script type="module" crossorigin src="/assets/index-DCh6bk0Rv4.js?v=85"></script>
   <script defer src="/assets/hrms-net.js?v=2"></script>
   <script defer src="/assets/hrms-live.js?v=7"></script>
   <script defer src="/assets/google-auth.js?v=11"></script>
@@ -103,8 +248,8 @@
   <script defer src="/assets/hrms-jobs-table.js?v=12"></script>
   <script defer src="/assets/hrms-bench-sales.js?v=9"></script>
   <script defer src="/assets/hrms-candidate-compare.js?v=23"></script>
-  <script defer src="/assets/hrms-interviews.js?v=19"></script>
-  <script defer src="/assets/hrms-qv-filter-dropdowns.js?v=1"></script>
+  <script defer src="/assets/hrms-interviews.js?v=21"></script>
+  <script defer src="/assets/hrms-qv-filter-dropdowns.js?v=3"></script>
   <script defer src="/assets/hrms-f2f-employee-detail.js?v=9"></script>
   <script defer src="/assets/hrms-f2f-candidate-info.js?v=18"></script>
   <script defer src="/assets/hrms-job-form-builder.js?v=12"></script>
@@ -113,7 +258,7 @@
   <script defer src="/assets/hrms-dashboard.js?v=11"></script>
   <script defer src="/assets/hrms-company-settings.js?v=6"></script>
   <script defer src="/assets/hrms-task-attachment-preview.js?v=3"></script>
-  <script defer src="/assets/hrms-video-player.js?v=3"></script>
+  <script defer src="/assets/hrms-video-player.js?v=4"></script>
   <link rel="stylesheet" crossorigin href="/assets/index-C53rmAEs.css?v=2">
   <link rel="stylesheet" crossorigin href="/assets/theme-overrides.css?v=66">
   <link rel="stylesheet" crossorigin href="/assets/responsive.css?v=7">

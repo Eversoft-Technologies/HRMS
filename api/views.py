@@ -21,6 +21,7 @@ import os
 import re
 import secrets
 from datetime import datetime, time, timedelta
+from pathlib import Path
 
 from django.conf import settings
 from django.db import transaction
@@ -1318,6 +1319,14 @@ def _mark_interview_taken(email, role, total_score=None):
               anonymous_methods=('POST',))
 def recordings(request):
     if request.method == 'GET':
+        if request.query_params.get('summary') == '1':
+            qs = _recording_list_qs().defer(
+                'transcript', 'responses', 'ai_evaluation',
+                'executive_summary', 'round2_questions',
+            )
+            return Response(InterviewRecordingSerializer(
+                qs, many=True, context={'summary': True},
+            ).data)
         return Response(InterviewRecordingSerializer(_recording_list_qs(), many=True).data)
 
     body = request.data

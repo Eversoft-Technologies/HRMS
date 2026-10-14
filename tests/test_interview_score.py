@@ -123,6 +123,28 @@ class TranscriptTests(TestCase):
         self.assertEqual(first['transcript'], 'I used B-tree indexes.')
         self.assertEqual(second['stageGroup'], 'HR Round')
 
+    def test_summary_list_omits_large_details_but_keeps_row_metadata(self):
+        resp = self.client.post('/api/interview-recordings', data={
+            'candidateName': 'srikanth', 'candidateEmail': 'candidate@example.com',
+            'role': 'data analyst', 'verdict': 'HOLD', 'totalScore': 55,
+            'transcript': 'A long interview transcript.',
+            'responses': [{'q': 'Explain indexing.', 'transcript': 'B-tree indexes.'}],
+        }, content_type='application/json')
+        self.assertEqual(resp.status_code, 201)
+
+        listed = self.client.get(
+            '/api/interview-recordings?summary=1',
+            HTTP_X_USER_EMAIL=self.viewer.email,
+        )
+        self.assertEqual(listed.status_code, 200)
+        row = listed.json()[0]
+
+        self.assertEqual(row['candidateName'], 'srikanth')
+        self.assertEqual(row['totalScore'], 55)
+        for field in ('transcript', 'responses', 'aiEvaluation',
+                      'executiveSummary', 'round2Questions'):
+            self.assertNotIn(field, row)
+
     def test_saved_transcript_contains_both_voices(self):
         """The flat transcript is the export/fallback view — it must not drop
         Eva's question the way the old "Q1: <answer>" format did."""
