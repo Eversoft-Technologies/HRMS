@@ -4418,6 +4418,22 @@ def leave_detail(request, pk):
 
 
 @api_view(['GET'])
+def holidays(request):
+    """India + US national holidays for ?year= (defaults to the current year).
+    Computed from fixed rules (api/holiday_calendar.py), so every year works
+    without anyone maintaining a list. Not sensitive, so no permission gate --
+    the Leave page's holiday calendar reads it for every role."""
+    from .holiday_calendar import national_holidays
+    try:
+        year = int(request.query_params.get('year') or local_today().year)
+    except ValueError:
+        return err('year must be a number')
+    if not 1900 <= year <= 2200:
+        return err('year must be between 1900 and 2200')
+    return Response(national_holidays(year))
+
+
+@api_view(['GET'])
 @require_perm('leave.view', or_self=True)
 def leave_balance(request):
     """Per-type leave balance for ?email= (allowance − approved days)."""
