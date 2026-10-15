@@ -8,23 +8,19 @@
  * WITHOUT a bundle rebuild.
  *
  *   • Own grid from /api/resume-scores (the React card is hidden while mounted).
- *   • Job Code column: the Job Board post each candidate was scored against;
- *     click it to load that post's description into the Job Description box.
- *   • Job picker on the Job Description card: choose a Job Code and the post's
- *     description (from /api/jobs) is dropped into the textarea. Its Quick
- *     Code strip lists the codes used most recently (picked here or scored
- *     against) plus the total number of job posts.
+ *   • Job Code column: the Job Board post each candidate was scored against.
  *   • Edit Column drawer (show/hide + drag reorder), persisted to localStorage.
  *   • Per-column Excel-style filter popups (sort + value search + checklist).
  *   • Edit Filters drawer: job post checklist, predefined quick filters, custom
  *     "contains" rules.
  *   • Pagination (page size + first/prev/pages/next/last). Export CSV / Excel.
- *   • Row click → syncs the candidate into the scorer; ✦ AI / View / Delete.
+ *   • Row click → syncs the candidate into the scorer; ✦ AI / View (match-score
+ *     details render into the Match Score card — no Delete action, no modal).
  *
  * Only the Candidate Comparison card is taken over; the JD input, resume
- * upload, and "Match Score" detail card on the same page are left in place
- * (the JD card just gains the Job Code picker). Kept mounted by a
- * MutationObserver. Theme-aware.
+ * upload, and "Match Score" detail card on the same page are left in place.
+ * The Job Description card is a plain text area only — no Job Code picker.
+ * Kept mounted by a MutationObserver. Theme-aware.
  */
 (function () {
   'use strict';
@@ -832,12 +828,12 @@
         /* Resume viewer modal fills the screen */
         '.cc-modal{width:100%;max-width:100%;max-height:94vh;box-sizing:border-box;}' +
         '.cc-modal-h,.cc-modal-b{padding:12px;}' +
-        /* KPI cards: two per row, compact */
-        '.content .stat-grid.cc-stats{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-bottom:14px;}' +
-        '.cc-stats .stat-card{padding:10px 12px;min-width:0;}' +
-        '.cc-stats .stat-label{font-size:9.5px;margin-bottom:4px;white-space:normal;}' +
-        '.cc-stats .stat-value{font-size:22px;}' +
-        '.cc-stats .stat-sub,.cc-stats .stat-trend{font-size:10px;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}' +
+        /* KPI cards: all 4 stay in one row, square, on any phone width */
+        '.content .stat-grid.cc-stats{grid-template-columns:repeat(4,minmax(0,1fr));gap:5px;margin-bottom:14px;}' +
+        '.cc-stats .stat-card{aspect-ratio:1/1;padding:6px 4px;min-width:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:5px;}' +
+        '.cc-stats .stat-label{font-size:7.8px;letter-spacing:.1px;margin:0;line-height:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;}' +
+        '.cc-stats .stat-value{font-size:17px;line-height:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;}' +
+        '.cc-stats .stat-sub,.cc-stats .stat-trend{font-size:7.3px;margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%;}' +
         /* Edit Filters / Edit Columns: a bottom sheet sized to its content */
         D + '-overlay{align-items:flex-end;justify-content:center;}' +
         D + '{width:100%;max-width:100%;height:auto;max-height:85vh;max-height:85dvh;border-left:0;border-top:1px solid var(--border2,#334155);border-radius:16px 16px 0 0;animation:cc-up .28s cubic-bezier(.2,.9,.3,1);}' +
@@ -913,8 +909,7 @@
       return '<tr data-id="' + esc(r.id) + '">' + cols.map(function (c) { return cell(r, c); }).join('') +
         '<td class="cc-actions">' +
           '<button class="cc-btn primary cc-sm" data-ai="' + esc(r.id) + '" title="AI Deep Analysis">✦ AI</button>' +
-          '<button class="cc-btn cc-sm" data-view="' + esc(r.id) + '" title="View uploaded resume">View</button>' +
-          '<button class="cc-btn danger cc-sm" data-del="' + esc(r.id) + '" title="Delete candidate resume">🗑 Delete</button>' +
+          '<button class="cc-btn cc-sm" data-view="' + esc(r.id) + '" title="View match-score details">View</button>' +
         '</td></tr>';
     }).join('');
 
@@ -925,25 +920,7 @@
       b.addEventListener('click', function (e) { e.stopPropagation(); showAIModal(byId(b.getAttribute('data-ai'))); });
     });
     tbody.querySelectorAll('[data-view]').forEach(function (b) {
-      b.addEventListener('click', function (e) { e.stopPropagation(); viewResume(byId(b.getAttribute('data-view'))); });
-    });
-    tbody.querySelectorAll('[data-del]').forEach(function (b) {
-      b.addEventListener('click', function (e) {
-        e.stopPropagation();
-        var id = b.getAttribute('data-del');
-        var cand = byId(id);
-        var candName = (cand && cand.name) || 'this candidate';
-        if (!confirm('Are you sure you want to delete ' + candName + '’s resume? This action cannot be undone.')) return;
-        b.disabled = true;
-        api('/api/resume-scores/' + id, { method: 'DELETE' }).then(function () {
-          state.rows = state.rows.filter(function (row) { return String(row.id) !== String(id); });
-          renderTable();
-          toast('Resume deleted successfully.');
-        }).catch(function (err) {
-          b.disabled = false;
-          toast('Failed to delete resume: ' + (err.message || 'Server error'), 'error');
-        });
-      });
+      b.addEventListener('click', function (e) { e.stopPropagation(); viewMatchScoreDetails(byId(b.getAttribute('data-view'))); });
     });
     tbody.querySelectorAll('[data-fmt]').forEach(function (b) {
       b.addEventListener('click', function (e) {
@@ -1281,6 +1258,149 @@
     ov.querySelector('#cc-m-x').addEventListener('click', closeModal);
     var dl = ov.querySelector('#cc-m-dl'); if (dl) dl.addEventListener('click', function () { downloadResume(r); });
     var tab = ov.querySelector('#cc-m-tab'); if (tab) tab.addEventListener('click', function () { window.open(url, '_blank'); });
+  }
+
+  // "View" action (Actions column): fetch the candidate's stored match-score
+  // details and render them into the Match Score card on the right — no popup,
+  // no modal. Distinct from the 👁 eye icon in the Candidate cell, which still
+  // previews the uploaded resume file/text via the modal above.
+  var viewScoreSeq = 0;
+  function viewMatchScoreDetails(r) {
+    if (!r) return;
+    var targetCard = findMatchScoreCard();
+    if (!targetCard) return;
+    var seq = ++viewScoreSeq;
+
+    targetCard.style.position = 'relative';
+    var overlay = document.getElementById('hrms-ai-card-overlay');
+    if (!overlay) {
+      overlay = document.createElement('div');
+      overlay.id = 'hrms-ai-card-overlay';
+      targetCard.appendChild(overlay);
+    }
+    overlay.style.cssText = 'position:absolute !important;top:0 !important;left:0 !important;right:0 !important;bottom:0 !important;width:100% !important;height:100% !important;max-width:100% !important;background:var(--bg2,#111827) !important;border-radius:inherit;z-index:40;padding:18px 20px;overflow-y:auto;overflow-x:hidden;box-sizing:border-box;display:flex;flex-direction:column;box-shadow:inset 0 1px 0 rgba(255,255,255,0.08);';
+    var children = targetCard.children;
+    for (var k = 0; k < children.length; k++) {
+      if (children[k] !== overlay) children[k].style.display = 'none';
+    }
+
+    overlay.innerHTML =
+      '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:360px;width:100%;text-align:center;margin:auto">' +
+        '<div style="font-size:42px;margin-bottom:14px;color:var(--accent,#4f8ef7)">⏳</div>' +
+        '<div style="font-weight:700;font-size:16px;color:var(--text)">Loading match-score details…</div>' +
+      '</div>';
+
+    fetchDetail(r.id).then(function (d) {
+      if (seq !== viewScoreSeq) return;
+      renderMatchScoreDetails(d || {}, r, targetCard);
+    }).catch(function (err) {
+      if (seq !== viewScoreSeq) return;
+      renderMatchScoreError(err, r, targetCard);
+    });
+  }
+
+  function closeMatchScoreOverlay(targetCard) {
+    var overlay = document.getElementById('hrms-ai-card-overlay');
+    if (overlay) overlay.style.display = 'none';
+    var tc = targetCard || findMatchScoreCard();
+    if (tc) {
+      for (var k = 0; k < tc.children.length; k++) {
+        if (tc.children[k] !== overlay) tc.children[k].style.display = '';
+      }
+    }
+  }
+
+  function renderMatchScoreError(err, r, targetCard) {
+    if (!targetCard) targetCard = findMatchScoreCard();
+    var overlay = targetCard && document.getElementById('hrms-ai-card-overlay');
+    if (!overlay) return;
+    var msg = (err && err.message) || 'Could not load match-score details.';
+    overlay.innerHTML =
+      '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:360px;width:100%;text-align:center;padding:24px;box-sizing:border-box;margin:auto">' +
+        '<div style="font-size:36px;margin-bottom:10px;color:var(--danger,#ef4444)">✕</div>' +
+        '<div style="color:var(--danger,#ef4444);font-weight:700;font-size:15px;margin-bottom:8px">Could Not Load Details</div>' +
+        '<div style="font-size:12px;color:var(--text2);line-height:1.6;max-width:360px;margin-bottom:16px">' + esc(msg) + '</div>' +
+        '<div style="display:flex;gap:8px">' +
+          '<button class="cc-btn primary" id="cc-retry-view">↺ Retry</button>' +
+          '<button class="cc-btn" id="cc-close-view-err">Dismiss</button>' +
+        '</div>' +
+      '</div>';
+    var retryBtn = overlay.querySelector('#cc-retry-view');
+    if (retryBtn) retryBtn.addEventListener('click', function () { viewMatchScoreDetails(r); });
+    var closeBtn = overlay.querySelector('#cc-close-view-err');
+    if (closeBtn) closeBtn.addEventListener('click', function () { closeMatchScoreOverlay(targetCard); });
+  }
+
+  function renderMatchScoreDetails(d, r, targetCard) {
+    if (!targetCard) targetCard = findMatchScoreCard();
+    if (!targetCard) return;
+    targetCard.style.position = 'relative';
+    var overlay = document.getElementById('hrms-ai-card-overlay');
+    if (!overlay) return;
+
+    var sc = num(d.score != null ? d.score : r.score), tc = num(d.technical), exp = num(d.experience), dom = num(d.domain);
+    var skills = d.skills || r.skills || [], missing = d.missing || r.missing || [];
+    var aiEvaluated = !!d.aiEvaluated;
+    var strengths = aiEvaluated ? (d.aiStrengths || []) : [];
+    var gaps = aiEvaluated ? (d.aiGaps || []) : [];
+    var summary = aiEvaluated ? (d.aiSummary || '') : '';
+    var note = !aiEvaluated ? (d.gap || '') : '';
+    var name = d.name || r.name || 'Candidate';
+    var role = d.role || r.role || 'Software Professional';
+
+    overlay.innerHTML =
+      '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;border-bottom:1px solid var(--border2);padding-bottom:10px;width:100%;box-sizing:border-box">' +
+        '<div style="display:flex;align-items:center;gap:8px;flex:1;min-width:0;overflow:hidden">' +
+          '<span class="card-title" style="margin:0;white-space:nowrap">MATCH SCORE</span>' +
+          '<span class="cc-badge" style="font-size:10.5px;white-space:nowrap' + (aiEvaluated ? ';color:#8b5cf6;border-color:rgba(139,92,246,0.3);background:rgba(139,92,246,0.08)' : '') + '">' + (aiEvaluated ? '✦ Claude AI Deep Analysis' : 'Standard Score') + '</span>' +
+        '</div>' +
+        '<button id="cc-close-view" style="background:var(--bg3);border:1px solid var(--border2);border-radius:7px;padding:5px 12px;font-size:11.5px;font-weight:600;color:var(--text);cursor:pointer;display:inline-flex;align-items:center;gap:4px;flex-shrink:0;margin-left:8px">✕ Close</button>' +
+      '</div>' +
+
+      '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;width:100%;box-sizing:border-box">' +
+        '<div style="display:flex;align-items:center;gap:10px;flex:1;min-width:0;overflow:hidden">' +
+          '<span class="cc-avc" style="width:36px;height:36px;font-size:13px;background:linear-gradient(135deg,var(--accent2,#8b5cf6),var(--accent,#4f8ef7));flex-shrink:0">' + esc(initials({ name: name })) + '</span>' +
+          '<div style="flex:1;min-width:0;overflow:hidden">' +
+            '<div style="font-weight:700;font-size:14px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(name) + '">' + esc(name) + '</div>' +
+            '<div style="font-size:11.5px;color:var(--text2);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(role) + '</div>' +
+          '</div>' +
+        '</div>' +
+        '<div style="text-align:right;flex-shrink:0;margin-left:8px">' +
+          '<div style="font-size:38px;font-weight:800;color:' + scoreColor(sc) + ';line-height:1">' + sc + '<span style="font-size:13px;color:var(--text2);font-weight:500"> / 100</span></div>' +
+        '</div>' +
+      '</div>' +
+
+      '<div style="display:flex;gap:10px;margin-bottom:16px;justify-content:space-between">' +
+        '<div style="flex:1;background:var(--bg3);border:1px solid var(--border2);border-radius:12px;padding:12px 6px;text-align:center">' +
+          drawRingSvg(tc, scoreColor(tc)) +
+          '<div style="font-size:9.5px;font-weight:700;color:var(--text2);letter-spacing:0.5px">TECHNICAL</div>' +
+        '</div>' +
+        '<div style="flex:1;background:var(--bg3);border:1px solid var(--border2);border-radius:12px;padding:12px 6px;text-align:center">' +
+          drawRingSvg(exp, scoreColor(exp)) +
+          '<div style="font-size:9.5px;font-weight:700;color:var(--text2);letter-spacing:0.5px">EXPERIENCE</div>' +
+        '</div>' +
+        '<div style="flex:1;background:var(--bg3);border:1px solid var(--border2);border-radius:12px;padding:12px 6px;text-align:center">' +
+          drawRingSvg(dom, scoreColor(dom)) +
+          '<div style="font-size:9.5px;font-weight:700;color:var(--text2);letter-spacing:0.5px">DOMAIN</div>' +
+        '</div>' +
+      '</div>' +
+
+      (skills.length ? '<div style="font-size:11px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px">MATCHED SKILLS (' + skills.length + ')</div><div class="cc-chips" style="margin-bottom:12px">' + skills.map(function (s) { return '<span class="cc-chip str">✓ ' + esc(s) + '</span>'; }).join('') + '</div>' : '') +
+
+      (missing.length ? '<div style="font-size:11px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px">MISSING SKILLS (' + missing.length + ')</div><div class="cc-chips" style="margin-bottom:12px">' + missing.map(function (s) { return '<span class="cc-chip miss">✕ ' + esc(s) + '</span>'; }).join('') + '</div>' : '') +
+
+      (summary ? '<div class="cc-brief-card"><b style="color:var(--accent,#4f8ef7)">✦ Hiring Brief:</b> ' + highlightBold(summary) + '</div>' : '') +
+      (note ? '<div class="cc-brief-card"><b style="color:var(--accent,#4f8ef7)">Note:</b> ' + highlightBold(note) + '</div>' : '') +
+
+      (strengths.length ? '<div style="font-size:11px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px">KEY STRENGTHS</div><div class="cc-chips" style="margin-bottom:12px">' + strengths.map(function (s) { return '<span class="cc-chip str">✓ ' + highlightBold(s) + '</span>'; }).join('') + '</div>' : '') +
+
+      (gaps.length ? '<div style="font-size:11px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px">GAPS &amp; RISKS</div><div class="cc-chips" style="margin-bottom:12px">' + gaps.map(function (s) { return '<span class="cc-chip miss">⚠ ' + highlightBold(s) + '</span>'; }).join('') + '</div>' : '') +
+
+      (!skills.length && !missing.length && !summary && !note && !strengths.length && !gaps.length
+        ? '<div style="font-size:12px;color:var(--text2);text-align:center;margin-top:20px">No further match-score details are stored for this candidate.</div>' : '');
+
+    var closeBtn = overlay.querySelector('#cc-close-view');
+    if (closeBtn) closeBtn.addEventListener('click', function () { closeMatchScoreOverlay(targetCard); });
   }
 
   function downloadResume(r) {
@@ -2476,208 +2596,15 @@
 
   // Job Code picker at the top of the Job Description card: choose a post and
   // its description (from the Job Board) is dropped into the textarea.
+  // Disabled: the Job Description panel is a plain text area only — no job
+  // code search, quick codes, or related controls. Any previously injected
+  // picker header is torn down and the function left as a no-op so existing
+  // call sites stay harmless.
   function enhanceJobPostCard() {
-    if (!onPage()) return;
-    var jdTa = findJdTextarea(); if (!jdTa) return;
-    var jdCard = jdTa.closest('.card') || jdTa.parentElement; if (!jdCard) return;
-    jdTa.style.setProperty('resize', 'vertical', 'important');
-
-    var activeJob = jobByCode(activeJobCode());
-    if (!activeJob) {
-      // Nothing picked yet: recognise a description pasted from a known post.
-      var text = jdTa.value || '';
-      if (text) for (var k = 0; k < jobsRegistry.length; k++) {
-        var jr = jobsRegistry[k];
-        if ((jr.code && text.indexOf(jr.code) !== -1) || (jr.title && text.indexOf(jr.title) !== -1)) { activeJob = jr; break; }
-      }
-    }
-
-    var header = jdCard.querySelector('#cc-job-post-header');
-    if (!header) {
-      header = document.createElement('div');
-      header.id = 'cc-job-post-header';
-      header.className = 'cc-job-post-card';
-      var cardTitle = jdCard.querySelector('.card-title');
-      if (cardTitle && cardTitle.parentNode === jdCard) jdCard.insertBefore(header, cardTitle.nextSibling);
-      else jdCard.insertBefore(header, jdTa);
-    }
-    // Never rebuild under a typing user, and skip the rebuild entirely when
-    // nothing shown has changed (this runs on every DOM mutation).
-    var searchInput = header.querySelector('#cc-job-code-search');
-    if (searchInput && document.activeElement === searchInput) return;
-    var isExpanded = jdTa.getAttribute('data-expanded') === '1';
-    var quick = recentJobs(QUICK_CODE_LIMIT);
-    if (!quick.length) quick = jobsRegistry.slice().reverse().slice(0, QUICK_CODE_LIMIT);   // nothing used yet: newest posts
-    if (activeJob && !quick.some(function (j) { return j.code === activeJob.code; })) quick = [activeJob].concat(quick).slice(0, QUICK_CODE_LIMIT);
-    var sig = [activeJob ? activeJob.code : '', jobsRegistry.map(function (j) { return j.code; }).join(','), quick.map(function (j) { return j.code; }).join(','), registryLoaded ? 1 : 0, isExpanded ? 1 : 0].join('|');
-    if (header.getAttribute('data-sig') === sig) return;
-    header.setAttribute('data-sig', sig);
-
-    var placeholder = jobsRegistry.length ? 'Search Job Code or title (e.g. JOB-101)…' : (registryLoaded ? 'No job posts on the Job Board yet' : 'Loading job posts…');
-    header.innerHTML =
-      '<div class="cc-job-picker-bar">' +
-        '<div class="cc-job-search-box">' +
-          '<span class="cc-job-search-ico">🔍</span>' +
-          '<input id="cc-job-code-search" class="cc-job-code-input" placeholder="' + esc(placeholder) + '" value="' + (activeJob ? '[' + esc(activeJob.code) + '] ' + esc(activeJob.title) : '') + '" autocomplete="off">' +
-          '<button id="cc-job-dropdown-toggle" class="cc-job-drop-btn" title="View all Job Posts by Code">▾</button>' +
-        '</div>' +
-        '<div id="cc-job-code-dropdown" class="cc-job-dropdown-list" style="display:none"></div>' +
-      '</div>' +
-      (quick.length ? '<div class="cc-quick-jobs-bar"><span class="cc-quick-jobs-lbl" title="The ' + QUICK_CODE_LIMIT + ' Job Codes used most recently, newest first">Quick Code:</span>' +
-        quick.map(function (j) {
-          return '<button class="cc-quick-job-pill' + (activeJob && j.code === activeJob.code ? ' active' : '') + kindClass(j) + '" data-qcode="' + esc(j.code) + '" title="' + esc(j.title) + ' · ' + esc(j.status || 'Active') + '">[' + esc(j.code) + '] ' + esc(j.title.split(' ')[0]) + '</button>';
-        }).join('') +
-        '<button id="cc-quick-jobs-total" class="cc-quick-jobs-total" title="View all job posts by code">Total: ' + jobsRegistry.length + ' job post' + (jobsRegistry.length === 1 ? '' : 's') + ' ▾</button>' +
-      '</div>' : '') +
-      '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px">' +
-        (activeJob
-          ? '<div style="display:flex;align-items:center;gap:10px;flex:1;min-width:0">' +
-              '<div style="width:36px;height:36px;border-radius:9px;background:linear-gradient(135deg,rgba(79,142,247,0.2),rgba(124,92,252,0.2));border:1px solid rgba(79,142,247,0.3);display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0">💼</div>' +
-              '<div style="flex:1;min-width:0;overflow:hidden">' +
-                '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">' +
-                  '<span class="cc-job-code-pill" style="font-size:11px;padding:3px 8px">' + esc(activeJob.code) + '</span>' +
-                  '<span style="font-size:13.5px;font-weight:700;color:var(--text);letter-spacing:-0.2px">' + esc(activeJob.title) + '</span>' +
-                  statusBadge(activeJob) +
-                '</div>' +
-                '<div style="font-size:11px;color:var(--text2);margin-top:2px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">' + jobMetaHtml(activeJob) + '</div>' +
-              '</div>' +
-            '</div>'
-          : '<div style="flex:1;min-width:0;font-size:12px;color:var(--text2);line-height:1.5">' +
-              (jobsRegistry.length
-                ? 'Select a <b>Job Code</b> to load that post’s description into the Job Description box below.'
-                : (registryLoaded ? 'No job posts found. Post one on the <b>Job Board</b> and it will appear here by its Job Code.' : 'Loading job posts…')) +
-            '</div>') +
-        '<div style="display:flex;align-items:center;gap:6px;flex-shrink:0">' +
-          '<button id="cc-jd-expand-toggle" class="cc-expand-btn" title="Expand or collapse Job Description">' + (isExpanded ? '⤡ Collapse' : '⤢ Expand') + '</button>' +
-        '</div>' +
-      '</div>' +
-      (activeJob && activeJob.skills && activeJob.skills.length
-        ? '<div class="cc-job-skills-bar"><span style="font-size:10.5px;font-weight:700;color:var(--text2);margin-right:2px">Key Skills:</span>' +
-          activeJob.skills.map(function (s) { return '<span class="cc-job-skill-chip">' + esc(s) + '</span>'; }).join('') + '</div>'
-        : '');
-
-    // Hook expand button
-    var expBtn = header.querySelector('#cc-jd-expand-toggle');
-    if (expBtn) {
-      expBtn.addEventListener('click', function (e) {
-        e.preventDefault();
-        var exp = jdTa.getAttribute('data-expanded') === '1';
-        if (exp) {
-          jdTa.style.height = '180px';
-          jdTa.setAttribute('data-expanded', '0');
-          expBtn.textContent = '⤢ Expand';
-        } else {
-          jdTa.style.height = '380px';
-          jdTa.setAttribute('data-expanded', '1');
-          expBtn.textContent = '⤡ Collapse';
-        }
-      });
-    }
-
-    // Hook quick code pills
-    header.querySelectorAll('[data-qcode]').forEach(function (btn) {
-      btn.addEventListener('click', function (e) { e.preventDefault(); selectJobByCode(btn.getAttribute('data-qcode')); });
-    });
-
-    // Hook dropdown and search input
-    var searchInp = header.querySelector('#cc-job-code-search');
-    var dropBtn = header.querySelector('#cc-job-dropdown-toggle');
-    var dropMenu = header.querySelector('#cc-job-code-dropdown');
-
-    function renderDropdownItems(filterText) {
-      if (!dropMenu) return;
-      var q = (filterText || '').trim().toLowerCase();
-      var matches = jobsRegistry.filter(function (j) {
-        if (!q) return true;
-        return j.code.toLowerCase().indexOf(q) !== -1 ||
-               j.title.toLowerCase().indexOf(q) !== -1 ||
-               (j.department || '').toLowerCase().indexOf(q) !== -1 ||
-               (j.skills || []).some(function (sk) { return sk.toLowerCase().indexOf(q) !== -1; });
-      });
-
-      if (!matches.length) {
-        dropMenu.innerHTML = '<div style="padding:12px;text-align:center;color:var(--text2);font-size:11.5px">' + (jobsRegistry.length ? 'No matching Job Codes found' : 'No job posts on the Job Board yet') + '</div>';
-      } else {
-        dropMenu.innerHTML = matches.map(function (j) {
-          var isSel = !!(activeJob && j.code === activeJob.code);
-          return '<div class="cc-job-item' + (isSel ? ' selected' : '') + '" data-code="' + esc(j.code) + '">' +
-            '<div class="cc-job-item-top">' +
-              '<span class="cc-job-code-pill">' + esc(j.code) + '</span>' +
-              '<span style="display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--text2);font-weight:600">' + esc(j.department || '') + statusBadge(j) + '</span>' +
-            '</div>' +
-            '<div class="cc-job-item-title">' + esc(j.title) + '</div>' +
-            '<div class="cc-job-item-sub">' + jobMetaHtml({ location: j.location, experience: j.experience, type: j.type }) + '</div>' +
-            ((j.skills || []).length ? '<div style="margin-top:5px;display:flex;gap:4px;flex-wrap:wrap">' +
-              (j.skills || []).slice(0, 4).map(function (sk) { return '<span class="cc-job-skill-chip">' + esc(sk) + '</span>'; }).join('') + '</div>' : '') +
-          '</div>';
-        }).join('');
-
-        dropMenu.querySelectorAll('.cc-job-item').forEach(function (item) {
-          item.addEventListener('click', function () {
-            var code = item.getAttribute('data-code');
-            dropMenu.style.display = 'none';
-            selectJobByCode(code);
-          });
-        });
-      }
-      dropMenu.style.display = 'block';
-    }
-
-    if (dropBtn && dropMenu) {
-      dropBtn.addEventListener('click', function (e) {
-        e.preventDefault();
-        e.stopPropagation();
-        if (dropMenu.style.display === 'block') dropMenu.style.display = 'none';
-        else renderDropdownItems('');
-      });
-    }
-    var totalBtn = header.querySelector('#cc-quick-jobs-total');
-    if (totalBtn && dropMenu) {
-      totalBtn.addEventListener('click', function (e) {
-        e.preventDefault();
-        e.stopPropagation();
-        if (dropMenu.style.display === 'block') dropMenu.style.display = 'none';
-        else renderDropdownItems('');
-      });
-    }
-
-    if (searchInp && dropMenu) {
-      searchInp.addEventListener('focus', function () {
-        renderDropdownItems(searchInp.value.indexOf('[') !== -1 ? '' : searchInp.value);
-      });
-      searchInp.addEventListener('input', function () {
-        renderDropdownItems(searchInp.value.replace(/^\[[^\]]+\]\s*/, ''));
-      });
-      searchInp.addEventListener('keydown', function (e) {
-        if (e.key === 'Enter') {
-          e.preventDefault();
-          var firstItem = dropMenu.querySelector('.cc-job-item');
-          if (firstItem) { dropMenu.style.display = 'none'; searchInp.blur(); selectJobByCode(firstItem.getAttribute('data-code')); }
-        } else if (e.key === 'Escape') {
-          dropMenu.style.display = 'none';
-        }
-      });
-      // Leaving the box without picking: put the current selection back.
-      searchInp.addEventListener('blur', function () {
-        setTimeout(function () { var cur = jobByCode(activeJobCode()); if (document.activeElement !== searchInp) searchInp.value = cur ? '[' + cur.code + '] ' + cur.title : ''; }, 150);
-      });
-    }
-
-    // Close dropdown on outside click
-    if (!window.__ccJobDropdownBound) {
-      window.__ccJobDropdownBound = true;
-      document.addEventListener('click', function (e) {
-        var menu = document.getElementById('cc-job-code-dropdown');
-        if (menu && menu.style.display === 'block' && !e.target.closest('#cc-job-post-header')) menu.style.display = 'none';
-      });
-    }
-
-    if (!jdTa.__jdInputBound) {
-      jdTa.__jdInputBound = true;
-      jdTa.addEventListener('input', function () {
-        if (document.activeElement !== searchInp) enhanceJobPostCard();
-      });
-    }
+    var jdTa = findJdTextarea();
+    var existingHeader = jdTa && (jdTa.closest('.card') || jdTa.parentElement);
+    existingHeader = existingHeader && existingHeader.querySelector('#cc-job-post-header');
+    if (existingHeader) existingHeader.remove();
   }
 
   function enhanceResumeExpandable() {
