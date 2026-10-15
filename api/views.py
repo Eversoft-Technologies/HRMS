@@ -1263,13 +1263,27 @@ def resume_score_detail(request, pk):
     return Response({
         'id': rs.id,
         'name': rs.name,
+        'initials': rs.initials,
         'fileName': rs.file_name or '',
         'fileMime': rs.file_mime or '',
         'fileData': rs.file_data or '',
         'resumeText': rs.resume_text or '',
+        'jdText': rs.jd_text or '',
         'formatted': bool(rs.formatted),
         'score': rs.score,
+        'technical': rs.technical,
+        'experience': rs.experience,
+        'domain': rs.domain,
+        'gap': rs.gap or '',
+        'skills': rs.skills or [],
+        'missing': rs.missing or [],
+        'source': rs.source or 'Upload',
+        'jobCode': rs.job_code or '',
         'role': rs.role,
+        'aiSummary': rs.ai_summary or '',
+        'aiStrengths': rs.ai_strengths or [],
+        'aiGaps': rs.ai_gaps or [],
+        'aiEvaluated': bool(rs.ai_evaluated),
     })
 
 
