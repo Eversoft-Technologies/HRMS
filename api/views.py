@@ -48,6 +48,7 @@ from .models import (
     CompanyDetail,
     EmployeeAttendance,
     EmployeeTask,
+    MasterDataSet,
     InterviewLink,
     InterviewRecording,
     JobPost,
@@ -1534,8 +1535,8 @@ def recording_thumbnail(request, pk):
     """Serves the poster snapshot image generated during video transcoding."""
     rec = InterviewRecording.objects.filter(pk=pk).values('thumbnail_file').first()
     if rec and rec.get('thumbnail_file'):
-        media_root = Path(getattr(settings, 'MEDIA_ROOT', settings.BASE_DIR / 'media'))
-        abs_path = media_root / rec['thumbnail_file']
+        from . import video_processor
+        abs_path = video_processor.media_root() / rec['thumbnail_file']
         if abs_path.exists():
             from django.http import FileResponse
             return FileResponse(open(abs_path, 'rb'), content_type='image/jpeg')
@@ -1575,10 +1576,9 @@ def recording_video(request, pk):
         # 1. Check if video file exists on disk (Preferred file-storage architecture)
         rec = InterviewRecording.objects.filter(pk=pk).values('video_file', 'video_mime').first()
         if rec and rec.get('video_file'):
-            media_root = Path(getattr(settings, 'MEDIA_ROOT', settings.BASE_DIR / 'media'))
-            abs_path = media_root / rec['video_file']
+            from . import video_processor
+            abs_path = video_processor.media_root() / rec['video_file']
             if abs_path.exists():
-                from . import video_processor
                 content_type = rec.get('video_mime') or 'video/mp4'
                 return video_processor.stream_file_range(abs_path, content_type, request)
 

@@ -17,20 +17,39 @@ from django.http import HttpResponse, StreamingHttpResponse, Http404
 
 logger = logging.getLogger(__name__)
 
-# Base storage directories under media/
-MEDIA_ROOT = Path(getattr(settings, 'MEDIA_ROOT', settings.BASE_DIR / 'media'))
-INTERVIEWS_DIR = MEDIA_ROOT / 'interviews'
-RAW_DIR = INTERVIEWS_DIR / 'raw'
-THUMBS_DIR = INTERVIEWS_DIR / 'thumbs'
-
 _RANGE_RE = re.compile(r'bytes=([0-9]*)-([0-9]*)', re.I)
+
+
+def media_root():
+    """Absolute directory that ``InterviewRecording.video_file`` paths are relative to.
+
+    Read from settings on every call (not at import) so ``override_settings``
+    works in tests and so an empty MEDIA_ROOT can never silently mean "the
+    process working directory" — that is what Django's default ('') does, and
+    it wrote recordings beside the code, where each deploy's fresh release
+    directory lost them.
+    """
+    root = getattr(settings, 'MEDIA_ROOT', None)
+    return Path(root) if root else Path(settings.BASE_DIR) / 'media'
+
+
+def interviews_dir():
+    return media_root() / 'interviews'
+
+
+def raw_dir():
+    return interviews_dir() / 'raw'
+
+
+def thumbs_dir():
+    return interviews_dir() / 'thumbs'
 
 
 def ensure_directories():
     """Ensure media storage folders exist."""
-    INTERVIEWS_DIR.mkdir(parents=True, exist_ok=True)
-    RAW_DIR.mkdir(parents=True, exist_ok=True)
-    THUMBS_DIR.mkdir(parents=True, exist_ok=True)
+    interviews_dir().mkdir(parents=True, exist_ok=True)
+    raw_dir().mkdir(parents=True, exist_ok=True)
+    thumbs_dir().mkdir(parents=True, exist_ok=True)
 
 
 def find_binary(name):
@@ -147,16 +166,16 @@ def save_interview_video(recording_id, raw_bytes, content_type='video/webm'):
         ext = '.mov'
 
     raw_filename = f"rec_{recording_id}_raw{ext}"
-    raw_path = RAW_DIR / raw_filename
+    raw_path = raw_dir() / raw_filename
 
     # Write raw incoming file to disk
     with open(raw_path, 'wb') as f:
         f.write(raw_bytes)
 
     target_mp4_filename = f"rec_{recording_id}.mp4"
-    target_mp4_path = INTERVIEWS_DIR / target_mp4_filename
+    target_mp4_path = interviews_dir() / target_mp4_filename
     thumb_filename = f"thumb_{recording_id}.jpg"
-    thumb_path = THUMBS_DIR / thumb_filename
+    thumb_path = thumbs_dir() / thumb_filename
 
     # Attempt FFmpeg transcode
     transcode_ok, err_msg = transcode_to_mp4(raw_path, target_mp4_path, thumb_path)
@@ -169,7 +188,7 @@ def save_interview_video(recording_id, raw_bytes, content_type='video/webm'):
     else:
         # Fallback to direct raw file storage if FFmpeg is not available
         final_target_filename = f"rec_{recording_id}{ext}"
-        final_abs_path = INTERVIEWS_DIR / final_target_filename
+        final_abs_path = interviews_dir() / final_target_filename
         shutil.copyfile(raw_path, final_abs_path)
         final_rel_path = f"interviews/{final_target_filename}"
         final_mime = content_type or "video/webm"
