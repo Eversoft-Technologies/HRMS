@@ -228,6 +228,14 @@ HRMS_BASEMAP_ATTRIBUTION = os.environ.get(
 STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 
+# Uploaded media (interview recordings, chat attachments) live under
+# <BASE_DIR>/media. The deploy workflow symlinks this directory to the shared,
+# release-independent folder, so anything written here survives a deploy.
+# Django's default MEDIA_ROOT is '' (= the process working directory), which
+# scattered recordings next to the code and lost them on the next release.
+MEDIA_URL = '/media/'
+MEDIA_ROOT = Path(os.environ.get('MEDIA_ROOT') or (BASE_DIR / 'media'))
+
 # Built React app (Vite output). Default: dist/dist relative to this project.
 REACT_BUILD_DIR = Path(
     os.environ.get('REACT_BUILD_DIR', BASE_DIR / 'dist' / 'dist')
