@@ -225,8 +225,28 @@
       '.hrms-iv-scroll{max-height:300px;overflow-y:auto;}',
       '.hrms-iv-row{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border2);}',
       '.hrms-iv-row:last-child{border-bottom:none;}',
+      '.hrms-ai-step-icon{display:inline-flex!important;align-items:center;justify-content:center;box-sizing:border-box;width:28px;height:28px;flex:0 0 28px;background:#dbeafe;border:1px solid #0284c7;border-radius:7px;font-size:0!important;line-height:1;box-shadow:0 1px 4px rgba(2,132,199,.24);}',
+      '.hrms-ai-step-icon::before{content:"";display:block;width:17px;height:17px;background:#111827;-webkit-mask-image:url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22none%22 stroke=%22black%22 stroke-width=%222%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Cpath d=%22M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94L14.7 6.3z%22/%3E%3C/svg%3E");-webkit-mask-repeat:no-repeat;-webkit-mask-position:center;-webkit-mask-size:contain;mask-image:url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22none%22 stroke=%22black%22 stroke-width=%222%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Cpath d=%22M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94L14.7 6.3z%22/%3E%3C/svg%3E");mask-repeat:no-repeat;mask-position:center;mask-size:contain;}',
+      'html[data-theme="dark"] .hrms-ai-step-icon{background:#12304a;border-color:#38bdf8;box-shadow:0 0 0 1px rgba(56,189,248,.18),0 2px 6px rgba(0,0,0,.25);}',
+      'html[data-theme="dark"] .hrms-ai-step-icon::before{background:#e0f2fe;}',
+      '.hrms-ai-technical-title{position:relative;display:flex!important;align-items:center;min-height:22px;padding-left:23px!important;}',
+      '.hrms-ai-technical-title::after{content:"";position:absolute;left:0;top:50%;transform:translateY(-50%);width:18px;height:18px;background:#111827;-webkit-mask-image:url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22none%22 stroke=%22black%22 stroke-width=%222%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Cpath d=%22M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94L14.7 6.3z%22/%3E%3C/svg%3E");-webkit-mask-repeat:no-repeat;-webkit-mask-position:center;-webkit-mask-size:contain;mask-image:url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22none%22 stroke=%22black%22 stroke-width=%222%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Cpath d=%22M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94L14.7 6.3z%22/%3E%3C/svg%3E");mask-repeat:no-repeat;mask-position:center;mask-size:contain;}',
+      'html[data-theme="dark"] .hrms-ai-technical-title::after{background:#e0f2fe;}',
+      '.hrms-iv-fu-row{display:grid!important;grid-template-columns:34px minmax(120px,1fr) 110px 225px 130px 28px;column-gap:12px!important;align-items:center!important;}',
+      '.hrms-iv-fu-row>.hrms-iv-fu-score{width:110px!important;min-width:110px!important;justify-content:center!important;}',
+      '.hrms-iv-fu-row>.hrms-iv-fu-outcomes{display:grid!important;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px!important;width:225px;min-width:225px;}',
+      '.hrms-iv-fu-row>.hrms-iv-fu-outcomes button{display:inline-flex;align-items:center;justify-content:center;width:100%!important;max-width:100%;min-width:0!important;box-sizing:border-box!important;padding:4px 1px!important;font-size:10px!important;line-height:1.2;white-space:nowrap;overflow:hidden;}',
+      '.hrms-iv-fu-row>.hrms-iv-fu-actions{display:grid!important;grid-template-columns:repeat(2,60px);align-items:center;justify-content:end;gap:7px!important;width:127px;min-width:127px;}',
+      '.hrms-iv-fu-row>.hrms-iv-fu-actions>*{display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box;width:60px;min-width:60px;white-space:nowrap;}',
+      '.hrms-iv-fu-row>.hrms-iv-fu-actions>.hrms-iv-fu-sent{grid-column:2;}',
+      '.hrms-iv-fu-row>.hrms-iv-fu-actions>.hrms-iv-fu-single{grid-column:2;}',
+      '@media(max-width:760px){.hrms-iv-fu-row{grid-template-columns:34px minmax(0,1fr) 110px 28px;column-gap:8px!important;row-gap:8px;}.hrms-iv-fu-row>.hrms-iv-fu-outcomes{grid-column:2/4;grid-row:2;width:100%;min-width:0;}.hrms-iv-fu-row>.hrms-iv-fu-actions{grid-column:2/4;grid-row:3;width:127px;min-width:127px;justify-self:end;}.hrms-iv-fu-row>.hrms-iv-fu-score{grid-column:3;grid-row:1;}.hrms-iv-fu-row>.hrms-iv-fu-note{grid-column:4;grid-row:1;}}',
       '.hrms-iv-av{flex-shrink:0;width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11.8px;font-weight:600;color:#fff;}',
       '.hrms-iv-main{flex:1;min-width:0;}',
+      '.hrms-iv-screen-candidate-card .badge{display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box;width:100px;height:28px;padding:4px 8px;white-space:nowrap;flex-shrink:0;}',
+      'html[data-theme="dark"] [style*="236, 245, 255"]{background:var(--bg2,#151b2e)!important;border-color:var(--border2,#334155)!important;}',
+      'html[data-theme="dark"] [style*="236, 245, 255"]>div:first-child{color:var(--text,#e6edf7)!important;}',
+      'html[data-theme="dark"] [style*="236, 245, 255"]>div:last-child{color:var(--text2,#c7d2e4)!important;}',
       '.hrms-iv-nm{font-size:12px;font-weight:600;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}',
       '.hrms-iv-sub{font-size:11px;color:var(--text3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}',
       '.hrms-iv-right{text-align:right;flex-shrink:0;}',
@@ -303,6 +323,32 @@
       }
     }
     return null;
+  }
+
+  function tagTechnicalStepIcon() {
+    var icons = document.querySelectorAll('span');
+    for (var i = 0; i < icons.length; i++) {
+      if ((icons[i].textContent || '').trim() === '\uD83D\uDD27') {
+        icons[i].classList.add('hrms-ai-step-icon');
+      }
+    }
+    var titles = document.querySelectorAll('div');
+    for (var j = 0; j < titles.length; j++) {
+      var title = titles[j];
+      if (title.childElementCount || !/^\uD83D\uDD27\s*Technical Deep-Dive/.test((title.textContent || '').trim())) continue;
+      for (var k = 0; k < title.childNodes.length; k++) {
+        var textNode = title.childNodes[k];
+        if (textNode.nodeType !== 3) continue;
+        textNode.nodeValue = textNode.nodeValue.replace(/^\uD83D\uDD27\s*/, '');
+        break;
+      }
+      title.classList.add('hrms-ai-technical-title');
+    }
+  }
+
+  function tagCandidateScreeningCard() {
+    var card = cardByTitle('Select Candidate to Screen');
+    if (card) card.classList.add('hrms-iv-screen-candidate-card');
   }
 
   /* ── list filtering ───────────────────────────────────────────────────── */
@@ -460,7 +506,18 @@
     Array.prototype.forEach.call(avs, function (av) {
       var row = av.parentElement;
       if (!row) return;
+      row.classList.add('hrms-iv-fu-row');
       var main = row.children[1];
+      if (row.children[2]) row.children[2].classList.add('hrms-iv-fu-score');
+      if (row.children[3]) row.children[3].classList.add('hrms-iv-fu-outcomes');
+      var actions = row.children[4];
+      if (actions) {
+        actions.classList.add('hrms-iv-fu-actions');
+        Array.prototype.forEach.call(actions.children, function (action) {
+          action.classList.toggle('hrms-iv-fu-sent', action.tagName === 'SPAN' && /sent/i.test(action.textContent || ''));
+          action.classList.toggle('hrms-iv-fu-single', actions.children.length === 1);
+        });
+      }
       var name = main && main.children[0] ? (main.children[0].textContent || '').trim() : '';
       if (!name) return;
       var iv = findByName(name);
@@ -907,7 +964,7 @@
   }
 
   /* ── template picker + manager inside the drawer ───────────────────────── */
-  function buildTemplateBar(bar, ed, subjInput, outcome, iv) {
+  function buildTemplateBar(bar, ed, subjInput, outcome, iv, onTemplateChange) {
     var sel = document.createElement('select');
     sel.innerHTML = '<option value="">— Select Template —</option>';
     bar.appendChild(sel);
@@ -957,6 +1014,7 @@
       if (!t) return;
       subjInput.value = t.subject || '';
       ed.setHTML(t.body || '');
+      if (onTemplateChange) onTemplateChange();
     });
 
     mkBtn(ICON.save + ' Save', 'Update the selected template with what is in the editor', '', function () {
@@ -1180,7 +1238,9 @@
       }
     }
 
+    var previewRevision = 0;
     function renderPreview() {
+      var revision = ++previewRevision;
       preview.srcdoc = '<p style="font:14px sans-serif;color:#64748b;padding:16px">Rendering…</p>';
       api('/api/email-templates/preview', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -1189,11 +1249,13 @@
           name: (iv && iv.name) || '', role: (iv && iv.role) || ''
         })
       }).then(function (r) {
+        if (revision !== previewRevision) return;
         preview.srcdoc = (r && r.html) || '';
         standaloneNote.textContent = r && r.standalone
           ? 'Your HTML is sent as-is (branded wrapper skipped).'
           : '';
       }).catch(function (e) {
+        if (revision !== previewRevision) return;
         preview.srcdoc = '<p style="font:14px sans-serif;color:#ef4444;padding:16px">' +
           'Could not render preview: ' + esc(e.message || '') + '</p>';
       });
@@ -1204,7 +1266,9 @@
     mPrev.addEventListener('click', function () { setMode('preview'); });
     setMode('edit');
 
-    buildTemplateBar(tplBar, ed, subjInput, outcome, iv);
+    buildTemplateBar(tplBar, ed, subjInput, outcome, iv, function () {
+      if (preview.style.display !== 'none') renderPreview();
+    });
 
     // Take over Send so our edited HTML is what actually goes out.
     var btns = modal.querySelectorAll('button');
@@ -1253,6 +1317,8 @@
   function tick() {
     if (!onPage()) return;
     ensureStyle();
+    tagCandidateScreeningCard();
+    tagTechnicalStepIcon();
     var up = cardByTitle('Upcoming Interviews');
     var done = cardByTitle('Recently Completed');
     var fu = cardByTitle('Candidate Follow-up Status');

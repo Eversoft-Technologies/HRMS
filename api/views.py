@@ -753,41 +753,57 @@ def build_followup_html(subject, inner):
     )
 
 
-def _followup_template(outcome, name, role, start_phrase='the first week of next month'):
+def _followup_template(outcome, name, role, start_phrase='confirmed in your formal offer letter'):
     role = role or 'the role'
     name = name or 'there'
     o = str(outcome or '').strip().lower()
     if o == 'selected':
-        subject = f'Congratulations! Offer for {role} at Eversoft'
+        subject = f'Congratulations! Offer for {role} at EverSoft Technologies LLC'
         body = (
             f'Dear {name},<br><br>'
-            f'We are delighted to let you know that you have been <strong>selected</strong> for the '
-            f'<strong>{role}</strong> position at Eversoft. The whole panel was impressed by your '
-            f'performance during the interview.<br><br>'
-            f'Our HR team will reach out shortly with your offer details and onboarding steps. '
-            f'We are looking forward to having you join us, with a tentative start in {start_phrase}.<br><br>'
-            f'Warm regards,<br>The Eversoft Talent Team'
+            f'We are delighted to inform you that after careful consideration, you have been selected '
+            f'for the <strong>{role}</strong> position at EverSoft Technologies LLC.<br><br>'
+            f'The entire interview panel was genuinely impressed by your knowledge, approach, and the '
+            f'clarity you brought to each discussion. You stood out among a highly competitive field '
+            f'of candidates, and we are confident you will be a valuable addition to the team.<br><br>'
+            f'<strong>WHAT HAPPENS NEXT</strong><br>'
+            f'<ul><li>Our HR team will contact you within 2–3 business days with your formal offer letter.</li>'
+            f'<li>You will receive complete onboarding details and next steps.</li>'
+            f'<li>Your tentative start date will be {start_phrase}.</li></ul>'
+            f'We look forward to welcoming you to EverSoft and building great things together.'
+            f'<br><br>With warmest congratulations,<br>EverSoft Technologies LLC Talent Team'
         )
     elif o == 'waitlisted':
-        subject = f'Your application for {role} at Eversoft'
+        subject = 'Your Application Status — EverSoft Technologies LLC'
         body = (
             f'Dear {name},<br><br>'
-            f'Thank you for interviewing for the <strong>{role}</strong> position. You did really well, '
-            f'and we have placed your application on our <strong>waitlist</strong>. Should a suitable '
-            f'opening become available, we will be in touch right away.<br><br>'
-            f'We genuinely appreciate the time and energy you invested in the process.<br><br>'
-            f'Warm regards,<br>The Eversoft Talent Team'
+            f'Thank you for your patience following your interview for the '
+            f'<strong>{role}</strong> position at EverSoft Technologies LLC.<br><br>'
+            f'We want to keep you informed: your application is currently on our reserve shortlist. '
+            f'While we have extended an offer to another candidate at this time, we were genuinely '
+            f'impressed by your profile and would like to keep your candidacy active.<br><br>'
+            f'<strong>WHAT THIS MEANS FOR YOU</strong><br>'
+            f'<ul><li>You will be contacted within 2–4 weeks with a definitive update.</li>'
+            f'<li>If a position opens up, you will be among the first considered.</li>'
+            f'<li>No further interview rounds are required at this stage.</li></ul>'
+            f'We appreciate your understanding and continued interest in EverSoft Technologies LLC. '
+            f'Please do not hesitate to reach out to your recruiter if you have any questions in the meantime.'
+            f'<br><br>With appreciation and anticipation,<br>EverSoft Technologies LLC Talent Team'
         )
     else:  # rejected / default
-        subject = f'Update on your application for {role} at Eversoft'
+        subject = 'Update on Your Application — EverSoft Technologies'
         body = (
-            f'Dear {name},<br><br>'
-            f'Thank you for taking the time to interview for the <strong>{role}</strong> position and for '
-            f'your interest in Eversoft. After careful consideration, we have decided not to move forward '
-            f'with your application at this time.<br><br>'
-            f'This was a difficult decision — we encourage you to apply for future roles that match your '
-            f'skills. We wish you the very best in your job search.<br><br>'
-            f'Warm regards,<br>The Eversoft Talent Team'
+            f'Dear {name},<br><br>Thank you sincerely for the time and effort you invested in interviewing '
+            f'for the <strong>{role}</strong> position at EverSoft Technologies LLC.<br><br>'
+            f'After thorough evaluation of all candidates, we regret to inform you that we will not be '
+            f'moving forward with your application at this time. This was a highly competitive process, '
+            f'and this decision does not diminish the strengths and qualities you demonstrated throughout.'
+            f'<br><br><strong>A FEW THOUGHTS</strong><br>'
+            f'<ul><li>We encourage you to apply again for future roles that align with your profile.</li>'
+            f'<li>Your résumé will remain in our talent pool for 12 months.</li>'
+            f'<li>You are welcome to request feedback by replying to your assigned recruiter.</li></ul>'
+            f'We genuinely appreciate your interest in EverSoft and wish you every success in your career journey.'
+            f'<br><br>With appreciation and best wishes,<br>EverSoft Talent Team'
         )
     return subject, body
 
@@ -1212,20 +1228,41 @@ def resume_score_detail(request, pk):
     })
 
 
-@api_view(['GET'])
-@require_perm('recruitment.view')
+@api_view(['GET', 'POST'])
+@require_perm({'GET': 'recruitment.view', 'POST': 'recruitment.edit'})
 def resume_score_file(request, pk):
-    """Serve the stored resume file (PDF/DOCX) as a download/inline view.
+    """Upload or serve the stored resume file (PDF/DOCX).
 
-    Returns the raw decoded bytes with proper Content-Type so the browser can
-    render a PDF inline or download a DOCX file directly.
+    POST replaces the file attached to this candidate. GET returns the raw
+    decoded bytes so the browser can render a PDF inline or download a DOCX.
     """
     import base64
+    import mimetypes
     from django.http import HttpResponse
 
     rs = ResumeScore.objects.filter(pk=pk).first()
     if not rs:
         return HttpResponse('Resume not found', status=404)
+
+    if request.method == 'POST':
+        uploaded_file = request.FILES.get('file')
+        if not uploaded_file:
+            return err('file is required', 400)
+
+        file_name = os.path.basename(uploaded_file.name.replace('\\', '/'))
+        if os.path.splitext(file_name)[1].lower() not in {'.pdf', '.doc', '.docx', '.txt'}:
+            return err('Only PDF, DOC, DOCX, and TXT resumes are supported', 400)
+
+        file_contents = uploaded_file.read()
+        if not file_contents:
+            return err('uploaded file is empty', 400)
+
+        rs.file_name = file_name
+        rs.file_mime = uploaded_file.content_type or mimetypes.guess_type(file_name)[0] or 'application/octet-stream'
+        rs.file_data = base64.b64encode(file_contents).decode('ascii')
+        rs.save(update_fields=['file_name', 'file_mime', 'file_data', 'updated_at'])
+        return Response({'id': rs.id, 'fileName': rs.file_name, 'fileMime': rs.file_mime})
+
     if not rs.file_data:
         return HttpResponse('No file stored for this resume', status=404)
 

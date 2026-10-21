@@ -23,6 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 django.setup()
 
 from api import mailer
+from api.email_template_views import _builtin_defaults
 from api.views import _public_origin, build_followup_html, _followup_template
 
 PUBLIC = 'https://hrms.example.com'
@@ -60,6 +61,66 @@ class EmailBrandingTests(TestCase):
         self.assertIn('<img', html)
         # Absolute: a mail client has no page to resolve a relative path against.
         self.assertIn('src="%s/logo.jpg"' % PUBLIC, html)
+
+    def test_built_in_follow_up_templates_use_the_supplied_documents(self):
+        templates = _builtin_defaults()
+
+        self.assertEqual(len(templates), 9)
+        self.assertEqual(
+            {outcome: sum(t['outcome'] == outcome for t in templates)
+             for outcome in ('Selected', 'Waitlisted', 'Rejected')},
+            {'Selected': 3, 'Waitlisted': 3, 'Rejected': 3},
+        )
+        self.assertEqual(
+            {outcome: [t['name'] for t in templates if t['outcome'] == outcome]
+             for outcome in ('Selected', 'Waitlisted', 'Rejected')},
+            {
+                'Selected': ['Selected — Offer', 'Selected — Formal Letter', 'Selected — Welcome'],
+                'Waitlisted': [
+                    'Waitlisted — Reserve Shortlist',
+                    'Waitlisted — Decision Delayed',
+                    'Waitlisted — Active Pipeline',
+                ],
+                'Rejected': [
+                    'Rejected — Standard Decline',
+                    'Rejected — With Feedback',
+                    'Rejected — Future Opportunities',
+                ],
+            },
+        )
+        by_outcome = {
+            outcome: [template for template in templates if template['outcome'] == outcome]
+            for outcome in ('Selected', 'Waitlisted', 'Rejected')
+        }
+        for template in templates:
+            self.assertIn('{{name}}', template['body'])
+            self.assertIn('{{role}}', template['body'])
+            self.assertIn('{{company}}', template['body'])
+
+        self.assertIn('12 months', by_outcome['Rejected'][0]['body'])
+        self.assertIn('request feedback', by_outcome['Rejected'][0]['body'])
+        self.assertIn('personalized', by_outcome['Rejected'][1]['body'])
+        self.assertIn('assigned recruiter', by_outcome['Rejected'][1]['body'])
+        self.assertIn('Your Application Outcome & Feedback', by_outcome['Rejected'][1]['subject'])
+        self.assertIn('STAY CONNECTED', by_outcome['Rejected'][2]['body'])
+        self.assertIn('12 months', by_outcome['Rejected'][2]['body'])
+        self.assertIn('LinkedIn', by_outcome['Rejected'][2]['body'])
+
+        self.assertIn('reserve shortlist', by_outcome['Waitlisted'][0]['body'])
+        self.assertIn('2–4 weeks', by_outcome['Waitlisted'][0]['body'])
+        self.assertIn('internal team', by_outcome['Waitlisted'][1]['body'])
+        self.assertIn('no re-interview', by_outcome['Waitlisted'][1]['body'].lower())
+        self.assertIn('Active Talent Pipeline', by_outcome['Waitlisted'][2]['body'])
+        self.assertIn('six months', by_outcome['Waitlisted'][2]['body'])
+
+        self.assertIn('2–3 business days', by_outcome['Selected'][0]['body'])
+        self.assertIn('formal offer letter', by_outcome['Selected'][0]['body'])
+        self.assertIn('knowledge, approach, and the', by_outcome['Selected'][0]['body'])
+        self.assertIn('Your Formal Offer', by_outcome['Selected'][1]['subject'])
+        self.assertIn('Annual Compensation', by_outcome['Selected'][1]['body'])
+        self.assertIn('Welcome to the', by_outcome['Selected'][2]['subject'])
+        self.assertIn('48 hours', by_outcome['Selected'][2]['body'])
+        self.assertIn('30-Day Check-in', by_outcome['Selected'][2]['body'])
 
     def test_the_company_name_is_next_to_the_logo(self):
         """So a client that blocks images still shows who sent the mail."""
