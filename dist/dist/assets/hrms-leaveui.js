@@ -44,7 +44,7 @@
     var U = window.__hrmsUI;
     var g = U.g, n = U.n, B = U.B, Us = U.Us, Gn = U.Gn, Hs = U.Hs, le = U.le,
         cn = U.cn, Qe = U.Qe, Bt = U.Bt, Vs = U.Vs, Dr = U.Dr, Et = U.Et;
-    const[L,sL]=g.useState([]),[ld,sld]=g.useState(!0),[er,ser]=g.useState(""),[wr,swr]=g.useState(""),[op,so]=g.useState(!1),[bz,sb]=g.useState(!1),[fm,sf]=g.useState({type:"Casual Leave",fromDate:"",toDate:"",reason:""}),[fe,sfe]=g.useState(""),[q,sq]=g.useState(""),[flt,sflt]=g.useState("All"),[srt,ssrt]=g.useState("newest"),[bal,sbal]=g.useState([]),[exp,sexp]=g.useState(null),[cf,scf]=g.useState(null),[more,smore]=g.useState({}),[hd,shd]=g.useState(null),[per,sper]=g.useState("today"),[cm,scm]=g.useState((new Date).getMonth());
+    const[L,sL]=g.useState([]),[ld,sld]=g.useState(!0),[er,ser]=g.useState(""),[wr,swr]=g.useState(""),[op,so]=g.useState(!1),[bz,sb]=g.useState(!1),[fm,sf]=g.useState({type:"Casual Leave",fromDate:"",toDate:"",reason:""}),[fe,sfe]=g.useState(""),[q,sq]=g.useState(""),[flt,sflt]=g.useState("All"),[srt,ssrt]=g.useState("newest"),[bal,sbal]=g.useState([]),[exp,sexp]=g.useState(null),[cf,scf]=g.useState(null),[more,smore]=g.useState({}),[hd,shd]=g.useState(null),[per,sper]=g.useState("today"),[cm,scm]=g.useState((new Date).getMonth()),[hol,shol]=g.useState([]),[holEr,sholEr]=g.useState(!1);
     /* Missed Clock-Out — cor holds the correction requests: MY own normally,
        everyone's once appr resolves true. The mop/mfm/mfe/mbz quartet mirrors
        op/fm/fe/bz on the Apply Leave form; crj/crn/cre mirror cf on its
@@ -110,25 +110,17 @@
     return x.getDate()+" "+MN[x.getMonth()]+" – "+y.getDate()+" "+MN[y.getMonth()]};
 
   /* ---- holidays ----
-     There is no /api/holidays endpoint yet (api/urls.py only exposes leave,
-     leave/balance and leave/<id>), so the calendar lives here. Keep the
-     {date,name,type} shape and swap this constant for a fetch when HR
-     publishes one. Only fixed-date holidays are listed: festival dates move
-     every year, so take those from HR's official calendar rather than
-     guessing them. Weekends are derived from the date, never listed here. */
-  var HOLIDAYS=[
-        {date:"2026-01-01",name:"New Year's Day",type:"Company holiday"},
-        {date:"2026-01-26",name:"Republic Day",type:"National holiday"},
-        {date:"2026-05-01",name:"Labour Day",type:"National holiday"},
-        {date:"2026-08-15",name:"Independence Day",type:"National holiday"},
-        {date:"2026-10-02",name:"Gandhi Jayanti",type:"National holiday"},
-        {date:"2026-12-25",name:"Christmas Day",type:"National holiday"}];
-  var HMAP={};HOLIDAYS.forEach(function(h){HMAP[h.date]=h});
-  window.__hrmsHolidays=HOLIDAYS;
+     India + US national holidays come from GET /api/holidays?year=, which
+     computes them from fixed rules (api/holiday_calendar.py) — so a new year
+     needs no edit here. Several holidays can share a date, so HMAP holds a
+     list per day. Weekends are derived from the date, never fetched. */
+  var CN={IN:"India",US:"USA"};
+  var HMAP=g.useMemo(function(){var m={};hol.forEach(function(h){(m[h.date]=m[h.date]||[]).push(h)});return m},[hol]);
+  window.__hrmsHolidays=hol;
   /* Only holiday and weekend cells are hoverable, so the "(Weekend)" tail is
      always correct for anything that can actually reach this. The c.w guard
      keeps it that way if a future change ever makes plain days hoverable. */
-  var holWhy=function(c){return c.h?prettyD(c.d)+" — "+c.h.name+" ("+c.h.type+")":prettyD(c.d)+" — "+WDL[dObj(c.d).getDay()]+(c.w?" (Weekend)":"")};
+  var holWhy=function(c){return c.h?prettyD(c.d)+" — "+c.h.map(function(x){return x.name+" ("+(CN[x.country]||x.country)+")"}).join(", "):prettyD(c.d)+" — "+WDL[dObj(c.d).getDay()]+(c.w?" (Weekend)":"")};
 
   /* ---- leave types + colour map ---- */
   var TYPES=["Casual Leave","Sick Leave","Earned Leave"];
@@ -255,12 +247,16 @@
      (starts on the current month) and the ‹ › arrows step it, disabled at the
      ends of the year. Weekday-aligned by padding the first week. */
   var CAL_Y=dObj(TODAY).getFullYear();
+  /* One fetch per year shown; `alive` drops a response for a stale year. */
+  g.useEffect(function(){var alive=!0;sholEr(!1);fetch("/api/holidays?year="+CAL_Y).then(readJson).then(function(r){if(!alive)return;if(r.ok&&Array.isArray(r.j))shol(r.j);else{shol([]);sholEr(!0)}}).catch(function(){if(alive){shol([]);sholEr(!0)}});return function(){alive=!1}},[CAL_Y]);
   var MNF=["January","February","March","April","May","June","July","August","September","October","November","December"];
   /* Memoised so a keystroke elsewhere on the page doesn't rebuild the month. */
-  var cal=g.useMemo(function(){var a=[],nd=new Date(CAL_Y,cm+1,0).getDate();for(var hi=1;hi<=nd;hi++){var hdt=CAL_Y+"-"+pad(cm+1)+"-"+pad(hi),hh=HMAP[hdt]||null;a.push({d:hdt,h:hh,w:!hh&&isWknd(hdt)})}return a},[CAL_Y,cm]);
+  var cal=g.useMemo(function(){var a=[],nd=new Date(CAL_Y,cm+1,0).getDate();for(var hi=1;hi<=nd;hi++){var hdt=CAL_Y+"-"+pad(cm+1)+"-"+pad(hi),hh=HMAP[hdt]||null;a.push({d:hdt,h:hh,w:!hh&&isWknd(hdt)})}return a},[CAL_Y,cm,HMAP]);
   var calLead=g.useMemo(function(){return new Date(CAL_Y,cm,1).getDay()},[CAL_Y,cm]);
   var calSpan=MNF[cm]+" "+CAL_Y;
-  var calHols=cal.filter(function(c){return c.h}).length;
+  /* This month's holidays, listed under the calendar so they can be read
+     without hovering each cell. */
+  var calHols=[];cal.forEach(function(c){(c.h||[]).forEach(function(x){calHols.push({d:c.d,h:x})})});
   var calNav=function(dir,lbl){var dis=dir<0?cm<=0:cm>=11;return n.jsx("button",{type:"button","aria-label":lbl,title:lbl,disabled:dis,onClick:function(){shd(null);scm(function(m){return Math.max(0,Math.min(11,m+dir))})},style:{width:28,height:28,display:"inline-flex",alignItems:"center",justifyContent:"center",borderRadius:7,border:"1px solid var(--border2)",background:"var(--bg3)",color:"var(--text)",fontFamily:"inherit",fontSize:16,lineHeight:1,cursor:dis?"not-allowed":"pointer",opacity:dis?.4:1},children:dir<0?"‹":"›"})};
 
   /* ---- small render helpers ---- */
@@ -488,8 +484,13 @@
                                     n.jsx("div",{"aria-live":"polite",style:{fontSize:12.5,fontWeight:600,color:LBL,minWidth:112,textAlign:"center"},children:calSpan}),calNav(1,"Next month")]})]}),
                         n.jsx("div",{style:{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:4,marginTop:14},children:["S","M","T","W","T","F","S"].map(function(w,i){return n.jsx("div",{style:{fontSize:10,fontWeight:700,letterSpacing:.6,textAlign:"center",color:LBL,paddingBottom:2},children:w},"wd"+i)})}),
                         n.jsxs("div",{style:{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:4},children:[Array.from({length:calLead},function(_,i){return n.jsx("div",{},"pad"+i)}),cal.map(function(c,i){return holCell(c,(calLead+i)%7)})]}),
-                        n.jsxs("div",{style:{display:"flex",gap:14,fontSize:11,color:LBL,marginTop:10,flexWrap:"wrap"},children:[legend("var(--cal-holiday-dot)","Holiday"),legend("var(--cal-weekend-dot)","Weekend"),
-                              n.jsx("span",{style:{marginLeft:"auto"},children:calHols?calHols+(calHols===1?" holiday":" holidays")+" this month":"No holidays this month"})]})]})]}),
+                        n.jsxs("div",{style:{display:"flex",gap:14,fontSize:11,color:LBL,marginTop:10,flexWrap:"wrap"},children:[legend("var(--cal-holiday-dot)","Holiday"),legend("var(--cal-weekend-dot)","Weekend")]}),
+                        n.jsx("div",{style:{marginTop:10,display:"grid",gap:6,fontSize:11.5,color:LBL},children:holEr?
+                              n.jsx("div",{style:{color:"var(--danger)"},children:"Couldn't load holidays."}):calHols.length?calHols.map(function(x){return n.jsxs("div",{style:{display:"flex",alignItems:"center",gap:8,minWidth:0},children:[
+                                    n.jsx("span",{style:{fontWeight:700,color:"var(--text)",minWidth:42},children:dObj(x.d).getDate()+" "+MN[dObj(x.d).getMonth()]}),
+                                    n.jsx("span",{style:{flex:"1 1 auto",minWidth:0,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"},children:x.h.name}),
+                                    n.jsx("span",{className:"badge "+(x.h.country==="IN"?"orange":"blue"),style:{fontSize:10,padding:"1px 6px",flex:"0 0 auto"},children:CN[x.h.country]||x.h.country})]},x.d+x.h.country+x.h.name)}):
+                              n.jsx("div",{children:"No holidays this month."})})]})]}),
             n.jsxs("div",{className:"grid-2 mb-16",children:[
                   n.jsxs("div",{className:"card",children:[
                         n.jsxs("div",{style:{display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:10},children:[

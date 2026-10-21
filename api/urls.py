@@ -151,6 +151,7 @@ urlpatterns = [
     # Employees module — Leave Management
     path('leave', views.leave),
     path('leave/balance', views.leave_balance),
+    path('holidays', views.holidays),
     path('leave/<int:pk>', views.leave_detail),
 
     # Employees module — Task Tracker
