@@ -317,7 +317,7 @@ class LateCheckInAlertViewSet(viewsets.ViewSet):
                 alert.email,
                 'Late Check-In Excused',
                 f'Your late check-in on {alert.date} has been excused by {excused_by}',
-                'success'
+                'success', '/employees/attendance'
             )
 
             return Response({'success': True, 'message': 'Alert excused'})
@@ -502,7 +502,7 @@ class AttendanceCorrectionViewSet(viewsets.ViewSet):
             'hr@company.com',  # TODO: Get HR email from config
             'Attendance Correction Request',
             f'{employee_name} requested correction for {attendance_date}',
-            'info'
+            'info', '/employees/leave'
         )
 
         return Response({
@@ -693,7 +693,7 @@ class WFHRequestViewSet(viewsets.ViewSet):
                 'attendance.approve_wfh',
                 'New WFH Request',
                 f'{employee_name} requested WFH for {days} day(s) from {from_date} to {to_date}.',
-                '/employees/checkin',
+                '/employees/checkin?focus=Work+From+Home',
             )
         except Exception:
             # Fall back to the single HR mailbox if the approver fan-out fails.
@@ -701,7 +701,7 @@ class WFHRequestViewSet(viewsets.ViewSet):
                 'hr@company.com',
                 'WFH Request Submitted',
                 f'{employee_name} requested WFH for {days} day(s) from {from_date} to {to_date}',
-                'info'
+                'info', '/employees/checkin?focus=Work+From+Home'
             )
 
         return Response({

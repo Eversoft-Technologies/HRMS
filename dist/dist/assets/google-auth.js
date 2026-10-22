@@ -25,6 +25,15 @@
   var DIVIDER_ID = 'hrms-google-divider';
   var BTN_ID = 'hrms-google-btn';
 
+  // Password fields whether masked or revealed. The React form switches the
+  // input to type="text" when the user clicks Show, so matching on the type
+  // alone removed the Google button the moment the password became visible
+  // (BUG-HRMS-AUTH-001). The autocomplete hint survives that switch.
+  var PWD_SELECTOR = 'input[type="password"], input[autocomplete="current-password"], input[autocomplete="new-password"]';
+  function passwordFields(root) {
+    return Array.prototype.slice.call((root || document).querySelectorAll(PWD_SELECTOR));
+  }
+
   // -------------------------------------------------------------------------
   // Helpers
   // -------------------------------------------------------------------------
@@ -84,7 +93,8 @@
 
         // Hard redirect after a short pause so React can pick up the auth state
         setTimeout(function () {
-          window.location.href = '/dashboard';
+          // The Dashboard is the app root; '/dashboard' is not a route.
+          window.location.href = '/';
         }, 600);
       })
       .catch(function (err) {
@@ -170,7 +180,7 @@
     if (!heading) return false;
     var h = (heading.textContent || '').toLowerCase();
 
-    var passwordInputs = document.querySelectorAll('input[type="password"]');
+    var passwordInputs = passwordFields();
 
     // Login: exactly one password field, heading says "welcome back"
     if (passwordInputs.length === 1 && h.includes('welcome')) return true;
@@ -199,7 +209,7 @@
     // Already injected?
     if (document.getElementById(DIVIDER_ID)) return;
 
-    var passwordInputs = document.querySelectorAll('input[type="password"]');
+    var passwordInputs = passwordFields();
     var passwordInput = passwordInputs[0];
     // Walk up to find the form or a suitable parent container
     var form = passwordInput.closest('form') || passwordInput.parentElement;
@@ -210,7 +220,7 @@
     // Anchor to the LAST password input's closest direct-form-child wrapper.
     // This is stable — React has already rendered all password fields by the
     // time _isLoginOrSignupPage() passes (requires 2 inputs for signup).
-    var allPwdInputs = Array.from(form.querySelectorAll('input[type="password"]'));
+    var allPwdInputs = Array.from(passwordFields(form));
     var lastPwd = allPwdInputs[allPwdInputs.length - 1];
 
     // Walk up to find the direct child of `form` that contains this input
@@ -254,7 +264,7 @@
     if (!form) return false;
 
     // For signup: button must come AFTER both password wrappers
-    var pwdInputs = form.querySelectorAll('input[type="password"]');
+    var pwdInputs = passwordFields(form);
     if (pwdInputs.length < 2) return false; // can't tell yet
 
     var lastPwd = pwdInputs[pwdInputs.length - 1];

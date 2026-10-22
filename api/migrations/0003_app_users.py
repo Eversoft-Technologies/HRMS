@@ -1,6 +1,8 @@
 # pyrefly: ignore [missing-import]
 from django.db import migrations, models
 
+from ._sqlite_compat import is_sqlite, table_exists
+
 
 # The `app_users` table is also created by database/hrms_system_schema.sql, so on
 # an existing production DB it already exists. We therefore split this migration:
@@ -23,12 +25,39 @@ CREATE TABLE IF NOT EXISTS app_users (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 """
 
+SQLITE_CREATE_APP_USERS = """
+CREATE TABLE IF NOT EXISTS app_users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  full_name TEXT NOT NULL,
+  email TEXT NOT NULL,
+  password TEXT NOT NULL,
+  initials TEXT NOT NULL DEFAULT '',
+  role TEXT NOT NULL DEFAULT 'admin',
+  status TEXT NOT NULL DEFAULT 'active',
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (email)
+);
+"""
+
 # Demo seed admin removed. All users must be created explicitly via the API or admin UI.
 SEED_ADMIN = """
 SELECT 1;
 """  # No-op query
 
 DROP_APP_USERS = "DROP TABLE IF EXISTS app_users;"
+
+
+def ensure_app_users(apps, schema_editor):
+    connection = schema_editor.connection
+    if is_sqlite(connection):
+        if not table_exists(connection, 'app_users'):
+            with connection.cursor() as cursor:
+                cursor.execute(SQLITE_CREATE_APP_USERS)
+        return
+
+    with connection.cursor() as cursor:
+        cursor.execute(CREATE_APP_USERS)
 
 
 class Migration(migrations.Migration):
@@ -40,7 +69,7 @@ class Migration(migrations.Migration):
     operations = [
         migrations.SeparateDatabaseAndState(
             database_operations=[
-                migrations.RunSQL(sql=CREATE_APP_USERS, reverse_sql=DROP_APP_USERS),
+                migrations.RunPython(ensure_app_users, reverse_code=migrations.RunPython.noop),
                 migrations.RunSQL(sql=SEED_ADMIN, reverse_sql=migrations.RunSQL.noop),
             ],
             state_operations=[

@@ -26,6 +26,8 @@ meeting in the company, and no rollback is worth that.
 """
 from django.db import migrations
 
+from ._sqlite_compat import add_column_if_missing, is_sqlite
+
 
 TABLES = [
     """
@@ -80,6 +82,53 @@ TABLES = [
     """,
 ]
 
+SQLITE_TABLES = [
+    """
+    CREATE TABLE IF NOT EXISTS chat_rooms (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL DEFAULT '',
+      is_group INTEGER NOT NULL DEFAULT 0,
+      created_by TEXT NOT NULL DEFAULT '',
+      created_at TEXT NULL,
+      is_private INTEGER NOT NULL DEFAULT 1
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS chat_members (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      employee_email TEXT NOT NULL,
+      room_id INTEGER NOT NULL,
+      joined_at TEXT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS chat_messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      sender_email TEXT NOT NULL,
+      sender_name TEXT NOT NULL DEFAULT '',
+      room_id INTEGER NOT NULL,
+      message TEXT NOT NULL,
+      is_read INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS chat_meetings (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      room_id INTEGER NULL,
+      title TEXT NOT NULL,
+      description TEXT NULL,
+      scheduled_at TEXT NOT NULL,
+      duration_minutes INTEGER NOT NULL DEFAULT 30,
+      created_by TEXT NOT NULL DEFAULT '',
+      created_by_name TEXT NOT NULL DEFAULT '',
+      join_url TEXT NOT NULL DEFAULT '',
+      attendees TEXT NULL,
+      created_at TEXT NULL
+    )
+    """,
+]
+
 #: (table, column, DDL) — the columns chat_migrations_v2/v3 add to the v1 tables.
 COLUMNS = [
     ('chat_messages', 'edited', '`edited` TINYINT(1) NOT NULL DEFAULT 0'),
@@ -93,21 +142,18 @@ COLUMNS = [
 ]
 
 
+def create_chat_tables(apps, schema_editor):
+    statements = SQLITE_TABLES if is_sqlite(schema_editor.connection) else TABLES
+    with schema_editor.connection.cursor() as cursor:
+        for statement in statements:
+            cursor.execute(statement)
+
+
 def add_missing_columns(apps, schema_editor):
     """Add each column only where it is absent, so this is safe to re-run and
     safe on databases where the SQL files were already applied by hand."""
-    with schema_editor.connection.cursor() as cursor:
-        for table, column, ddl in COLUMNS:
-            cursor.execute(
-                """
-                SELECT COUNT(*) FROM information_schema.COLUMNS
-                 WHERE TABLE_SCHEMA = DATABASE()
-                   AND TABLE_NAME = %s AND COLUMN_NAME = %s
-                """,
-                [table, column],
-            )
-            if cursor.fetchone()[0] == 0:
-                cursor.execute('ALTER TABLE `%s` ADD COLUMN %s' % (table, ddl))
+    for table, column, ddl in COLUMNS:
+        add_column_if_missing(schema_editor.connection, table, column, ddl)
 
 
 def noop(apps, schema_editor):
@@ -118,6 +164,6 @@ class Migration(migrations.Migration):
     dependencies = [('api', '0044_home_geofences')]
 
     operations = [
-        migrations.RunSQL(sql=TABLES, reverse_sql=migrations.RunSQL.noop),
+        migrations.RunPython(create_chat_tables, noop),
         migrations.RunPython(add_missing_columns, noop),
     ]

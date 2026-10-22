@@ -18,6 +18,8 @@ no-op on legacy databases and a real ALTER on fresh ones.
 """
 from django.db import migrations, models
 
+from ._sqlite_compat import add_column_if_missing
+
 
 COLUMNS = [
     ('tech_question_count', 'int NOT NULL DEFAULT 3'),
@@ -29,27 +31,9 @@ COLUMNS = [
 ]
 
 
-def add_column_if_missing(column, definition):
-    return [
-        (
-            "SET @exists := (SELECT COUNT(*) FROM information_schema.COLUMNS "
-            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'interview_links' "
-            f"AND COLUMN_NAME = '{column}')"
-        ),
-        (
-            "SET @stmt := IF(@exists = 0, "
-            f"'ALTER TABLE `interview_links` ADD COLUMN `{column}` {definition}', "
-            "'DO 0')"
-        ),
-        'PREPARE _add FROM @stmt',
-        'EXECUTE _add',
-        'DEALLOCATE PREPARE _add',
-    ]
-
-
-sql = []
-for _col, _defn in COLUMNS:
-    sql.extend(add_column_if_missing(_col, _defn))
+def add_columns(apps, schema_editor):
+    for column, definition in COLUMNS:
+        add_column_if_missing(schema_editor.connection, 'interview_links', column, definition)
 
 
 class Migration(migrations.Migration):
@@ -61,7 +45,7 @@ class Migration(migrations.Migration):
     operations = [
         migrations.SeparateDatabaseAndState(
             database_operations=[
-                migrations.RunSQL(sql, reverse_sql=migrations.RunSQL.noop),
+                migrations.RunPython(add_columns, migrations.RunPython.noop),
             ],
             state_operations=[
                 migrations.AddField(

@@ -13,6 +13,7 @@
   var OVERLAY_ID  = 'hrms-kpi-overlay';
   var BTN_ID      = 'hrms-kpi-btn';
   var REFRESH_MS  = 60000;
+  var HISTORY_KEY = '__hrmsRecruitKpiOverlay';
 
   var state = {
     tab:             'overview',
@@ -40,6 +41,7 @@
     data:            null,
     loading:         false,
     timer:           null,
+    historyToken:    null,
     charts:          [], // Keep track of active Chart.js instances
     lastRenderedTab: null // Tracks the active tab to prevent unnecessary HTML rebuilds
   };
@@ -177,7 +179,7 @@
       '#hrms-kpi-overlay .kpi-card{background:var(--bg,#f8fafc)}',
       /* per-chart filter */
       '#hrms-kpi-overlay .chart-wrapper{position:relative}',
-      '.kpi-cf-btn{position:absolute;top:0;right:0;display:inline-flex;align-items:center;gap:5px;background:var(--bg3,#f3f4f6);border:1px solid var(--border,#e5e7eb);border-radius:8px;padding:4px 9px;font-size:11px;font-weight:600;color:var(--text2,#666);cursor:pointer}',
+      '.kpi-cf-btn{position:absolute;top:12px;right:12px;display:inline-flex;align-items:center;gap:5px;background:var(--bg3,#f3f4f6);border:1px solid var(--border,#e5e7eb);border-radius:8px;padding:4px 9px;font-size:11px;font-weight:600;color:var(--text2,#666);cursor:pointer;z-index:2}',
       '.kpi-cf-btn:hover{border-color:var(--accent,#6366f1);color:var(--text1,#111)}',
       '.kpi-cf-btn.on{color:var(--accent,#6366f1);border-color:var(--accent,#6366f1)}',
       '.kpi-cf-pop{position:fixed;z-index:9950;background:var(--card,#fff);border:1px solid var(--border,#e5e7eb);border-radius:10px;box-shadow:0 14px 38px rgba(0,0,0,.35);padding:6px;min-width:170px;max-height:260px;overflow-y:auto}',
@@ -231,9 +233,9 @@
       /* body */
       '.kpi-body{flex:1;overflow-y:auto;padding:24px;background:var(--card,#fff);transition:opacity 0.25s ease}',
       /* cards grid */
-      '.kpi-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:16px;margin-bottom:24px}',
-      '.kpi-card{background:var(--bg2,#f8fafc);border:1.5px solid var(--border,#e5e7eb);border-radius:12px;padding:16px;position:relative;overflow:hidden;transition:transform .2s, box-shadow .2s;box-sizing:border-box}',
-      '.kpi-card:hover{transform:translateY(-2px);box-shadow:0 6px 16px rgba(14, 13, 13, 0.92)}',
+      '.kpi-cards{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));column-gap:16px;row-gap:16px;margin-bottom:20px}',
+      '.kpi-card{min-width:0;background:var(--bg2,#f8fafc);border:1.5px solid var(--border,#e5e7eb);border-radius:12px;padding:14px 16px;position:relative;overflow:hidden;transition:transform .2s, box-shadow .2s, border-color .2s;box-sizing:border-box}',
+      '.kpi-card:hover{transform:translateY(-2px);border-color:var(--accent,#6366f1);box-shadow:0 6px 18px rgba(99,102,241,0.18)}',
       '.kpi-card::before{content:"";position:absolute;top:0;left:0;right:0;height:4px}',
       '.kpi-card.c-green::before{background:linear-gradient(90deg,#10b981,#34d399)}',
       '.kpi-card.c-blue::before{background:linear-gradient(90deg,#6366f1,#818cf8)}',
@@ -243,7 +245,7 @@
       '.kpi-card.c-cyan::before{background:linear-gradient(90deg,#06b6d4,#22d3ee)}',
       '.kpi-card.c-indigo::before{background:linear-gradient(90deg,#4f46e5,#6366f1)}',
       '.kpi-card.c-pink::before{background:linear-gradient(90deg,#ec4899,#f472b6)}',
-      '.kpi-card-val{font-size:28px;font-weight:800;color:var(--text1,#111);line-height:1.1;margin-top:6px;font-family:\'Syne\',sans-serif}',
+      '.kpi-card-val{font-size:26px;font-weight:700;color:var(--text1,#111);line-height:1.1;margin-top:6px;font-family:var(--font-d, "DM Sans", sans-serif)}',
       '.kpi-card-lbl{font-size:11px;font-weight:700;color:var(--text3,#888);text-transform:uppercase;letter-spacing:.5px}',
       '.kpi-card-sub{font-size:11px;color:var(--text3,#888);margin-top:4px}',
       /* section */
@@ -293,8 +295,10 @@
       /* empty */
       '.kpi-empty{text-align:center;color:var(--text3,#888);font-size:14px;padding:48px 0}',
       /* layout and grid wrappers */
-      '.kpi-two{display:grid;grid-template-columns:1fr 1fr;gap:20px}',
-      '@media(max-width:768px){.kpi-two{grid-template-columns:1fr}.kpi-cards{grid-template-columns:repeat(2,1fr)}}',
+      '.kpi-two{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}',
+      '@media(max-width:1100px){.kpi-cards{grid-template-columns:repeat(3,minmax(0,1fr))}}',
+      '@media(max-width:768px){.kpi-two{grid-template-columns:minmax(0,1fr)}.kpi-cards{grid-template-columns:repeat(2,minmax(0,1fr))}}',
+      '@media(max-width:480px){.kpi-cards{grid-template-columns:minmax(0,1fr)}}',
       '.chart-wrapper{background:var(--bg2,#f8fafc);border:1px solid var(--border,#e5e7eb);border-radius:12px;padding:16px;box-sizing:border-box}',
       /* trigger button */
       /* --card and --text1 are names this app's palette never defined, so the pill
@@ -309,12 +313,21 @@
   /* ── open / close ─────────────────────────────────────────────────────── */
   function open() {
     if (document.getElementById(OVERLAY_ID)) return;
+    state.historyToken = String(Date.now()) + '-' + Math.random().toString(36).slice(2);
+    var currentHistoryState = history.state;
+    var overlayHistoryState = currentHistoryState && typeof currentHistoryState === 'object'
+      ? Object.assign({}, currentHistoryState)
+      : {};
+    overlayHistoryState[HISTORY_KEY] = state.historyToken;
+    history.pushState(overlayHistoryState, '', location.href);
+
     injectStyle();
     var o = document.createElement('div');
     o.id = OVERLAY_ID;
-    o.addEventListener('click', function (e) { if (e.target === o) close(); });
+    o.addEventListener('click', function (e) { if (e.target === o) dismiss(); });
     document.body.appendChild(o);
     document.addEventListener('keydown', onKey);
+    window.addEventListener('popstate', onPopState);
     buildShell();
     
     loadChartJs(function () {
@@ -328,6 +341,14 @@
   }
 
   function close() {
+    var currentHistoryState = history.state;
+    if (state.historyToken && currentHistoryState &&
+        currentHistoryState[HISTORY_KEY] === state.historyToken) {
+      var cleanedHistoryState = Object.assign({}, currentHistoryState);
+      delete cleanedHistoryState[HISTORY_KEY];
+      history.replaceState(cleanedHistoryState, '', location.href);
+    }
+
     clearInterval(state.timer);
     if (state.charts && state.charts.length) {
       state.charts.forEach(function (c) {
@@ -338,11 +359,29 @@
     var o = document.getElementById(OVERLAY_ID);
     if (o) o.parentNode.removeChild(o);
     document.removeEventListener('keydown', onKey);
+    window.removeEventListener('popstate', onPopState);
+    state.historyToken = null;
     state.data = null;
     state.lastRenderedTab = null;
   }
 
-  function onKey(e) { if (e.key === 'Escape') close(); }
+  function dismiss() {
+    var currentHistoryState = history.state;
+    if (state.historyToken && currentHistoryState &&
+        currentHistoryState[HISTORY_KEY] === state.historyToken) {
+      history.back();
+      return;
+    }
+    close();
+  }
+
+  function onPopState() {
+    if (!document.getElementById(OVERLAY_ID)) return;
+    state.historyToken = null;
+    close();
+  }
+
+  function onKey(e) { if (e.key === 'Escape') dismiss(); }
 
   /* ── tabs definition ──────────────────────────────────────────────────── */
   function tabs() {
@@ -510,7 +549,7 @@
       var el = e.target.closest('[data-kact]');
       if (!el) return;
       var act = el.getAttribute('data-kact');
-      if (act === 'close') { close(); return; }
+      if (act === 'close') { dismiss(); return; }
       if (act === 'editfilters') { openKpiFilters(); return; }
       if (act === 'tab') {
         state.tab = el.getAttribute('data-tab');
@@ -1025,26 +1064,45 @@
     });
 
     var c1 = state.charts.find(function(c) { return c.canvas.id === 'chart-overview-outcome'; });
+    var hasOutcomeData = labels.length > 0 && data.some(function(v) { return v > 0; });
+    var outcomeEmptyOverlay = document.getElementById('chart-overview-outcome-empty');
+    if (!outcomeEmptyOverlay) {
+      var ctxParent = document.getElementById('chart-overview-outcome') ? document.getElementById('chart-overview-outcome').parentElement : null;
+      if (ctxParent) {
+        outcomeEmptyOverlay = document.createElement('div');
+        outcomeEmptyOverlay.id = 'chart-overview-outcome-empty';
+        outcomeEmptyOverlay.style.cssText = 'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600;color:var(--text3,#888);pointer-events:none;';
+        outcomeEmptyOverlay.textContent = 'No Data';
+        ctxParent.appendChild(outcomeEmptyOverlay);
+      }
+    }
+    if (outcomeEmptyOverlay) {
+      outcomeEmptyOverlay.style.display = hasOutcomeData ? 'none' : 'flex';
+    }
+
     if (c1) {
-      c1.data.labels = labels.length ? labels : ['No Data'];
-      c1.data.datasets[0].data = data.length ? data : [0];
-      c1.data.datasets[0].backgroundColor = bg.length ? bg : [colors.neutral];
+      c1.data.labels = hasOutcomeData ? labels : [];
+      c1.data.datasets[0].data = hasOutcomeData ? data : [];
+      c1.data.datasets[0].backgroundColor = hasOutcomeData ? bg : [];
+      c1.options.plugins.legend.display = hasOutcomeData;
       c1.update();
     } else {
       var ctx1 = document.getElementById('chart-overview-outcome');
       if (ctx1) {
+        var opts = doughnutOptions(colors);
+        opts.plugins.legend.display = hasOutcomeData;
         var chart1 = new Chart(ctx1, {
           type: 'doughnut',
           data: {
-            labels: labels.length ? labels : ['No Data'],
+            labels: hasOutcomeData ? labels : [],
             datasets: [{
-              data: data.length ? data : [0],
-              backgroundColor: bg.length ? bg : [colors.neutral],
+              data: hasOutcomeData ? data : [],
+              backgroundColor: hasOutcomeData ? bg : [],
               borderWidth: 1,
               borderColor: colors.cardBg
             }]
           },
-          options: doughnutOptions(colors)
+          options: opts
         });
         state.charts.push(chart1);
       }
@@ -2047,7 +2105,7 @@
     btn.innerHTML = '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" style="flex-shrink:0"><rect x="1" y="3" width="14" height="10" rx="1.5"/><path d="M5 10V8M8 10V6M11 10V7" stroke-linecap="round"/></svg>KPI Dashboard';
     btn.addEventListener('click', function (e) {
       e.stopPropagation();
-      if (document.getElementById(OVERLAY_ID)) close(); else open();
+      if (document.getElementById(OVERLAY_ID)) dismiss(); else open();
     });
 
     // Preferred home: immediately after the page's own "Filters" button, so the

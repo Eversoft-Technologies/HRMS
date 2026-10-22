@@ -35,6 +35,7 @@
   var ID = {
     ot:    'hrms-att-ot',       // overtime line inside the check-in card
     brk:   'hrms-att-brk',      // break-taken line inside the check-in card
+    stats: 'hrms-att-stats',    // Working/Overtime/Break 3-chip row (check-in card)
     wfh:   'hrms-att-wfh',      // Work From Home card
     act:   'hrms-att-activity', // our Today's Activity Log card
     team:  'hrms-att-team',     // our Team Status Now card
@@ -240,7 +241,40 @@
       '.haa-scope .haa-search{background:var(--bg3);border:1px solid var(--border2);border-radius:8px;color:var(--text);font:inherit;font-size:11.5px;font-weight:500;padding:5px 9px;width:130px;max-width:42vw;text-transform:none;letter-spacing:normal;}',
       '.haa-scope .haa-search:focus{border-color:var(--accent);outline:none;}',
       '.haa-scope .haa-search::placeholder{color:var(--text3);}',
-      'body.hrms-checkin-page .card,body.hrms-checkin-page .card *,body.hrms-checkin-page .haa-scope,body.hrms-checkin-page .haa-scope *{font-family:Arial,Helvetica,sans-serif!important;}'
+      'body.hrms-checkin-page .card,body.hrms-checkin-page .card *,body.hrms-checkin-page .haa-scope,body.hrms-checkin-page .haa-scope *{font-family:Arial,Helvetica,sans-serif!important;}',
+      /* UI redesign: slim empty states (no tall blank boxes) */
+      '.haa-scope .haa-empty{display:flex;align-items:center;justify-content:center;gap:8px;padding:11px 13px;font-size:12.5px;color:var(--text3);background:var(--bg3);border:1px dashed var(--border2);border-radius:10px;}',
+      '.haa-scope .haa-tbl:has(.haa-empty){border:none;background:transparent;}',
+      '.haa-scope .haa-tbl:has(.haa-empty) .haa-head{display:none;}',
+      '.haa-scope .haa-list .haa-empty{justify-content:flex-start;text-align:left;}',
+      /* UI redesign: subtle accent + polish on our cards */
+      'body.hrms-checkin-page .haa-scope.card{position:relative;overflow:hidden;}',
+      'body.hrms-checkin-page .haa-scope.card::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:linear-gradient(180deg,var(--accent,#4f8ef7),var(--success,#22d3a5));opacity:.85;}',
+      /* UI redesign: overtime + break as compact chips instead of stacked lines */
+      '#' + ID.ot + ',#' + ID.brk + '{display:none;}',
+      '#' + ID.stats + '{display:grid;grid-template-columns:repeat(3,1fr);gap:9px;width:100%;max-width:430px;margin:12px auto 0;}',
+      '#' + ID.stats + ' .haa-ci-stat{background:var(--bg3);border:1px solid var(--border2);border-radius:11px;padding:10px 8px;text-align:center;}',
+      '#' + ID.stats + ' .haa-ci-work{border-top:3px solid var(--accent,#4f8ef7);}',
+      '#' + ID.stats + ' .haa-ci-ot{border-top:3px solid var(--warn,#f7c94f);}',
+      '#' + ID.stats + ' .haa-ci-brk{border-top:3px solid #8b5cf6;}',
+      '#' + ID.stats + ' .haa-ci-v{display:block;font-size:17px;font-weight:800;color:var(--text);font-variant-numeric:tabular-nums;}',
+      '#' + ID.stats + ' .haa-ci-l{display:block;font-size:9px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--text3);margin-top:3px;}',
+      /* UI redesign: compact the check-in card (remove big gaps around the clock) */
+      'body.hrms-checkin-page .haa-ci-card{display:flex!important;flex-direction:column!important;align-items:stretch!important;gap:8px!important;padding:13px!important;text-align:center!important;}',
+      'body.hrms-checkin-page .haa-ci-card .rowbtns,body.hrms-checkin-page .haa-ci-card [class*="flex"]{justify-content:center!important;}',
+      'body.hrms-checkin-page .haa-ci-card > *{width:100%!important;max-width:430px!important;margin-left:auto!important;margin-right:auto!important;box-sizing:border-box!important;}',
+      'body.hrms-checkin-page .haa-ci-card *{margin-top:0!important;margin-bottom:0!important;}',
+      'body.hrms-checkin-page .haa-ci-clock{font-size:31px!important;line-height:1.03!important;letter-spacing:.5px;text-align:center!important;}',
+      /* UI redesign: mobile responsiveness */
+      '@media(max-width:600px){'
+        + 'body.hrms-checkin-page .haa-ci-card{gap:7px;padding:11px;}'
+        + 'body.hrms-checkin-page .haa-ci-clock{font-size:clamp(22px,7vw,28px)!important;}'
+        + '#' + ID.stats + '{max-width:none;gap:7px;}'
+        + '#' + ID.stats + ' .haa-ci-stat{padding:8px 5px;}'
+        + '#' + ID.stats + ' .haa-ci-v{font-size:14px;}'
+        + '.haa-scope .haa-title{font-size:13px;}'
+        + '.haa-scope .haa-scroll{max-height:220px;}'
+      + '}'
     ].join('');
     var st = document.createElement('style');
     st.id = ID.style; st.textContent = css;
@@ -348,30 +382,51 @@
   // otVal is cached so a re-created line restores instantly without re-fetching
   // (the check-in card re-renders on the live clock).
   var otVal = null;
-  function ensureOvertimeLine(clock) {
-    var line = document.getElementById(ID.ot);
-    if (!line) {
-      line = document.createElement('div');
-      line.id = ID.ot;
-      line.innerHTML = 'Overtime worked today: <strong id="haa-ot-val"></strong>';
+  var brkVal = null;
+  var workVal = null;
+
+  /* Working / Overtime / Break totals as a compact 3-chip row inside the
+     check-in card (replaces the old stacked text lines; matches the mockup).
+     Values come from the single /api/attendance/today fetch below. */
+  function ensureStatRow(clock) {
+    var row = document.getElementById(ID.stats);
+    if (!row) {
+      row = document.createElement('div');
+      row.id = ID.stats;
+      row.className = 'haa-ci-stats';
+      row.innerHTML =
+        '<div class="haa-ci-stat haa-ci-work"><span class="haa-ci-v" id="haa-work-val"></span><span class="haa-ci-l">Working</span></div>' +
+        '<div class="haa-ci-stat haa-ci-ot"><span class="haa-ci-v" id="haa-ot-val"></span><span class="haa-ci-l">Overtime</span></div>' +
+        '<div class="haa-ci-stat haa-ci-brk"><span class="haa-ci-v" id="haa-brk-val"></span><span class="haa-ci-l">Break</span></div>';
     }
-    if (line.parentElement !== clock) clock.appendChild(line); // keep it last
-    var v = document.getElementById('haa-ot-val');
-    if (v) v.textContent = (otVal == null ? '…' : otVal);
+    if (row.parentElement !== clock) clock.appendChild(row); // keep it last
+    var w = document.getElementById('haa-work-val'); if (w) w.textContent = (workVal == null ? '…' : workVal);
+    var o = document.getElementById('haa-ot-val');   if (o) o.textContent = (otVal   == null ? '…' : otVal);
+    var b = document.getElementById('haa-brk-val');  if (b) b.textContent = (brkVal  == null ? '…' : brkVal);
   }
 
-  // brkVal is cached alongside otVal so the re-created line restores instantly.
-  var brkVal = null;
-  function ensureBreakLine(clock) {
-    var line = document.getElementById(ID.brk);
-    if (!line) {
-      line = document.createElement('div');
-      line.id = ID.brk;
-      line.innerHTML = 'Break taken today: <strong id="haa-brk-val"></strong>';
+  /* Hide the app's own "Working hours today: Xh Ym" line, now that Working is a
+     chip. Scoped to the check-in card, matched tightly, re-applied each tick. */
+  function hideReactWorkingLine(clock) {
+    var all = clock.querySelectorAll('div, p, span');
+    for (var i = 0; i < all.length; i++) {
+      var el = all[i];
+      if (el.id === ID.stats || (el.closest && el.closest('#' + ID.stats))) continue;
+      var t = (el.textContent || '').replace(/\s+/g, ' ').trim();
+      if (/^Working hours today[:\s]/i.test(t) && t.length < 40) { el.style.display = 'none'; return; }
     }
-    if (line.parentElement !== clock) clock.appendChild(line); // keep it last
-    var v = document.getElementById('haa-brk-val');
-    if (v) v.textContent = (brkVal == null ? '…' : brkVal);
+  }
+
+  /* Tag the live-clock element so CSS can size it responsively. React swaps
+     this node every second, so we re-tag each tick (cheap, idempotent). */
+  function tagClock(clock) {
+    if (clock.querySelector('.haa-ci-clock')) return;
+    var kids = clock.querySelectorAll('div, span, h1, h2, h3, p');
+    for (var i = 0; i < kids.length; i++) {
+      if (kids[i].children.length) continue;
+      var t = (kids[i].textContent || '').trim();
+      if (/^\d{1,2}:\d{2}:\d{2}$/.test(t)) { kids[i].classList.add('haa-ci-clock'); return; }
+    }
   }
 
   /* ── data ─────────────────────────────────────────────────────────────── */
@@ -381,12 +436,15 @@
     api('/api/attendance/today?email=' + encodeURIComponent(em))
       .then(function (rec) {
         rec = Array.isArray(rec) ? (rec[0] || {}) : (rec || {});
+        workVal = fmtMins(rec.workedMinutes || 0);
+        var wel = document.getElementById('haa-work-val'); if (wel) wel.textContent = workVal;
         otVal = fmtMins(rec.overtimeMinutes || 0);
         var el = document.getElementById('haa-ot-val'); if (el) el.textContent = otVal;
         brkVal = fmtMins(rec.breakMinutes || 0);
         var bel = document.getElementById('haa-brk-val'); if (bel) bel.textContent = brkVal;
       })
       .catch(function () {
+        if (workVal == null) workVal = '0h 0m'; var wel = document.getElementById('haa-work-val'); if (wel) wel.textContent = workVal;
         if (otVal == null) otVal = '0h 0m'; var el = document.getElementById('haa-ot-val'); if (el) el.textContent = otVal;
         if (brkVal == null) brkVal = '0h 0m'; var bel = document.getElementById('haa-brk-val'); if (bel) bel.textContent = brkVal;
       });
@@ -394,16 +452,34 @@
 
   var activityData = [];
   function loadActivity() {
-    var em = actorEmail(); if (!em) return;
-    api('/api/attendance/events?email=' + encodeURIComponent(em))
-      .then(function (rows) { activityData = Array.isArray(rows) ? rows : []; renderActivity(); })
+    var em = (actorEmail() || '').trim().toLowerCase();
+    var url = em ? ('/api/attendance/events?email=' + encodeURIComponent(em)) : '/api/attendance/events';
+    api(url)
+      .then(function (rows) {
+        if (Array.isArray(rows) && rows.length) {
+          activityData = rows;
+        } else if (em) {
+          return api('/api/attendance/events').then(function (allRows) {
+            if (Array.isArray(allRows)) {
+              activityData = allRows.filter(function (r) {
+                return !r.email || String(r.email).toLowerCase() === em;
+              });
+            } else {
+              activityData = [];
+            }
+          }).catch(function () { activityData = []; });
+        } else {
+          activityData = Array.isArray(rows) ? rows : [];
+        }
+      })
+      .then(function () { renderActivity(); })
       .catch(function () { var l = document.getElementById('haa-act-list'); if (l) l.innerHTML = '<div class="haa-empty">Could not load activity.</div>'; });
   }
   function actCategory(r) {
     var t = (r.type || r.event || '').toLowerCase();
     if (/remote|office|home|wfh/.test(t)) return 'remote';
     if (/break/.test(t)) return 'break';
-    if (/check|in|out/.test(t)) return 'attendance';
+    if (/check|in|out|clock/.test(t)) return 'attendance';
     return 'other';
   }
   function dotColor(c) {
@@ -835,7 +911,10 @@
       for (var y = y0; y <= y1; y++) {
         if (y < 0 || y >= max) continue;
         var tx = ((x % max) + max) % max;
-        imgs += '<img alt="" src="https://a.basemaps.cartocdn.com/rastertiles/voyager/' + z + '/' + tx + '/' + y + '.png" style="position:absolute;width:256px;height:256px;left:' + (x * T - left) + 'px;top:' + (y * T - top) + 'px;">';
+        var tileTpl = (window.__HRMS_CONFIG__ && window.__HRMS_CONFIG__.basemapTileUrl) ||
+          'https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png';
+        var tileSrc = tileTpl.replace('{z}', z).replace('{x}', tx).replace('{y}', y);
+        imgs += '<img alt="" src="' + tileSrc + '" style="position:absolute;width:256px;height:256px;left:' + (x * T - left) + 'px;top:' + (y * T - top) + 'px;">';
       }
     }
     return '<div style="position:absolute;inset:0;overflow:hidden;">' + imgs + '</div><div class="hat-mkr">' + PIN_BIG + '</div>';
@@ -922,13 +1001,17 @@
   }
 
   function appendOrdered(grid, node, order) {
-    node.style.order = order;
+    node.style.order = '';
+    node.style.width = '';
+    node.style.marginBottom = '';
+    node.style.breakInside = '';
+    node.style.webkitColumnBreakInside = '';
     if (node.parentElement !== grid) grid.appendChild(node);
   }
   function ensureLayout() {
     if (!onCheckinPage()) {
       document.body.classList.remove('hrms-checkin-page');
-      [ID.wfh, ID.act, ID.team, ID.ot, ID.brk].forEach(function (id) { var el = document.getElementById(id); if (el && el.parentNode) el.parentNode.removeChild(el); });
+      [ID.wfh, ID.act, ID.team, ID.ot, ID.brk, ID.stats].forEach(function (id) { var el = document.getElementById(id); if (el && el.parentNode) el.parentNode.removeChild(el); });
       return;
     }
     var clock = clockCard();
@@ -938,16 +1021,25 @@
 
     ensureStyle();
     document.body.classList.add('hrms-checkin-page');
+    var haaNarrow = window.innerWidth <= 900;
     grid.style.display = 'grid';
-    grid.style.gridTemplateColumns = (window.innerWidth <= 900 ? '1fr' : '1fr 1fr');
+    grid.style.removeProperty('column-count');
+    grid.style.removeProperty('column-gap');
     grid.style.gap = '14px';
-    grid.style.alignItems = 'start';
-    clock.style.order = '10';
+    grid.style.gridTemplateColumns = haaNarrow ? '1fr' : '1fr 1fr';
+    grid.style.alignItems = haaNarrow ? 'start' : 'stretch';
+    clock.style.order = '';
+    clock.style.breakInside = '';
+    clock.style.webkitColumnBreakInside = '';
+    clock.style.width = '';
+    clock.style.marginBottom = '';
 
     // Overtime + break totals inside the check-in card (restored from cache; fetched once).
-    ensureOvertimeLine(clock);
-    ensureBreakLine(clock);
-    if (otVal === null || brkVal === null) loadOvertime();
+    clock.classList.add('haa-ci-card');
+    tagClock(clock);
+    ensureStatRow(clock);
+    hideReactWorkingLine(clock);
+    if (otVal === null || brkVal === null || workVal === null) loadOvertime();
 
     // Hide the app's combined Activity+Team card (we render our own two).
     var reactCard = reactActTeam();
@@ -967,6 +1059,21 @@
     var team = document.getElementById(ID.team), freshTeam = false;
     if (!team) { team = buildTeamCard(); freshTeam = true; }
     appendOrdered(grid, team, '40');
+
+    // Balanced placement. Desktop: left column = Check In + Activity + Team;
+    // right column = Work From Home filling the full height (so the two
+    // columns bottom-align and there is no stray blank space). Mobile: a
+    // single natural-order column.
+    if (haaNarrow) {
+      [clock, act, wfh, team].forEach(function (el) {
+        el.style.gridColumn = ''; el.style.gridRow = ''; el.style.alignSelf = '';
+      });
+    } else {
+      clock.style.gridColumn = '1'; clock.style.gridRow = '1'; clock.style.alignSelf = 'start';
+      act.style.gridColumn   = '1'; act.style.gridRow   = '2'; act.style.alignSelf   = '';
+      team.style.gridColumn  = '1'; team.style.gridRow  = '3'; team.style.alignSelf  = '';
+      wfh.style.gridColumn   = '2'; wfh.style.gridRow   = '1 / span 3'; wfh.style.alignSelf = '';
+    }
 
     if (freshWfh) { loadWfh(); loadApprovals(); }
     if (freshAct) { loadActivity(); }
@@ -995,8 +1102,8 @@
       var msg = (e.detail && e.detail.message) || 'Could not complete that action.';
       if (onCheckinPage() && showAttMsg(msg, 'err')) e.preventDefault();
     });
-    // Check-in toggled (topbar switch) → refresh totals + team status.
-    window.addEventListener('hrmsCheckinToggle', function () { loadOvertime(); loadTeam(); });
+    // Check-in toggled (topbar switch) → refresh totals + team status + activity.
+    window.addEventListener('hrmsCheckinToggle', function () { loadOvertime(); loadTeam(); loadActivity(); });
     setInterval(function () { if (onCheckinPage() && document.getElementById(ID.team)) { loadTeam(); loadActivity(); loadOvertime(); } }, 30000);
     startLocationTracking();
   }

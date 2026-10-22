@@ -7,7 +7,7 @@ const src = fs.readFileSync(process.argv[2], 'utf8');
 
 // The file is an IIFE that bails without a DOM; lift out just the map section
 // plus its helpers by evaluating them in isolation.
-const start = src.indexOf('  var TILE = 256;');
+const start = src.indexOf('  var BASEMAPS = {') >= 0 ? src.indexOf('  var BASEMAPS = {') : src.indexOf('  var TILE = 256;');
 const end = src.indexOf('  function injectStyle()');
 if (start < 0 || end < 0) { console.error('could not locate the map section'); process.exit(1); }
 
@@ -32,8 +32,8 @@ const HQ = { lat: 17.4485, lng: 78.3908, radius: 200, label: 'Head Office' };
 let html = ctx.renderMap({ ...HQ, width: 300, height: 200 });
 const tiles = (html.match(/<img /g) || []).length;
 check('renders tiles', tiles >= 4, `${tiles} tiles`);
-check('tiles come from tile host', html.includes('cartocdn.com') || html.includes('tile.openstreetmap.org'), 'no tile host');
-check('has attribution', html.includes('OpenStreetMap contributors'), 'missing attribution');
+check('tiles come from tile host', html.includes('arcgisonline.com') || html.includes('cartocdn.com') || html.includes('tile.openstreetmap.org'), 'no tile host');
+check('has attribution', html.includes('OpenStreetMap') || html.includes('Esri'), 'missing attribution');
 check('draws the fence circle', /<circle[^>]*stroke="#0f9d58"/.test(html), 'no circle');
 check('no check-in marker when none given', !html.includes('#dc2626'), 'unexpected red marker');
 check('caption shows the radius', html.includes('200 m radius'), 'radius missing');

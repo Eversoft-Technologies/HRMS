@@ -23,6 +23,7 @@ urlpatterns = [
     path('auth/linkedin/disconnect', linkedin_oauth.linkedin_disconnect),
 
     path('jobs', views.jobs),
+    path('jobs/next-code', views.job_next_code),
     path('jobs/<int:pk>', views.job_detail),
 
     # Reusable candidate follow-up email templates
@@ -64,6 +65,7 @@ urlpatterns = [
     path('interview-recordings', views.recordings),
     path('interview-recordings/<int:pk>', views.recording_detail),
     path('interview-recordings/<int:pk>/video', views.recording_video),
+    path('interview-recordings/<int:pk>/thumbnail', views.recording_thumbnail),
 
     path('question-sets', views.question_sets),
     path('question-sets/<str:set_id>', views.question_set_detail),
@@ -117,6 +119,7 @@ urlpatterns = [
     path('attendance/geofence-check', views.attendance_geofence_check),
     path('attendance/location-reviews', views.attendance_location_reviews),
     path('attendance/map-feed', views.attendance_map_feed),
+    path('attendance/remind', views.attendance_remind),
     path('attendance/departure-policy', views.attendance_departure_policy),
     path('attendance/roster', views.attendance_roster),
     path('attendance/home-locations', views.attendance_home_locations),
@@ -148,10 +151,12 @@ urlpatterns = [
     # Employees module — Leave Management
     path('leave', views.leave),
     path('leave/balance', views.leave_balance),
+    path('holidays', views.holidays),
     path('leave/<int:pk>', views.leave_detail),
 
     # Employees module — Task Tracker
     path('tasks', views.tasks),
+    path('tasks/assignees', views.task_assignees),
     path('tasks/<int:pk>', views.task_detail),
 
     # Employees module — Work Submissions
@@ -168,6 +173,7 @@ urlpatterns = [
     path('recruit/bench-sales', views.bench_sales_profiles),
     path('recruit/bench-sales/<int:pk>', views.bench_sales_profile_detail),
     path('recruit/bench-sales/<int:pk>/file/<str:field>', views.bench_sales_profile_file),
+    path('recruit/bench-sales/<int:pk>/upload', views.bench_sales_profile_upload),
     path('recruit/bench-sales/<int:pk>/certificates/<int:cert_id>', views.bench_sales_profile_certificate_detail),
     path('recruit/bench-sales/<int:pk>/certificates/<int:cert_id>/file', views.bench_sales_profile_certificate_file),
 
@@ -189,7 +195,9 @@ urlpatterns = [
     path('me/permissions', views.my_permissions),
 
     path('dashboard/stats', views.dashboard_stats),
+    path('directory', views.directory_search),
     path('config', views.client_config),
+    path('integrations/status', views.integrations_status),
     path('health', views.health),
 
     # Recruitment KPI Dashboard

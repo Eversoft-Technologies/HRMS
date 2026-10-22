@@ -159,7 +159,7 @@ DATABASES = {
         'ENGINE': 'django.db.backends.mysql',
         'NAME':  os.environ.get('DB_NAME', 'hrms_system'),
         'USER':  os.environ.get('DB_USER', 'root'),
-        'PASSWORD': os.environ.get('DB_PASSWORD', '1234'),
+        'PASSWORD': os.environ.get('DB_PASSWORD', 'root'),
         'HOST':  os.environ.get('DB_HOST', 'localhost'),
         'PORT': os.environ.get('DB_PORT', '3306'),
         'OPTIONS': {
@@ -167,6 +167,12 @@ DATABASES = {
         },
     }
 }
+
+if 'test' in sys.argv:
+    DATABASES['default'] = {
+        'ENGINE': 'django.db.backends.sqlite3',
+        'NAME': BASE_DIR / 'test.sqlite3',
+    }
 
 # Match the existing INT AUTO_INCREMENT primary keys (not BIGINT).
 DEFAULT_AUTO_FIELD = 'django.db.models.AutoField'
@@ -203,12 +209,32 @@ LINKEDIN_REDIRECT_URI = os.environ.get('LINKEDIN_REDIRECT_URI', '') or (
     HRMS_PUBLIC_URL + '/api/auth/linkedin/callback' if HRMS_PUBLIC_URL else ''
 )
 
+# ---------------------------------------------------------------------------
+# Map & Basemap Tile Configuration
+# ---------------------------------------------------------------------------
+HRMS_BASEMAP_TILE_URL = os.environ.get(
+    'HRMS_BASEMAP_TILE_URL',
+    'https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png'
+)
+HRMS_BASEMAP_ATTRIBUTION = os.environ.get(
+    'HRMS_BASEMAP_ATTRIBUTION',
+    '© OpenStreetMap contributors, © CARTO'
+)
+
 
 # ---------------------------------------------------------------------------
 # Static files + React build
 # ---------------------------------------------------------------------------
 STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
+
+# Uploaded media (interview recordings, chat attachments) live under
+# <BASE_DIR>/media. The deploy workflow symlinks this directory to the shared,
+# release-independent folder, so anything written here survives a deploy.
+# Django's default MEDIA_ROOT is '' (= the process working directory), which
+# scattered recordings next to the code and lost them on the next release.
+MEDIA_URL = '/media/'
+MEDIA_ROOT = Path(os.environ.get('MEDIA_ROOT') or (BASE_DIR / 'media'))
 
 # Built React app (Vite output). Default: dist/dist relative to this project.
 REACT_BUILD_DIR = Path(

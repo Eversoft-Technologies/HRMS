@@ -6,6 +6,18 @@
       "url": "http://localhost:8000",
       "port": 8000,
       "autoPort": false
+    },
+    {
+      "name": "hrms3-django",
+      "runtimeExecutable": ".venv/Scripts/python.exe",
+      "runtimeArgs": [
+        "manage.py",
+        "runserver",
+        "8000",
+        "--noreload"
+      ],
+      "port": 8000,
+      "autoPort": false
     }
   ]
 }

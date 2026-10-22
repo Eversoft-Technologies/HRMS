@@ -23,6 +23,9 @@
  *     additionally hide rows whose chosen column does not match. The result is
  *     the intersection, i.e. "matches, in this column".
  *   - Work Submissions is skipped — it has its own built-in panel.
+ *   - The shared topbar search ("Search anything…") is skipped too — it now
+ *     has its own real employee-search dropdown, wired directly in the app
+ *     bundle rather than through this column-scoping helper.
  *   - Every entry point is wrapped so a failure here can never break a page.
  */
 (function () {
@@ -88,7 +91,7 @@
     var out = [];
     var ths = table.querySelectorAll('thead tr th');
     for (var i = 0; i < ths.length; i++) {
-      var label = (ths[i].textContent || '').trim();
+      var label = (ths[i].textContent || '').replace(/[▼▲]/g, '').trim();
       /* skip checkbox / action / icon-only columns — nothing to search in */
       if (!label || label.length > 24 || /^actions?$/i.test(label)) continue;
       out.push({ i: i, label: label });
@@ -115,7 +118,10 @@
         var hide = false;
         if (st.col >= 0 && term && row.children.length > st.col) {
           var cell = row.children[st.col];
-          hide = ((cell && cell.textContent) || '').toLowerCase().indexOf(term) === -1;
+          var cellTxt = ((cell && cell.textContent) || '').toLowerCase();
+          var cellNoComma = cellTxt.replace(/,/g, '');
+          var termNoComma = term.replace(/,/g, '');
+          hide = cellTxt.indexOf(term) === -1 && cellNoComma.indexOf(termNoComma) === -1;
         }
         if (hide) {
           if (!row.hasAttribute(MARK)) {
@@ -204,27 +210,93 @@
     return sec;
   }
 
+  function esc(s) {
+    return String(s || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  /* ── find matching suggestions on current page ──────────────────────── */
+  function findSuggestions(query) {
+    query = String(query || '').trim().toLowerCase();
+    if (!query || query.length < 1) return [];
+    var seen = {}, results = [];
+    var targets = document.querySelectorAll('.candidate-name, .ob-row, .kpi-person-row, tr td, .candidate-card, [class*="candidate"], [class*="name"], .job-title, strong, h4');
+    for (var i = 0; i < targets.length; i++) {
+      var text = (targets[i].textContent || '').trim().replace(/\s+/g, ' ');
+      if (text.length >= 2 && text.length <= 60) {
+        var lower = text.toLowerCase();
+        if (lower.indexOf(query) !== -1 && !seen[lower]) {
+          seen[lower] = true;
+          results.push(text);
+          if (results.length >= 6) break;
+        }
+      }
+    }
+    return results;
+  }
+
   function buildPanel(input) {
     var st = input.__sdd;
     var panel = document.createElement('div');
     panel.id = PANEL_ID;
     panel.className = 'hrms-sdd';
+    var qVal = (input.value || '').trim();
+
+    /* MATCHING KEYWORDS / SUGGESTIONS (when typing) */
+    if (qVal) {
+      var suggs = findSuggestions(qVal);
+      if (suggs.length) {
+        var ssec = section('Matching suggestions', null);
+        var slist = document.createElement('div');
+        slist.className = 'hrms-sdd-list';
+        suggs.forEach(function (sugg) {
+          var sitem = document.createElement('button');
+          sitem.type = 'button';
+          sitem.className = 'hrms-sdd-item';
+          var sLabel = document.createElement('span');
+          sLabel.className = 'hrms-sdd-txt';
+          sLabel.innerHTML = '🔍 <strong style="color:var(--accent,#4f8ef7)">' + esc(sugg) + '</strong>';
+          sitem.appendChild(sLabel);
+          sitem.addEventListener('mousedown', function (e) { e.preventDefault(); });
+          sitem.addEventListener('click', function () {
+            setValue(input, sugg);
+            remember(input, st.col, sugg);
+            setTimeout(function () { applyScope(input); }, 0);
+            closePanel();
+          });
+          slist.appendChild(sitem);
+        });
+        ssec.appendChild(slist);
+        panel.appendChild(ssec);
+      }
+    }
 
     /* SEARCH IN — only where there is a table to take columns from */
     var cols = columnsOf(tableFor(input));
     if (cols.length) {
-      var sec = section('Search in', null);
+      var sec = section('Search in', (input.value || st.col >= 0) ? function () {
+        st.col = -1;
+        setValue(input, '');
+        clearScope(input);
+        closePanel();
+      } : null);
       var wrap = document.createElement('div');
       wrap.className = 'hrms-sdd-chips';
       wrap.appendChild(chip('All fields', st.col === -1, function () {
         st.col = -1;
         clearScope(input);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
         render(input);
       }));
       cols.forEach(function (c) {
         wrap.appendChild(chip(c.label, st.col === c.i, function () {
           st.col = c.i;
           applyScope(input);
+          input.dispatchEvent(new Event('input', { bubbles: true }));
           render(input);
         }));
       });
@@ -272,15 +344,12 @@
     }
 
     /* Card-based searches (Interviews, Notifications) have no columns to scope
-       by, so with no history yet there would be nothing to render. Returning
-       null there made focusing the box do nothing at all, which reads as a
-       broken control rather than an empty one. Show what the panel is for
-       instead — history builds from there. */
+       by, so with no history yet and no query typed, show guide hint. */
     if (!panel.firstChild) {
       var hint = section('Recent searches', null);
       var line = document.createElement('div');
       line.className = 'hrms-sdd-hint';
-      line.textContent = 'Press Enter to keep a search here.';
+      line.textContent = 'Type keyword to see matching suggestions, or press Enter to save search.';
       hint.appendChild(line);
       panel.appendChild(hint);
     }
@@ -304,6 +373,7 @@
     var ph = el.getAttribute('placeholder') || '';
     if (!/search/i.test(ph)) return false;
     if (el.closest && el.closest('.subs-search')) return false;   // has its own
+    if (el.closest && el.closest('.topbar-search')) return false; // has its own (real employee search)
     return true;
   }
 
@@ -321,6 +391,9 @@
       }
     });
     input.addEventListener('input', function () {
+      if (openFor === input || document.activeElement === input) {
+        render(input);
+      }
       if (input.__sdd.col >= 0) setTimeout(function () { applyScope(input); }, 0);
     });
   }

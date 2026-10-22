@@ -7,6 +7,9 @@ LONGBLOB into memory to serve any request at all.
 """
 import os
 import sys
+import tempfile
+from pathlib import Path
+from unittest.mock import patch
 
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'hrms_project.settings')
 
@@ -76,8 +79,39 @@ class RecordingVideoRangeTests(TestCase):
             reset_queries()
             self.client.get(self.url, HTTP_RANGE='bytes=0-1023')
             sql = ' '.join(q['sql'] for q in connection.queries)
-        self.assertIn('SUBSTRING', sql)
-        self.assertNotIn('SELECT `interview_recordings`.`video_buffer`', sql)
+        self.assertTrue('SUBSTRING' in sql or 'SUBSTR' in sql)
+        self.assertNotIn('SELECT "interview_recordings"."video_buffer"', sql)
+
+    def test_uploaded_file_video_streams_and_supports_range_requests(self):
+        from api import video_processor
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            media_root = Path(temp_dir)
+            interviews_dir = media_root / 'interviews'
+            with override_settings(MEDIA_ROOT=media_root), \
+                    patch.object(video_processor, 'transcode_to_mp4', return_value=(False, 'test')):
+                self.assertEqual(video_processor.interviews_dir(), interviews_dir)
+                uploaded = self.client.post(
+                    self.url, data=BODY, content_type='video/webm',
+                )
+                self.assertEqual(uploaded.status_code, 200)
+                self.rec.refresh_from_db()
+                self.assertTrue(self.rec.video_file)
+                self.assertEqual(
+                    (media_root / self.rec.video_file).read_bytes(), BODY,
+                )
+
+                response = self.client.get(
+                    self.url, HTTP_RANGE='bytes=0-1023',
+                )
+                response_body = self._body(response)
+
+        self.assertEqual(response.status_code, 206)
+        self.assertEqual(
+            response['Content-Range'], f'bytes 0-1023/{len(BODY)}',
+        )
+        self.assertEqual(response_body, BODY[:1024])
+        self.assertEqual(response['Content-Type'], 'video/webm')
 
     def test_missing_video_is_404_not_a_broken_stream(self):
         empty = InterviewRecording.objects.create(
