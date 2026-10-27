@@ -182,9 +182,11 @@
       '.kpi-cf-btn{position:absolute;top:12px;right:12px;display:inline-flex;align-items:center;gap:5px;background:var(--bg3,#f3f4f6);border:1px solid var(--border,#e5e7eb);border-radius:8px;padding:4px 9px;font-size:11px;font-weight:600;color:var(--text2,#666);cursor:pointer;z-index:2}',
       '.kpi-cf-btn:hover{border-color:var(--accent,#6366f1);color:var(--text1,#111)}',
       '.kpi-cf-btn.on{color:var(--accent,#6366f1);border-color:var(--accent,#6366f1)}',
-      '.kpi-cf-pop{position:fixed;z-index:9950;background:var(--card,#fff);border:1px solid var(--border,#e5e7eb);border-radius:10px;box-shadow:0 14px 38px rgba(0,0,0,.35);padding:6px;min-width:170px;max-height:260px;overflow-y:auto}',
-      '.kpi-cf-pop label{display:flex;align-items:center;gap:8px;padding:6px 8px;font-size:12.5px;color:var(--text1,#111);cursor:pointer;border-radius:6px}',
-      '.kpi-cf-pop label:hover{background:var(--hover,#f3f4f6)}',
+      /* Theme tokens first: --card and --hover are not theme tokens, so the popover fell back to a
+         white panel while its labels kept the theme's light --text in dark mode (unreadable). */
+      '.kpi-cf-pop{position:fixed;z-index:9950;background:var(--bg2,var(--card,#fff));border:1px solid var(--border2,var(--border,#e5e7eb));border-radius:10px;box-shadow:0 14px 38px rgba(0,0,0,.35);padding:6px;min-width:170px;max-height:260px;overflow-y:auto}',
+      '.kpi-cf-pop label{display:flex;align-items:center;gap:8px;padding:6px 8px;font-size:12.5px;color:var(--text,var(--text1,#111));cursor:pointer;border-radius:6px}',
+      '.kpi-cf-pop label:hover{background:var(--bg3,var(--hover,#f3f4f6))}',
       '.kpi-cf-pop input{accent-color:var(--accent,#6366f1)}',
       /* Overall "Edit Filters" — Job Board–style right drawer */
       '.kpi-editfilters{display:inline-flex;align-items:center;gap:7px;background:var(--bg3,#f3f4f6);border:1px solid var(--border,#e5e7eb);border-radius:9px;padding:8px 14px;font-size:12.5px;font-weight:600;color:var(--text1,#111);cursor:pointer}',
