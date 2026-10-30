@@ -14,6 +14,7 @@
   var BTN_ID      = 'hrms-kpi-btn';
   var REFRESH_MS  = 60000;
   var HISTORY_KEY = '__hrmsRecruitKpiOverlay';
+  var OPEN_KEY    = 'hrms_recruit_kpi_open_path';
 
   var state = {
     tab:             'overview',
@@ -42,6 +43,7 @@
     loading:         false,
     timer:           null,
     historyToken:    null,
+    openPath:        null,
     charts:          [], // Keep track of active Chart.js instances
     lastRenderedTab: null // Tracks the active tab to prevent unnecessary HTML rebuilds
   };
@@ -315,13 +317,23 @@
   /* ── open / close ─────────────────────────────────────────────────────── */
   function open() {
     if (document.getElementById(OVERLAY_ID)) return;
-    state.historyToken = String(Date.now()) + '-' + Math.random().toString(36).slice(2);
+    state.openPath = window.location.pathname + window.location.hash;
     var currentHistoryState = history.state;
-    var overlayHistoryState = currentHistoryState && typeof currentHistoryState === 'object'
-      ? Object.assign({}, currentHistoryState)
-      : {};
-    overlayHistoryState[HISTORY_KEY] = state.historyToken;
-    history.pushState(overlayHistoryState, '', location.href);
+    if (currentHistoryState && typeof currentHistoryState[HISTORY_KEY] === 'string') {
+      state.historyToken = currentHistoryState[HISTORY_KEY];
+    } else {
+      state.historyToken = String(Date.now()) + '-' + Math.random().toString(36).slice(2);
+      var overlayHistoryState = currentHistoryState && typeof currentHistoryState === 'object'
+        ? Object.assign({}, currentHistoryState)
+        : {};
+      overlayHistoryState[HISTORY_KEY] = state.historyToken;
+      history.pushState(overlayHistoryState, '', location.href);
+    }
+    try {
+      sessionStorage.setItem(OPEN_KEY, state.openPath);
+    } catch (error) {
+      console.warn('[Recruit KPI] Could not save dashboard state for refresh:', error);
+    }
 
     injectStyle();
     var o = document.createElement('div');
@@ -352,6 +364,13 @@
     }
 
     clearInterval(state.timer);
+    try {
+      sessionStorage.removeItem(OPEN_KEY);
+    } catch (error) {
+      console.warn('[Recruit KPI] Could not clear saved dashboard state:', error);
+    }
+    closeKpiFilters();
+    closeChartFilter();
     if (state.charts && state.charts.length) {
       state.charts.forEach(function (c) {
         try { c.destroy(); } catch (_) {}
@@ -363,6 +382,7 @@
     document.removeEventListener('keydown', onKey);
     window.removeEventListener('popstate', onPopState);
     state.historyToken = null;
+    state.openPath = null;
     state.data = null;
     state.lastRenderedTab = null;
   }
@@ -2163,6 +2183,7 @@
 
   function tryMount() {
     var path = window.location.pathname + window.location.hash;
+    if (document.getElementById(OVERLAY_ID) && state.openPath !== path) close();
     var onRecruit = /recruit|job|interview/i.test(path);
     if (onRecruit) {
       injectButton();
@@ -2174,6 +2195,14 @@
 
   function boot() {
     tryMount();
+    try {
+      var savedOpenPath = sessionStorage.getItem(OPEN_KEY);
+      var currentPath = window.location.pathname + window.location.hash;
+      if (savedOpenPath && savedOpenPath === currentPath) open();
+      else if (savedOpenPath) sessionStorage.removeItem(OPEN_KEY);
+    } catch (error) {
+      console.warn('[Recruit KPI] Could not restore dashboard state:', error);
+    }
     // __hrmsCan fails open until /api/me/permissions answers, so re-evaluate the
     // moment the real grants land — otherwise the button lingers for a user who
     // turns out to have neither KPI scope.

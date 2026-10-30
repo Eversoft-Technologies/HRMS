@@ -8,6 +8,108 @@
   <meta http-equiv="Expires" content="0" />
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    html.hrms-f2f-restoring #root .content {
+      visibility: hidden !important;
+    }
+  </style>
+  <script>
+    (function () {
+      var tabs = ['Dashboard', 'AI Interviewer', 'Schedule & Links', 'Follow-up Emails', 'Recordings'];
+      var key = 'hrms_f2f_active_tab_v1';
+      var restoring = false;
+      var restoreRequested = false;
+      var observer = null;
+      var timeout = null;
+
+      function onInterviewPage() {
+        return location.pathname.replace(/\/+$/, '') === '/recruit/interview';
+      }
+
+      function tabButtons() {
+        var buttons = document.querySelectorAll('button');
+        for (var i = 0; i < buttons.length; i++) {
+          var parent = buttons[i].parentElement;
+          if (!parent) continue;
+          var matches = [];
+          for (var j = 0; j < parent.children.length; j++) {
+            var child = parent.children[j];
+            if (child.tagName !== 'BUTTON') continue;
+            if (tabs.indexOf((child.textContent || '').trim()) !== -1) matches.push(child);
+          }
+          if (matches.length === tabs.length) return matches;
+        }
+        return [];
+      }
+
+      function savedTab() {
+        try {
+          var value = localStorage.getItem(key);
+          return tabs.indexOf(value) !== -1 ? value : '';
+        } catch (error) {
+          console.warn('[HRMS F2F restore] Could not read the selected interview page:', error);
+          return '';
+        }
+      }
+
+      function finishRestore() {
+        if (!restoring) return;
+        restoring = false;
+        document.documentElement.classList.remove('hrms-f2f-restoring');
+        if (observer) observer.disconnect();
+        if (timeout) window.clearTimeout(timeout);
+      }
+
+      function restoreTab() {
+        if (!restoring) return;
+        if (!onInterviewPage()) {
+          finishRestore();
+          return;
+        }
+        var target = null;
+        var buttons = tabButtons();
+        for (var i = 0; i < buttons.length; i++) {
+          if ((buttons[i].textContent || '').trim() === savedTab()) target = buttons[i];
+        }
+        if (!target) return;
+        if (target.style.background !== 'var(--accent)' && !restoreRequested) {
+          restoreRequested = true;
+          target.click();
+        }
+        window.requestAnimationFrame(function () {
+          if (onInterviewPage() && target.style.background === 'var(--accent)') finishRestore();
+          else restoreRequested = false;
+        });
+      }
+
+      function rememberTab(event) {
+        if (!onInterviewPage()) return;
+        var node = event.target;
+        while (node && node !== document && node.tagName !== 'BUTTON') node = node.parentElement;
+        if (!node || node === document) return;
+        var label = (node.textContent || '').trim();
+        if (tabs.indexOf(label) === -1) return;
+        if (tabButtons().indexOf(node) === -1) return;
+        try {
+          localStorage.setItem(key, label);
+        } catch (error) {
+          console.error('[HRMS F2F restore] Could not save the selected interview page:', error);
+        }
+      }
+
+      document.addEventListener('click', rememberTab, true);
+      var tab = onInterviewPage() ? savedTab() : '';
+      if (!tab) return;
+      restoring = true;
+      document.documentElement.classList.add('hrms-f2f-restoring');
+      observer = new MutationObserver(restoreTab);
+      observer.observe(document.documentElement, { childList: true, subtree: true });
+      timeout = window.setTimeout(finishRestore, 5000);
+      restoreTab();
+      window.addEventListener('popstate', restoreTab);
+      window.addEventListener('hrmsNavigate', restoreTab);
+    })();
+  </script>
   <title>HRMS — AI-Powered HR Platform</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -242,14 +344,14 @@
   <script defer src="/assets/hrms-onboarding.js?v=33"></script>
   <script defer src="/assets/hrms-candidate-portal.js?v=2"></script>
   <script defer src="/assets/hrms-notifications.js?v=5"></script>
-  <script defer src="/assets/hrms-recruit-kpi.js?v=13"></script>
+  <script defer src="/assets/hrms-recruit-kpi.js?v=15"></script>
   <script defer src="/assets/hrms-attendance-actions.js?v=24"></script>
   <script defer src="/assets/hrms-attendance-ui.js?v=2"></script>
   <script defer src="/assets/hrms-jobs-table.js?v=19"></script>
   <script defer src="/assets/hrms-bench-sales.js?v=9"></script>
   <script defer src="/assets/hrms-candidate-compare.js?v=43"></script>
-  <script defer src="/assets/hrms-interviews.js?v=22"></script>
-  <script defer src="/assets/hrms-qv-filter-dropdowns.js?v=3"></script>
+  <script defer src="/assets/hrms-interviews.js?v=25"></script>
+  <script defer src="/assets/hrms-qv-filter-dropdowns.js?v=9"></script>
   <script defer src="/assets/hrms-f2f-employee-detail.js?v=10"></script>
   <script defer src="/assets/hrms-f2f-candidate-info.js?v=18"></script>
   <script defer src="/assets/hrms-job-form-builder.js?v=17"></script>
