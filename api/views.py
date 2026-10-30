@@ -4915,6 +4915,60 @@ def attendance_team(request):
     return Response(rows)
 
 
+#: Heatmap periods the map offers (days, including today).
+HEATMAP_MAX_DAYS = 90
+
+
+@api_view(['GET'])
+@require_perm('attendance.view')
+def attendance_heatmap(request):
+    """Check-in density for the live map's heatmap.
+
+    ``days`` (1 = today, default 30, max 90) and optional ``department``.
+    Points are check-in coordinates rounded to 4 decimals (~11 m) with a
+    weight = number of check-ins there, so the response stays small and never
+    pinpoints one person's exact fix. Only check-in events are counted (a day
+    with several check-ins after breaks still adds one point per check-in)."""
+    try:
+        days = int(request.GET.get('days') or 30)
+    except (TypeError, ValueError):
+        days = 30
+    days = max(1, min(days, HEATMAP_MAX_DAYS))
+    dept = str(request.GET.get('department') or '').strip()
+    to_date = local_now().date()
+    from_date = to_date - timedelta(days=days - 1)
+
+    qs = (AttendanceEvent.objects
+          .filter(date__gte=from_date, date__lte=to_date, event='check-in')
+          .exclude(latitude=None).exclude(longitude=None))
+    if dept and dept.lower() != 'all':
+        in_dept = {norm_email(p.email) for p in UserProfile.objects.filter(department__iexact=dept)}
+        if dept.lower() == 'general':
+            # The map labels people without a profile department "General".
+            known = {norm_email(p.email) for p in UserProfile.objects.exclude(department='')}
+            in_dept |= {norm_email(e) for e in qs.values_list('email', flat=True)} - known
+        qs = qs.filter(email__in=list(in_dept))
+
+    buckets, people, total = {}, set(), 0
+    for email, lat, lng in qs.values_list('email', 'latitude', 'longitude'):
+        try:
+            lat, lng = float(lat), float(lng)
+        except (TypeError, ValueError):
+            continue
+        if not (-90 <= lat <= 90 and -180 <= lng <= 180) or (abs(lat) < 1e-6 and abs(lng) < 1e-6):
+            continue
+        key = (round(lat, 4), round(lng, 4))
+        buckets[key] = buckets.get(key, 0) + 1
+        people.add(norm_email(email))
+        total += 1
+    points = [{'lat': k[0], 'lng': k[1], 'weight': w} for k, w in buckets.items()]
+    points.sort(key=lambda pt: -pt['weight'])
+    return Response({
+        'from': from_date.isoformat(), 'to': to_date.isoformat(), 'days': days,
+        'checkins': total, 'people': len(people), 'points': points[:5000],
+    })
+
+
 @api_view(['GET'])
 @require_perm('attendance.view')
 def attendance_map_feed(request):
