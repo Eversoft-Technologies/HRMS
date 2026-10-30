@@ -469,10 +469,17 @@
     var closeBtn = e.target.closest && e.target.closest('.hrms-drawer-x');
     var isBackdrop = e.target.classList && e.target.classList.contains('hrms-drawer-backdrop');
     if (closeBtn || isBackdrop) {
-      var d = document.querySelector('.hrms-drawer');
-      var b = document.querySelector('.hrms-drawer-backdrop');
-      if (d) { d.style.display = 'none'; try { d.remove(); } catch (_) {} }
-      if (b) { b.style.display = 'none'; try { b.remove(); } catch (_) {} }
+      // React owns the drawer and closes it itself (both the cross and the
+      // backdrop call its state setter). Removing those nodes here made React
+      // fail to unmount them ("removeChild … not a child of this node") and
+      // took the whole app down. Only as a fallback, if the drawer is somehow
+      // still showing a moment later, hide it — never remove React's nodes.
+      setTimeout(function () {
+        var d = document.querySelector('.hrms-drawer');
+        var b = document.querySelector('.hrms-drawer-backdrop');
+        if (d) d.style.display = 'none';
+        if (b) b.style.display = 'none';
+      }, 120);
     }
   });
 
@@ -480,6 +487,12 @@
   function ensureDrawerAttendanceSettings() {
     var drawer = document.querySelector('.hrms-drawer');
     if (!drawer) return;
+    // Geofencing is mandatory for every mode of work and cannot be switched
+    // off (the server ignores any bypass), so the drawer no longer offers it.
+    var old = drawer.querySelector('.hrms-drawer-att-settings');
+    if (old) old.remove();
+    try { localStorage.removeItem('hrms_geofence_enabled'); } catch (_) {}
+    return;
     if (drawer.querySelector('.hrms-drawer-att-settings')) return;
 
     var isEnabled = localStorage.getItem('hrms_geofence_enabled') !== 'false';

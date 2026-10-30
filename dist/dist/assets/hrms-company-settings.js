@@ -163,6 +163,12 @@
       });
   }
 
+  // Tell the rest of the app (hrms-company.js) that General settings changed,
+  // so the brand, currency, date format, work week and clock follow at once.
+  function broadcast(d) {
+    try { window.dispatchEvent(new CustomEvent('hrmsCompanyUpdated', { detail: Object.assign({}, d) })); } catch (_) {}
+  }
+
   function saveCompanySettings() {
     state.saving = true;
     var saveBtn = document.getElementById('hrms-cs-save-btn');
@@ -179,8 +185,10 @@
         if (res.ok && res.data) {
           state.data = Object.assign({}, state.data, res.data);
           showToast('✓ Company Details & Employee ID format saved successfully!');
+          broadcast(state.data);
         } else if (res.ok) {
           showToast('✓ Settings updated successfully!');
+          broadcast(state.data);
         } else {
           var errMsg = (res.data && res.data.message) || (res.data && JSON.stringify(res.data)) || 'Could not save settings';
           showToast('⚠️ ' + errMsg, true);
@@ -536,8 +544,31 @@
     });
   }
 
+  /* React owns the "Company Settings" card. Replacing it (replaceChild) made
+     React crash with a removeChild NotFoundError the moment the user switched
+     to another settings section, taking the whole app down. So we only HIDE
+     React's card, put our form next to it, and drop our form once React
+     unmounts its card. */
+  var csHiddenCard = null;
+  function reactCardTitles() {
+    return Array.prototype.filter.call(document.querySelectorAll('.card-title'), function (el) {
+      return !el.closest('[data-cs-hidden]') && !el.closest('#' + WRAPPER_ID);
+    });
+  }
+  function cleanupWrapper() {
+    var w = document.getElementById(WRAPPER_ID);
+    if (!w) return;
+    var onSettings = window.location.pathname.replace(/\/+$/, '') === '/settings';
+    var stillGeneral = csHiddenCard && csHiddenCard.isConnected &&
+      Array.prototype.some.call(csHiddenCard.querySelectorAll('.card-title'), function (el) { return el.textContent.trim() === 'Company Settings'; });
+    if (onSettings && stillGeneral) return;
+    if (csHiddenCard && csHiddenCard.isConnected) { csHiddenCard.style.display = ''; csHiddenCard.removeAttribute('data-cs-hidden'); }
+    csHiddenCard = null;
+    if (w.parentNode) w.parentNode.removeChild(w);   // ours, safe to remove
+  }
+
   function renderInPlace() {
-    var cardTitles = document.querySelectorAll('.card-title');
+    var cardTitles = reactCardTitles();
     var targetCard = null;
     for (var i = 0; i < cardTitles.length; i++) {
       var t = cardTitles[i].textContent.trim();
@@ -555,7 +586,10 @@
         var temp = document.createElement('div');
         temp.innerHTML = buildHtml();
         var newEl = temp.firstElementChild;
-        parent.replaceChild(newEl, targetCard);
+        parent.insertBefore(newEl, targetCard);
+        targetCard.style.display = 'none';
+        targetCard.setAttribute('data-cs-hidden', '1');
+        csHiddenCard = targetCard;
         attachListeners();
       }
     } else if (existing) {
@@ -642,10 +676,11 @@
 
   function checkAndRender() {
     injectDrawerEmpId();
+    cleanupWrapper();
 
     if (window.location.pathname.replace(/\/+$/, '') !== '/settings') return;
 
-    var cardTitles = document.querySelectorAll('.card-title');
+    var cardTitles = reactCardTitles();
     for (var i = 0; i < cardTitles.length; i++) {
       if (cardTitles[i].textContent.trim() === 'Company Settings') {
         fetchCompanySettings();

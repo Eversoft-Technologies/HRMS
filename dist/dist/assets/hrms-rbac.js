@@ -96,6 +96,8 @@
                      ['payroll.approve', 'Approve Payroll'], ['payroll.manage', 'Manage Payroll']]],
     ['Reports',     [['reports.view', 'View Reports'], ['reports.export', 'Export Reports']]],
     ['Settings',    [['settings.view', 'View Settings'], ['settings.manage', 'Manage Settings']]],
+    ['AI Settings', [['ai.settings.view', 'View AI Settings (status, provider, model)'],
+                     ['ai.settings.manage', 'Manage AI Settings (save / rotate / remove the API key)']]],
     ['RBAC',        [['rbac.view', 'View Access Control'], ['rbac.manage', 'Manage Access Control']]],
     ['Onboarding',  [['onboarding.view', 'View Onboarding'], ['onboarding.create', 'Create Candidate'],
                      ['onboarding.edit', 'Edit Candidate / Work Authorization'],
@@ -1125,6 +1127,14 @@
 
   /* ── settings card entry ─────────────────────────────────────────────── */
   function ensureSettingsCard() {
+    /* Only under Settings › User Access (it used to be appended below EVERY
+       settings section: General, Billing, …). The card is ours, so removing
+       it when another section is shown is safe for React. */
+    var stale = document.getElementById('hrms-rbac-settings-card');
+    var onUserAccess = Array.prototype.some.call(document.querySelectorAll('.content .card-title'), function (el) {
+      return (el.textContent || '').trim() === 'User Access Management';
+    });
+    if (!onUserAccess) { if (stale && stale.parentNode) stale.parentNode.removeChild(stale); return; }
     if (!isAdmin()) return;
     if (window.location.pathname !== '/settings') return;
     // If the RBAC page is open, don't inject the card

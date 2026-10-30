@@ -1,5 +1,10 @@
 from django.urls import path
 
+from . import ai_settings
+from . import notification_prefs
+from . import org_views
+from . import submission_discussion
+from . import work_setup
 from . import (auth_views, email_template_views, linkedin_oauth, live_views, views,
                attendance_views, job_form_views, onboarding_views, payroll_views)
 
@@ -78,10 +83,26 @@ urlpatterns = [
     path('ai/score-resume/', views.ai_score_resume),
     path('ai/evaluate-interview', views.ai_evaluate_interview),
     path('ai/evaluate-interview/', views.ai_evaluate_interview),
+    # Server-managed AI key (Settings > AI Settings); never returns the key.
+    path('ai/settings', ai_settings.ai_settings),
+    path('ai/settings/validate', ai_settings.ai_settings_validate),
+    path('ai/settings/key', ai_settings.ai_settings_key),
+    path('ai/settings/audit', ai_settings.ai_settings_audit),
 
     path('users', views.users),
     path('users/<str:email>', views.user_detail),
     path('employees', views.employees),
+    path('employees/<str:key>/profile', views.employee_profile),
+    path('teams', org_views.teams),
+    path('teams/<int:pk>', org_views.team_detail),
+    path('teams/<int:pk>/members', org_views.team_members),
+    path('teams/<int:pk>/members/<str:member>', org_views.team_member_detail),
+    path('org/people', org_views.org_people),
+    path('org/manager-review', org_views.manager_review),
+    path('org/approver', org_views.org_approver),
+    path('org/reviewers', org_views.org_reviewers),
+    path('org/unresolved', org_views.org_unresolved),
+    path('employees/<str:key>', views.employee_detail),
 
     path('notifications', views.notifications),
     path('notifications/<int:pk>/read', views.notification_read),
@@ -91,6 +112,7 @@ urlpatterns = [
 
     path('user-settings/<str:email>', views.user_settings),
     path('user-settings/<str:email>/profile', views.user_profile),
+    path('user-settings/<str:email>/notification-preferences', notification_prefs.notification_preferences),
     path('user-settings/<str:email>/email-config', views.user_email_config),
     path('user-settings/<str:email>/documents', views.user_documents),
     path('user-settings/<str:email>/documents/<str:doc_type>', views.user_document_detail),
@@ -124,6 +146,9 @@ urlpatterns = [
     path('attendance/roster', views.attendance_roster),
     path('attendance/home-locations', views.attendance_home_locations),
     path('attendance/home-locations/review', views.attendance_home_location_review),
+    path('attendance/home-locations/changes', work_setup.home_changes),
+    path('attendance/home-locations/changes/<int:pk>/decide', work_setup.home_change_decide),
+    path('attendance/home-locations/changes/<int:pk>', work_setup.home_change_cancel),
     path('attendance/arrangements', views.attendance_arrangements),
     path('attendance/arrangements/<int:pk>', views.attendance_arrangement_detail),
     path('attendance/geofences', views.attendance_geofences),
@@ -153,6 +178,7 @@ urlpatterns = [
     path('leave/balance', views.leave_balance),
     path('holidays', views.holidays),
     path('leave/<int:pk>', views.leave_detail),
+    path('leave/<int:pk>/approver', views.leave_approver),
 
     # Employees module — Task Tracker
     path('tasks', views.tasks),
@@ -162,6 +188,10 @@ urlpatterns = [
     # Employees module — Work Submissions
     path('submissions', views.submissions),
     path('submissions/<int:pk>', views.submission_detail),
+    path('submissions/<int:pk>/thread', submission_discussion.thread),
+    path('submissions/<int:pk>/comments', submission_discussion.comments),
+    path('submissions/<int:pk>/collaborators', submission_discussion.collaborators),
+    path('submissions/<int:pk>/collaborators/<str:member>', submission_discussion.collaborator_detail),
     path('submissions/<int:pk>/file', views.submission_file),
     path('submissions/<int:pk>/review-file', views.submission_review_file),
 
@@ -196,6 +226,8 @@ urlpatterns = [
 
     path('dashboard/stats', views.dashboard_stats),
     path('directory', views.directory_search),
+    path('avatars', views.avatars),
+    path('avatars/<str:email>', views.avatar_image),
     path('config', views.client_config),
     path('integrations/status', views.integrations_status),
     path('health', views.health),
@@ -211,8 +243,10 @@ urlpatterns = [
     path('shifts/<int:pk>/assignments/', attendance_views.ShiftViewSet.as_view({'get': 'assignments'})),
 
     # Check-In/Check-Out
-    path('attendance/check-in/', attendance_views.AttendanceCheckInOutViewSet.as_view({'post': 'check_in'})),
-    path('attendance/check-out/', attendance_views.AttendanceCheckInOutViewSet.as_view({'post': 'check_out'})),
+    # Same guarded, location-verified views as the slash-less routes; these used
+    # to reach an AllowAny viewset that skipped identity and every fence.
+    path('attendance/check-in/', views.attendance_check_in),
+    path('attendance/check-out/', views.attendance_check_out),
     path('attendance/device-punch/', attendance_views.AttendanceCheckInOutViewSet.as_view({'post': 'device_punch'})),
     path('attendance/today/', attendance_views.AttendanceCheckInOutViewSet.as_view({'get': 'today'})),
     path('attendance/summary/', attendance_views.AttendanceCheckInOutViewSet.as_view({'get': 'summary'})),

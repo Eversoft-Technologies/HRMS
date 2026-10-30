@@ -179,7 +179,7 @@ class PayslipViewSet(SafeViewSet):
 
     @action(detail=True, methods=['get'], url_path='pdf')
     def download_pdf(self, request, pk=None):
-        """Download or view payslip PDF."""
+        """Download or view payslip as rendered HTML (printable to PDF)."""
         try:
             payslip = self.get_object()
             if not payslip.file_data:
@@ -187,10 +187,25 @@ class PayslipViewSet(SafeViewSet):
                 payslip.save()
 
             import base64
-            pdf_bytes = base64.b64decode(payslip.file_data)
-            response = HttpResponse(pdf_bytes, content_type='text/html')
-            response['Content-Disposition'] = f'inline; filename="{payslip.file_name or "payslip.pdf"}"'
+            html_bytes = base64.b64decode(payslip.file_data)
+            response = HttpResponse(html_bytes, content_type='text/html; charset=utf-8')
+            fname = payslip.file_name or f'Payslip_{payslip.run.period_label}_{payslip.employee_name}.html'
+            response['Content-Disposition'] = f'inline; filename="{fname}"'
             return response
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['post'], url_path='regenerate')
+    def regenerate_pdf(self, request, pk=None):
+        """Force-regenerate the payslip HTML from current data."""
+        try:
+            payslip = self.get_object()
+            payslip.file_data = PayrollService.generate_payslip_pdf(payslip)
+            payslip.file_name = f"Payslip_{payslip.run.period_label}_{payslip.email.split('@')[0]}.html"
+            payslip.file_size = len(payslip.file_data)
+            payslip.save()
+            serializer = self.get_serializer(payslip)
+            return Response(serializer.data)
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 

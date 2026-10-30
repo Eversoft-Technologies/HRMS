@@ -66,6 +66,8 @@ class AttendanceAdminApiTests(TestCase):
         self.assertEqual(shift.grace_minutes, 15)
 
     def test_assigning_a_shift_to_an_employee(self):
+        # The API now only assigns shifts to existing employees.
+        AppUser.objects.get_or_create(email='person@example.com', defaults={'full_name': 'Person', 'password': 'x'})
         shift = Shift.objects.create(name='Night', overtime_after_minutes=540)
         resp = self._post('/api/shift-assignments', {
             'email': 'person@example.com',
