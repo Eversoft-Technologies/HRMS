@@ -126,6 +126,16 @@ class AttendanceCheckInOutViewSet(viewsets.ViewSet):
     @action(detail=False, methods=['post'], url_path='device-punch')
     def device_punch(self, request):
         """Record punch from external biometric/RFID hardware device."""
+        # Hardware punches carry no GPS: the device is fixed on site. They are
+        # accepted only from a device holding the shared secret configured as
+        # HRMS_DEVICE_PUNCH_TOKEN, never from an arbitrary caller.
+        import hmac
+        from django.conf import settings as dj_settings
+        expected = getattr(dj_settings, 'HRMS_DEVICE_PUNCH_TOKEN', '') or ''
+        given = request.headers.get('X-Device-Token') or ''
+        if not expected or not hmac.compare_digest(str(given), str(expected)):
+            return Response({'error': 'This endpoint only accepts registered punch devices.'},
+                            status=status.HTTP_403_FORBIDDEN)
         email = request.data.get('email') or request.data.get('employee_code')
         employee_name = request.data.get('employeeName') or request.data.get('employee_name') or (email.split('@')[0].title() if email else '')
         punch_type = request.data.get('punchType') or request.data.get('punch_type', 'in')
@@ -419,7 +429,13 @@ class OvertimeViewSet(viewsets.ViewSet):
         """Approve overtime."""
         email = request.data.get('email')
         date_str = request.data.get('date')
-        approver_email = request.user.email if request.user else 'admin'
+        # Was request.user.email: AnonymousUser on this AllowAny viewset, so the
+        # action crashed for everyone. Same rule as every other approval now.
+        from api import org_views
+        approver_email, denied = '', None
+        _ok, approver_email, denied = org_views.can_decide(request, 'attendance.edit', request.data.get('email'))
+        if denied:
+            return denied
 
         if not email or not date_str:
             return Response(
@@ -516,7 +532,13 @@ class AttendanceCorrectionViewSet(viewsets.ViewSet):
         """Approve attendance correction."""
         correction_id = request.data.get('correctionId')
         reviewer_note = request.data.get('reviewerNote', '')
-        reviewer_email = request.user.email if request.user else 'admin'
+        from api import org_views
+        _c = AttendanceCorrection.objects.filter(pk=request.data.get('correctionId')).first() \
+            if request.data.get('correctionId') else None
+        _ok, reviewer_email, denied = org_views.can_decide(
+            request, 'settings.manage', _c.email if _c else '', _c.reviewer_email if _c else '')
+        if denied:
+            return denied
 
         try:
             correction = AttendanceCorrection.objects.get(id=correction_id)
@@ -560,7 +582,13 @@ class AttendanceCorrectionViewSet(viewsets.ViewSet):
         """Reject attendance correction."""
         correction_id = request.data.get('correctionId')
         reviewer_note = request.data.get('reviewerNote', '')
-        reviewer_email = request.user.email if request.user else 'admin'
+        from api import org_views
+        _c = AttendanceCorrection.objects.filter(pk=request.data.get('correctionId')).first() \
+            if request.data.get('correctionId') else None
+        _ok, reviewer_email, denied = org_views.can_decide(
+            request, 'settings.manage', _c.email if _c else '', _c.reviewer_email if _c else '')
+        if denied:
+            return denied
 
         try:
             correction = AttendanceCorrection.objects.get(id=correction_id)
@@ -619,8 +647,15 @@ def _wfh_approver(request):
     AnonymousUser here (the viewset is AllowAny) and has no ``.email``.
     """
     from api.permissions import check_perm
+    from api import org_views
 
     allowed, caller_email, _user = check_perm(request, 'attendance.approve_wfh')
+    if not allowed and caller_email:
+        # The employee's linked manager may decide too (never their own).
+        req = WfhRequest.objects.filter(pk=request.data.get('requestId')).first() \
+            if request.data.get('requestId') else None
+        if req is not None:
+            allowed = org_views.can_decide(request, 'attendance.approve_wfh', req.email, req.approver_email)[0]
     if not caller_email:
         return None, Response(
             {'error': 'Authentication required. Please sign in again.',

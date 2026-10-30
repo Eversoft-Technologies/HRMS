@@ -347,7 +347,7 @@
 
     return filteredEmployees.map(function (emp) {
       var isAct = emp.status === 'Active';
-      var empCode = emp.employeeId || ('EV-' + String(emp.id).padStart(4, '0'));
+      var empCode = emp.employeeId || (window.HRMSCompany ? window.HRMSCompany.empId(emp.id) : ('EV-' + String(emp.id).padStart(4, '0')));
       // A row with no stored name still needs a readable first line.
       var nameText = emp.name || String(emp.email || '').split('@')[0] || '\u2014';
       return '<tr class="hrms-dir-row" onclick="location.href=\'/hr/hris/' + emp.id + '\'">' +

@@ -120,7 +120,8 @@ Create a `.env` file in the project root. It is git‑ignored — **never commit
 | `DJANGO_DEBUG` | `true` / `false` |
 | `DJANGO_ALLOWED_HOSTS` | Comma‑separated hostnames |
 | `DB_NAME` / `DB_USER` / `DB_PASSWORD` / `DB_HOST` / `DB_PORT` | MySQL connection |
-| `ANTHROPIC_API_KEY` | Claude API key (AI question generation) |
+| `ANTHROPIC_API_KEY` | Claude API key, server-side only (fallback when no key is saved in Settings › AI Settings; see README_DJANGO.md) |
+| `HRMS_SECRETS_KEY` | Encrypts the AI key saved from the UI (Fernet key; keep out of the database) |
 | `ANTHROPIC_MODEL` | Generation model override (default `claude-sonnet-4-5`) |
 | `ANTHROPIC_VALIDATION_MODEL` | Validation model override (default `claude-haiku-4-5`) |
 | `RESEND_API_KEY` / `RESEND_FROM_EMAIL` / `RESEND_FROM_NAME` | Resend email API (preferred) |

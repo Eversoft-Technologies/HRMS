@@ -549,7 +549,7 @@
             '  </div>' +
             '  <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">' +
             '    <button type="button" class="haa-btn haa-remind-btn" data-name="' + esc(emp.name) + '" data-email="' + esc(emp.email || '') + '" style="font-size:11px;padding:5px 12px;height:30px;cursor:pointer;border-radius:6px;background:var(--haa-accent,#4f46e5);color:#fff;border:none;font-weight:700;display:inline-flex;align-items:center;gap:4px;">📲 Remind</button>' +
-            '    <a href="/hr/hris" style="font-size:11px;color:var(--haa-link,#4f46e5);font-weight:600;padding:4px 6px;text-decoration:none;">Profile →</a>' +
+            '    <a href="' + ('/hr/hris' + (emp.email ? '/' + encodeURIComponent(emp.email) : '')) + '" style="font-size:11px;color:var(--haa-link,#4f46e5);font-weight:600;padding:4px 6px;text-decoration:none;">Profile →</a>' +
             '  </div>' +
             '</div>';
         }).join('');
@@ -913,7 +913,7 @@
         (emp.locationReason ? '<div style="margin-top:6px;font-size:11px;color:var(--haa-warn-fg);background:rgba(245,158,11,0.1);padding:6px 8px;border-radius:6px;"><strong>Note:</strong> ' + esc(emp.locationReason) + '</div>' : '') +
         '<div style="margin-top:10px;display:flex;align-items:center;justify-content:space-between;gap:6px;">' +
         '  <a href="' + directionsUrl + '" target="_blank" rel="noopener" style="font-size:11px;color:#fff;background:var(--haa-accent,#4f46e5);text-decoration:none;font-weight:700;padding:5px 10px;border-radius:6px;display:inline-flex;align-items:center;gap:4px;">🛣️ Directions</a>' +
-        '  <a href="/hr/hris" style="font-size:11px;color:var(--haa-link);text-decoration:none;font-weight:600;padding:4px 8px;">View Profile →</a>' +
+        '  <a href="' + ('/hr/hris' + (emp.email ? '/' + encodeURIComponent(emp.email) : '')) + '" style="font-size:11px;color:var(--haa-link);text-decoration:none;font-weight:600;padding:4px 8px;">View Profile →</a>' +
         '</div>';
 
       overlayLayer.appendChild(pop);
@@ -1450,6 +1450,7 @@
       grab('arrangements', '/api/attendance/arrangements'),
       grab('roster', '/api/attendance/roster'),
       grab('homes', '/api/attendance/home-locations'),
+      grab('homeChanges', '/api/attendance/home-locations/changes?status=Pending&kind=change'),
       grab('mapFeed', '/api/attendance/map-feed'),
       grab('departurePolicy', '/api/attendance/departure-policy')
     ]).then(function (r) {
@@ -1460,8 +1461,9 @@
       state.arrangements = Array.isArray(r[4]) ? r[4] : [];
       state.roster = Array.isArray(r[5]) ? r[5] : [];
       state.homes = Array.isArray(r[6]) ? r[6] : [];
-      state.mapFeed = (r[7] && Array.isArray(r[7].employees)) ? r[7] : { fences: state.fences, employees: [] };
-      state.departurePolicy = (r[8] && typeof r[8].enabled === 'boolean') ? r[8] : (state.departurePolicy || { enabled: true, timeout_minutes: 15 });
+      state.homeChanges = Array.isArray(r[7]) ? r[7] : [];
+      state.mapFeed = (r[8] && Array.isArray(r[8].employees)) ? r[8] : { fences: state.fences, employees: [] };
+      state.departurePolicy = (r[9] && typeof r[9].enabled === 'boolean') ? r[9] : (state.departurePolicy || { enabled: true, timeout_minutes: 15 });
       state.busy = false; render();
     });
   }
@@ -1563,9 +1565,22 @@
     var opts = state.shifts.map(function (s) {
       return '<option value="' + s.id + '">' + esc(s.name) + '</option>';
     }).join('');
-    var asg = state.assignments.map(function (a) {
+    var todayIso = new Date().toISOString().slice(0, 10);
+    var nameOf = {};
+    state.roster.forEach(function (u) { nameOf[u.email] = u.name; });
+    var shiftOf = {};
+    var sorted = state.assignments.slice().sort(function (x, y) {
+      return (x.email || '').localeCompare(y.email || '') ||
+        String(y.effectiveFrom || y.effective_from || '').localeCompare(String(x.effectiveFrom || x.effective_from || ''));
+    });
+    var asg = sorted.map(function (a) {
       var sh = state.shifts.filter(function (s) { return s.id === (a.shiftId || a.shift); })[0];
-      return '<tr><td>' + esc(a.email) + '</td><td>' + esc(sh ? sh.name : (a.shiftName || '—')) + '</td>' +
+      var from = a.effectiveFrom || a.effective_from || '', to = a.effectiveTo || a.effective_to || '';
+      var status = from > todayIso ? '<span class="haa-pill" style="background:var(--haa-info-bg);color:var(--haa-info-fg)">Upcoming</span>'
+        : (!to || to >= todayIso) ? '<span class="haa-pill" style="background:var(--haa-ok-bg,#dcfce7);color:var(--haa-ok-fg,#166534)">Current</span>'
+        : '<span class="haa-pill" style="background:var(--haa-chip);color:var(--haa-text2)">Ended</span>';
+      if ((!to || to >= todayIso) && from <= todayIso) shiftOf[a.email] = sh ? sh.name : (a.shiftName || '');
+      return '<tr><td>' + esc(nameOf[a.email] || a.email) + (nameOf[a.email] ? '<div style="font-size:11px;color:var(--haa-faint)">' + esc(a.email) + '</div>' : '') + ' ' + status + '</td><td>' + esc(sh ? sh.name : (a.shiftName || '—')) + '</td>' +
         '<td>' + esc(a.effectiveFrom || a.effective_from || '') + '</td>' +
         '<td>' + esc(a.effectiveTo || a.effective_to || 'open-ended') + '</td>' +
         '<td style="text-align:right"><button class="haa-btn dgr" data-del-asg="' + a.id + '">Remove</button></td></tr>';
@@ -1584,7 +1599,7 @@
         : '<div class="haa-empty">No shifts defined — everyone falls back to General Shift (09:00–18:00).</div>') +
       '<div class="haa-card" style="margin-top:18px"><div style="font-weight:700;margin-bottom:12px;font-size:14px;">Assign a shift</div>' +
       '<div class="haa-grid">' +
-      '<div><label class="haa-lbl">Employee email</label><input class="haa-in" id="haa-a-email" placeholder="person@eversoftit.com"></div>' +
+      '<div><label class="haa-lbl">Employee</label>' + rosterSelect('haa-a-email', shiftOf) + '</div>' +
       '<div><label class="haa-lbl">Shift</label><select class="haa-in" id="haa-a-shift">' + opts + '</select></div>' +
       '<div><label class="haa-lbl">Effective from</label><input class="haa-in" id="haa-a-from" type="date"></div>' +
       '<div><label class="haa-lbl">Until (optional)</label><input class="haa-in" id="haa-a-to" type="date"></div>' +
@@ -1650,6 +1665,18 @@
    * Whoever already has an arrangement is marked, so it is obvious when you are
    * about to supersede one rather than set a first.
    */
+  function rosterSelect(id, current) {
+    if (!state.roster.length) {
+      return '<input class="haa-in" id="' + id + '" placeholder="person@company.com">';
+    }
+    current = current || {};
+    return '<select class="haa-in" id="' + id + '"><option value="">Select an employee…</option>' +
+      state.roster.map(function (u) {
+        return '<option value="' + esc(u.email) + '">' + esc(u.name) + ' (' + esc(u.email) + ')' +
+          (current[u.email] ? esc('  · ' + current[u.email]) : '') + '</option>';
+      }).join('') + '</select>';
+  }
+
   function employeePicker() {
     if (!state.roster.length) {
       return '<input class="haa-in" id="haa-wa-email" placeholder="person@company.com">' +
@@ -1750,7 +1777,79 @@
    * confirm it, and a circle over an office park or a motorway tells them not
    * to. The captured GPS accuracy is shown for the same reason.
    */
+  /* Every employee's home-location status, so "Not set up" is visible too. */
+  var HOME_TONES = { 'Approved': 'var(--haa-ok-bg,#dcfce7);color:var(--haa-ok-fg,#166534)',
+                     'Pending review': 'var(--haa-warn-bg);color:var(--haa-warn-fg)',
+                     'Change requested': 'var(--haa-info-bg);color:var(--haa-info-fg)',
+                     'Rejected': 'var(--haa-err-soft);color:var(--haa-err-fg)',
+                     'Not set up': 'var(--haa-chip);color:var(--haa-text2)' };
+  function homeStatusTable() {
+    var byEmail = {};
+    state.homes.forEach(function (h) { byEmail[h.email] = h; });
+    var rows = state.roster.map(function (u) {
+      var h = byEmail[u.email];
+      var st = h ? (h.homeStatus || h.status) : 'Not set up';
+      return { name: u.name, email: u.email, status: st,
+               when: h ? (h.reviewedAt || '') : '', reviewer: h ? (h.reviewer || '') : '' };
+    });
+    var filter = state.homeFilter || 'all';
+    var counts = {};
+    rows.forEach(function (r) { counts[r.status] = (counts[r.status] || 0) + 1; });
+    var shown = rows.filter(function (r) { return filter === 'all' || r.status === filter; });
+    var chips = ['all', 'Approved', 'Pending review', 'Change requested', 'Rejected', 'Not set up'].map(function (k) {
+      var n = k === 'all' ? rows.length : (counts[k] || 0);
+      return '<button class="haa-btn' + (filter === k ? '' : ' sec') + '" data-home-filter="' + esc(k) + '" style="font-size:11.5px;padding:4px 10px">' +
+        esc(k === 'all' ? 'All' : k) + ' (' + n + ')</button>';
+    }).join(' ');
+    return '<div class="haa-card" style="margin-top:16px"><div style="font-weight:700;font-size:14px;margin-bottom:10px">Home location status</div>' +
+      '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">' + chips + '</div>' +
+      (shown.length ? '<table class="haa-tbl"><thead><tr><th>Employee</th><th>Status</th><th>Last decision</th></tr></thead><tbody>' +
+        shown.map(function (r) {
+          return '<tr><td>' + esc(r.name) + '<div style="font-size:11px;color:var(--haa-faint)">' + esc(r.email) + '</div></td>' +
+            '<td><span class="haa-pill" style="background:' + (HOME_TONES[r.status] || HOME_TONES['Not set up']) + '">' + esc(r.status) + '</span></td>' +
+            '<td style="font-size:12px;color:var(--haa-muted)">' + esc(r.when ? r.when.slice(0, 16) + (r.reviewer ? ' · ' + r.reviewer : '') : '—') + '</td></tr>';
+        }).join('') + '</tbody></table>' : '<div class="haa-empty">Nobody in this state.</div>') + '</div>';
+  }
+
+  /* Proposed replacements for approved homes. The approved fence keeps
+     verifying WFH check-ins until one of these is approved here. */
+  function homeChangesHtml() {
+    var may = can('attendance.approve_offsite');
+    var list = state.homeChanges || [];
+    if (!list.length) return '';
+    return '<div class="haa-card" style="margin-top:16px"><div style="font-weight:700;font-size:14px;margin-bottom:4px">' +
+      'Home location changes awaiting approval (' + list.length + ')</div>' +
+      '<div style="font-size:12.5px;color:var(--haa-muted);margin-bottom:12px">The current approved location stays in use until you approve the new one.</div>' +
+      '<div style="display:flex;gap:16px;flex-wrap:wrap">' + list.map(function (c) {
+        var prev = c.previous || {};
+        return '<div style="border:1px solid var(--haa-line);border-radius:10px;padding:12px;max-width:760px">' +
+          '<div style="font-weight:600;font-size:13px">' + esc(c.email) + '</div>' +
+          '<div style="font-size:12px;color:var(--haa-muted);margin:2px 0 10px">Requested ' + esc((c.requestedAt || '').slice(0, 16)) +
+          (c.captureMethod === 'manual'
+            ? ' · <b style="color:var(--haa-warn-fg)">Entered manually</b> — not captured by GPS; check the map before approving'
+            : ' · GPS ' + (c.capturedAccuracy ? '±' + Math.round(c.capturedAccuracy) + ' m' : 'unknown accuracy')) +
+          '<div style="color:var(--haa-text2);margin-top:4px">Reason: “' + esc(c.reason || '—') + '”</div></div>' +
+          '<div style="display:flex;gap:12px;flex-wrap:wrap">' +
+            (prev.latitude != null ? '<div><div style="font-size:11px;font-weight:700;margin-bottom:4px">CURRENT (approved)</div>' +
+              renderMap({ lat: prev.latitude, lng: prev.longitude, radius: prev.radiusMeters || 150, label: 'Current', width: 340, height: 200 }) + '</div>' : '') +
+            '<div><div style="font-size:11px;font-weight:700;margin-bottom:4px">PROPOSED</div>' +
+              renderMap({ lat: c.latitude, lng: c.longitude, radius: c.radiusMeters, label: 'Proposed', width: 340, height: 200 }) + '</div>' +
+          '</div>' +
+          (may
+            ? '<div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap;align-items:center">' +
+              '<input class="haa-in" data-hc-note="' + c.id + '" placeholder="Note to the employee (optional)" style="flex:1;min-width:200px">' +
+              '<button class="haa-btn" data-hc-ok="' + c.id + '">Approve change</button>' +
+              '<button class="haa-btn dgr" data-hc-no="' + c.id + '">Reject</button></div>'
+            : '<div style="font-size:12px;color:var(--haa-muted);margin-top:10px">You do not have permission to approve home locations.</div>') +
+          '</div>';
+      }).join('') + '</div></div>';
+  }
+
   function homesHtml() {
+    return homesQueueHtml() + homeChangesHtml() + homeStatusTable();
+  }
+
+  function homesQueueHtml() {
     var may = can('attendance.approve_offsite');
     var pending = state.homes.filter(function (h) { return h.status === 'Pending'; });
     if (!pending.length) {
@@ -1773,7 +1872,9 @@
         return '<div style="border:1px solid var(--haa-line);border-radius:10px;padding:12px;max-width:400px">' +
           '<div style="font-weight:600;font-size:13px;margin-bottom:2px">' + esc(h.email) + '</div>' +
           '<div style="font-size:12px;color:var(--haa-muted);margin-bottom:10px">' +
-          'Captured at GPS ' + (acc ? '±' + Math.round(acc) + ' m' : 'unknown accuracy') +
+          (h.captureMethod === 'manual'
+            ? '<b style="color:var(--haa-warn-fg)">Coordinates entered manually</b> (the device had no precise fix) — check the map carefully'
+            : 'Captured at GPS ' + (acc ? '±' + Math.round(acc) + ' m' : 'unknown accuracy')) +
           ' · ' + esc(h.radiusMeters) + ' m radius' +
           (acc && acc > 100
             ? '<div style="color:var(--haa-warn-fg);margin-top:3px">Captured from a poor fix — ' +
@@ -2211,6 +2312,28 @@
     }
     decideHome('data-home-ok', 'Approved');
     decideHome('data-home-no', 'Rejected');
+
+    function decideChange(attr, decision) {
+      body.querySelectorAll('[' + attr + ']').forEach(function (el) {
+        el.onclick = function () {
+          var id = el.getAttribute(attr);
+          var noteEl = body.querySelector('[data-hc-note="' + id + '"]');
+          el.disabled = true;
+          api('/api/attendance/home-locations/changes/' + id + '/decide', {
+            method: 'POST',
+            body: JSON.stringify({ decision: decision, note: noteEl ? noteEl.value : '' })
+          }).then(function () {
+            toast('Home location change ' + decision.toLowerCase());
+            loadAll();
+          }).catch(function (e) { el.disabled = false; toast(e.message, true); });
+        };
+      });
+    }
+    decideChange('data-hc-ok', 'Approved');
+    decideChange('data-hc-no', 'Rejected');
+    body.querySelectorAll('[data-home-filter]').forEach(function (el) {
+      el.onclick = function () { state.homeFilter = el.getAttribute('data-home-filter'); render(); };
+    });
 
     /* ── work arrangements ─────────────────────────────────────────────── */
     var kind = body.querySelector('#haa-wa-kind');

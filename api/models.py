@@ -332,6 +332,9 @@ class UserProfile(models.Model):
     department = models.CharField(max_length=120, default='', blank=True)
     designation = models.CharField(max_length=120, default='', blank=True)
     manager = models.CharField(max_length=255, default='', blank=True)
+    # Stable reporting link: the manager's email (UserProfile / AppUser key).
+    # ``manager`` above stays as the display name for older screens.
+    manager_email = models.CharField(max_length=255, default='', blank=True, db_index=True)
     level = models.CharField(max_length=20, default='L4', blank=True)
     employment_type = models.CharField(max_length=40, default='Full-time', blank=True)
     location = models.CharField(max_length=255, default='', blank=True)
@@ -519,6 +522,8 @@ class LeaveRequest(models.Model):
     reason = models.TextField(null=True, blank=True)
     status = models.CharField(max_length=20, default='Pending')   # Pending | Approved | Rejected
     approver = models.CharField(max_length=255, default='', blank=True)
+    # Who decides it: the employee's linked manager at submission time.
+    approver_email = models.CharField(max_length=255, default='', blank=True, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -538,6 +543,9 @@ class EmployeeTask(models.Model):
     description = models.TextField(null=True, blank=True)
     task_code = models.CharField(max_length=40, default='', blank=True)   # e.g. TASK-1788507958987
     team_lead = models.CharField(max_length=255, default='', blank=True)
+    team_lead_email = models.CharField(max_length=255, default='', blank=True)
+    team = models.ForeignKey('Team', null=True, blank=True, on_delete=models.SET_NULL,
+                             related_name='tasks', db_column='team_id')
     department = models.CharField(max_length=120, default='', blank=True)
     estimated_hours = models.FloatField(null=True, blank=True)
     progress = models.IntegerField(default=0)   # 0-100
@@ -562,6 +570,39 @@ class EmployeeTask(models.Model):
         ordering = ['-id']
 
 
+class Team(models.Model):
+    """A working team: a name, the function it belongs to and its lead.
+
+    Distinct from the reporting line (UserProfile.manager_email) and from the
+    RBAC role: a team lead guides work, a manager handles people and HR
+    approvals, and the role only governs permissions."""
+    name = models.CharField(max_length=150, unique=True)
+    department = models.CharField(max_length=120, default='', blank=True)
+    description = models.TextField(default='', blank=True)
+    status = models.CharField(max_length=20, default='active', db_index=True)   # active | archived
+    lead_email = models.CharField(max_length=255, default='', blank=True, db_index=True)
+    created_by = models.CharField(max_length=255, default='', blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'teams'
+        ordering = ['name']
+
+
+class TeamMembership(models.Model):
+    """One employee in one team. An employee may belong to several teams."""
+    team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name='memberships')
+    email = models.CharField(max_length=255, db_index=True)
+    added_by = models.CharField(max_length=255, default='', blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'team_memberships'
+        ordering = ['id']
+        unique_together = (('team', 'email'),)
+
+
 class WorkSubmission(models.Model):
     """A work item / deliverable submitted by an employee for review."""
     email = models.CharField(max_length=255, db_index=True)
@@ -581,6 +622,10 @@ class WorkSubmission(models.Model):
     file_data = models.TextField(null=True, blank=True)  # base64 data URL
     status = models.CharField(max_length=20, default='Pending')   # Pending | In Review | Approved | Rejected
     reviewer = models.CharField(max_length=255, default='', blank=True)
+    # Routed to the team lead by default; HR may override.
+    reviewer_email = models.CharField(max_length=255, default='', blank=True, db_index=True)
+    team = models.ForeignKey('Team', null=True, blank=True, on_delete=models.SET_NULL,
+                             related_name='submissions', db_column='team_id')
     # Why it was sent back, and anything the reviewer marked up. Kept here for
     # the same reason as the attachment above: written to the browser alone,
     # the reason existed only for the reviewer who typed it, and the employee
@@ -604,6 +649,34 @@ class WorkSubmission(models.Model):
 BENCH_SUBMISSION_STATUSES = [
     'Submitted', 'Interview Scheduled', 'Offered', 'Placed', 'Rejected', 'On Hold',
 ]
+
+
+class SubmissionCollaborator(models.Model):
+    """Someone, from any team, brought into a work submission's discussion.
+    They can see the submission and comment; deciding stays with the routed
+    reviewer and holders of submission.action."""
+    submission = models.ForeignKey('WorkSubmission', on_delete=models.CASCADE, related_name='collaborators')
+    email = models.CharField(max_length=255, db_index=True)
+    added_by = models.CharField(max_length=255, default='', blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'submission_collaborators'
+        ordering = ['id']
+        unique_together = (('submission', 'email'),)
+
+
+class SubmissionComment(models.Model):
+    """One message in a work submission's discussion thread."""
+    submission = models.ForeignKey('WorkSubmission', on_delete=models.CASCADE, related_name='comments')
+    author_email = models.CharField(max_length=255, db_index=True)
+    author_name = models.CharField(max_length=255, default='', blank=True)
+    body = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'submission_comments'
+        ordering = ['created_at', 'id']
 
 
 class BenchSubmission(models.Model):
@@ -766,6 +839,7 @@ class AttendanceCorrection(models.Model):
     reason = models.TextField(null=True, blank=True)
     status = models.CharField(max_length=20, default='Pending')  # Pending|Approved|Rejected
     reviewer = models.CharField(max_length=255, default='', blank=True)
+    reviewer_email = models.CharField(max_length=255, default='', blank=True, db_index=True)
     reviewer_note = models.TextField(null=True, blank=True)
     reviewed_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -844,10 +918,47 @@ class GeoFence(models.Model):
     # The accuracy of the fix the employee captured, so a reviewer can see
     # whether the pin was worth trusting before confirming it.
     captured_accuracy = models.FloatField(null=True, blank=True)
+    # 'gps' when captured on the device, 'manual' when the employee typed the
+    # coordinates (their device could not get a precise fix). HR sees which.
+    capture_method = models.CharField(max_length=10, default='gps', blank=True)
 
     class Meta:
         db_table = 'attendance_geofences'
         ordering = ['name']
+
+
+class HomeLocationChange(models.Model):
+    """A request to set (initial) or replace (change) an employee's home fence.
+
+    The approved fence (GeoFence with owner_email) stays in force while a
+    change is pending: only an HR decision of Approved copies the proposed
+    location onto it. Every request, its decision and the before/after values
+    are kept as the audit trail.
+    """
+    INITIAL, CHANGE = 'initial', 'change'
+    PENDING, APPROVED, REJECTED, CANCELLED = 'Pending', 'Approved', 'Rejected', 'Cancelled'
+    email = models.CharField(max_length=255, db_index=True)
+    kind = models.CharField(max_length=10, default=CHANGE)
+    status = models.CharField(max_length=12, default=PENDING, db_index=True)
+    name = models.CharField(max_length=100, default='', blank=True)
+    latitude = models.FloatField()
+    longitude = models.FloatField()
+    radius_meters = models.IntegerField(default=150)
+    captured_accuracy = models.FloatField(null=True, blank=True)
+    capture_method = models.CharField(max_length=10, default='gps', blank=True)
+    reason = models.TextField(default='', blank=True)
+    previous = models.JSONField(default=dict, blank=True)     # the fence before the decision
+    fence = models.ForeignKey('GeoFence', null=True, blank=True, on_delete=models.SET_NULL,
+                              related_name='change_requests')
+    requested_by = models.CharField(max_length=255, default='', blank=True)
+    requested_at = models.DateTimeField(auto_now_add=True)
+    reviewer = models.CharField(max_length=255, default='', blank=True)
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    review_note = models.TextField(default='', blank=True)
+
+    class Meta:
+        db_table = 'home_location_changes'
+        ordering = ['-requested_at', '-id']
 
 
 class WfhRequest(models.Model):
@@ -860,6 +971,7 @@ class WfhRequest(models.Model):
     reason = models.TextField(null=True, blank=True)
     status = models.CharField(max_length=20, default='Pending')  # Pending|Approved|Rejected
     approver = models.CharField(max_length=255, default='', blank=True)
+    approver_email = models.CharField(max_length=255, default='', blank=True, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -1617,11 +1729,18 @@ class EmployeeCompensation(models.Model):
     pay_frequency = models.CharField(max_length=20, default='monthly')  # monthly | semimonthly | biweekly | weekly
     base_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
     annual_ctc = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
-    currency = models.CharField(max_length=10, default='USD')
+    currency = models.CharField(max_length=10, default='INR')
     effective_from = models.DateField(default=timezone.now)
     effective_to = models.DateField(null=True, blank=True)
     status = models.CharField(max_length=20, default='active')  # active | inactive
     notes = models.TextField(default='', blank=True)
+    # Indian statutory fields for payslip generation
+    employee_code = models.CharField(max_length=40, default='', blank=True)
+    pan_number = models.CharField(max_length=20, default='', blank=True)
+    uan_number = models.CharField(max_length=20, default='', blank=True)
+    pf_account_number = models.CharField(max_length=60, default='', blank=True)
+    bank_account_number = models.CharField(max_length=40, default='', blank=True)
+    bank_name = models.CharField(max_length=100, default='', blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -1634,18 +1753,20 @@ class PayComponent(models.Model):
     """Catalogue of earnings and deduction components."""
     code = models.CharField(max_length=50, unique=True)
     name = models.CharField(max_length=100)
-    component_type = models.CharField(max_length=20, default='earning')  # earning | deduction
+    component_type = models.CharField(max_length=20, default='earning')  # earning | deduction | employer
     calc_type = models.CharField(max_length=30, default='fixed')  # fixed | percent_of_base | formula
     rate = models.DecimalField(max_digits=8, decimal_places=4, default=Decimal('0.0000'))
     default_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
     is_taxable = models.BooleanField(default=True)
     is_active = models.BooleanField(default=True)
+    # Display order within type group (lower = shown first)
+    display_order = models.IntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         db_table = 'pay_components'
-        ordering = ['component_type', 'code']
+        ordering = ['component_type', 'display_order', 'code']
 
 
 class EmployeePayComponent(models.Model):
@@ -1666,7 +1787,7 @@ class EmployeePayComponent(models.Model):
 
 class PayrollRun(models.Model):
     """Batch pay period run engine record."""
-    period_label = models.CharField(max_length=20, db_index=True)  # e.g., '2026-08'
+    period_label = models.CharField(max_length=20, db_index=True)  # e.g., '2026-06'
     period_start = models.DateField()
     period_end = models.DateField()
     pay_date = models.DateField(null=True, blank=True)
@@ -1701,13 +1822,28 @@ class Payslip(models.Model):
     gross_earnings = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
     total_deductions = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
     net_pay = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    # Employer's contribution total (EPF + ESIC)
+    employer_contribution = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    total_ctc = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
     earnings_data = models.JSONField(default=list, blank=True)
     deductions_data = models.JSONField(default=list, blank=True)
+    # Employer CTC breakdown: [{code, label, amount, sub_items: [{label, amount}]}]
+    employer_contributions_data = models.JSONField(default=list, blank=True)
+    # Snapshot of employee statutory info at payslip generation time
+    employee_code = models.CharField(max_length=40, default='', blank=True)
+    pan_number = models.CharField(max_length=20, default='', blank=True)
+    uan_number = models.CharField(max_length=20, default='', blank=True)
+    pf_account_number = models.CharField(max_length=60, default='', blank=True)
+    bank_account_number = models.CharField(max_length=40, default='', blank=True)
+    bank_name = models.CharField(max_length=100, default='', blank=True)
+    designation = models.CharField(max_length=120, default='', blank=True)
+    doj = models.DateField(null=True, blank=True)  # Date of Joining
+    month_days = models.IntegerField(default=30)
     status = models.CharField(max_length=20, default='draft')  # draft | approved | paid
     file_name = models.CharField(max_length=255, default='', blank=True)
     file_mime = models.CharField(max_length=100, default='application/pdf', blank=True)
     file_size = models.IntegerField(default=0)
-    file_data = models.TextField(default='', blank=True)  # base64 PDF
+    file_data = models.TextField(default='', blank=True)  # base64 HTML payslip
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -1851,3 +1987,54 @@ class ChatMeeting(models.Model):
         db_table = "chat_meetings"
         managed = False
         ordering = ["scheduled_at"]
+
+
+# ---------------------------------------------------------------------------
+# Per-user notification preferences (Settings > Notifications)
+# ---------------------------------------------------------------------------
+class NotificationPreference(models.Model):
+    """One row per user. ``prefs`` maps a category key (see
+    api/notification_prefs.py) to on/off; a missing key means "use the
+    category default"."""
+    email = models.CharField(max_length=255, primary_key=True)
+    prefs = models.JSONField(default=dict, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'notification_preferences'
+
+
+# ---------------------------------------------------------------------------
+# AI provider settings: the server-managed API key (Settings > AI Settings)
+# ---------------------------------------------------------------------------
+class AIProviderSetting(models.Model):
+    """The AI provider key managed from the HRMS UI.
+
+    The key itself is only ever stored encrypted (Fernet, keyed by the
+    HRMS_SECRETS_KEY environment variable, which lives outside the database)
+    and is never returned by any API. ``key_fingerprint`` is a short SHA-256
+    prefix so administrators can tell which key is active without seeing it.
+    One row per provider."""
+    provider = models.CharField(max_length=40, unique=True, default='anthropic')
+    encrypted_key = models.TextField(default='', blank=True)
+    key_fingerprint = models.CharField(max_length=16, default='', blank=True)
+    validated_at = models.DateTimeField(null=True, blank=True)
+    updated_by = models.CharField(max_length=255, default='', blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'ai_provider_settings'
+
+
+class AISettingsAudit(models.Model):
+    """Who changed the AI settings, and when. Never holds the key."""
+    actor_email = models.CharField(max_length=255, db_index=True)
+    action = models.CharField(max_length=40)
+    provider = models.CharField(max_length=40, default='anthropic')
+    key_fingerprint = models.CharField(max_length=16, default='', blank=True)
+    detail = models.CharField(max_length=255, default='', blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'ai_settings_audit'
+        ordering = ['-created_at', '-id']

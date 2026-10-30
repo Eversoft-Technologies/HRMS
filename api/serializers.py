@@ -663,19 +663,19 @@ class CompanyDetailSerializer(serializers.ModelSerializer):
     legalName = serializers.CharField(source='legal_name', required=False, allow_blank=True)
     brandName = serializers.CharField(source='brand_name', required=False, allow_blank=True)
     companyLogo = serializers.CharField(source='company_logo', required=False, allow_blank=True)
-    website = serializers.CharField(source='website', required=False, allow_blank=True)
+    website = serializers.CharField(required=False, allow_blank=True)
     contactEmail = serializers.CharField(source='contact_email', required=False, allow_blank=True)
-    phone = serializers.CharField(source='phone', required=False, allow_blank=True)
+    phone = serializers.CharField(required=False, allow_blank=True)
     taxId = serializers.CharField(source='tax_id', required=False, allow_blank=True)
-    industry = serializers.CharField(source='industry', required=False, allow_blank=True)
+    industry = serializers.CharField(required=False, allow_blank=True)
     addressLine1 = serializers.CharField(source='address_line1', required=False, allow_blank=True)
     addressLine2 = serializers.CharField(source='address_line2', required=False, allow_blank=True)
-    city = serializers.CharField(source='city', required=False, allow_blank=True)
-    state = serializers.CharField(source='state', required=False, allow_blank=True)
-    country = serializers.CharField(source='country', required=False, allow_blank=True)
-    pincode = serializers.CharField(source='pincode', required=False, allow_blank=True)
-    timezone = serializers.CharField(source='timezone', required=False, allow_blank=True)
-    currency = serializers.CharField(source='currency', required=False, allow_blank=True)
+    city = serializers.CharField(required=False, allow_blank=True)
+    state = serializers.CharField(required=False, allow_blank=True)
+    country = serializers.CharField(required=False, allow_blank=True)
+    pincode = serializers.CharField(required=False, allow_blank=True)
+    timezone = serializers.CharField(required=False, allow_blank=True)
+    currency = serializers.CharField(required=False, allow_blank=True)
     dateFormat = serializers.CharField(source='date_format', required=False, allow_blank=True)
     workWeek = serializers.JSONField(source='work_week', required=False)
     empIdPrefix = serializers.CharField(source='emp_id_prefix', required=False, allow_blank=True)
@@ -778,6 +778,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
     employmentType = serializers.CharField(source='employment_type', required=False, allow_blank=True, default='Full-time')
     annualCtc = serializers.DecimalField(source='annual_ctc', max_digits=14, decimal_places=2, required=False, allow_null=True)
     startDate = serializers.DateField(source='start_date', required=False, allow_null=True)
+    managerEmail = serializers.CharField(source='manager_email', required=False, allow_blank=True, default='')
 
     class Meta:
         model = UserProfile
@@ -785,6 +786,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
             'email', 'employeeId', 'firstName', 'lastName', 'phone', 'altEmail',
             'bloodGroup', 'department', 'designation', 'manager', 'level',
             'employmentType', 'location', 'annualCtc', 'startDate', 'address', 'profilePic',
+            'managerEmail',
         ]
         extra_kwargs = {
             'employeeId': {'required': False, 'allow_blank': True, 'default': ''},
@@ -811,6 +813,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
             'address': instance.address or '',
             'profilePic': instance.profile_pic or '',
             'manager': instance.manager or '',
+            'managerEmail': instance.manager_email or '',
             'level': instance.level or '',
             'employmentType': instance.employment_type or '',
             'location': instance.location or '',
@@ -983,6 +986,7 @@ class LeaveRequestSerializer(serializers.ModelSerializer):
             'reason': instance.reason or '',
             'status': instance.status,
             'approver': instance.approver or '',
+            'approverEmail': instance.approver_email or '',
             'createdAt': instance.created_at.strftime(DATETIME_FMT) if instance.created_at else None,
         }
 
@@ -1034,6 +1038,9 @@ class EmployeeTaskSerializer(serializers.ModelSerializer):
             'createdBy': instance.created_by or '',
             'taskCode': instance.task_code or '',
             'teamLead': instance.team_lead or '',
+            'teamLeadEmail': instance.team_lead_email or '',
+            'teamId': instance.team_id,
+            'teamName': instance.team.name if instance.team_id and instance.team else '',
             'department': instance.department or '',
             'estimatedHours': instance.estimated_hours,
             'progress': instance.progress or 0,
@@ -1113,6 +1120,11 @@ class WorkSubmissionSerializer(serializers.ModelSerializer):
             'hasFile': bool(instance.file_data),
             'status': instance.status,
             'reviewer': instance.reviewer or '',
+            'reviewerEmail': instance.reviewer_email or '',
+            'teamId': instance.team_id,
+            'teamName': instance.team.name if instance.team_id and instance.team else '',
+            'collaborators': [c.email for c in instance.collaborators.all()],
+            'commentCount': instance.comments.count(),
             'reviewerNote': instance.reviewer_note or '',
             'reviewerNoteBy': instance.reviewer_note_by or '',
             'reviewerNoteAt': (instance.reviewer_note_at.strftime(DATETIME_FMT)
@@ -1524,6 +1536,7 @@ class AttendanceCorrectionSerializer(serializers.ModelSerializer):
             'reason': instance.reason or '',
             'status': instance.status,
             'reviewer': instance.reviewer or '',
+            'reviewerEmail': instance.reviewer_email or '',
             'reviewerNote': instance.reviewer_note or '',
             'reviewedAt': instance.reviewed_at.strftime(DATETIME_FMT) if instance.reviewed_at else None,
             'createdAt': instance.created_at.strftime(DATETIME_FMT) if instance.created_at else None,
@@ -1574,6 +1587,7 @@ class WfhRequestSerializer(serializers.ModelSerializer):
             'reason': instance.reason or '',
             'status': instance.status,
             'approver': instance.approver or '',
+            'approverEmail': instance.approver_email or '',
             'createdAt': instance.created_at.strftime(DATETIME_FMT) if instance.created_at else None,
         }
 
