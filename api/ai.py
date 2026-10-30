@@ -47,19 +47,41 @@ class AIUnavailable(Exception):
 
 
 def _api_key(request_key=None):
-    return request_key or os.environ.get('VITE_ANTHROPIC_API_KEY') or os.environ.get('ANTHROPIC_API_KEY')
+    """The key for an AI call.
+
+    ``request_key`` is for server-side callers only (tests, key validation).
+    HTTP views must never pass a browser-supplied value here: the key always
+    comes from the server-managed source (see api/ai_settings.py: the key saved
+    in Settings > AI Settings, else ANTHROPIC_API_KEY, else the deprecated
+    VITE_ANTHROPIC_API_KEY)."""
+    if request_key:
+        return request_key
+    from .ai_settings import active_key
+    return active_key()
+
+
+def reset_status_cache():
+    """Forget the cached key check (called after the key is saved/rotated/removed)."""
+    global _ai_status_cache, _ai_status_detail
+    _ai_status_cache = None
+    _ai_status_detail = ''
 
 
 def check_ai_key_valid(request_key=None):
-    """Validate a key with a 1-token ping. Caches the env-key result."""
+    """Validate the active key with a 1-token ping. The result is cached per
+    key fingerprint, so a rotation (even from another server process) is
+    re-checked instead of serving a stale answer."""
     global _ai_status_cache, _ai_status_detail
     api_key = _api_key(request_key)
     if not api_key:
         if not request_key:
-            _ai_status_detail = 'No Anthropic API key configured. Set ANTHROPIC_API_KEY in the server .env.'
+            _ai_status_detail = ('No Anthropic API key configured. Save one in Settings > AI Settings '
+                                 'or set ANTHROPIC_API_KEY on the server.')
         return False
-    if not request_key and _ai_status_cache is not None:
-        return _ai_status_cache
+    from .ai_settings import fingerprint as _fp
+    fp = _fp(api_key)
+    if not request_key and _ai_status_cache is not None and _ai_status_cache[0] == fp:
+        return _ai_status_cache[1]
     try:
         resp = requests.post(
             ANTHROPIC_URL,
@@ -77,7 +99,7 @@ def check_ai_key_valid(request_key=None):
         )
         valid = resp.ok
         if not request_key:
-            _ai_status_cache = valid
+            _ai_status_cache = (fp, valid)
             _ai_status_detail = 'ok' if valid else _upstream_error(resp)
         return valid
     except requests.RequestException as exc:
@@ -99,7 +121,7 @@ def _get_langchain_llm(request_key=None, max_tokens=3000, timeout=None):
     api_key = _api_key(request_key)
     if not api_key:
         raise AIUnavailable(
-            'No Anthropic API key configured. Set ANTHROPIC_API_KEY in the server .env.',
+            'No Anthropic API key configured. Save one in Settings > AI Settings or set ANTHROPIC_API_KEY on the server.',
             status=503,
         )
     try:
@@ -159,7 +181,7 @@ def _call_raw_claude(prompt, max_tokens=3000, request_key=None, system=None, dea
     api_key = _api_key(request_key)
     if not api_key:
         raise AIUnavailable(
-            'No Anthropic API key configured. Set ANTHROPIC_API_KEY in the server .env.',
+            'No Anthropic API key configured. Save one in Settings > AI Settings or set ANTHROPIC_API_KEY on the server.',
             status=503,
         )
 

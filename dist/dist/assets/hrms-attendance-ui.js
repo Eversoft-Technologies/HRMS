@@ -85,11 +85,15 @@
   }
   /* Weekdays elapsed this month up to today — same definition the bundle's
      own hrWeekdays() uses for the Monthly Summary "Absent"/"Rate" math. */
+  /* Working day per Settings > General (work week); Mon–Fri until it loads. */
+  function isWorkDay(d) {
+    if (window.HRMSCompany) return window.HRMSCompany.isWorkDay(d);
+    var w = d.getDay(); return w !== 0 && w !== 6;
+  }
   function weekdaysSoFar() {
     var d = new Date(), y = d.getFullYear(), m = d.getMonth(), t = d.getDate(), c = 0;
     for (var i = 1; i <= t; i++) {
-      var w = new Date(y, m, i).getDay();
-      if (w !== 0 && w !== 6) c++;
+      if (isWorkDay(new Date(y, m, i))) c++;
     }
     return c;
   }
@@ -100,8 +104,7 @@
   function weekdaysInRange(fromStr, toStr) {
     var from = new Date(fromStr + 'T00:00:00'), to = new Date(toStr + 'T00:00:00'), c = 0;
     for (var d = new Date(from); d <= to; d.setDate(d.getDate() + 1)) {
-      var w = d.getDay();
-      if (w !== 0 && w !== 6) c++;
+      if (isWorkDay(d)) c++;
     }
     return Math.max(1, c);
   }

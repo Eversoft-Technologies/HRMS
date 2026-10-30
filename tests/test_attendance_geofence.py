@@ -113,52 +113,43 @@ class OutOfGeofenceCheckInTests(TestCase):
         self.assertIsNotNone(body['distance'], 'the employee must be told how far out they are')
         self.assertEqual(body['fence'], 'HQ')
 
-    def test_a_missing_position_does_not_keep_yesterdays_coordinates(self):
+    def test_a_missing_position_records_nothing(self):
         EmployeeAttendance.objects.create(
             email=self.email, date=local_today(),
             location_lat=OFFICE_LAT, location_lng=OFFICE_LNG,
         )
         resp = self._check_in()          # no position at all
-        self.assertEqual(resp.status_code, 422)
-
+        self.assertEqual(resp.status_code, 400)
         row = EmployeeAttendance.objects.get(email=self.email, date=local_today())
-        self.assertIsNone(row.location_lat, 'a stale fix makes an unverified day look measured')
+        self.assertIsNone(row.check_in, 'a check-in without a position must not count as one')
 
-    def test_wfh_is_exempt_from_the_office_fence(self):
-        """Being 500 km from the office is the normal case for a WFH day, so it
-        must not go into the out-of-office review queue.
-
-        Note what exemption does NOT mean any more: this used to also assert
-        geo_verified, which made `isWfh` a way to be marked verified from
-        anywhere. Verification for a WFH day now comes from the employee's own
-        registered home — see tests/test_home_geofence.py. With no home on file,
-        as here, the day is simply left unverified.
-        """
+    def test_wfh_is_judged_against_home_not_the_office(self):
+        """Being 500 km from the office is normal on a WFH day, so it never enters
+        the OFFICE review. With no approved home there is nothing to verify
+        against either, so the employee is asked for a reason (home path)."""
         WfhRequest.objects.create(
             email=self.email, status='Approved',
             from_date=local_today(), to_date=local_today(), days=1,
         )
         resp = self._check_in(latitude=FAR_LAT, longitude=FAR_LNG)
+        self.assertEqual(resp.status_code, 422)
+        self.assertTrue(resp.json()['isWfh'])
+        self.assertEqual(resp.json()['homeLocationStatus'], 'Not set up')
 
-        self.assertIn(resp.status_code, (200, 201))
-        row = EmployeeAttendance.objects.get(email=self.email, date=local_today())
-        self.assertTrue(row.is_wfh)
-        self.assertEqual(row.location_status, '', 'WFH must never need approval')
-        self.assertFalse(row.geo_verified,
-                         'nothing was checked against, so nothing may be claimed')
-
-    def test_no_position_from_the_browser_is_treated_as_outside(self):
-        """A denied geolocation prompt cannot be told apart from being away."""
-        self.assertEqual(self._check_in().status_code, 422)
-
-    def test_nothing_is_enforced_until_a_fence_exists(self):
-        GeoFence.objects.all().delete()
+    def test_no_position_from_the_browser_is_refused(self):
+        """A denied geolocation prompt cannot be verified at all, so the
+        check-in is refused outright rather than reviewed."""
         resp = self._check_in()
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.json()['code'], 'LOCATION_REQUIRED')
 
-        self.assertIn(resp.status_code, (200, 201))
-        row = EmployeeAttendance.objects.get(email=self.email, date=local_today())
-        self.assertEqual(row.location_status, '')
-
+    def test_without_any_fence_nothing_is_verified(self):
+        """Location is mandatory in every mode: with no office fence there is
+        nothing to verify against, so the check-in needs a reason and HR review."""
+        GeoFence.objects.all().delete()
+        resp = self._check_in(latitude=OFFICE_LAT, longitude=OFFICE_LNG)
+        self.assertEqual(resp.status_code, 422)
+        self.assertIn('No office location', resp.json()['message'])
 
 class LocationReviewQueueTests(TestCase):
     def setUp(self):

@@ -36,6 +36,13 @@ OFFICE_LAT, OFFICE_LNG = 17.4485, 78.3908           # inside the fence below
 FAR_LAT, FAR_LNG = 12.9716, 77.5946                 # ~500 km away
 
 
+
+def _approved_home(email, lat, lng):
+    """Location is mandatory in every mode: a WFH day is verified against the
+    employee's APPROVED home fence, so tests that work from home need one."""
+    return GeoFence.objects.create(name='Home', latitude=lat, longitude=lng, radius_meters=150,
+                                   owner_email=email, status=GeoFence.APPROVED)
+
 class WfhCheckInGateTests(TestCase):
     """A plain employee — no role_ref, no legacy 'admin' — so no permission
     silently waves these through."""
@@ -87,16 +94,21 @@ class WfhCheckInGateTests(TestCase):
                          'an unapproved WFH claim must never be geo-verified')
 
     # ── the approved path still works ────────────────────────────────────
-    def test_an_approved_request_allows_wfh_far_from_every_fence(self):
+    def test_an_approved_request_allows_wfh_far_from_every_office_fence(self):
+        """Far from every OFFICE fence is fine on a WFH day — it is checked
+        against the approved home instead, and never enters office review."""
         self._request('Approved')
+        _approved_home(self.email, FAR_LAT, FAR_LNG)
         resp = self._check_in(isWfh=True, latitude=FAR_LAT, longitude=FAR_LNG)
         self.assertIn(resp.status_code, (200, 201))
         row = self._row()
         self.assertTrue(row.is_wfh)
-        self.assertEqual(row.location_status, '', 'WFH must never need review')
+        self.assertTrue(row.geo_verified)
+        self.assertEqual(row.location_status, '', 'verified at home: no review needed')
 
     def test_an_approval_applies_even_if_the_client_forgets_to_ask(self):
         self._request('Approved')
+        _approved_home(self.email, FAR_LAT, FAR_LNG)
         resp = self._check_in(latitude=FAR_LAT, longitude=FAR_LNG)
         self.assertIn(resp.status_code, (200, 201))
         self.assertTrue(self._row().is_wfh)
@@ -123,14 +135,16 @@ class WfhCheckInGateTests(TestCase):
         """An approver reversing themselves should not have to delete a row."""
         self._request('Rejected')
         self._request('Approved')
-        self.assertIn(self._check_in(isWfh=True).status_code, (200, 201))
+        _approved_home(self.email, FAR_LAT, FAR_LNG)
+        self.assertIn(self._check_in(isWfh=True, latitude=FAR_LAT, longitude=FAR_LNG).status_code, (200, 201))
 
     def test_a_rejection_for_another_day_does_not_block_today(self):
         today = local_today()
         WfhRequest.objects.create(
             email=self.email, from_date=today.replace(day=1) if today.day > 1 else today,
             to_date=today, days=1, status='Approved')
-        self.assertIn(self._check_in(isWfh=True).status_code, (200, 201))
+        _approved_home(self.email, FAR_LAT, FAR_LNG)
+        self.assertIn(self._check_in(isWfh=True, latitude=FAR_LAT, longitude=FAR_LNG).status_code, (200, 201))
 
     # ── the two ways to work remotely without filing a request ───────────
     def _grant(self, code):
@@ -149,7 +163,8 @@ class WfhCheckInGateTests(TestCase):
 
     def test_a_policy_that_needs_no_approval_allows_wfh(self):
         WFHPolicy.objects.create(name='Open', requires_approval=False, is_active=True)
-        self.assertIn(self._check_in(isWfh=True).status_code, (200, 201))
+        _approved_home(self.email, FAR_LAT, FAR_LNG)
+        self.assertIn(self._check_in(isWfh=True, latitude=FAR_LAT, longitude=FAR_LNG).status_code, (200, 201))
 
     def test_standing_remote_access_does_not_mark_office_staff_as_wfh(self):
         """It permits a claim; it must not make one. Otherwise every admin

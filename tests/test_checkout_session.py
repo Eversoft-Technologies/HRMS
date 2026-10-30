@@ -88,7 +88,8 @@ class CheckOutSessionTests(TestCase):
         self.assertIsNone(self._row().check_out)
 
     def test_a_real_session_still_checks_out(self):
-        self._check_in()
+        GeoFence.objects.create(name='HQ', latitude=OFFICE_LAT, longitude=OFFICE_LNG, radius_meters=200)
+        self._check_in(latitude=OFFICE_LAT, longitude=OFFICE_LNG)
         self.assertIsNotNone(self._row().check_in, 'precondition: checked in')
         self.assertIn(self._check_out().status_code, (200, 201))
         self.assertIsNotNone(self._row().check_out)
