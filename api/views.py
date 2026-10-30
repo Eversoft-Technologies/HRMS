@@ -4949,8 +4949,20 @@ def attendance_map_feed(request):
                     'activeCount': 0,
                 })
 
-        # Include registered home fences for WFH/remote tracking
-        for hf in GeoFence.objects.exclude(owner_email=''):
+        # Include registered home fences for WFH/remote tracking. ownerName lets
+        # the map label a home by the person's name instead of "Home — <email>".
+        home_fences = list(GeoFence.objects.exclude(owner_email=''))
+        owner_names = {}
+        try:
+            for u in AppUser.objects.filter(email__in=[h.owner_email for h in home_fences]):
+                owner_names[(u.email or '').lower()] = (u.full_name or '').strip()
+            for pr in UserProfile.objects.filter(email__in=[h.owner_email for h in home_fences]):
+                full = f"{pr.first_name or ''} {pr.last_name or ''}".strip()
+                if full:
+                    owner_names[(pr.email or '').lower()] = full
+        except Exception:
+            pass
+        for hf in home_fences:
             try:
                 h_lat = float(hf.latitude) if hf.latitude is not None else None
                 h_lng = float(hf.longitude) if hf.longitude is not None else None
@@ -4966,6 +4978,7 @@ def attendance_map_feed(request):
                     'radius_meters': int(hf.radius_meters) if hf.radius_meters else 150,
                     'isHome': True,
                     'ownerEmail': hf.owner_email,
+                    'ownerName': owner_names.get((hf.owner_email or '').lower(), ''),
                     'activeCount': 0,
                 })
 

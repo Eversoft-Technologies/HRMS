@@ -643,16 +643,62 @@
         }
       }
 
-      // 🏢 Office Location Badges
-      fences.forEach(function (f) {
-        if (!f.latitude || !f.longitude) return;
-        var fx = toX(f.longitude), fy = toY(f.latitude);
-        var lbl = document.createElement('div');
-        lbl.className = 'haa-map-fence-badge';
-        lbl.style.cssText = 'position:absolute;left:' + fx + 'px;top:' + (fy - 28) + 'px;transform:translate(-50%,-100%);' +
-          'background:rgba(15,23,42,0.88);color:#fff;padding:5px 12px;border-radius:20px;font-size:11px;font-weight:700;' +
-          'border:1px solid ' + (f.isHome ? '#8b5cf6' : '#3b82f6') + ';box-shadow:0 4px 16px rgba(0,0,0,0.35);white-space:nowrap;pointer-events:auto;cursor:pointer;z-index:15;';
-
+      // 🏢 / 🏠 Location labels — short, readable and never stacked.
+      // Homes show the owner's first name (not "Home — <email>"), long names
+      // are cut with the full text in the tooltip, and labels are placed in
+      // priority order (offices, busy homes, idle homes): one that would
+      // overlap an earlier label tries a slot above/below, else it shrinks to
+      // an icon chip. Idle homes (0 remote) are always just a small icon.
+      var placedRects = [];
+      // Home labels show the owner's profile picture (initials until it loads,
+      // or when there is none). /api/avatars/<email> needs the caller header,
+      // which an <img src> cannot send, so it is fetched once and kept as an
+      // object URL for the session.
+      var PIC = window.__haaFencePics || (window.__haaFencePics = {});
+      function picImg(url) {
+        return '<img src="' + esc(url) + '" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:50%;display:block;">';
+      }
+      function loadPic(em) {
+        PIC[em] = { pending: true };
+        fetch('/api/avatars/' + encodeURIComponent(em), { headers: { Accept: 'image/*,*/*;q=0.8' } })
+          .then(function (r) { return r.ok ? r.blob() : null; })
+          .then(function (b) {
+            PIC[em] = (b && /^image\//.test(b.type)) ? URL.createObjectURL(b) : null;
+            if (!PIC[em]) return;
+            document.querySelectorAll('.haa-fence-av').forEach(function (el) {
+              if (el.getAttribute('data-pic-email') === em) el.innerHTML = picImg(PIC[em]);
+            });
+          })
+          .catch(function () { PIC[em] = null; });
+      }
+      function ownerAvatar(f, owner, size) {
+        var em = String(f.ownerEmail || '').toLowerCase();
+        var ini = owner.full.split(/\s+/).map(function (w) { return w.charAt(0); }).join('').toUpperCase().slice(0, 2) || '?';
+        var c = PIC[em];
+        if (em && c === undefined) loadPic(em);
+        return '<span class="haa-fence-av" data-pic-email="' + esc(em) + '" style="width:' + size + 'px;height:' + size + 'px;border-radius:50%;' +
+          'background:linear-gradient(135deg,#8b5cf6,#6366f1);color:#fff;font-size:' + Math.round(size * 0.42) + 'px;font-weight:700;' +
+          'display:inline-flex;align-items:center;justify-content:center;overflow:hidden;flex-shrink:0;">' +
+          (typeof c === 'string' ? picImg(c) : esc(ini)) + '</span>';
+      }
+      function shortText(s, n) { s = String(s || '').trim(); return s.length > n ? s.slice(0, n - 1).trim() + '…' : s; }
+      function homeOwnerName(f) {
+        var emp = employees.filter(function (e) { return e.email && e.email === f.ownerEmail; })[0];
+        var full = (f.ownerName || (emp && emp.name) || '').replace(/\s+/g, ' ').trim();
+        if (!full) {
+          var local = String(f.ownerEmail || '').split('@')[0].split(/[._\-+]/)[0] || 'Home';
+          full = local.charAt(0).toUpperCase() + local.slice(1);
+        }
+        return { first: full.split(/\s+/)[0], full: full };
+      }
+      function overlaps(r) {
+        for (var i = 0; i < placedRects.length; i++) {
+          var q = placedRects[i];
+          if (r.x < q.x + q.w + 4 && r.x + r.w + 4 > q.x && r.y < q.y + q.h + 3 && r.y + r.h + 3 > q.y) return true;
+        }
+        return false;
+      }
+      var fenceItems = fences.filter(function (f) { return f.latitude && f.longitude; }).map(function (f) {
         var onSiteEmpsInFence = employees.filter(function (emp) {
           if (emp.latitude == null || emp.longitude == null || emp.isAbsent) return false;
           if (f.isHome) return emp.isWfh && emp.email === f.ownerEmail;
@@ -660,11 +706,70 @@
           var d = haversine(emp.latitude, emp.longitude, f.latitude, f.longitude);
           return d <= (Number(f.radiusMeters || f.radius_meters) || 200) + 60 || emp.isSimulatedCoord;
         });
-
         var countNum = (f.activeCount != null && f.activeCount > 0) ? f.activeCount : onSiteEmpsInFence.length;
+        return { f: f, count: countNum, x: toX(f.longitude), y: toY(f.latitude),
+                 rank: f.isHome ? (countNum > 0 ? 1 : 2) : 0 };
+      }).filter(function (it) { return it.x > -120 && it.x < W + 120 && it.y > -60 && it.y < H + 60; });
+      fenceItems.sort(function (a, b) { return a.rank - b.rank || b.count - a.count; });
+
+      fenceItems.forEach(function (it) {
+        var f = it.f, fx = it.x, fy = it.y, countNum = it.count;
+        var color = f.isHome ? '#8b5cf6' : '#3b82f6';
         var iconPrefix = f.isHome ? '🏠 ' : '🏢 ';
-        var labelSuffix = f.isHome ? ' Remote' : ' On-Site';
-        lbl.innerHTML = iconPrefix + esc(f.name) + ' <span style="background:' + (f.isHome ? '#8b5cf6' : '#3b82f6') + ';color:#fff;border-radius:10px;padding:2px 7px;margin-left:4px;font-size:10px;">' + countNum + labelSuffix + '</span>';
+        var labelSuffix = f.isHome ? ' remote' : ' on-site';
+        var owner = f.isHome ? homeOwnerName(f) : null;
+        var fullName = f.isHome ? owner.full + '’s home' + (f.ownerEmail ? ' (' + f.ownerEmail + ')' : '') : (f.name || 'Office');
+        var shortName = f.isHome ? shortText(owner.first, 14) : shortText(f.name || 'Office', 20);
+        var tip = fullName + ' — ' + countNum + labelSuffix + (countNum ? ' now' : '');
+
+        var lbl = document.createElement('div');
+        lbl.className = 'haa-map-fence-badge';
+        lbl.title = tip;
+        lbl.setAttribute('aria-label', tip);
+        var base = 'position:absolute;left:0;top:0;visibility:hidden;background:rgba(15,23,42,0.9);color:#fff;' +
+          'border:1px solid ' + color + ';box-shadow:0 3px 12px rgba(0,0,0,0.3);white-space:nowrap;pointer-events:auto;cursor:pointer;' +
+          'display:inline-flex;align-items:center;gap:5px;line-height:1;';
+        var pill = function (txt) {
+          return '<span style="background:' + color + ';color:#fff;border-radius:9px;padding:2px 6px;font-size:10px;font-weight:700;">' + txt + '</span>';
+        };
+        function asFull() {
+          lbl.style.cssText = base + 'padding:' + (f.isHome ? '3px 9px 3px 3px' : '4px 9px') + ';border-radius:14px;font-size:11px;font-weight:600;z-index:' + (f.isHome ? 14 : 16) + ';';
+          lbl.innerHTML = (f.isHome ? ownerAvatar(f, owner, 18) + '<span>' + esc(shortName) + '</span>'
+                                    : '<span>' + iconPrefix + esc(shortName) + '</span>') + pill(countNum + labelSuffix);
+        }
+        function asIcon() {
+          if (f.isHome) {
+            lbl.style.cssText = base + 'padding:2px;border-radius:14px;border-width:2px;z-index:13;' + (countNum ? 'padding-right:5px;' : '');
+            lbl.innerHTML = ownerAvatar(f, owner, 22) + (countNum ? pill(String(countNum)) : '');
+            return;
+          }
+          lbl.style.cssText = base + 'padding:3px 6px;border-radius:12px;font-size:11px;z-index:13;';
+          lbl.innerHTML = iconPrefix.trim() + (countNum ? pill(String(countNum)) : '');
+        }
+        if (f.isHome && !countNum) asIcon(); else asFull();
+        overlayLayer.appendChild(lbl);
+
+        // Find a free slot: above the point, higher, below, then shrink.
+        function tryPlace() {
+          var w = lbl.offsetWidth, h = lbl.offsetHeight;
+          var slots = [fy - 22 - h, fy - 22 - 2 * h - 6, fy + 18, fy + 18 + h + 6];
+          for (var s = 0; s < slots.length; s++) {
+            var r = { x: fx - w / 2, y: slots[s], w: w, h: h };
+            if (!overlaps(r)) return r;
+          }
+          return null;
+        }
+        var spot = tryPlace();
+        if (!spot && !(f.isHome && !countNum)) { asIcon(); spot = tryPlace(); }
+        if (!spot) {   // still crowded: keep the icon right on the point, behind the rest
+          var w0 = lbl.offsetWidth, h0 = lbl.offsetHeight;
+          spot = { x: fx - w0 / 2, y: fy - h0 / 2, w: w0, h: h0 };
+          lbl.style.zIndex = 12;
+        }
+        placedRects.push(spot);
+        lbl.style.left = Math.round(spot.x) + 'px';
+        lbl.style.top = Math.round(spot.y) + 'px';
+        lbl.style.visibility = 'visible';
 
         lbl.onclick = function (e) {
           e.stopPropagation();
@@ -675,15 +780,14 @@
             return d <= (Number(f.radiusMeters || f.radius_meters) || 200) + 60 || emp.isSimulatedCoord;
           });
           if (fenceEmps.length > 0) {
-            showClusterPopover(fenceEmps, fx, fy - 10, iconPrefix + f.name + ' (' + fenceEmps.length + labelSuffix + ')');
+            showClusterPopover(fenceEmps, fx, fy - 10, (f.isHome ? owner.full + '’s home' : iconPrefix + (f.name || 'Office')) + ' (' + fenceEmps.length + labelSuffix + ')');
           } else {
             st.lat = f.latitude;
             st.lng = f.longitude;
-            st.z = 16;
+            st.z = Math.max(st.z, 16);
             redraw();
           }
         };
-        overlayLayer.appendChild(lbl);
       });
 
       // 👥 Marker Clustering & Employee Pins
