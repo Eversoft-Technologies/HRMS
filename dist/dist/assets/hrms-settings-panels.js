@@ -209,7 +209,7 @@
 
     if (m.canManage) {
       html += '<div style="display:flex;gap:10px;flex-wrap:wrap">' +
-        '<input class="input-field" data-a="key" type="password" autocomplete="off" spellcheck="false" placeholder="' + (managed.present ? 'New key to rotate to (sk-ant-…)' : 'sk-ant-api03-…') + '" style="flex:1;min-width:220px"' + (m.encryptionReady ? '' : ' disabled') + '>' +
+        '<input class="input-field" data-a="key" type="password" autocomplete="new-password" spellcheck="false" placeholder="' + (managed.present ? 'New key to rotate to (sk-ant-…)' : 'sk-ant-api03-…') + '" style="flex:1;min-width:220px"' + (m.encryptionReady ? '' : ' disabled') + '>' +
         '</div>' +
         '<div class="hsp-btns">' +
         '<button type="button" class="btn-sm" data-a="test">Test key</button>' +
@@ -280,6 +280,49 @@
         (e.detail ? ' <span class="hsp-s">— ' + esc(e.detail) + '</span>' : '') + '</span></li>';
     }).join('');
   }
+
+  /* ── Browser password autofill must not hit the topbar search ────────────
+     A page with a password field (SMTP password, AI key) looks like a login
+     form to the browser's password manager, which then fills the saved login
+     email into the nearest text box: the topbar "Search anything" input. That
+     autofill fires an input event, so the search dropdown popped open with the
+     user's email in it every time Settings was opened.
+       1. Every password field is marked autocomplete="new-password", which
+          tells the browser not to offer saved logins on this page.
+       2. Belt and braces: input reaching the search box while it is NOT
+          focused (only autofill does that) is discarded before React sees it. */
+  function isTopSearch(el) {
+    return !!(el && el.tagName === 'INPUT' && el.closest && el.closest('.topbar') &&
+              /search/i.test(el.getAttribute('placeholder') || ''));
+  }
+  function hardenAutofill() {
+    document.querySelectorAll('input[type="password"]').forEach(function (i) {
+      if (i.getAttribute('autocomplete') !== 'new-password') i.setAttribute('autocomplete', 'new-password');
+    });
+    document.querySelectorAll('.topbar input').forEach(function (i) {
+      if (isTopSearch(i) && i.getAttribute('autocomplete') !== 'off') {
+        i.setAttribute('autocomplete', 'off');
+        i.setAttribute('name', 'hrms-global-search');
+        i.setAttribute('data-lpignore', 'true');      // password-manager extensions
+        i.setAttribute('data-1p-ignore', 'true');
+      }
+    });
+  }
+  ['input', 'change'].forEach(function (type) {
+    window.addEventListener(type, function (e) {
+      var el = e.target;
+      if (!isTopSearch(el) || el === document.activeElement) return;
+      e.stopImmediatePropagation();
+      el.value = '';
+    }, true);
+  });
+  var hardenQueued = false;
+  new MutationObserver(function () {
+    if (hardenQueued) return;
+    hardenQueued = true;
+    setTimeout(function () { hardenQueued = false; hardenAutofill(); }, 0);
+  }).observe(document.documentElement, { childList: true, subtree: true });
+  hardenAutofill();
 
   setInterval(tick, 300);
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', tick);

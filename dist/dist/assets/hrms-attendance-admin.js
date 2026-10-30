@@ -449,6 +449,142 @@
       return { fence: best, distanceMeters: bestD };
     }
 
+    /* ── Attendance heatmap ──────────────────────────────────────────────
+       Check-in density over a period (Today / 7 / 30 / 90 days) from
+       /api/attendance/heatmap, not just today's live pins — with nobody
+       checked in yet the old heatmap was simply blank. Points are drawn as
+       alpha blobs on an offscreen canvas and then coloured blue→red by
+       density, so busy places glow and stray check-ins stay faint. */
+    var heat = { days: state.heatDays || 30, key: '', data: null, loading: false, error: '', fitted: false };
+    var HEAT_PERIODS = [[1, 'Today'], [7, '7 days'], [30, '30 days'], [90, '90 days']];
+    var heatLut = null;
+    function heatPalette() {
+      if (heatLut) return heatLut;
+      var c = document.createElement('canvas'); c.width = 256; c.height = 1;
+      var g = c.getContext('2d');
+      var gr = g.createLinearGradient(0, 0, 256, 0);
+      gr.addColorStop(0, '#3b82f6'); gr.addColorStop(0.35, '#10b981'); gr.addColorStop(0.6, '#eab308');
+      gr.addColorStop(0.8, '#f97316'); gr.addColorStop(1, '#ef4444');
+      g.fillStyle = gr; g.fillRect(0, 0, 256, 1);
+      heatLut = g.getImageData(0, 0, 256, 1).data;
+      return heatLut;
+    }
+    function heatUrl() {
+      return '/api/attendance/heatmap?days=' + heat.days +
+        (deptFilter && deptFilter !== 'all' ? '&department=' + encodeURIComponent(deptFilter) : '');
+    }
+    function loadHeat() {
+      var key = heatUrl();
+      if (heat.key === key) return;
+      heat.key = key; heat.loading = true; heat.data = null; heat.error = '';
+      renderHeatPanel();
+      api(key).then(function (d) {
+        if (heat.key !== key) return;
+        heat.loading = false; heat.data = d || { points: [] };
+        if (!heat.fitted && heat.data.points && heat.data.points.length) { heat.fitted = true; fitToHeat(); }
+        redraw();
+      }).catch(function (e) {
+        if (heat.key !== key) return;
+        heat.loading = false; heat.error = e.message || 'Could not load the heatmap.'; heat.data = { points: [] };
+        redraw();
+      });
+    }
+    function fitToHeat() {
+      var pts = heat.data.points;
+      var minLat = 90, maxLat = -90, minLng = 180, maxLng = -180;
+      pts.forEach(function (q) {
+        minLat = Math.min(minLat, q.lat); maxLat = Math.max(maxLat, q.lat);
+        minLng = Math.min(minLng, q.lng); maxLng = Math.max(maxLng, q.lng);
+      });
+      var W0 = container.clientWidth || 800, H0 = container.clientHeight || 560;
+      var z = 16;
+      for (; z > 3; z--) {
+        var spanX = lngToWorldX(maxLng, z) - lngToWorldX(minLng, z);
+        var spanY = latToWorldY(minLat, z) - latToWorldY(maxLat, z);
+        if (spanX <= W0 * 0.7 && spanY <= H0 * 0.7) break;
+      }
+      st.lat = (minLat + maxLat) / 2; st.lng = (minLng + maxLng) / 2; st.z = z;
+    }
+    function drawHeat(ctx, W, H, toX, toY) {
+      var pts = (heat.data && heat.data.points) || [];
+      if (!pts.length) return;
+      var radius = Math.max(16, Math.min(48, 4 + st.z * 2.6));
+      var maxW = 1;
+      pts.forEach(function (q) { if (q.weight > maxW) maxW = q.weight; });
+      var off = document.createElement('canvas'); off.width = W; off.height = H;
+      var o = off.getContext('2d');
+      pts.forEach(function (q) {
+        var x = toX(q.lng), y = toY(q.lat);
+        if (x < -radius || y < -radius || x > W + radius || y > H + radius) return;
+        var a = Math.min(1, 0.18 + 0.82 * Math.log(1 + q.weight) / Math.log(1 + maxW));
+        var g = o.createRadialGradient(x, y, 0, x, y, radius);
+        g.addColorStop(0, 'rgba(0,0,0,' + a + ')');
+        g.addColorStop(1, 'rgba(0,0,0,0)');
+        o.fillStyle = g;
+        o.fillRect(x - radius, y - radius, radius * 2, radius * 2);
+      });
+      var img = o.getImageData(0, 0, W, H), d = img.data, lut = heatPalette();
+      for (var i = 0; i < d.length; i += 4) {
+        var al = d[i + 3];
+        if (al < 6) { d[i + 3] = 0; continue; }
+        d[i] = lut[al * 4]; d[i + 1] = lut[al * 4 + 1]; d[i + 2] = lut[al * 4 + 2];
+        d[i + 3] = Math.min(225, 50 + al * 0.8);
+      }
+      ctx.putImageData(img, 0, 0);
+    }
+    function fmtDay(iso) {
+      var dd = new Date(iso + 'T00:00:00');
+      return isNaN(dd) ? iso : dd.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+    }
+    var heatPanel = document.createElement('div');
+    heatPanel.className = 'haa-heat-panel';
+    heatPanel.style.cssText = 'position:absolute;left:14px;bottom:14px;z-index:30;background:var(--haa-surface,#fff);' +
+      'color:var(--haa-text,#0f172a);border:1px solid var(--haa-line,#cbd5e1);border-radius:10px;padding:9px 11px;' +
+      'box-shadow:0 4px 14px rgba(0,0,0,0.16);font:12px \'Segoe UI\',Arial,sans-serif;display:none;max-width:calc(100% - 28px);';
+    ['mousedown', 'mouseup', 'click', 'dblclick', 'touchstart'].forEach(function (ev) {
+      heatPanel.addEventListener(ev, function (e) { e.stopPropagation(); });
+    });
+    heatPanel.addEventListener('wheel', function (e) { e.stopPropagation(); }, { passive: true });
+    container.appendChild(heatPanel);
+    var heatEmpty = document.createElement('div');
+    heatEmpty.style.cssText = 'position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:29;display:none;' +
+      'background:var(--haa-surface,#fff);color:var(--haa-text,#0f172a);border:1px solid var(--haa-line,#cbd5e1);border-radius:10px;' +
+      'padding:12px 16px;font:13px \'Segoe UI\',Arial,sans-serif;box-shadow:0 6px 20px rgba(0,0,0,0.18);text-align:center;pointer-events:none;max-width:80%;';
+    container.appendChild(heatEmpty);
+    function renderHeatPanel() {
+      var on = mode === 'heatmap';
+      heatPanel.style.display = on ? '' : 'none';
+      var d = heat.data;
+      var empty = on && !heat.loading && d && !(d.points || []).length;
+      heatEmpty.style.display = (on && (heat.loading || empty)) ? '' : 'none';
+      heatEmpty.textContent = heat.loading ? 'Loading heatmap…'
+        : (heat.error ? heat.error
+           : 'No check-ins with a location ' + (heat.days === 1 ? 'today' : 'in the last ' + heat.days + ' days') +
+             (deptFilter && deptFilter !== 'all' ? ' for ' + deptFilter : '') + '. Try a longer period.');
+      if (!on) return;
+      var chips = HEAT_PERIODS.map(function (pp) {
+        var sel = pp[0] === heat.days;
+        return '<button type="button" data-heat-days="' + pp[0] + '" style="border:1px solid ' + (sel ? 'var(--haa-accent,#4f46e5)' : 'var(--haa-line,#cbd5e1)') +
+          ';background:' + (sel ? 'var(--haa-accent,#4f46e5)' : 'transparent') + ';color:' + (sel ? '#fff' : 'inherit') +
+          ';border-radius:14px;padding:3px 10px;font:600 11px \'Segoe UI\',Arial,sans-serif;cursor:pointer;">' + pp[1] + '</button>';
+      }).join('');
+      var summary = heat.loading ? 'Loading…'
+        : (d ? (d.checkins || 0) + ' check-in' + (d.checkins === 1 ? '' : 's') + ' · ' + (d.people || 0) + ' ' + (d.people === 1 ? 'person' : 'people') +
+               (d.from ? ' · ' + (d.from === d.to ? fmtDay(d.to) : fmtDay(d.from) + ' – ' + fmtDay(d.to)) : '') : '');
+      heatPanel.innerHTML =
+        '<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:7px;">' + chips + '</div>' +
+        '<div style="display:flex;align-items:center;gap:7px;font-size:10.5px;color:var(--haa-muted,#64748b);">' +
+        '<span>Fewer</span><span style="flex:1;min-width:90px;height:7px;border-radius:4px;background:linear-gradient(90deg,#3b82f6,#10b981,#eab308,#f97316,#ef4444);"></span><span>More check-ins</span></div>' +
+        '<div style="margin-top:6px;font-size:11px;color:var(--haa-muted,#64748b);">' + esc(summary) + '</div>';
+      heatPanel.querySelectorAll('[data-heat-days]').forEach(function (b) {
+        b.onclick = function () {
+          heat.days = state.heatDays = Number(b.getAttribute('data-heat-days'));
+          heat.fitted = false;
+          redraw();
+        };
+      });
+    }
+
     function redraw() {
       var W = container.clientWidth || 800;
       var H = container.clientHeight || 560;
@@ -498,27 +634,16 @@
       });
       svgLayer.innerHTML = svgHtml;
 
-      // 3. Attendance Heatmap
+      // 3. Attendance Heatmap (check-in density over the chosen period)
       if (mode === 'heatmap') {
+        loadHeat();
         heatmapCanvas.width = W;
         heatmapCanvas.height = H;
         var ctx = heatmapCanvas.getContext('2d');
         ctx.clearRect(0, 0, W, H);
-
-        visibleEmps.forEach(function (emp) {
-          if (!emp.latitude || !emp.longitude || emp.isAbsent) return;
-          var px = toX(emp.longitude), py = toY(emp.latitude);
-          var grad = ctx.createRadialGradient(px, py, 4, px, py, 52);
-          grad.addColorStop(0, 'rgba(239, 68, 68, 0.92)');
-          grad.addColorStop(0.3, 'rgba(245, 158, 11, 0.75)');
-          grad.addColorStop(0.6, 'rgba(16, 185, 129, 0.45)');
-          grad.addColorStop(1, 'rgba(59, 130, 246, 0)');
-          ctx.fillStyle = grad;
-          ctx.beginPath();
-          ctx.arc(px, py, 52, 0, Math.PI * 2);
-          ctx.fill();
-        });
+        drawHeat(ctx, W, H, toX, toY);
       }
+      renderHeatPanel();
 
       // 4. Overlays (Office Badges, Absent Roster, & Employee Markers/Clusters)
       overlayLayer.innerHTML = '';
@@ -643,16 +768,62 @@
         }
       }
 
-      // 🏢 Office Location Badges
-      fences.forEach(function (f) {
-        if (!f.latitude || !f.longitude) return;
-        var fx = toX(f.longitude), fy = toY(f.latitude);
-        var lbl = document.createElement('div');
-        lbl.className = 'haa-map-fence-badge';
-        lbl.style.cssText = 'position:absolute;left:' + fx + 'px;top:' + (fy - 28) + 'px;transform:translate(-50%,-100%);' +
-          'background:rgba(15,23,42,0.88);color:#fff;padding:5px 12px;border-radius:20px;font-size:11px;font-weight:700;' +
-          'border:1px solid ' + (f.isHome ? '#8b5cf6' : '#3b82f6') + ';box-shadow:0 4px 16px rgba(0,0,0,0.35);white-space:nowrap;pointer-events:auto;cursor:pointer;z-index:15;';
-
+      // 🏢 / 🏠 Location labels — short, readable and never stacked.
+      // Homes show the owner's first name (not "Home — <email>"), long names
+      // are cut with the full text in the tooltip, and labels are placed in
+      // priority order (offices, busy homes, idle homes): one that would
+      // overlap an earlier label tries a slot above/below, else it shrinks to
+      // an icon chip. Idle homes (0 remote) are always just a small icon.
+      var placedRects = [];
+      // Home labels show the owner's profile picture (initials until it loads,
+      // or when there is none). /api/avatars/<email> needs the caller header,
+      // which an <img src> cannot send, so it is fetched once and kept as an
+      // object URL for the session.
+      var PIC = window.__haaFencePics || (window.__haaFencePics = {});
+      function picImg(url) {
+        return '<img src="' + esc(url) + '" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:50%;display:block;">';
+      }
+      function loadPic(em) {
+        PIC[em] = { pending: true };
+        fetch('/api/avatars/' + encodeURIComponent(em), { headers: { Accept: 'image/*,*/*;q=0.8' } })
+          .then(function (r) { return r.ok ? r.blob() : null; })
+          .then(function (b) {
+            PIC[em] = (b && /^image\//.test(b.type)) ? URL.createObjectURL(b) : null;
+            if (!PIC[em]) return;
+            document.querySelectorAll('.haa-fence-av').forEach(function (el) {
+              if (el.getAttribute('data-pic-email') === em) el.innerHTML = picImg(PIC[em]);
+            });
+          })
+          .catch(function () { PIC[em] = null; });
+      }
+      function ownerAvatar(f, owner, size) {
+        var em = String(f.ownerEmail || '').toLowerCase();
+        var ini = owner.full.split(/\s+/).map(function (w) { return w.charAt(0); }).join('').toUpperCase().slice(0, 2) || '?';
+        var c = PIC[em];
+        if (em && c === undefined) loadPic(em);
+        return '<span class="haa-fence-av" data-pic-email="' + esc(em) + '" style="width:' + size + 'px;height:' + size + 'px;border-radius:50%;' +
+          'background:linear-gradient(135deg,#8b5cf6,#6366f1);color:#fff;font-size:' + Math.round(size * 0.42) + 'px;font-weight:700;' +
+          'display:inline-flex;align-items:center;justify-content:center;overflow:hidden;flex-shrink:0;">' +
+          (typeof c === 'string' ? picImg(c) : esc(ini)) + '</span>';
+      }
+      function shortText(s, n) { s = String(s || '').trim(); return s.length > n ? s.slice(0, n - 1).trim() + '…' : s; }
+      function homeOwnerName(f) {
+        var emp = employees.filter(function (e) { return e.email && e.email === f.ownerEmail; })[0];
+        var full = (f.ownerName || (emp && emp.name) || '').replace(/\s+/g, ' ').trim();
+        if (!full) {
+          var local = String(f.ownerEmail || '').split('@')[0].split(/[._\-+]/)[0] || 'Home';
+          full = local.charAt(0).toUpperCase() + local.slice(1);
+        }
+        return { first: full.split(/\s+/)[0], full: full };
+      }
+      function overlaps(r) {
+        for (var i = 0; i < placedRects.length; i++) {
+          var q = placedRects[i];
+          if (r.x < q.x + q.w + 4 && r.x + r.w + 4 > q.x && r.y < q.y + q.h + 3 && r.y + r.h + 3 > q.y) return true;
+        }
+        return false;
+      }
+      var fenceItems = fences.filter(function (f) { return f.latitude && f.longitude; }).map(function (f) {
         var onSiteEmpsInFence = employees.filter(function (emp) {
           if (emp.latitude == null || emp.longitude == null || emp.isAbsent) return false;
           if (f.isHome) return emp.isWfh && emp.email === f.ownerEmail;
@@ -660,11 +831,70 @@
           var d = haversine(emp.latitude, emp.longitude, f.latitude, f.longitude);
           return d <= (Number(f.radiusMeters || f.radius_meters) || 200) + 60 || emp.isSimulatedCoord;
         });
-
         var countNum = (f.activeCount != null && f.activeCount > 0) ? f.activeCount : onSiteEmpsInFence.length;
+        return { f: f, count: countNum, x: toX(f.longitude), y: toY(f.latitude),
+                 rank: f.isHome ? (countNum > 0 ? 1 : 2) : 0 };
+      }).filter(function (it) { return it.x > -120 && it.x < W + 120 && it.y > -60 && it.y < H + 60; });
+      fenceItems.sort(function (a, b) { return a.rank - b.rank || b.count - a.count; });
+
+      fenceItems.forEach(function (it) {
+        var f = it.f, fx = it.x, fy = it.y, countNum = it.count;
+        var color = f.isHome ? '#8b5cf6' : '#3b82f6';
         var iconPrefix = f.isHome ? '🏠 ' : '🏢 ';
-        var labelSuffix = f.isHome ? ' Remote' : ' On-Site';
-        lbl.innerHTML = iconPrefix + esc(f.name) + ' <span style="background:' + (f.isHome ? '#8b5cf6' : '#3b82f6') + ';color:#fff;border-radius:10px;padding:2px 7px;margin-left:4px;font-size:10px;">' + countNum + labelSuffix + '</span>';
+        var labelSuffix = f.isHome ? ' remote' : ' on-site';
+        var owner = f.isHome ? homeOwnerName(f) : null;
+        var fullName = f.isHome ? owner.full + '’s home' + (f.ownerEmail ? ' (' + f.ownerEmail + ')' : '') : (f.name || 'Office');
+        var shortName = f.isHome ? shortText(owner.first, 14) : shortText(f.name || 'Office', 20);
+        var tip = fullName + ' — ' + countNum + labelSuffix + (countNum ? ' now' : '');
+
+        var lbl = document.createElement('div');
+        lbl.className = 'haa-map-fence-badge';
+        lbl.title = tip;
+        lbl.setAttribute('aria-label', tip);
+        var base = 'position:absolute;left:0;top:0;visibility:hidden;background:rgba(15,23,42,0.9);color:#fff;' +
+          'border:1px solid ' + color + ';box-shadow:0 3px 12px rgba(0,0,0,0.3);white-space:nowrap;pointer-events:auto;cursor:pointer;' +
+          'display:inline-flex;align-items:center;gap:5px;line-height:1;';
+        var pill = function (txt) {
+          return '<span style="background:' + color + ';color:#fff;border-radius:9px;padding:2px 6px;font-size:10px;font-weight:700;">' + txt + '</span>';
+        };
+        function asFull() {
+          lbl.style.cssText = base + 'padding:' + (f.isHome ? '3px 9px 3px 3px' : '4px 9px') + ';border-radius:14px;font-size:11px;font-weight:600;z-index:' + (f.isHome ? 14 : 16) + ';';
+          lbl.innerHTML = (f.isHome ? ownerAvatar(f, owner, 18) + '<span>' + esc(shortName) + '</span>'
+                                    : '<span>' + iconPrefix + esc(shortName) + '</span>') + pill(countNum + labelSuffix);
+        }
+        function asIcon() {
+          if (f.isHome) {
+            lbl.style.cssText = base + 'padding:2px;border-radius:14px;border-width:2px;z-index:13;' + (countNum ? 'padding-right:5px;' : '');
+            lbl.innerHTML = ownerAvatar(f, owner, 22) + (countNum ? pill(String(countNum)) : '');
+            return;
+          }
+          lbl.style.cssText = base + 'padding:3px 6px;border-radius:12px;font-size:11px;z-index:13;';
+          lbl.innerHTML = iconPrefix.trim() + (countNum ? pill(String(countNum)) : '');
+        }
+        if (f.isHome && !countNum) asIcon(); else asFull();
+        overlayLayer.appendChild(lbl);
+
+        // Find a free slot: above the point, higher, below, then shrink.
+        function tryPlace() {
+          var w = lbl.offsetWidth, h = lbl.offsetHeight;
+          var slots = [fy - 22 - h, fy - 22 - 2 * h - 6, fy + 18, fy + 18 + h + 6];
+          for (var s = 0; s < slots.length; s++) {
+            var r = { x: fx - w / 2, y: slots[s], w: w, h: h };
+            if (!overlaps(r)) return r;
+          }
+          return null;
+        }
+        var spot = tryPlace();
+        if (!spot && !(f.isHome && !countNum)) { asIcon(); spot = tryPlace(); }
+        if (!spot) {   // still crowded: keep the icon right on the point, behind the rest
+          var w0 = lbl.offsetWidth, h0 = lbl.offsetHeight;
+          spot = { x: fx - w0 / 2, y: fy - h0 / 2, w: w0, h: h0 };
+          lbl.style.zIndex = 12;
+        }
+        placedRects.push(spot);
+        lbl.style.left = Math.round(spot.x) + 'px';
+        lbl.style.top = Math.round(spot.y) + 'px';
+        lbl.style.visibility = 'visible';
 
         lbl.onclick = function (e) {
           e.stopPropagation();
@@ -675,15 +905,14 @@
             return d <= (Number(f.radiusMeters || f.radius_meters) || 200) + 60 || emp.isSimulatedCoord;
           });
           if (fenceEmps.length > 0) {
-            showClusterPopover(fenceEmps, fx, fy - 10, iconPrefix + f.name + ' (' + fenceEmps.length + labelSuffix + ')');
+            showClusterPopover(fenceEmps, fx, fy - 10, (f.isHome ? owner.full + '’s home' : iconPrefix + (f.name || 'Office')) + ' (' + fenceEmps.length + labelSuffix + ')');
           } else {
             st.lat = f.latitude;
             st.lng = f.longitude;
-            st.z = 16;
+            st.z = Math.max(st.z, 16);
             redraw();
           }
         };
-        overlayLayer.appendChild(lbl);
       });
 
       // 👥 Marker Clustering & Employee Pins
