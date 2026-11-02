@@ -923,19 +923,26 @@
     if (document.getElementById('kpi-cf-pop')) { closeChartFilter(); return; }
     var labels = (chart.data && chart.data.labels) || [];
     var pop = document.createElement('div'); pop.id = 'kpi-cf-pop'; pop.className = 'kpi-cf-pop';
-    pop.innerHTML = labels.map(function (lb, i) {
-      var vis = !(chart._hidden && chart._hidden[i]);
-      return '<label><input type="checkbox" data-i="' + i + '"' + (vis ? ' checked' : '') + '> ' + esc(String(lb)) + '</label>';
-    }).join('');
+    // Single-select: one radio per label plus "All". Picking a label shows only
+    // that bar; "All" (the default) shows every bar again.
+    var selected = -1;
+    if (chart._hidden && Object.keys(chart._hidden).some(function (k) { return chart._hidden[k]; })) {
+      labels.some(function (lb, i) { if (!chart._hidden[i]) { selected = i; return true; } return false; });
+    }
+    pop.innerHTML = '<label><input type="radio" name="kpi-cf" data-i="-1"' + (selected === -1 ? ' checked' : '') + '> All</label>' +
+      labels.map(function (lb, i) {
+        return '<label><input type="radio" name="kpi-cf" data-i="' + i + '"' + (selected === i ? ' checked' : '') + '> ' + esc(String(lb)) + '</label>';
+      }).join('');
     document.body.appendChild(pop);
     var r = btn.getBoundingClientRect();
     pop.style.top = Math.min(r.bottom + 4, window.innerHeight - 270) + 'px';
     pop.style.left = Math.min(r.left, window.innerWidth - 190) + 'px';
-    pop.querySelectorAll('input').forEach(function (cb) {
-      cb.addEventListener('change', function () {
-        toggleChartLabel(chart, +cb.getAttribute('data-i'), cb.checked);
-        var anyHidden = chart._hidden && Object.keys(chart._hidden).some(function (k) { return chart._hidden[k]; });
-        btn.classList.toggle('on', !!anyHidden);
+    pop.querySelectorAll('input').forEach(function (rb) {
+      rb.addEventListener('change', function () {
+        if (!rb.checked) return;
+        var k = +rb.getAttribute('data-i');
+        labels.forEach(function (lb, i) { toggleChartLabel(chart, i, k === -1 || i === k); });
+        btn.classList.toggle('on', k !== -1);
       });
     });
     setTimeout(function () { document.addEventListener('mousedown', function h(e) { var p = document.getElementById('kpi-cf-pop'); if (p && !p.contains(e.target) && e.target !== btn) { p.remove(); document.removeEventListener('mousedown', h); } }); }, 0);
