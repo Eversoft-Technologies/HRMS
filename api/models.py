@@ -717,6 +717,8 @@ class BenchSalesProfile(models.Model):
     experience = models.CharField(max_length=60, default='', blank=True)
     email = models.CharField(max_length=255, default='', blank=True)
     contact_no = models.CharField(max_length=60, default='', blank=True)
+    date_of_birth = models.DateField(null=True, blank=True)
+    passport_no = models.CharField(max_length=40, default='', blank=True)
     work_authorization = models.CharField(max_length=40, default='', blank=True)
 
     resume_file_name = models.CharField(max_length=255, default='', blank=True)
@@ -746,6 +748,9 @@ class BenchSalesCertificate(models.Model):
     base64-in-row storage as BenchSalesProfile's resume/DL/I-94 fields.
     """
     profile = models.ForeignKey(BenchSalesProfile, related_name='certificate_files', on_delete=models.CASCADE)
+    # 'certificate' = the Certificates upload, 'certification' = the files attached
+    # to the Certifications field. Each kind has its own per-profile limit.
+    kind = models.CharField(max_length=20, default='certificate', db_index=True)
     file_name = models.CharField(max_length=255, default='', blank=True)
     file_mime = models.CharField(max_length=100, default='', blank=True)
     file_data = models.TextField(default='', blank=True)  # base64
