@@ -211,6 +211,8 @@
       '.kpi-fd-btn{flex:1;text-align:center;border-radius:9px;padding:11px;font-size:13px;font-weight:700;cursor:pointer;border:1px solid var(--border,#e5e7eb);background:var(--bg2,#f8fafc);color:var(--text1,#111)}',
       '.kpi-fd-btn.primary{background:var(--accent,#6366f1);color:#fff;border-color:var(--accent,#6366f1)}',
       '.kpi-fd-btn.ghost{background:transparent;color:var(--text2,#666)}',
+      '#kpi-fd-reset{background:var(--bg3,#1e293b);border-color:var(--danger,#f75f4f);color:var(--danger,#f75f4f)}',
+      '#kpi-fd-reset:hover{background:var(--bg3,#1e293b);border-color:var(--danger,#f75f4f);color:var(--danger,#f75f4f)}',
       '@keyframes kpi-fd-fade{from{opacity:0}to{opacity:1}}',
       '@keyframes kpi-fd-slide{from{transform:translateX(100%)}to{transform:translateX(0)}}',
       /* header */
@@ -499,8 +501,23 @@
     dr.innerHTML =
       '<div class="kpi-fd-h"><h3>Edit Filters</h3><button class="kpi-fd-x" id="kpi-fd-x">&times;</button></div>' +
       '<div class="kpi-fd-body">' + scopeSec + rangeSec + filtSec + '</div>' +
-      '<div class="kpi-fd-f"><button class="kpi-fd-btn primary" id="kpi-fd-apply">Apply</button><button class="kpi-fd-btn ghost" id="kpi-fd-cancel">Cancel</button></div>';
+      '<div class="kpi-fd-f"><button class="kpi-fd-btn" id="kpi-fd-reset">Reset</button><button class="kpi-fd-btn ghost" id="kpi-fd-cancel">Cancel</button><button class="kpi-fd-btn primary" id="kpi-fd-apply">Apply Filter</button></div>';
     ov.appendChild(dr); document.body.appendChild(ov);
+    dr.querySelector('#kpi-fd-reset').addEventListener('click', function () {
+      FILTER_KEYS.forEach(function (key) { work[key] = ''; });
+      work.scope = 'me';
+      work.range = 'all';
+      dr.querySelectorAll('input[name="kpi-fd-scope"]').forEach(function (radio) {
+        radio.checked = radio.value === work.scope;
+      });
+      dr.querySelectorAll('input[name="kpi-fd-range"]').forEach(function (radio) {
+        radio.checked = radio.value === work.range;
+      });
+      dr.querySelectorAll('.kpi-fd-date').forEach(function (input) { input.value = ''; });
+      dr.querySelectorAll('select[data-fk]').forEach(function (select) { select.value = ''; });
+      var dates = dr.querySelector('#kpi-fd-dates');
+      if (dates) dates.style.display = 'none';
+    });
     dr.querySelectorAll('input[name="kpi-fd-scope"]').forEach(function (r) { r.addEventListener('change', function () { work.scope = r.value; }); });
     dr.querySelectorAll('input[name="kpi-fd-range"]').forEach(function (r) {
       r.addEventListener('change', function () {

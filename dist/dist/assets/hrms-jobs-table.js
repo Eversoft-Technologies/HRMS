@@ -225,6 +225,8 @@
       '.jt-btn.primary:hover{filter:brightness(1.1);border-color:var(--accent,#38bdf8);color:#fff;}',
       '.jt-btn.ghost{background:transparent;color:var(--text2,#cbd5e1);}',
       '.jt-btn.ghost:hover{border-color:var(--accent,#38bdf8);color:var(--text,#f8fafc);}',
+      '#jt-freset{background:var(--bg3,#1e293b);border-color:var(--danger,#f75f4f);color:var(--danger,#f75f4f);}',
+      '#jt-freset:hover{background:var(--bg3,#1e293b);border-color:var(--danger,#f75f4f);color:var(--danger,#f75f4f);}',
       '.jt-icon{display:inline-flex;align-items:center;justify-content:center;width:38px;height:38px;background:var(--bg3,#1e293b);border:1px solid var(--border2,#334155);border-radius:9px;color:var(--text2,#cbd5e1);cursor:pointer;transition:all .15s;}',
       '.jt-icon:hover{border-color:var(--accent,#38bdf8);color:var(--accent,#38bdf8);}',
       '.jt-x{width:30px;height:30px;border:none;border-radius:50%;background:var(--bg3,#1e293b);color:var(--text2,#cbd5e1);font-size:17px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;line-height:1;}',
@@ -612,7 +614,7 @@
         '<div class="jt-fsec">Custom Filters</div>' +
         '<div id="jt-cflist"></div><button class="jt-addf" id="jt-addf">+ Add Filter</button>' +
       '</div>' +
-      '<div class="jt-df"><button class="jt-btn primary" id="jt-fapply">Apply</button><button class="jt-btn ghost" id="jt-fcancel">Cancel</button></div>';
+      '<div class="jt-df"><button class="jt-btn" id="jt-freset">Reset</button><button class="jt-btn ghost" id="jt-fcancel">Cancel</button><button class="jt-btn primary" id="jt-fapply">Apply Filter</button></div>';
     ov.appendChild(dr); document.body.appendChild(ov); ensureStyle();
     var buBox = dr.querySelector('#jt-bu');
     function drawBu() {
@@ -635,6 +637,16 @@
     }
     drawCf();
     dr.querySelector('#jt-addf').addEventListener('click', function () { customs.push({ key: 'title', val: '' }); drawCf(); });
+    dr.querySelector('#jt-freset').addEventListener('click', function () {
+      bu = depts.slice();
+      predef = 'all';
+      customs = [];
+      drawBu();
+      drawCf();
+      dr.querySelectorAll('input[name="jt-predef"]').forEach(function (radio) {
+        radio.checked = radio.value === predef;
+      });
+    });
     ov.addEventListener('click', function (e) { if (e.target === ov) closeFDrawer(); });
     dr.querySelector('#jt-fx').addEventListener('click', closeFDrawer);
     dr.querySelector('#jt-fcancel').addEventListener('click', closeFDrawer);

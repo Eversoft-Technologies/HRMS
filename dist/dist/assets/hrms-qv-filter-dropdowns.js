@@ -15,7 +15,7 @@
   var frame = 0;
   var observedDrawer = null;
   var drawerObserver = null;
-  var pipelineDraft = {};
+  var quickViewDraft = {};
   var applyInProgress = false;
 
   function removeInjectedSelects() {
@@ -114,9 +114,14 @@
     return label + (count ? ' (' + count + ')' : '');
   }
 
-  function optionKey(chip) {
+  function optionKey(chip, pipeline) {
     var labels = chip.querySelectorAll('span');
-    return labels.length ? (labels[0].textContent || '').trim() : (chip.textContent || '').trim();
+    if (pipeline && labels.length) return (labels[0].textContent || '').trim();
+    var label = '';
+    for (var i = 0; i < chip.childNodes.length; i++) {
+      if (chip.childNodes[i].nodeType === 3) label += chip.childNodes[i].nodeValue || '';
+    }
+    return label.trim().replace(/\s+/g, ' ') || (chip.textContent || '').trim();
   }
 
   function observeDrawer(drawer) {
@@ -198,26 +203,13 @@
         'outline:none'
       ].join(';');
       select.addEventListener('change', function () {
-        if (group.pipeline) {
-          var drawer = currentDrawer();
-          var currentGroup = drawer && filterGroups(drawer).filter(function (item) {
-            return item.title === group.title;
-          })[0];
-          var options = currentGroup ? currentGroup.options : group.options;
-          var selected = options[Number(select.value)];
-          if (selected) pipelineDraft[group.title] = optionKey(selected);
-          return;
-        }
-        var current = currentDrawer();
-        if (!current) return;
-        var activeGroup = filterGroups(current).filter(function (item) {
-          return item.title === select.getAttribute('data-filter');
+        var drawer = currentDrawer();
+        var currentGroup = drawer && filterGroups(drawer).filter(function (item) {
+          return item.title === group.title;
         })[0];
-        if (!activeGroup) return;
-        var activeChips = activeGroup.element.querySelectorAll('.chip');
-        var activeSelect = activeGroup.element.querySelector('select[data-hrms-qv-filter]');
-        var chosen = activeChips[Number(activeSelect && activeSelect.value)];
-        if (chosen) chosen.click();
+        var options = currentGroup ? currentGroup.options : group.options;
+        var selected = options[Number(select.value)];
+        if (selected) quickViewDraft[group.title] = optionKey(selected, group.pipeline);
       });
       group.element.appendChild(select);
     }
@@ -227,7 +219,7 @@
     var activeIndex = 0;
     for (var j = 0; j < chips.length; j++) {
       labels.push(optionText(chips[j], group.pipeline));
-      keys.push(group.pipeline ? optionKey(chips[j]) : labels[j]);
+      keys.push(optionKey(chips[j], group.pipeline));
       if (group.pipeline
         ? (chips[j].style.background || '').indexOf(ACTIVE_FILTER) !== -1
         : chips[j].classList.contains('active')) activeIndex = j;
@@ -244,14 +236,12 @@
       }
       select.__hrmsOptions = signature;
     }
-    if (group.pipeline) {
-      if (Object.prototype.hasOwnProperty.call(pipelineDraft, group.title)) {
-        var draftIndex = keys.indexOf(pipelineDraft[group.title]);
-        if (draftIndex !== -1) activeIndex = draftIndex;
-        else pipelineDraft[group.title] = keys[activeIndex];
-      } else {
-        pipelineDraft[group.title] = keys[activeIndex];
-      }
+    if (Object.prototype.hasOwnProperty.call(quickViewDraft, group.title)) {
+      var draftIndex = keys.indexOf(quickViewDraft[group.title]);
+      if (draftIndex !== -1) activeIndex = draftIndex;
+      else quickViewDraft[group.title] = keys[activeIndex];
+    } else {
+      quickViewDraft[group.title] = keys[activeIndex];
     }
     select.value = String(activeIndex);
     addIcon(group.label, group.title);
@@ -265,7 +255,7 @@
   }
 
   function ensureFooter(drawer) {
-    if (!drawer || !filterGroups(drawer).some(function (group) { return group.pipeline; })) return;
+    if (!drawer || !filterGroups(drawer).length) return;
     removeClearButton(drawer);
     if (drawer.querySelector('[' + FOOTER_ID + ']')) return;
 
@@ -276,7 +266,7 @@
       heading.style.display = 'inline-flex';
       heading.style.alignItems = 'center';
       heading.style.gap = '8px';
-      addIcon(heading, 'Pipeline Quick View');
+      addIcon(heading, (heading.textContent || '').trim());
     }
 
     var content = drawer.firstElementChild;
@@ -312,12 +302,10 @@
     footer.querySelector('[data-action="reset"]').addEventListener('click', function () {
       var groups = filterGroups(currentDrawer());
       for (var i = 0; i < groups.length; i++) {
-        if (groups[i].pipeline) {
-          var select = groups[i].element.querySelector('select[data-hrms-qv-filter]');
-          if (select && select.options.length) {
-            select.value = '0';
-            pipelineDraft[groups[i].title] = optionKey(groups[i].options[0]);
-          }
+        var select = groups[i].element.querySelector('select[data-hrms-qv-filter]');
+        if (select && select.options.length) {
+          select.value = '0';
+          quickViewDraft[groups[i].title] = optionKey(groups[i].options[0], groups[i].pipeline);
         }
       }
     });
@@ -327,10 +315,9 @@
       var groups = filterGroups(currentDrawer());
       var pending = [];
       for (var i = 0; i < groups.length; i++) {
-        if (!groups[i].pipeline) continue;
         var select = groups[i].element.querySelector('select[data-hrms-qv-filter]');
         var selected = select && groups[i].options[Number(select.value)];
-        if (selected) pending.push({ title: groups[i].title, key: optionKey(selected) });
+        if (selected) pending.push({ title: groups[i].title, key: optionKey(selected, groups[i].pipeline) });
       }
       setApplying(true);
       applyPending(pending, 0, footer, 0);
@@ -338,7 +325,7 @@
     var closeButtons = drawer.querySelectorAll('button');
     for (var i = 0; i < closeButtons.length; i++) {
       if ((closeButtons[i].textContent || '').trim() === '✕') {
-        closeButtons[i].addEventListener('click', function () { pipelineDraft = {}; }, true);
+        closeButtons[i].addEventListener('click', function () { quickViewDraft = {}; }, true);
         break;
       }
     }
@@ -360,7 +347,10 @@
 
   function activeOptionKey(group) {
     for (var i = 0; i < group.options.length; i++) {
-      if ((group.options[i].style.background || '').indexOf(ACTIVE_FILTER) !== -1) return optionKey(group.options[i]);
+      var isActive = group.pipeline
+        ? (group.options[i].style.background || '').indexOf(ACTIVE_FILTER) !== -1
+        : group.options[i].classList.contains('active');
+      if (isActive) return optionKey(group.options[i], group.pipeline);
     }
     return '';
   }
@@ -380,7 +370,7 @@
       return;
     }
     var target = group.options.filter(function (option) {
-      return optionKey(option) === pending[index].key;
+      return optionKey(option, group.pipeline) === pending[index].key;
     })[0];
     if (!target) {
       showApplyError(footer, 'A filter option is no longer available. Please review your selections.');
@@ -409,7 +399,7 @@
 
   function closeQuickView() {
     var drawer = currentDrawer();
-    pipelineDraft = {};
+    quickViewDraft = {};
     setApplying(false);
     if (!drawer) return;
     var buttons = drawer.querySelectorAll('button');
@@ -435,7 +425,7 @@
       : currentDrawer();
     observeDrawer(drawer);
     if (drawer && parseFloat(window.getComputedStyle(drawer).right) < -100 && !applyInProgress) {
-      pipelineDraft = {};
+      quickViewDraft = {};
     }
     var groups = drawer ? filterGroups(drawer) : [];
     if (!groups.length) {
