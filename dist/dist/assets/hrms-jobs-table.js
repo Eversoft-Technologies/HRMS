@@ -215,8 +215,17 @@
     var R = '#' + ID.root, D = '.jt-dr', M = '#' + ID.menu, P = '#' + ID.pop, MD = '.jt-md';
     var css = [
       R + '{margin:0;}',
-      R + ' .jt-bar{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-bottom:12px;}',
-      R + ' .jt-search{flex:1;min-width:200px;background:var(--bg3,#1e293b);border:1px solid var(--border2,#334155);border-radius:9px;padding:9px 12px;color:var(--text,#f8fafc);font:inherit;font-size:13px;}',
+      R + ' .jt-h{display:flex;align-items:center;gap:12px;margin-bottom:18px;flex-wrap:wrap;}',
+      R + ' .jt-h h2{margin:0;font-size:20px;font-weight:700;flex:1;color:var(--text,#f8fafc);}',
+      R + ' .jt-sub{color:var(--text3,#8a9bb8);font-size:13px;margin:-10px 0 18px;}',
+      R + ' .jt-bar{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-bottom:16px;}',
+      R + ' .jt-count{color:var(--text3,#8a9bb8);font-size:12px;}',
+      R + ' .jt-search{flex:1;min-width:200px;max-width:280px;background:var(--bg3,#1e293b);border:1px solid var(--border2,#334155);border-radius:9px;padding:9px 12px;color:var(--text,#f8fafc);font:inherit;font-size:13px;}',
+      /* phones: the same stacked, full-width layout Bench Sales uses */
+      '@media(max-width:768px){' + R + ' .jt-search{max-width:none;width:100%;}' +
+        R + ' .jt-bar>.jt-btn,' + R + ' .jt-bar>div>.jt-btn{flex:1 1 auto;width:100%;justify-content:center;}' +
+        R + ' .jt-bar>div{flex:1 1 auto;width:100%;}' +
+        R + ' .jt-count{width:100%;}}',
       R + ' .jt-search:focus{border-color:var(--accent,#38bdf8);outline:none;}',
       /* Controls are GLOBAL (not root-scoped) so drawers/modals mounted on <body> get them too. */
       '.jt-btn{display:inline-flex;align-items:center;gap:6px;background:var(--bg3,#1e293b);border:1px solid var(--border2,#334155);border-radius:9px;padding:8px 14px;color:var(--text,#f8fafc);font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;white-space:nowrap;transition:all .15s;}',
@@ -377,13 +386,19 @@
     var root = document.createElement('div'); root.id = ID.root;
     var ICON_SLIDERS = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="4" y1="7" x2="20" y2="7"/><circle cx="9" cy="7" r="2.4" fill="var(--bg3)"/><line x1="4" y1="17" x2="20" y2="17"/><circle cx="15" cy="17" r="2.4" fill="var(--bg3)"/></svg>';
     var ICON_COLUMNS = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="5.5" height="16" rx="1"/><rect x="9.5" y="4" width="5.5" height="16" rx="1"/><rect x="16" y="4" width="5" height="16" rx="1"/></svg>';
+    // Same header + toolbar language as Bench Sales: title, one-line purpose,
+    // then search / Filters / Manage Columns / Export / primary action / count.
+    // On phones every control stacks full-width (see the 768px rule below).
     root.innerHTML =
+      '<div class="jt-h"><h2>Job Board</h2></div>' +
+      '<div class="jt-sub">Open positions — job code, title, department, location, type, priority and status, ready to publish and track applicants.</div>' +
       '<div class="jt-bar">' +
         '<input class="jt-search" id="jt-search" placeholder="Search jobs, job code, department, location…">' +
+        '<button class="jt-btn" id="jt-editfilters" title="Edit Filters">' + ICON_SLIDERS + 'Filters</button>' +
+        '<button class="jt-btn" id="jt-editcolumns" title="Show, hide and reorder columns">' + ICON_COLUMNS + 'Manage Columns</button>' +
         '<div style="position:relative"><button class="jt-btn" id="jt-export">⭳ Export ▾</button></div>' +
-        '<button class="jt-icon" id="jt-editfilters" title="Edit Filters">' + ICON_SLIDERS + '</button>' +
-        '<button class="jt-icon" id="jt-editcolumns" title="Edit Column">' + ICON_COLUMNS + '</button>' +
         '<button class="jt-btn primary" id="jt-postjob">+ Post Job</button>' +
+        '<span class="jt-count" id="jt-count"></span>' +
       '</div>' +
       '<div class="jt-wrap"><table class="jt-table"><thead id="jt-thead"></thead><tbody id="jt-tbody"></tbody></table></div>' +
       '<div class="jt-pg" id="jt-pg"></div>';
@@ -436,8 +451,10 @@
   }
 
   function renderPg(total, start, shown, pages) {
+    var cnt = document.getElementById('jt-count');
+    if (cnt) cnt.textContent = state.loaded ? (total + ' of ' + state.jobs.length + ' jobs') : '';
     var pg = document.getElementById('jt-pg'); if (!pg) return;
-    if (!total) { pg.innerHTML = '<span>' + (state.loaded ? '0 jobs' : '') + '</span>'; return; }
+    if (!total) { pg.innerHTML = ''; return; }   // the toolbar count already says '0 of N jobs'
     var from = start + 1, to = start + shown;
     var nums = [], p = state.page;
     var lo = Math.max(1, p - 2), hi = Math.min(pages, lo + 4); lo = Math.max(1, hi - 4);
