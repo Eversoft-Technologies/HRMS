@@ -25,6 +25,7 @@ from pathlib import Path
 from urllib.parse import urlencode
 
 from django.conf import settings
+from django.contrib.auth.hashers import make_password
 from django.db import transaction
 from django.db.models import (
     BinaryField, BooleanField, Case, CharField, Count, ExpressionWrapper, F, Func,
@@ -316,7 +317,8 @@ def notify_approvers(perm_code, title, message, link='', category=None):
 def app_user_dict(o):
     return {
         'id': o.id, 'name': o.full_name, 'email': o.email,
-        'password': o.password, 'initials': o.initials,
+        'password': '',   # never expose the stored hash to the client
+        'initials': o.initials,
         'role': o.role, 'status': o.status,
         'authProvider': o.auth_provider,
         'profilePic': o.profile_pic or '',
@@ -1371,19 +1373,10 @@ def resume_score_file(request, pk):
 # Interview Recordings
 # ---------------------------------------------------------------------------
 def _recording_list_qs():
-    return InterviewRecording.objects.annotate(
-        # ``_has_video`` is True when disk file, binary blob, or legacy base64 has data
-        _has_video=Case(
-            When(video_file__isnull=False, video_file__gt='', then=Value(True)),
-            When(video_buffer__isnull=False, video_buffer__gt=b'', then=Value(True)),
-            When(recording_data__isnull=False, recording_data__gt='', then=Value(True)),
-            default=Value(False), output_field=BooleanField(),
-        ),
-        _has_recording=Case(
-            When(recording_data__isnull=False, recording_data__gt='', then=Value(True)),
-            default=Value(False), output_field=BooleanField(),
-        ),
-    ).defer('video_buffer', 'recording_data')
+    """Recordings without their blob columns. ``hasVideo`` comes from the stored
+    ``has_video`` flag (see the model) rather than a per-row test of the
+    LONGBLOB / LONGTEXT columns, so this query never reads a video."""
+    return InterviewRecording.objects.defer('video_buffer', 'recording_data')
 
 
 RECORDING_FIELD_MAP = {
@@ -1433,15 +1426,18 @@ def _mark_interview_taken(email, role, total_score=None):
               anonymous_methods=('POST',))
 def recordings(request):
     if request.method == 'GET':
-        if request.query_params.get('summary') == '1':
-            qs = _recording_list_qs().defer(
-                'transcript', 'responses', 'ai_evaluation',
-                'executive_summary', 'round2_questions',
-            )
-            return Response(InterviewRecordingSerializer(
-                qs, many=True, context={'summary': True},
-            ).data)
-        return Response(InterviewRecordingSerializer(_recording_list_qs(), many=True).data)
+        # The list is row metadata only; the panel loads a recording's
+        # transcript and evaluation from the detail endpoint when it is opened.
+        # ``?full=1`` keeps the old heavy shape for any caller that wants it.
+        if request.query_params.get('full') == '1':
+            return Response(InterviewRecordingSerializer(_recording_list_qs(), many=True).data)
+        qs = _recording_list_qs().defer(
+            'transcript', 'responses', 'ai_evaluation',
+            'executive_summary', 'round2_questions',
+        )
+        return Response(InterviewRecordingSerializer(
+            qs, many=True, context={'summary': True},
+        ).data)
 
     body = request.data
     if not body.get('candidateName'):
@@ -1457,13 +1453,16 @@ def recordings(request):
 @api_view(['GET', 'PUT', 'DELETE'])
 @require_perm({'GET': 'recruitment.view', 'PUT': 'recruitment.edit', 'DELETE': 'recruitment.delete'})
 def recording_detail(request, pk):
-    obj = InterviewRecording.objects.filter(pk=pk).first()
+    # Blob columns stay deferred: the player streams video from the /video
+    # endpoint, so the legacy base64 copy is only sent back on ``?full=1``.
+    obj = InterviewRecording.objects.defer('video_buffer', 'recording_data').filter(pk=pk).first()
     if not obj:
         return err('Recording not found', 404)
 
     if request.method == 'GET':
         data = InterviewRecordingSerializer(obj).data
-        data['recordingData'] = obj.recording_data
+        if request.query_params.get('full') == '1':
+            data['recordingData'] = obj.recording_data
         return Response(data)
 
     if request.method == 'PUT':
@@ -1614,7 +1613,8 @@ def recording_video(request, pk):
         except Exception as exc:
             logger.error(f"[RecordingVideo] Disk save failed: {exc}", exc_info=True)
             # Fallback direct buffer write if disk save encounters an unexpected error
-            InterviewRecording.objects.filter(pk=pk).update(video_buffer=data, video_mime=mime)
+            InterviewRecording.objects.filter(pk=pk).update(
+                video_buffer=data, video_mime=mime, has_video=True)
             return JsonResponse({'ok': True, 'fallback': 'buffer'})
 
     if request.method != 'GET':
@@ -1969,13 +1969,29 @@ def user_email_config(request, email):
         return err('email is required')
     body = request.data
     social = _merge_social(email, body.get('social', {}))
+    # The SMTP password is stored encrypted and never sent back to the browser,
+    # so the form submits it blank unless the user typed a new one: blank keeps
+    # the saved password, ``clearSmtpPassword: true`` removes it.
+    from .secret_box import SecretsNotConfigured, encrypt
+    existing = UserEmailConfig.objects.filter(user_email=email).first()
+    new_pw = str(body.get('smtpPassword') or '')
+    if body.get('clearSmtpPassword'):
+        stored_pw = ''
+    elif new_pw:
+        try:
+            stored_pw = encrypt(new_pw)
+        except SecretsNotConfigured:
+            return err('The SMTP password cannot be stored securely because HRMS_SECRETS_KEY is not '
+                       'set on the server. Ask an administrator to set it (see README_DJANGO.md).', 503)
+    else:
+        stored_pw = existing.smtp_password if existing else ''
     obj, _ = UserEmailConfig.objects.update_or_create(
         user_email=email,
         defaults={
             'smtp_host': body.get('smtpHost', ''),
             'smtp_port': str(body.get('smtpPort', '') or ''),
             'smtp_user': body.get('smtpUser', ''),
-            'smtp_password': body.get('smtpPassword', ''),
+            'smtp_password': stored_pw,
             'smtp_secure': bool(body.get('smtpSecure', False)),
             'from_name': body.get('fromName', ''),
             'from_email': body.get('fromEmail', ''),
@@ -2460,7 +2476,7 @@ def user_detail(request, email):
             obj.full_name = str(body['name']).strip()
             obj.initials = make_initials(obj.full_name)
         if body.get('password'):
-            obj.password = body['password']
+            obj.password = make_password(body['password'])
         if body.get('role'):
             obj.role = body['role']
         if body.get('status'):
@@ -6124,20 +6140,32 @@ def _store_bench_sales_file_data(pk, files):
         BenchSalesProfile.objects.filter(pk=pk).update(**{col: data})
 
 
-def _is_pdf(mime, file_name):
+BENCH_SALES_DOC_MIMES = {
+    'application/pdf',
+    'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+}
+BENCH_SALES_DOC_EXTS = ('.pdf', '.doc', '.docx')
+BENCH_SALES_DOC_ERROR = ' is not a PDF or Word document — only PDF, DOC and DOCX uploads are allowed.'
+
+
+def _is_document(mime, file_name):
+    """PDF or Word (DOC/DOCX) — the formats a vendor accepts for a resume,
+    DL, I-94 or certificate. The browser's MIME for .doc/.docx is unreliable,
+    so the extension is checked too."""
     mime = (mime or '').lower()
     file_name = (file_name or '').lower()
-    return mime == 'application/pdf' or file_name.endswith('.pdf')
+    return mime in BENCH_SALES_DOC_MIMES or file_name.endswith(BENCH_SALES_DOC_EXTS)
 
 
 def _validate_bench_sales_files(body):
-    """Rejects non-PDF uploads and files over MAX_BENCH_SALES_FILE_MB for
-    resume/DL/I-94/certificates. Returns an error string, or None if every
-    provided file is an acceptable PDF."""
+    """Rejects uploads that are not PDF/DOC/DOCX and files over
+    MAX_BENCH_SALES_FILE_MB for resume/DL/I-94/certificates. Returns an error
+    string, or None if every provided file is acceptable."""
     for name_key, mime_key in _BENCH_SALES_SINGLE_FILE_FIELDS.values():
         file_name = body.get(name_key)
-        if file_name and not _is_pdf(body.get(mime_key), file_name):
-            return f'{file_name} is not a PDF — only PDF uploads are allowed.'
+        if file_name and not _is_document(body.get(mime_key), file_name):
+            return file_name + BENCH_SALES_DOC_ERROR
         data_key = name_key[:-len('FileName')] + 'FileData'
         size_error = _bench_sales_file_too_large(file_name or data_key, body.get(data_key))
         if size_error:
@@ -6147,8 +6175,8 @@ def _validate_bench_sales_files(body):
         return 'certificates must be a list of files'
     for c in certs:
         file_name = (c or {}).get('fileName')
-        if file_name and not _is_pdf((c or {}).get('fileMime'), file_name):
-            return f'{file_name} is not a PDF — only PDF uploads are allowed.'
+        if file_name and not _is_document((c or {}).get('fileMime'), file_name):
+            return file_name + BENCH_SALES_DOC_ERROR
         size_error = _bench_sales_file_too_large(file_name or 'certificate', (c or {}).get('fileData'))
         if size_error:
             return size_error
@@ -6164,7 +6192,8 @@ def bench_sales_profiles(request):
         if search:
             qs = qs.filter(
                 Q(name__icontains=search) | Q(tech_stack__icontains=search) |
-                Q(email__icontains=search) | Q(contact_no__icontains=search)
+                Q(email__icontains=search) | Q(contact_no__icontains=search) |
+                Q(passport_no__icontains=search)
             )
         return Response(BenchSalesProfileSerializer(qs, many=True).data)
 
@@ -6211,7 +6240,7 @@ def bench_sales_profile_detail(request, pk):
 
     body = dict(request.data or {})
     new_certs = body.pop('certificates', None) or []
-    existing_count = obj.certificate_files.count()
+    existing_count = obj.certificate_files.filter(kind='certificate').count()
     if existing_count + len(new_certs) > MAX_CERTIFICATES_PER_PROFILE:
         return err(f'You can upload up to {MAX_CERTIFICATES_PER_PROFILE} certificates per profile.')
     file_error = _validate_bench_sales_files(dict(body, certificates=new_certs))
@@ -6266,19 +6295,20 @@ def bench_sales_profile_upload(request, pk):
     upload = request.FILES.get('file')
     if not upload:
         return err('file is required')
-    if not _is_pdf(upload.content_type, upload.name):
-        return err(f'{upload.name} is not a PDF — only PDF uploads are allowed.')
+    if not _is_document(upload.content_type, upload.name):
+        return err(upload.name + BENCH_SALES_DOC_ERROR)
     if upload.size > MAX_BENCH_SALES_FILE_BYTES:
         return err(f'{upload.name} is larger than {MAX_BENCH_SALES_FILE_MB} MB — '
                    f'each file must be {MAX_BENCH_SALES_FILE_MB} MB or smaller.')
-    mime = upload.content_type or 'application/pdf'
+    mime = upload.content_type or mimetypes.guess_type(upload.name)[0] or 'application/octet-stream'
     data = base64.b64encode(upload.read()).decode('ascii')
 
-    if field == 'certificate':
-        if obj.certificate_files.count() >= MAX_CERTIFICATES_PER_PROFILE:
-            return err(f'You can upload up to {MAX_CERTIFICATES_PER_PROFILE} certificates per profile.')
+    if field in ('certificate', 'certification'):
+        noun = 'certificates' if field == 'certificate' else 'certification files'
+        if obj.certificate_files.filter(kind=field).count() >= MAX_CERTIFICATES_PER_PROFILE:
+            return err(f'You can upload up to {MAX_CERTIFICATES_PER_PROFILE} {noun} per profile.')
         BenchSalesCertificate.objects.create(
-            profile=obj, file_name=upload.name, file_mime=mime, file_data=data,
+            profile=obj, kind=field, file_name=upload.name, file_mime=mime, file_data=data,
         )
     elif field in _BENCH_SALES_UPLOAD_COLS:
         name_col, mime_col, data_col = _BENCH_SALES_UPLOAD_COLS[field]
@@ -6287,7 +6317,7 @@ def bench_sales_profile_upload(request, pk):
         BenchSalesProfile.objects.filter(pk=pk).update(**{name_col: upload.name, mime_col: mime})
         _store_bench_sales_file_data(pk, {data_col: data})
     else:
-        return err('field must be one of: resume, dl-state-id, i94, certificate')
+        return err('field must be one of: resume, dl-state-id, i94, certificate, certification')
 
     inst = _bench_sales_profile_qs().get(pk=pk)
     return Response(BenchSalesProfileSerializer(inst).data)
@@ -6311,11 +6341,13 @@ _BENCH_SALES_FILE_FIELDS = {
 }
 
 
-@api_view(['GET'])
-@require_perm('recruitment.view')
+@api_view(['GET', 'DELETE'])
+@require_perm({'GET': 'recruitment.view', 'DELETE': 'recruitment.edit'})
 def bench_sales_profile_file(request, pk, field):
     """Serve a stored Bench Sales document (resume / DL / State ID / I-94) as
     a download/inline view — same base64-in-row approach as resume_score_file.
+    DELETE clears that one document (the form's "Remove" next to a saved file),
+    leaving the rest of the profile untouched.
     """
     import base64
     from django.http import HttpResponse
@@ -6323,6 +6355,11 @@ def bench_sales_profile_file(request, pk, field):
     cols = _BENCH_SALES_FILE_FIELDS.get(field)
     if not cols:
         return HttpResponse('Unknown file field', status=404)
+    if request.method == 'DELETE':
+        if not BenchSalesProfile.objects.filter(pk=pk).exists():
+            return err('Profile not found', 404)
+        BenchSalesProfile.objects.filter(pk=pk).update(**{c: '' for c in cols})
+        return Response(BenchSalesProfileSerializer(_bench_sales_profile_qs().get(pk=pk)).data)
     # only() the requested document: never drag the other two blobs along.
     obj = BenchSalesProfile.objects.only(*cols).filter(pk=pk).first()
     if not obj:
@@ -7338,7 +7375,7 @@ def rbac_users(request):
     u = AppUser.objects.create(
         full_name=name,
         email=email,
-        password=password,
+        password=make_password(password),
         initials=make_initials(name),
         role=_legacy_from_role(role.name),
         role_ref=role,
@@ -7369,7 +7406,7 @@ def rbac_user_detail(request, pk):
         u.full_name = str(body['name']).strip()
         u.initials = make_initials(u.full_name)
     if body.get('password'):
-        u.password = body['password']
+        u.password = make_password(body['password'])
     if body.get('status'):
         u.status = body['status']
     u.save()
@@ -8485,6 +8522,11 @@ def _parse_dt(value):
     return datetime.fromisoformat(str(value).replace("Z", ""))
 
 
+from .chat_extras import (attachment_url as _chat_attachment_url, chat_guard,  # noqa: E402
+                          notify_mentions as _chat_notify_mentions, reactions_for as _chat_reactions_for,
+                          unread_counts as _chat_unread_counts)
+
+
 def _broadcast_message(room_id, payload):
     """Best-effort push of a saved message to the room's WebSocket group."""
     try:
@@ -8714,11 +8756,10 @@ def _rooms_payload(rooms, viewer):
         m.room_id: m for m in ChatMessage.objects
         .filter(id__in=[i for i in last_ids.values() if i]).only(*_LAST_MSG_FIELDS)
     }
-    unread_by_room = dict(
-        ChatMessage.objects.filter(room_id__in=ids, is_read=False)
-        .exclude(sender_email=viewer)
-        .values("room_id").annotate(n=Count("id")).values_list("room_id", "n")
-    )
+    # Per member: messages from others newer than *this viewer's* last read.
+    # (The shared ChatMessage.is_read flag cleared everyone's badge as soon as
+    # one member of a channel opened it.)
+    unread_by_room = _chat_unread_counts(viewer, ids)
 
     out = []
     for room in rooms:
@@ -8761,6 +8802,7 @@ def _rooms_payload(rooms, viewer):
 
 
 @api_view(["GET", "POST"])
+@chat_guard(membership=False)
 def chat_rooms(request):
     if request.method == "POST":
         body = request.data or {}
@@ -8817,6 +8859,7 @@ def chat_rooms(request):
 
 
 @api_view(["GET", "POST"])
+@chat_guard()
 def chat_messages(request, room_id):
     room = ChatRoom.objects.filter(id=room_id).first()
     if not room:
@@ -8867,6 +8910,15 @@ def chat_messages(request, room_id):
                 if others:
                     seen = all(r is not None and r >= msg.created_at for r in others)
             data[i]["seen"] = seen
+        ids = [msg.id for msg in msgs]
+        reactions = _chat_reactions_for(ids)
+        reply_counts = dict(
+            ChatMessage.objects.filter(room_id=room_id, reply_to_id__in=ids, is_deleted=False)
+            .values("reply_to_id").annotate(n=Count("id")).values_list("reply_to_id", "n")
+        )
+        for i, msg in enumerate(msgs):
+            data[i]["reactions"] = reactions.get(msg.id, [])
+            data[i]["reply_count"] = reply_counts.get(msg.id, 0)
         return Response(data)
 
     # POST — persist + broadcast (REST fallback for the WebSocket). Supports an
@@ -8935,15 +8987,21 @@ def chat_messages(request, room_id):
         "created_at": _fmt_dt(now),
         "attachment_name": att_name,
         "attachment_type": att_type,
-        "attachment_url": (f"/api/chat/attachment/{msg.id}" if att_path else ""),
+        "attachment_url": (_chat_attachment_url(msg.id) if att_path else ""),
         "reply_to_id": reply_to_id,
         "reply_to_sender": reply_to_sender,
         "reply_to_text": reply_to_text,
     })
+    mentions = body.get("mentions") if isinstance(body.get("mentions"), list) else []
+    try:
+        _chat_notify_mentions(room, msg, mentions)
+    except Exception:
+        logger.exception("chat mention notifications failed")
     return Response(ChatMessageSerializer(msg).data, status=201)
 
 
 @api_view(["PUT", "DELETE"])
+@chat_guard()
 def chat_message_detail(request, msg_id):
     """Edit (PUT) or soft-delete (DELETE) a single message. Sender only."""
     msg = ChatMessage.objects.filter(id=msg_id).first()
@@ -9026,6 +9084,7 @@ def chat_message_detail(request, msg_id):
 
 
 @api_view(["GET"])
+@chat_guard(allow_signed_attachment=True)
 def chat_attachment(request, msg_id):
     """Return a message's file attachment with the right content type."""
     import base64
@@ -9066,6 +9125,7 @@ def chat_attachment(request, msg_id):
 
 
 @api_view(["POST"])
+@chat_guard()
 def chat_mark_read(request, room_id):
     viewer = norm_email(
         (request.data or {}).get("email") or request.headers.get("X-Actor-Email") or ""
@@ -9074,6 +9134,7 @@ def chat_mark_read(request, room_id):
         ChatMessage.objects.filter(room_id=room_id, is_read=False).exclude(
             sender_email=viewer
         ).update(is_read=True)
+        ChatMember.objects.filter(room_id=room_id, employee_email=viewer).update(last_read_at=_chat_now())
     return Response({"ok": True})
 
 
@@ -9111,6 +9172,7 @@ def _actor_of(request):
 
 
 @api_view(["GET", "POST"])
+@chat_guard()
 def chat_room_members(request, room_id):
     room = ChatRoom.objects.filter(id=room_id).first()
     if not room:
@@ -9144,6 +9206,7 @@ def chat_room_members(request, room_id):
 
 
 @api_view(["PUT", "DELETE"])
+@chat_guard()
 def chat_room_member_detail(request, room_id, email):
     room = ChatRoom.objects.filter(id=room_id).first()
     if not room:
@@ -9187,6 +9250,7 @@ def chat_room_member_detail(request, room_id, email):
 
 
 @api_view(["GET"])
+@chat_guard(membership=False)
 def chat_contacts(request):
     """The company directory a user can start a chat with.
 
@@ -9271,6 +9335,7 @@ def chat_contacts(request):
 
 
 @api_view(["GET", "POST"])
+@chat_guard(room_param="room_id")
 def chat_meetings(request):
     if request.method == "GET":
         room_id = request.GET.get("room_id")
@@ -9360,6 +9425,7 @@ def chat_meetings(request):
 
 
 @api_view(["DELETE"])
+@chat_guard(membership=False)
 def chat_meeting_detail(request, meeting_id):
     """Cancel a scheduled meeting (organiser or channel admin)."""
     mt = ChatMeeting.objects.filter(id=meeting_id).first()
@@ -9375,7 +9441,8 @@ def chat_meeting_detail(request, meeting_id):
     return Response({"ok": True, "id": meeting_id})
 
 
-@api_view(["DELETE"])
+@api_view(["PATCH", "DELETE"])
+@chat_guard()
 def chat_room_detail(request, room_id):
     """Delete a whole conversation.
 
@@ -9387,6 +9454,27 @@ def chat_room_detail(request, room_id):
         return err("Room not found", 404)
     actor = _actor_of(request)
     is_member = ChatMember.objects.filter(room_id=room_id, employee_email=actor).exists()
+
+    if request.method == "PATCH":
+        # Channel settings: rename and public/private. Channel admins only.
+        if not room.is_group:
+            return err("Only channels have settings", 400)
+        if not _is_room_admin(room_id, actor):
+            return err("Only a channel admin can change channel settings", 403)
+        body = request.data or {}
+        fields = []
+        if "name" in body:
+            name = str(body.get("name") or "").strip()
+            if not name or len(name) > 80:
+                return err("Channel name must be 1–80 characters")
+            room.name = name
+            fields.append("name")
+        if "is_private" in body:
+            room.is_private = bool(body.get("is_private"))
+            fields.append("is_private")
+        if fields:
+            room.save(update_fields=fields)
+        return Response(_room_payload(room, actor))
 
     if room.is_group:
         if not _is_room_admin(room_id, actor):
@@ -9430,6 +9518,7 @@ def _expire_stale_pins(room_id):
 
 
 @api_view(["POST"])
+@chat_guard()
 def chat_message_pin(request, msg_id):
     """Pin or unpin a message.
 
@@ -9501,6 +9590,7 @@ CHAT_TRANSLATE_LANGS = {
 
 
 @api_view(["POST"])
+@chat_guard(membership=False)
 def chat_translate(request):
     """Translate the composer's text into the requested language.
 

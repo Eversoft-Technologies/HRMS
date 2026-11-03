@@ -21,6 +21,17 @@
 
   /* Any key an older build stored in the browser is removed for good. */
   try { localStorage.removeItem('hrms_ai_key'); } catch (_) {}
+  /* Older builds cached every login *with its password* in localStorage
+     (hrms_users), including a hard-coded default admin. Passwords now live
+     only on the server, hashed — strip any copies left in this browser. */
+  try {
+    var cached = JSON.parse(localStorage.getItem('hrms_users') || 'null');
+    if (Array.isArray(cached) && cached.some(function (u) { return u && 'password' in u; })) {
+      localStorage.setItem('hrms_users', JSON.stringify(cached.filter(function (u) {
+        return u && String(u.email || '').toLowerCase() !== 'admin@eversoftit.com';
+      }).map(function (u) { var c = {}; for (var k in u) if (k !== 'password') c[k] = u[k]; return c; })));
+    }
+  } catch (_) {}
 
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
@@ -298,6 +309,13 @@
   function hardenAutofill() {
     document.querySelectorAll('input[type="password"]').forEach(function (i) {
       if (i.getAttribute('autocomplete') !== 'new-password') i.setAttribute('autocomplete', 'new-password');
+      // The saved SMTP password is encrypted on the server and never sent back,
+      // so the field is always empty: say what an empty field means.
+      if (i.getAttribute('placeholder') === '••••••••' && i.closest('.content') && !i.hasAttribute('data-hsp-smtp')) {
+        i.setAttribute('data-hsp-smtp', '1');
+        i.setAttribute('placeholder', 'Leave blank to keep the saved password');
+        i.title = 'Stored encrypted on the server and never shown. Type a new password only to change it.';
+      }
     });
     document.querySelectorAll('.topbar input').forEach(function (i) {
       if (isTopSearch(i) && i.getAttribute('autocomplete') !== 'off') {

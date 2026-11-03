@@ -177,6 +177,12 @@ if 'test' in sys.argv:
 # Match the existing INT AUTO_INCREMENT primary keys (not BIGINT).
 DEFAULT_AUTO_FIELD = 'django.db.models.AutoField'
 
+# Login passwords are hashed with Django's default (PBKDF2). The test suite
+# creates hundreds of throw-away accounts, so it uses a fast hasher instead —
+# only under `manage.py test`, never in a running server.
+if len(sys.argv) > 1 and sys.argv[1] == 'test':
+    PASSWORD_HASHERS = ['django.contrib.auth.hashers.MD5PasswordHasher']
+
 # ---------------------------------------------------------------------------
 # Large payloads: base64 video (recordingData) and document uploads can be big.
 # Mirror the Node server's generous body limits.

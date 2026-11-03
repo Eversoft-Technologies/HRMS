@@ -205,6 +205,7 @@ def save_interview_video(recording_id, raw_bytes, content_type='video/webm'):
         'video_size': file_size,
         'video_mime': final_mime,
         'thumbnail_file': thumb_rel_path,
+        'has_video': True,
     }
     if duration and duration > 0:
         update_data['duration'] = duration
