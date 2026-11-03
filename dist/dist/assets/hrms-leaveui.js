@@ -63,6 +63,10 @@
      signed-in email and Who's Out becomes My Upcoming Leave. Fails CLOSED —
      a fetch error is treated as a plain employee, never as an admin. */
   const[pm,spm]=g.useState(null);
+  /* The approver is the employee's linked manager (Employee profile > Manager),
+     never a choice on this form. Shown read-only so they know who gets it. */
+  const[apr,sapr]=g.useState(null);
+  g.useEffect(function(){fetch("/api/org/approver").then(function(x){return x.ok?x.json():null}).then(function(d){sapr(d||{manager:null})}).catch(function(){sapr({manager:null})})},[]);
 
   /* ---- session + fetch helpers ---- */
   var sess=function(){try{return JSON.parse(localStorage.getItem("hrms_session")||"{}")}catch(_){return{}}};
@@ -73,7 +77,7 @@
      same scoping for any caller without leave.action, so the param only keeps
      the request honest — it is not the security boundary. loadAppr calls this
      once permissions resolve, so the list is never fetched at the wrong scope. */
-  var loadList=function(all){var e=sess().email||"";sld(!0);return fetch(all||!e?"/api/leave":"/api/leave?email="+encodeURIComponent(e)).then(readJson).then(function(r){if(!r.ok||!Array.isArray(r.j))throw 0;sL(r.j);ser("");sld(!1)}).catch(function(){ser("Couldn't load leave requests.");sld(!1)})};
+  var loadList=function(all){var e=sess().email||"";sld(!0);return fetch("/api/leave").then(readJson).then(function(r){if(!r.ok||!Array.isArray(r.j))throw 0;sL(r.j);ser("");sld(!1)}).catch(function(){ser("Couldn't load leave requests.");sld(!1)})};
   var loadBal=function(){var e=sess().email||"";if(!e){sbal([]);return}fetch("/api/leave/balance?email="+encodeURIComponent(e)).then(readJson).then(function(r){sbal(r.ok&&r.j&&Array.isArray(r.j.balances)?r.j.balances:[])}).catch(function(){sbal([])})};
   /* Signed-in-user scoped, so it no-ops when logged out. Dropping ?email=
      returns EVERY employee's requests, which the API only serves to a caller
@@ -102,7 +106,8 @@
   var dmy=function(s){var d=dObj(s);return isNaN(d.getTime())?s||"—":pad(d.getDate())+"-"+pad(d.getMonth()+1)+"-"+d.getFullYear()};
   var initials=function(s){var p=(s||"?").trim().split(/\s+/).map(function(w){return w.charAt(0)}).join("");return(p||"?").toUpperCase().slice(0,2)};
   var WDL=["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
-  var isWknd=function(s){var d=dObj(s).getDay();return d===0||d===6};
+  /* Weekend = not a working day in Settings > General; Sat/Sun until it loads. */
+  var isWknd=function(s){var d=dObj(s);if(window.HRMSCompany)return !window.HRMSCompany.isWorkDay(d);var w=d.getDay();return w===0||w===6};
   /* "5–7 Aug" / "31 Jul – 2 Aug" / "5 Aug" — compact range for the Who's Out list. */
   var shortR=function(a,b){var x=dObj(a),y=dObj(b);if(isNaN(x.getTime())||isNaN(y.getTime()))return"";
     if(a===b)return x.getDate()+" "+MN[x.getMonth()];
@@ -365,7 +370,10 @@
            data-keepcol tells hrms-perms' gateActionColumns the Action column
            still holds a usable control, so it must not hide the column even
            when the role lacks leave.action. */
-        var own=(e.email||"").toLowerCase()===myEmail,showDel=empV&&own&&e.status==="Pending";body.push(
+        var own=(e.email||"").toLowerCase()===myEmail,showDel=empV&&own&&e.status==="Pending";
+        /* Routed to me as the manager: Approve / Decline without leave.action (the
+           API allows the assigned approver; never on your own request). */
+        var routed=!own&&(e.approverEmail||"").toLowerCase()===myEmail&&!!myEmail,dp=function(code){return routed?{"data-keepcol":"1"}:{"data-perm":code}};body.push(
             n.jsxs("tr",{onClick:function(){sexp(exp===e.id?null:e.id)},style:{cursor:"pointer"},title:"Show reason, approver and applied date",children:[
                   n.jsx("td",{children:
                       n.jsxs("div",{style:{display:"flex",alignItems:"center",gap:9},children:[
@@ -389,8 +397,8 @@
                       n.jsx(Gn,{status:e.status})}),
                   n.jsx("td",{children:e.status==="Pending"?
                       n.jsxs("div",{style:{display:"flex",gap:6,flexWrap:"wrap"},children:[e.status==="Pending"?
-                            n.jsx("button",{className:"btn-sm","data-perm":"leave.approve",style:{fontSize:11,padding:"2px 8px",color:"var(--success)"},onClick:function(ev){ev.stopPropagation();setSt(e.id,"Approved")},children:"Approve"}):null,e.status==="Pending"?
-                            n.jsx("button",{className:"btn-sm","data-perm":"leave.reject",style:{fontSize:11,padding:"2px 8px",color:"var(--danger)"},onClick:function(ev){ev.stopPropagation();scf(e)},children:"Decline"}):null,showDel?
+                            n.jsx("button",{className:"btn-sm",...dp("leave.approve"),style:{fontSize:11,padding:"2px 8px",color:"var(--success)"},onClick:function(ev){ev.stopPropagation();setSt(e.id,"Approved")},children:"Approve"}):null,e.status==="Pending"?
+                            n.jsx("button",{className:"btn-sm",...dp("leave.reject"),style:{fontSize:11,padding:"2px 8px",color:"var(--danger)"},onClick:function(ev){ev.stopPropagation();scf(e)},children:"Decline"}):null,showDel?
                             n.jsx("button",{className:"btn-sm","data-keepcol":"1",style:{fontSize:11,padding:"2px 8px",color:"var(--danger)"},onClick:function(ev){ev.stopPropagation();delRq(e)},children:"Delete"}):null]}):
                       n.jsx("span",{style:{fontSize:12,color:"var(--text3)"},children:"—"})})]},e.id));if(exp===e.id){var dot=function(on,col){return n.jsx("span",{style:{width:9,height:9,borderRadius:"50%",background:on?col:"var(--border2)",display:"inline-block",flex:"0 0 auto"}})};var decided=e.status==="Approved"||e.status==="Rejected";body.push(
               n.jsx("tr",{children:
@@ -583,6 +591,8 @@
                         n.jsxs("span",{children:[
                               n.jsxs("strong",{children:[dc," ",dc===1?"day":"days"]})," · ",prettyD(fm.fromDate)," → ",prettyD(fm.toDate),selBal&&dc>selBal.remaining?
                               n.jsxs("span",{style:{color:"var(--danger)"},children:[" — more than your remaining ",selBal.type," balance"]}):null]}):"Pick both dates to see the duration.")}),
+                  n.jsx(le,{label:"Approver",children:
+                      n.jsx("div",{style:{fontSize:13,color:"var(--text)",padding:"8px 11px",background:"var(--bg3)",border:"1px solid var(--border2)",borderRadius:8},children:apr===null?"Loading…":(apr.manager?apr.manager.name+(apr.manager.designation?" · "+apr.manager.designation:""):"HR (no manager is linked on your profile)")})}),
                   n.jsx(le,{label:"Reason",children:
                       n.jsx("textarea",{className:"input-field",rows:3,style:{resize:"vertical"},value:fm.reason,onChange:function(d){setF("reason",d.target.value)},placeholder:"Optional — a short note for your approver"})}),fe?
                   n.jsx("div",{style:{fontSize:12,color:"var(--danger)",marginTop:-8},children:fe}):null,

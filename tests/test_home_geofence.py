@@ -140,12 +140,14 @@ class WfhHomeCheckInTests(TestCase):
         self.assertTrue(self._row().geo_verified)
 
     # ── no home on file: allowed, but not verified ───────────────────────
-    def test_without_a_registered_home_the_check_in_still_works(self):
+    def test_without_a_registered_home_a_reason_is_required(self):
         resp = self._check_in(latitude=FAR_LAT, longitude=FAR_LNG)
-        self.assertIn(resp.status_code, (200, 201))
+        self.assertEqual(resp.status_code, 422)
+        self.assertTrue(resp.json()['needsReason'])
 
     def test_without_a_registered_home_the_day_is_not_verified(self):
-        self._check_in(latitude=FAR_LAT, longitude=FAR_LNG)
+        resp = self._check_in(latitude=FAR_LAT, longitude=FAR_LNG, locationReason='No home on file')
+        self.assertEqual(resp.status_code, 202)
         row = self._row()
         self.assertTrue(row.is_wfh)
         self.assertFalse(row.geo_verified,
@@ -153,9 +155,8 @@ class WfhHomeCheckInTests(TestCase):
 
     def test_an_unconfirmed_home_behaves_as_none(self):
         self._home(status=GeoFence.PENDING)
-        resp = self._check_in(latitude=FAR_LAT, longitude=FAR_LNG)
-        self.assertIn(resp.status_code, (200, 201))
-        self.assertFalse(self._row().geo_verified)
+        resp = self._check_in(latitude=HOME_LAT, longitude=HOME_LNG)
+        self.assertEqual(resp.status_code, 422, 'a pending pin verifies nothing, even standing on it')
 
     # ── the approval round trip ──────────────────────────────────────────
     def test_a_reason_sends_it_for_approval(self):
@@ -229,17 +230,18 @@ class ClientSignalTests(TestCase):
                                 content_type='application/json',
                                 HTTP_X_USER_EMAIL=self.email)
 
-    def test_a_wfh_check_in_with_no_home_asks_the_client_to_offer_one(self):
+    def test_a_wfh_check_in_with_no_home_says_it_is_not_set_up(self):
         resp = self._check_in(latitude=HOME_LAT, longitude=HOME_LNG)
-        self.assertIn(resp.status_code, (200, 201))
-        self.assertTrue(resp.json().get('homeLocationMissing'))
+        self.assertEqual(resp.status_code, 422)
+        self.assertEqual(resp.json()['homeLocationStatus'], 'Not set up')
 
-    def test_the_check_in_succeeds_regardless(self):
-        """The prompt is an offer, not a gate — attendance must not depend on
-        answering a question about where you live."""
-        self._check_in(latitude=HOME_LAT, longitude=HOME_LNG)
+    def test_without_a_home_the_check_in_goes_to_hr_review(self):
+        """Location is mandatory in every mode: with no approved home the day
+        cannot be verified, so it needs a reason and HR's decision."""
+        self._check_in(latitude=HOME_LAT, longitude=HOME_LNG, locationReason='Home not registered yet')
         row = EmployeeAttendance.objects.get(email=self.email, date=local_today())
-        self.assertIsNotNone(row.check_in)
+        self.assertEqual(row.location_status, 'Pending')
+        self.assertFalse(row.geo_verified)
 
     def test_the_offer_stops_once_a_home_is_confirmed(self):
         GeoFence.objects.create(
@@ -248,14 +250,13 @@ class ClientSignalTests(TestCase):
         resp = self._check_in(latitude=HOME_LAT, longitude=HOME_LNG, accuracy=15)
         self.assertNotIn('homeLocationMissing', resp.json())
 
-    def test_the_offer_continues_while_the_home_is_only_pending(self):
-        """Still unverifiable, so still worth prompting if they cancelled
-        halfway — but the client remembers a decline, so this does not nag."""
+    def test_a_pending_home_is_reported_as_pending(self):
         GeoFence.objects.create(
             name='Home', latitude=HOME_LAT, longitude=HOME_LNG, radius_meters=150,
             owner_email=self.email, status=GeoFence.PENDING)
         resp = self._check_in(latitude=HOME_LAT, longitude=HOME_LNG)
-        self.assertTrue(resp.json().get('homeLocationMissing'))
+        self.assertEqual(resp.status_code, 422)
+        self.assertEqual(resp.json()['homeLocationStatus'], 'Pending review')
 
     def test_an_office_check_in_is_never_offered_a_home_prompt(self):
         WfhRequest.objects.filter(email=self.email).delete()

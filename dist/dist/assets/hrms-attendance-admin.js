@@ -449,6 +449,142 @@
       return { fence: best, distanceMeters: bestD };
     }
 
+    /* ── Attendance heatmap ──────────────────────────────────────────────
+       Check-in density over a period (Today / 7 / 30 / 90 days) from
+       /api/attendance/heatmap, not just today's live pins — with nobody
+       checked in yet the old heatmap was simply blank. Points are drawn as
+       alpha blobs on an offscreen canvas and then coloured blue→red by
+       density, so busy places glow and stray check-ins stay faint. */
+    var heat = { days: state.heatDays || 30, key: '', data: null, loading: false, error: '', fitted: false };
+    var HEAT_PERIODS = [[1, 'Today'], [7, '7 days'], [30, '30 days'], [90, '90 days']];
+    var heatLut = null;
+    function heatPalette() {
+      if (heatLut) return heatLut;
+      var c = document.createElement('canvas'); c.width = 256; c.height = 1;
+      var g = c.getContext('2d');
+      var gr = g.createLinearGradient(0, 0, 256, 0);
+      gr.addColorStop(0, '#3b82f6'); gr.addColorStop(0.35, '#10b981'); gr.addColorStop(0.6, '#eab308');
+      gr.addColorStop(0.8, '#f97316'); gr.addColorStop(1, '#ef4444');
+      g.fillStyle = gr; g.fillRect(0, 0, 256, 1);
+      heatLut = g.getImageData(0, 0, 256, 1).data;
+      return heatLut;
+    }
+    function heatUrl() {
+      return '/api/attendance/heatmap?days=' + heat.days +
+        (deptFilter && deptFilter !== 'all' ? '&department=' + encodeURIComponent(deptFilter) : '');
+    }
+    function loadHeat() {
+      var key = heatUrl();
+      if (heat.key === key) return;
+      heat.key = key; heat.loading = true; heat.data = null; heat.error = '';
+      renderHeatPanel();
+      api(key).then(function (d) {
+        if (heat.key !== key) return;
+        heat.loading = false; heat.data = d || { points: [] };
+        if (!heat.fitted && heat.data.points && heat.data.points.length) { heat.fitted = true; fitToHeat(); }
+        redraw();
+      }).catch(function (e) {
+        if (heat.key !== key) return;
+        heat.loading = false; heat.error = e.message || 'Could not load the heatmap.'; heat.data = { points: [] };
+        redraw();
+      });
+    }
+    function fitToHeat() {
+      var pts = heat.data.points;
+      var minLat = 90, maxLat = -90, minLng = 180, maxLng = -180;
+      pts.forEach(function (q) {
+        minLat = Math.min(minLat, q.lat); maxLat = Math.max(maxLat, q.lat);
+        minLng = Math.min(minLng, q.lng); maxLng = Math.max(maxLng, q.lng);
+      });
+      var W0 = container.clientWidth || 800, H0 = container.clientHeight || 560;
+      var z = 16;
+      for (; z > 3; z--) {
+        var spanX = lngToWorldX(maxLng, z) - lngToWorldX(minLng, z);
+        var spanY = latToWorldY(minLat, z) - latToWorldY(maxLat, z);
+        if (spanX <= W0 * 0.7 && spanY <= H0 * 0.7) break;
+      }
+      st.lat = (minLat + maxLat) / 2; st.lng = (minLng + maxLng) / 2; st.z = z;
+    }
+    function drawHeat(ctx, W, H, toX, toY) {
+      var pts = (heat.data && heat.data.points) || [];
+      if (!pts.length) return;
+      var radius = Math.max(16, Math.min(48, 4 + st.z * 2.6));
+      var maxW = 1;
+      pts.forEach(function (q) { if (q.weight > maxW) maxW = q.weight; });
+      var off = document.createElement('canvas'); off.width = W; off.height = H;
+      var o = off.getContext('2d');
+      pts.forEach(function (q) {
+        var x = toX(q.lng), y = toY(q.lat);
+        if (x < -radius || y < -radius || x > W + radius || y > H + radius) return;
+        var a = Math.min(1, 0.18 + 0.82 * Math.log(1 + q.weight) / Math.log(1 + maxW));
+        var g = o.createRadialGradient(x, y, 0, x, y, radius);
+        g.addColorStop(0, 'rgba(0,0,0,' + a + ')');
+        g.addColorStop(1, 'rgba(0,0,0,0)');
+        o.fillStyle = g;
+        o.fillRect(x - radius, y - radius, radius * 2, radius * 2);
+      });
+      var img = o.getImageData(0, 0, W, H), d = img.data, lut = heatPalette();
+      for (var i = 0; i < d.length; i += 4) {
+        var al = d[i + 3];
+        if (al < 6) { d[i + 3] = 0; continue; }
+        d[i] = lut[al * 4]; d[i + 1] = lut[al * 4 + 1]; d[i + 2] = lut[al * 4 + 2];
+        d[i + 3] = Math.min(225, 50 + al * 0.8);
+      }
+      ctx.putImageData(img, 0, 0);
+    }
+    function fmtDay(iso) {
+      var dd = new Date(iso + 'T00:00:00');
+      return isNaN(dd) ? iso : dd.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+    }
+    var heatPanel = document.createElement('div');
+    heatPanel.className = 'haa-heat-panel';
+    heatPanel.style.cssText = 'position:absolute;left:14px;bottom:14px;z-index:30;background:var(--haa-surface,#fff);' +
+      'color:var(--haa-text,#0f172a);border:1px solid var(--haa-line,#cbd5e1);border-radius:10px;padding:9px 11px;' +
+      'box-shadow:0 4px 14px rgba(0,0,0,0.16);font:12px \'Segoe UI\',Arial,sans-serif;display:none;max-width:calc(100% - 28px);';
+    ['mousedown', 'mouseup', 'click', 'dblclick', 'touchstart'].forEach(function (ev) {
+      heatPanel.addEventListener(ev, function (e) { e.stopPropagation(); });
+    });
+    heatPanel.addEventListener('wheel', function (e) { e.stopPropagation(); }, { passive: true });
+    container.appendChild(heatPanel);
+    var heatEmpty = document.createElement('div');
+    heatEmpty.style.cssText = 'position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:29;display:none;' +
+      'background:var(--haa-surface,#fff);color:var(--haa-text,#0f172a);border:1px solid var(--haa-line,#cbd5e1);border-radius:10px;' +
+      'padding:12px 16px;font:13px \'Segoe UI\',Arial,sans-serif;box-shadow:0 6px 20px rgba(0,0,0,0.18);text-align:center;pointer-events:none;max-width:80%;';
+    container.appendChild(heatEmpty);
+    function renderHeatPanel() {
+      var on = mode === 'heatmap';
+      heatPanel.style.display = on ? '' : 'none';
+      var d = heat.data;
+      var empty = on && !heat.loading && d && !(d.points || []).length;
+      heatEmpty.style.display = (on && (heat.loading || empty)) ? '' : 'none';
+      heatEmpty.textContent = heat.loading ? 'Loading heatmap…'
+        : (heat.error ? heat.error
+           : 'No check-ins with a location ' + (heat.days === 1 ? 'today' : 'in the last ' + heat.days + ' days') +
+             (deptFilter && deptFilter !== 'all' ? ' for ' + deptFilter : '') + '. Try a longer period.');
+      if (!on) return;
+      var chips = HEAT_PERIODS.map(function (pp) {
+        var sel = pp[0] === heat.days;
+        return '<button type="button" data-heat-days="' + pp[0] + '" style="border:1px solid ' + (sel ? 'var(--haa-accent,#4f46e5)' : 'var(--haa-line,#cbd5e1)') +
+          ';background:' + (sel ? 'var(--haa-accent,#4f46e5)' : 'transparent') + ';color:' + (sel ? '#fff' : 'inherit') +
+          ';border-radius:14px;padding:3px 10px;font:600 11px \'Segoe UI\',Arial,sans-serif;cursor:pointer;">' + pp[1] + '</button>';
+      }).join('');
+      var summary = heat.loading ? 'Loading…'
+        : (d ? (d.checkins || 0) + ' check-in' + (d.checkins === 1 ? '' : 's') + ' · ' + (d.people || 0) + ' ' + (d.people === 1 ? 'person' : 'people') +
+               (d.from ? ' · ' + (d.from === d.to ? fmtDay(d.to) : fmtDay(d.from) + ' – ' + fmtDay(d.to)) : '') : '');
+      heatPanel.innerHTML =
+        '<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:7px;">' + chips + '</div>' +
+        '<div style="display:flex;align-items:center;gap:7px;font-size:10.5px;color:var(--haa-muted,#64748b);">' +
+        '<span>Fewer</span><span style="flex:1;min-width:90px;height:7px;border-radius:4px;background:linear-gradient(90deg,#3b82f6,#10b981,#eab308,#f97316,#ef4444);"></span><span>More check-ins</span></div>' +
+        '<div style="margin-top:6px;font-size:11px;color:var(--haa-muted,#64748b);">' + esc(summary) + '</div>';
+      heatPanel.querySelectorAll('[data-heat-days]').forEach(function (b) {
+        b.onclick = function () {
+          heat.days = state.heatDays = Number(b.getAttribute('data-heat-days'));
+          heat.fitted = false;
+          redraw();
+        };
+      });
+    }
+
     function redraw() {
       var W = container.clientWidth || 800;
       var H = container.clientHeight || 560;
@@ -498,27 +634,16 @@
       });
       svgLayer.innerHTML = svgHtml;
 
-      // 3. Attendance Heatmap
+      // 3. Attendance Heatmap (check-in density over the chosen period)
       if (mode === 'heatmap') {
+        loadHeat();
         heatmapCanvas.width = W;
         heatmapCanvas.height = H;
         var ctx = heatmapCanvas.getContext('2d');
         ctx.clearRect(0, 0, W, H);
-
-        visibleEmps.forEach(function (emp) {
-          if (!emp.latitude || !emp.longitude || emp.isAbsent) return;
-          var px = toX(emp.longitude), py = toY(emp.latitude);
-          var grad = ctx.createRadialGradient(px, py, 4, px, py, 52);
-          grad.addColorStop(0, 'rgba(239, 68, 68, 0.92)');
-          grad.addColorStop(0.3, 'rgba(245, 158, 11, 0.75)');
-          grad.addColorStop(0.6, 'rgba(16, 185, 129, 0.45)');
-          grad.addColorStop(1, 'rgba(59, 130, 246, 0)');
-          ctx.fillStyle = grad;
-          ctx.beginPath();
-          ctx.arc(px, py, 52, 0, Math.PI * 2);
-          ctx.fill();
-        });
+        drawHeat(ctx, W, H, toX, toY);
       }
+      renderHeatPanel();
 
       // 4. Overlays (Office Badges, Absent Roster, & Employee Markers/Clusters)
       overlayLayer.innerHTML = '';
@@ -549,7 +674,7 @@
             '  </div>' +
             '  <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">' +
             '    <button type="button" class="haa-btn haa-remind-btn" data-name="' + esc(emp.name) + '" data-email="' + esc(emp.email || '') + '" style="font-size:11px;padding:5px 12px;height:30px;cursor:pointer;border-radius:6px;background:var(--haa-accent,#4f46e5);color:#fff;border:none;font-weight:700;display:inline-flex;align-items:center;gap:4px;">📲 Remind</button>' +
-            '    <a href="/hr/hris" style="font-size:11px;color:var(--haa-link,#4f46e5);font-weight:600;padding:4px 6px;text-decoration:none;">Profile →</a>' +
+            '    <a href="' + ('/hr/hris' + (emp.email ? '/' + encodeURIComponent(emp.email) : '')) + '" style="font-size:11px;color:var(--haa-link,#4f46e5);font-weight:600;padding:4px 6px;text-decoration:none;">Profile →</a>' +
             '  </div>' +
             '</div>';
         }).join('');
@@ -643,16 +768,62 @@
         }
       }
 
-      // 🏢 Office Location Badges
-      fences.forEach(function (f) {
-        if (!f.latitude || !f.longitude) return;
-        var fx = toX(f.longitude), fy = toY(f.latitude);
-        var lbl = document.createElement('div');
-        lbl.className = 'haa-map-fence-badge';
-        lbl.style.cssText = 'position:absolute;left:' + fx + 'px;top:' + (fy - 28) + 'px;transform:translate(-50%,-100%);' +
-          'background:rgba(15,23,42,0.88);color:#fff;padding:5px 12px;border-radius:20px;font-size:11px;font-weight:700;' +
-          'border:1px solid ' + (f.isHome ? '#8b5cf6' : '#3b82f6') + ';box-shadow:0 4px 16px rgba(0,0,0,0.35);white-space:nowrap;pointer-events:auto;cursor:pointer;z-index:15;';
-
+      // 🏢 / 🏠 Location labels — short, readable and never stacked.
+      // Homes show the owner's first name (not "Home — <email>"), long names
+      // are cut with the full text in the tooltip, and labels are placed in
+      // priority order (offices, busy homes, idle homes): one that would
+      // overlap an earlier label tries a slot above/below, else it shrinks to
+      // an icon chip. Idle homes (0 remote) are always just a small icon.
+      var placedRects = [];
+      // Home labels show the owner's profile picture (initials until it loads,
+      // or when there is none). /api/avatars/<email> needs the caller header,
+      // which an <img src> cannot send, so it is fetched once and kept as an
+      // object URL for the session.
+      var PIC = window.__haaFencePics || (window.__haaFencePics = {});
+      function picImg(url) {
+        return '<img src="' + esc(url) + '" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:50%;display:block;">';
+      }
+      function loadPic(em) {
+        PIC[em] = { pending: true };
+        fetch('/api/avatars/' + encodeURIComponent(em), { headers: { Accept: 'image/*,*/*;q=0.8' } })
+          .then(function (r) { return r.ok ? r.blob() : null; })
+          .then(function (b) {
+            PIC[em] = (b && /^image\//.test(b.type)) ? URL.createObjectURL(b) : null;
+            if (!PIC[em]) return;
+            document.querySelectorAll('.haa-fence-av').forEach(function (el) {
+              if (el.getAttribute('data-pic-email') === em) el.innerHTML = picImg(PIC[em]);
+            });
+          })
+          .catch(function () { PIC[em] = null; });
+      }
+      function ownerAvatar(f, owner, size) {
+        var em = String(f.ownerEmail || '').toLowerCase();
+        var ini = owner.full.split(/\s+/).map(function (w) { return w.charAt(0); }).join('').toUpperCase().slice(0, 2) || '?';
+        var c = PIC[em];
+        if (em && c === undefined) loadPic(em);
+        return '<span class="haa-fence-av" data-pic-email="' + esc(em) + '" style="width:' + size + 'px;height:' + size + 'px;border-radius:50%;' +
+          'background:linear-gradient(135deg,#8b5cf6,#6366f1);color:#fff;font-size:' + Math.round(size * 0.42) + 'px;font-weight:700;' +
+          'display:inline-flex;align-items:center;justify-content:center;overflow:hidden;flex-shrink:0;">' +
+          (typeof c === 'string' ? picImg(c) : esc(ini)) + '</span>';
+      }
+      function shortText(s, n) { s = String(s || '').trim(); return s.length > n ? s.slice(0, n - 1).trim() + '…' : s; }
+      function homeOwnerName(f) {
+        var emp = employees.filter(function (e) { return e.email && e.email === f.ownerEmail; })[0];
+        var full = (f.ownerName || (emp && emp.name) || '').replace(/\s+/g, ' ').trim();
+        if (!full) {
+          var local = String(f.ownerEmail || '').split('@')[0].split(/[._\-+]/)[0] || 'Home';
+          full = local.charAt(0).toUpperCase() + local.slice(1);
+        }
+        return { first: full.split(/\s+/)[0], full: full };
+      }
+      function overlaps(r) {
+        for (var i = 0; i < placedRects.length; i++) {
+          var q = placedRects[i];
+          if (r.x < q.x + q.w + 4 && r.x + r.w + 4 > q.x && r.y < q.y + q.h + 3 && r.y + r.h + 3 > q.y) return true;
+        }
+        return false;
+      }
+      var fenceItems = fences.filter(function (f) { return f.latitude && f.longitude; }).map(function (f) {
         var onSiteEmpsInFence = employees.filter(function (emp) {
           if (emp.latitude == null || emp.longitude == null || emp.isAbsent) return false;
           if (f.isHome) return emp.isWfh && emp.email === f.ownerEmail;
@@ -660,11 +831,70 @@
           var d = haversine(emp.latitude, emp.longitude, f.latitude, f.longitude);
           return d <= (Number(f.radiusMeters || f.radius_meters) || 200) + 60 || emp.isSimulatedCoord;
         });
-
         var countNum = (f.activeCount != null && f.activeCount > 0) ? f.activeCount : onSiteEmpsInFence.length;
+        return { f: f, count: countNum, x: toX(f.longitude), y: toY(f.latitude),
+                 rank: f.isHome ? (countNum > 0 ? 1 : 2) : 0 };
+      }).filter(function (it) { return it.x > -120 && it.x < W + 120 && it.y > -60 && it.y < H + 60; });
+      fenceItems.sort(function (a, b) { return a.rank - b.rank || b.count - a.count; });
+
+      fenceItems.forEach(function (it) {
+        var f = it.f, fx = it.x, fy = it.y, countNum = it.count;
+        var color = f.isHome ? '#8b5cf6' : '#3b82f6';
         var iconPrefix = f.isHome ? '🏠 ' : '🏢 ';
-        var labelSuffix = f.isHome ? ' Remote' : ' On-Site';
-        lbl.innerHTML = iconPrefix + esc(f.name) + ' <span style="background:' + (f.isHome ? '#8b5cf6' : '#3b82f6') + ';color:#fff;border-radius:10px;padding:2px 7px;margin-left:4px;font-size:10px;">' + countNum + labelSuffix + '</span>';
+        var labelSuffix = f.isHome ? ' remote' : ' on-site';
+        var owner = f.isHome ? homeOwnerName(f) : null;
+        var fullName = f.isHome ? owner.full + '’s home' + (f.ownerEmail ? ' (' + f.ownerEmail + ')' : '') : (f.name || 'Office');
+        var shortName = f.isHome ? shortText(owner.first, 14) : shortText(f.name || 'Office', 20);
+        var tip = fullName + ' — ' + countNum + labelSuffix + (countNum ? ' now' : '');
+
+        var lbl = document.createElement('div');
+        lbl.className = 'haa-map-fence-badge';
+        lbl.title = tip;
+        lbl.setAttribute('aria-label', tip);
+        var base = 'position:absolute;left:0;top:0;visibility:hidden;background:rgba(15,23,42,0.9);color:#fff;' +
+          'border:1px solid ' + color + ';box-shadow:0 3px 12px rgba(0,0,0,0.3);white-space:nowrap;pointer-events:auto;cursor:pointer;' +
+          'display:inline-flex;align-items:center;gap:5px;line-height:1;';
+        var pill = function (txt) {
+          return '<span style="background:' + color + ';color:#fff;border-radius:9px;padding:2px 6px;font-size:10px;font-weight:700;">' + txt + '</span>';
+        };
+        function asFull() {
+          lbl.style.cssText = base + 'padding:' + (f.isHome ? '3px 9px 3px 3px' : '4px 9px') + ';border-radius:14px;font-size:11px;font-weight:600;z-index:' + (f.isHome ? 14 : 16) + ';';
+          lbl.innerHTML = (f.isHome ? ownerAvatar(f, owner, 18) + '<span>' + esc(shortName) + '</span>'
+                                    : '<span>' + iconPrefix + esc(shortName) + '</span>') + pill(countNum + labelSuffix);
+        }
+        function asIcon() {
+          if (f.isHome) {
+            lbl.style.cssText = base + 'padding:2px;border-radius:14px;border-width:2px;z-index:13;' + (countNum ? 'padding-right:5px;' : '');
+            lbl.innerHTML = ownerAvatar(f, owner, 22) + (countNum ? pill(String(countNum)) : '');
+            return;
+          }
+          lbl.style.cssText = base + 'padding:3px 6px;border-radius:12px;font-size:11px;z-index:13;';
+          lbl.innerHTML = iconPrefix.trim() + (countNum ? pill(String(countNum)) : '');
+        }
+        if (f.isHome && !countNum) asIcon(); else asFull();
+        overlayLayer.appendChild(lbl);
+
+        // Find a free slot: above the point, higher, below, then shrink.
+        function tryPlace() {
+          var w = lbl.offsetWidth, h = lbl.offsetHeight;
+          var slots = [fy - 22 - h, fy - 22 - 2 * h - 6, fy + 18, fy + 18 + h + 6];
+          for (var s = 0; s < slots.length; s++) {
+            var r = { x: fx - w / 2, y: slots[s], w: w, h: h };
+            if (!overlaps(r)) return r;
+          }
+          return null;
+        }
+        var spot = tryPlace();
+        if (!spot && !(f.isHome && !countNum)) { asIcon(); spot = tryPlace(); }
+        if (!spot) {   // still crowded: keep the icon right on the point, behind the rest
+          var w0 = lbl.offsetWidth, h0 = lbl.offsetHeight;
+          spot = { x: fx - w0 / 2, y: fy - h0 / 2, w: w0, h: h0 };
+          lbl.style.zIndex = 12;
+        }
+        placedRects.push(spot);
+        lbl.style.left = Math.round(spot.x) + 'px';
+        lbl.style.top = Math.round(spot.y) + 'px';
+        lbl.style.visibility = 'visible';
 
         lbl.onclick = function (e) {
           e.stopPropagation();
@@ -675,15 +905,14 @@
             return d <= (Number(f.radiusMeters || f.radius_meters) || 200) + 60 || emp.isSimulatedCoord;
           });
           if (fenceEmps.length > 0) {
-            showClusterPopover(fenceEmps, fx, fy - 10, iconPrefix + f.name + ' (' + fenceEmps.length + labelSuffix + ')');
+            showClusterPopover(fenceEmps, fx, fy - 10, (f.isHome ? owner.full + '’s home' : iconPrefix + (f.name || 'Office')) + ' (' + fenceEmps.length + labelSuffix + ')');
           } else {
             st.lat = f.latitude;
             st.lng = f.longitude;
-            st.z = 16;
+            st.z = Math.max(st.z, 16);
             redraw();
           }
         };
-        overlayLayer.appendChild(lbl);
       });
 
       // 👥 Marker Clustering & Employee Pins
@@ -913,7 +1142,7 @@
         (emp.locationReason ? '<div style="margin-top:6px;font-size:11px;color:var(--haa-warn-fg);background:rgba(245,158,11,0.1);padding:6px 8px;border-radius:6px;"><strong>Note:</strong> ' + esc(emp.locationReason) + '</div>' : '') +
         '<div style="margin-top:10px;display:flex;align-items:center;justify-content:space-between;gap:6px;">' +
         '  <a href="' + directionsUrl + '" target="_blank" rel="noopener" style="font-size:11px;color:#fff;background:var(--haa-accent,#4f46e5);text-decoration:none;font-weight:700;padding:5px 10px;border-radius:6px;display:inline-flex;align-items:center;gap:4px;">🛣️ Directions</a>' +
-        '  <a href="/hr/hris" style="font-size:11px;color:var(--haa-link);text-decoration:none;font-weight:600;padding:4px 8px;">View Profile →</a>' +
+        '  <a href="' + ('/hr/hris' + (emp.email ? '/' + encodeURIComponent(emp.email) : '')) + '" style="font-size:11px;color:var(--haa-link);text-decoration:none;font-weight:600;padding:4px 8px;">View Profile →</a>' +
         '</div>';
 
       overlayLayer.appendChild(pop);
@@ -1450,6 +1679,7 @@
       grab('arrangements', '/api/attendance/arrangements'),
       grab('roster', '/api/attendance/roster'),
       grab('homes', '/api/attendance/home-locations'),
+      grab('homeChanges', '/api/attendance/home-locations/changes?status=Pending&kind=change'),
       grab('mapFeed', '/api/attendance/map-feed'),
       grab('departurePolicy', '/api/attendance/departure-policy')
     ]).then(function (r) {
@@ -1460,8 +1690,9 @@
       state.arrangements = Array.isArray(r[4]) ? r[4] : [];
       state.roster = Array.isArray(r[5]) ? r[5] : [];
       state.homes = Array.isArray(r[6]) ? r[6] : [];
-      state.mapFeed = (r[7] && Array.isArray(r[7].employees)) ? r[7] : { fences: state.fences, employees: [] };
-      state.departurePolicy = (r[8] && typeof r[8].enabled === 'boolean') ? r[8] : (state.departurePolicy || { enabled: true, timeout_minutes: 15 });
+      state.homeChanges = Array.isArray(r[7]) ? r[7] : [];
+      state.mapFeed = (r[8] && Array.isArray(r[8].employees)) ? r[8] : { fences: state.fences, employees: [] };
+      state.departurePolicy = (r[9] && typeof r[9].enabled === 'boolean') ? r[9] : (state.departurePolicy || { enabled: true, timeout_minutes: 15 });
       state.busy = false; render();
     });
   }
@@ -1563,9 +1794,22 @@
     var opts = state.shifts.map(function (s) {
       return '<option value="' + s.id + '">' + esc(s.name) + '</option>';
     }).join('');
-    var asg = state.assignments.map(function (a) {
+    var todayIso = new Date().toISOString().slice(0, 10);
+    var nameOf = {};
+    state.roster.forEach(function (u) { nameOf[u.email] = u.name; });
+    var shiftOf = {};
+    var sorted = state.assignments.slice().sort(function (x, y) {
+      return (x.email || '').localeCompare(y.email || '') ||
+        String(y.effectiveFrom || y.effective_from || '').localeCompare(String(x.effectiveFrom || x.effective_from || ''));
+    });
+    var asg = sorted.map(function (a) {
       var sh = state.shifts.filter(function (s) { return s.id === (a.shiftId || a.shift); })[0];
-      return '<tr><td>' + esc(a.email) + '</td><td>' + esc(sh ? sh.name : (a.shiftName || '—')) + '</td>' +
+      var from = a.effectiveFrom || a.effective_from || '', to = a.effectiveTo || a.effective_to || '';
+      var status = from > todayIso ? '<span class="haa-pill" style="background:var(--haa-info-bg);color:var(--haa-info-fg)">Upcoming</span>'
+        : (!to || to >= todayIso) ? '<span class="haa-pill" style="background:var(--haa-ok-bg,#dcfce7);color:var(--haa-ok-fg,#166534)">Current</span>'
+        : '<span class="haa-pill" style="background:var(--haa-chip);color:var(--haa-text2)">Ended</span>';
+      if ((!to || to >= todayIso) && from <= todayIso) shiftOf[a.email] = sh ? sh.name : (a.shiftName || '');
+      return '<tr><td>' + esc(nameOf[a.email] || a.email) + (nameOf[a.email] ? '<div style="font-size:11px;color:var(--haa-faint)">' + esc(a.email) + '</div>' : '') + ' ' + status + '</td><td>' + esc(sh ? sh.name : (a.shiftName || '—')) + '</td>' +
         '<td>' + esc(a.effectiveFrom || a.effective_from || '') + '</td>' +
         '<td>' + esc(a.effectiveTo || a.effective_to || 'open-ended') + '</td>' +
         '<td style="text-align:right"><button class="haa-btn dgr" data-del-asg="' + a.id + '">Remove</button></td></tr>';
@@ -1584,7 +1828,7 @@
         : '<div class="haa-empty">No shifts defined — everyone falls back to General Shift (09:00–18:00).</div>') +
       '<div class="haa-card" style="margin-top:18px"><div style="font-weight:700;margin-bottom:12px;font-size:14px;">Assign a shift</div>' +
       '<div class="haa-grid">' +
-      '<div><label class="haa-lbl">Employee email</label><input class="haa-in" id="haa-a-email" placeholder="person@eversoftit.com"></div>' +
+      '<div><label class="haa-lbl">Employee</label>' + rosterSelect('haa-a-email', shiftOf) + '</div>' +
       '<div><label class="haa-lbl">Shift</label><select class="haa-in" id="haa-a-shift">' + opts + '</select></div>' +
       '<div><label class="haa-lbl">Effective from</label><input class="haa-in" id="haa-a-from" type="date"></div>' +
       '<div><label class="haa-lbl">Until (optional)</label><input class="haa-in" id="haa-a-to" type="date"></div>' +
@@ -1650,6 +1894,18 @@
    * Whoever already has an arrangement is marked, so it is obvious when you are
    * about to supersede one rather than set a first.
    */
+  function rosterSelect(id, current) {
+    if (!state.roster.length) {
+      return '<input class="haa-in" id="' + id + '" placeholder="person@company.com">';
+    }
+    current = current || {};
+    return '<select class="haa-in" id="' + id + '"><option value="">Select an employee…</option>' +
+      state.roster.map(function (u) {
+        return '<option value="' + esc(u.email) + '">' + esc(u.name) + ' (' + esc(u.email) + ')' +
+          (current[u.email] ? esc('  · ' + current[u.email]) : '') + '</option>';
+      }).join('') + '</select>';
+  }
+
   function employeePicker() {
     if (!state.roster.length) {
       return '<input class="haa-in" id="haa-wa-email" placeholder="person@company.com">' +
@@ -1750,7 +2006,79 @@
    * confirm it, and a circle over an office park or a motorway tells them not
    * to. The captured GPS accuracy is shown for the same reason.
    */
+  /* Every employee's home-location status, so "Not set up" is visible too. */
+  var HOME_TONES = { 'Approved': 'var(--haa-ok-bg,#dcfce7);color:var(--haa-ok-fg,#166534)',
+                     'Pending review': 'var(--haa-warn-bg);color:var(--haa-warn-fg)',
+                     'Change requested': 'var(--haa-info-bg);color:var(--haa-info-fg)',
+                     'Rejected': 'var(--haa-err-soft);color:var(--haa-err-fg)',
+                     'Not set up': 'var(--haa-chip);color:var(--haa-text2)' };
+  function homeStatusTable() {
+    var byEmail = {};
+    state.homes.forEach(function (h) { byEmail[h.email] = h; });
+    var rows = state.roster.map(function (u) {
+      var h = byEmail[u.email];
+      var st = h ? (h.homeStatus || h.status) : 'Not set up';
+      return { name: u.name, email: u.email, status: st,
+               when: h ? (h.reviewedAt || '') : '', reviewer: h ? (h.reviewer || '') : '' };
+    });
+    var filter = state.homeFilter || 'all';
+    var counts = {};
+    rows.forEach(function (r) { counts[r.status] = (counts[r.status] || 0) + 1; });
+    var shown = rows.filter(function (r) { return filter === 'all' || r.status === filter; });
+    var chips = ['all', 'Approved', 'Pending review', 'Change requested', 'Rejected', 'Not set up'].map(function (k) {
+      var n = k === 'all' ? rows.length : (counts[k] || 0);
+      return '<button class="haa-btn' + (filter === k ? '' : ' sec') + '" data-home-filter="' + esc(k) + '" style="font-size:11.5px;padding:4px 10px">' +
+        esc(k === 'all' ? 'All' : k) + ' (' + n + ')</button>';
+    }).join(' ');
+    return '<div class="haa-card" style="margin-top:16px"><div style="font-weight:700;font-size:14px;margin-bottom:10px">Home location status</div>' +
+      '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">' + chips + '</div>' +
+      (shown.length ? '<table class="haa-tbl"><thead><tr><th>Employee</th><th>Status</th><th>Last decision</th></tr></thead><tbody>' +
+        shown.map(function (r) {
+          return '<tr><td>' + esc(r.name) + '<div style="font-size:11px;color:var(--haa-faint)">' + esc(r.email) + '</div></td>' +
+            '<td><span class="haa-pill" style="background:' + (HOME_TONES[r.status] || HOME_TONES['Not set up']) + '">' + esc(r.status) + '</span></td>' +
+            '<td style="font-size:12px;color:var(--haa-muted)">' + esc(r.when ? r.when.slice(0, 16) + (r.reviewer ? ' · ' + r.reviewer : '') : '—') + '</td></tr>';
+        }).join('') + '</tbody></table>' : '<div class="haa-empty">Nobody in this state.</div>') + '</div>';
+  }
+
+  /* Proposed replacements for approved homes. The approved fence keeps
+     verifying WFH check-ins until one of these is approved here. */
+  function homeChangesHtml() {
+    var may = can('attendance.approve_offsite');
+    var list = state.homeChanges || [];
+    if (!list.length) return '';
+    return '<div class="haa-card" style="margin-top:16px"><div style="font-weight:700;font-size:14px;margin-bottom:4px">' +
+      'Home location changes awaiting approval (' + list.length + ')</div>' +
+      '<div style="font-size:12.5px;color:var(--haa-muted);margin-bottom:12px">The current approved location stays in use until you approve the new one.</div>' +
+      '<div style="display:flex;gap:16px;flex-wrap:wrap">' + list.map(function (c) {
+        var prev = c.previous || {};
+        return '<div style="border:1px solid var(--haa-line);border-radius:10px;padding:12px;max-width:760px">' +
+          '<div style="font-weight:600;font-size:13px">' + esc(c.email) + '</div>' +
+          '<div style="font-size:12px;color:var(--haa-muted);margin:2px 0 10px">Requested ' + esc((c.requestedAt || '').slice(0, 16)) +
+          (c.captureMethod === 'manual'
+            ? ' · <b style="color:var(--haa-warn-fg)">Entered manually</b> — not captured by GPS; check the map before approving'
+            : ' · GPS ' + (c.capturedAccuracy ? '±' + Math.round(c.capturedAccuracy) + ' m' : 'unknown accuracy')) +
+          '<div style="color:var(--haa-text2);margin-top:4px">Reason: “' + esc(c.reason || '—') + '”</div></div>' +
+          '<div style="display:flex;gap:12px;flex-wrap:wrap">' +
+            (prev.latitude != null ? '<div><div style="font-size:11px;font-weight:700;margin-bottom:4px">CURRENT (approved)</div>' +
+              renderMap({ lat: prev.latitude, lng: prev.longitude, radius: prev.radiusMeters || 150, label: 'Current', width: 340, height: 200 }) + '</div>' : '') +
+            '<div><div style="font-size:11px;font-weight:700;margin-bottom:4px">PROPOSED</div>' +
+              renderMap({ lat: c.latitude, lng: c.longitude, radius: c.radiusMeters, label: 'Proposed', width: 340, height: 200 }) + '</div>' +
+          '</div>' +
+          (may
+            ? '<div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap;align-items:center">' +
+              '<input class="haa-in" data-hc-note="' + c.id + '" placeholder="Note to the employee (optional)" style="flex:1;min-width:200px">' +
+              '<button class="haa-btn" data-hc-ok="' + c.id + '">Approve change</button>' +
+              '<button class="haa-btn dgr" data-hc-no="' + c.id + '">Reject</button></div>'
+            : '<div style="font-size:12px;color:var(--haa-muted);margin-top:10px">You do not have permission to approve home locations.</div>') +
+          '</div>';
+      }).join('') + '</div></div>';
+  }
+
   function homesHtml() {
+    return homesQueueHtml() + homeChangesHtml() + homeStatusTable();
+  }
+
+  function homesQueueHtml() {
     var may = can('attendance.approve_offsite');
     var pending = state.homes.filter(function (h) { return h.status === 'Pending'; });
     if (!pending.length) {
@@ -1773,7 +2101,9 @@
         return '<div style="border:1px solid var(--haa-line);border-radius:10px;padding:12px;max-width:400px">' +
           '<div style="font-weight:600;font-size:13px;margin-bottom:2px">' + esc(h.email) + '</div>' +
           '<div style="font-size:12px;color:var(--haa-muted);margin-bottom:10px">' +
-          'Captured at GPS ' + (acc ? '±' + Math.round(acc) + ' m' : 'unknown accuracy') +
+          (h.captureMethod === 'manual'
+            ? '<b style="color:var(--haa-warn-fg)">Coordinates entered manually</b> (the device had no precise fix) — check the map carefully'
+            : 'Captured at GPS ' + (acc ? '±' + Math.round(acc) + ' m' : 'unknown accuracy')) +
           ' · ' + esc(h.radiusMeters) + ' m radius' +
           (acc && acc > 100
             ? '<div style="color:var(--haa-warn-fg);margin-top:3px">Captured from a poor fix — ' +
@@ -2211,6 +2541,28 @@
     }
     decideHome('data-home-ok', 'Approved');
     decideHome('data-home-no', 'Rejected');
+
+    function decideChange(attr, decision) {
+      body.querySelectorAll('[' + attr + ']').forEach(function (el) {
+        el.onclick = function () {
+          var id = el.getAttribute(attr);
+          var noteEl = body.querySelector('[data-hc-note="' + id + '"]');
+          el.disabled = true;
+          api('/api/attendance/home-locations/changes/' + id + '/decide', {
+            method: 'POST',
+            body: JSON.stringify({ decision: decision, note: noteEl ? noteEl.value : '' })
+          }).then(function () {
+            toast('Home location change ' + decision.toLowerCase());
+            loadAll();
+          }).catch(function (e) { el.disabled = false; toast(e.message, true); });
+        };
+      });
+    }
+    decideChange('data-hc-ok', 'Approved');
+    decideChange('data-hc-no', 'Rejected');
+    body.querySelectorAll('[data-home-filter]').forEach(function (el) {
+      el.onclick = function () { state.homeFilter = el.getAttribute('data-home-filter'); render(); };
+    });
 
     /* ── work arrangements ─────────────────────────────────────────────── */
     var kind = body.querySelector('#haa-wa-kind');

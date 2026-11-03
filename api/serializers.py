@@ -15,6 +15,7 @@ import json
 import os
 import re
 import unicodedata
+from datetime import date
 
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.validators import EmailValidator
@@ -658,19 +659,19 @@ class CompanyDetailSerializer(serializers.ModelSerializer):
     legalName = serializers.CharField(source='legal_name', required=False, allow_blank=True)
     brandName = serializers.CharField(source='brand_name', required=False, allow_blank=True)
     companyLogo = serializers.CharField(source='company_logo', required=False, allow_blank=True)
-    website = serializers.CharField(source='website', required=False, allow_blank=True)
+    website = serializers.CharField(required=False, allow_blank=True)
     contactEmail = serializers.CharField(source='contact_email', required=False, allow_blank=True)
-    phone = serializers.CharField(source='phone', required=False, allow_blank=True)
+    phone = serializers.CharField(required=False, allow_blank=True)
     taxId = serializers.CharField(source='tax_id', required=False, allow_blank=True)
-    industry = serializers.CharField(source='industry', required=False, allow_blank=True)
+    industry = serializers.CharField(required=False, allow_blank=True)
     addressLine1 = serializers.CharField(source='address_line1', required=False, allow_blank=True)
     addressLine2 = serializers.CharField(source='address_line2', required=False, allow_blank=True)
-    city = serializers.CharField(source='city', required=False, allow_blank=True)
-    state = serializers.CharField(source='state', required=False, allow_blank=True)
-    country = serializers.CharField(source='country', required=False, allow_blank=True)
-    pincode = serializers.CharField(source='pincode', required=False, allow_blank=True)
-    timezone = serializers.CharField(source='timezone', required=False, allow_blank=True)
-    currency = serializers.CharField(source='currency', required=False, allow_blank=True)
+    city = serializers.CharField(required=False, allow_blank=True)
+    state = serializers.CharField(required=False, allow_blank=True)
+    country = serializers.CharField(required=False, allow_blank=True)
+    pincode = serializers.CharField(required=False, allow_blank=True)
+    timezone = serializers.CharField(required=False, allow_blank=True)
+    currency = serializers.CharField(required=False, allow_blank=True)
     dateFormat = serializers.CharField(source='date_format', required=False, allow_blank=True)
     workWeek = serializers.JSONField(source='work_week', required=False)
     empIdPrefix = serializers.CharField(source='emp_id_prefix', required=False, allow_blank=True)
@@ -773,6 +774,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
     employmentType = serializers.CharField(source='employment_type', required=False, allow_blank=True, default='Full-time')
     annualCtc = serializers.DecimalField(source='annual_ctc', max_digits=14, decimal_places=2, required=False, allow_null=True)
     startDate = serializers.DateField(source='start_date', required=False, allow_null=True)
+    managerEmail = serializers.CharField(source='manager_email', required=False, allow_blank=True, default='')
 
     class Meta:
         model = UserProfile
@@ -780,6 +782,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
             'email', 'employeeId', 'firstName', 'lastName', 'phone', 'altEmail',
             'bloodGroup', 'department', 'designation', 'manager', 'level',
             'employmentType', 'location', 'annualCtc', 'startDate', 'address', 'profilePic',
+            'managerEmail',
         ]
         extra_kwargs = {
             'employeeId': {'required': False, 'allow_blank': True, 'default': ''},
@@ -806,6 +809,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
             'address': instance.address or '',
             'profilePic': instance.profile_pic or '',
             'manager': instance.manager or '',
+            'managerEmail': instance.manager_email or '',
             'level': instance.level or '',
             'employmentType': instance.employment_type or '',
             'location': instance.location or '',
@@ -978,6 +982,7 @@ class LeaveRequestSerializer(serializers.ModelSerializer):
             'reason': instance.reason or '',
             'status': instance.status,
             'approver': instance.approver or '',
+            'approverEmail': instance.approver_email or '',
             'createdAt': instance.created_at.strftime(DATETIME_FMT) if instance.created_at else None,
         }
 
@@ -1029,6 +1034,9 @@ class EmployeeTaskSerializer(serializers.ModelSerializer):
             'createdBy': instance.created_by or '',
             'taskCode': instance.task_code or '',
             'teamLead': instance.team_lead or '',
+            'teamLeadEmail': instance.team_lead_email or '',
+            'teamId': instance.team_id,
+            'teamName': instance.team.name if instance.team_id and instance.team else '',
             'department': instance.department or '',
             'estimatedHours': instance.estimated_hours,
             'progress': instance.progress or 0,
@@ -1108,6 +1116,11 @@ class WorkSubmissionSerializer(serializers.ModelSerializer):
             'hasFile': bool(instance.file_data),
             'status': instance.status,
             'reviewer': instance.reviewer or '',
+            'reviewerEmail': instance.reviewer_email or '',
+            'teamId': instance.team_id,
+            'teamName': instance.team.name if instance.team_id and instance.team else '',
+            'collaborators': [c.email for c in instance.collaborators.all()],
+            'commentCount': instance.comments.count(),
             'reviewerNote': instance.reviewer_note or '',
             'reviewerNoteBy': instance.reviewer_note_by or '',
             'reviewerNoteAt': (instance.reviewer_note_at.strftime(DATETIME_FMT)
@@ -1198,6 +1211,8 @@ class BenchSalesProfileSerializer(serializers.ModelSerializer):
     experience = serializers.CharField(required=False, allow_blank=True, default='')
     email = serializers.CharField(required=False, allow_blank=True, default='')
     contactNo = serializers.CharField(source='contact_no', required=False, allow_blank=True, default='')
+    dateOfBirth = serializers.DateField(source='date_of_birth', required=False, allow_null=True, default=None)
+    passportNo = serializers.CharField(source='passport_no', required=False, allow_blank=True, default='')
     workAuthorization = serializers.CharField(source='work_authorization', required=False, allow_blank=True, default='')
 
     resumeFileName = serializers.CharField(source='resume_file_name', required=False, allow_blank=True, default='')
@@ -1217,11 +1232,16 @@ class BenchSalesProfileSerializer(serializers.ModelSerializer):
     def validate_email(self, value):
         return _validate_optional_email(value, 'Mail Id')
 
+    def validate_dateOfBirth(self, value):
+        if value and value > date.today():
+            raise serializers.ValidationError('Date of Birth cannot be in the future.')
+        return value
+
     class Meta:
         model = BenchSalesProfile
         fields = [
             'id', 'name', 'techStack', 'experience', 'email', 'contactNo',
-            'workAuthorization',
+            'dateOfBirth', 'passportNo', 'workAuthorization',
             'resumeFileName', 'resumeFileMime', 'resumeFileData',
             'dlStateIdFileName', 'dlStateIdFileMime', 'dlStateIdFileData',
             'i94FileName', 'i94FileMime', 'i94FileData',
@@ -1241,6 +1261,8 @@ class BenchSalesProfileSerializer(serializers.ModelSerializer):
         return bool(getattr(instance, col))
 
     def to_representation(self, instance):
+        # only(): never pull each file's base64 body just to list names.
+        certificate_rows = list(instance.certificate_files.only('id', 'file_name', 'kind', 'profile_id'))
         return {
             'id': instance.id,
             'name': instance.name,
@@ -1248,11 +1270,16 @@ class BenchSalesProfileSerializer(serializers.ModelSerializer):
             'experience': instance.experience or '',
             'email': instance.email or '',
             'contactNo': instance.contact_no or '',
+            'dateOfBirth': instance.date_of_birth.isoformat() if instance.date_of_birth else '',
+            'passportNo': instance.passport_no or '',
             'workAuthorization': instance.work_authorization or '',
             'certificates': [
                 {'id': c.id, 'fileName': c.file_name}
-                # only(): never pull each certificate's base64 body to list names.
-                for c in instance.certificate_files.only('id', 'file_name', 'profile_id')
+                for c in certificate_rows if c.kind != 'certification'
+            ],
+            'certificationFiles': [
+                {'id': c.id, 'fileName': c.file_name}
+                for c in certificate_rows if c.kind == 'certification'
             ],
             'resumeFileName': instance.resume_file_name or '',
             'resumeHasFile': self._has_file(instance, 'resume_file_data'),
@@ -1519,6 +1546,7 @@ class AttendanceCorrectionSerializer(serializers.ModelSerializer):
             'reason': instance.reason or '',
             'status': instance.status,
             'reviewer': instance.reviewer or '',
+            'reviewerEmail': instance.reviewer_email or '',
             'reviewerNote': instance.reviewer_note or '',
             'reviewedAt': instance.reviewed_at.strftime(DATETIME_FMT) if instance.reviewed_at else None,
             'createdAt': instance.created_at.strftime(DATETIME_FMT) if instance.created_at else None,
@@ -1569,6 +1597,7 @@ class WfhRequestSerializer(serializers.ModelSerializer):
             'reason': instance.reason or '',
             'status': instance.status,
             'approver': instance.approver or '',
+            'approverEmail': instance.approver_email or '',
             'createdAt': instance.created_at.strftime(DATETIME_FMT) if instance.created_at else None,
         }
 

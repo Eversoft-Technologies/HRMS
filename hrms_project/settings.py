@@ -212,6 +212,10 @@ LINKEDIN_REDIRECT_URI = os.environ.get('LINKEDIN_REDIRECT_URI', '') or (
 # ---------------------------------------------------------------------------
 # Map & Basemap Tile Configuration
 # ---------------------------------------------------------------------------
+# Shared secret a biometric / RFID punch device sends as X-Device-Token.
+# Empty disables /api/attendance/device-punch/ entirely.
+HRMS_DEVICE_PUNCH_TOKEN = os.environ.get('HRMS_DEVICE_PUNCH_TOKEN', '')
+
 HRMS_BASEMAP_TILE_URL = os.environ.get(
     'HRMS_BASEMAP_TILE_URL',
     'https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png'

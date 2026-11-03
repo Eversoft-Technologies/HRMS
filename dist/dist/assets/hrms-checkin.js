@@ -20,6 +20,7 @@
   var STORAGE_STATE    = 'hrms_checked_in';
   var TOGGLE_ID        = 'hrms-checkin-toggle';
   var WRAPPER_ID       = 'hrms-checkin-wrapper';
+  var checkInAt        = null;   // ms epoch of today's check-in, drives the hover tooltip
 
   /* ── initial state ────────────────────────────────────────────────────
    *
@@ -442,14 +443,24 @@
           // Checked in from home with no home address on file. Offered after
           // the check-in has already succeeded, so declining costs nothing.
           if (record && record.homeLocationMissing) {
-            setTimeout(offerHomeRegistration, 400);   // let the toggle settle first
+            var hs = record.homeLocationStatus || 'Not set up';
+            if (hs === 'Not set up' || hs === 'Rejected') {
+              setTimeout(offerHomeRegistration, 400);   // let the toggle settle first
+            } else {
+              // Already registered and waiting for HR: re-registering would only
+              // replace the request, so explain instead of offering it again.
+              setTimeout(function () {
+                notice('Location not verified', record.locationMessage ||
+                  'Your home location is ' + hs.toLowerCase() + '. Work-from-home check-ins are verified once HR approves it.');
+              }, 400);
+            }
           }
           return true;
         });
     }
 
-    // Only a check-in is location-checked when geofencing is enabled; checking out never is.
-    return (checkedIn && isGeofenceEnabled() ? getPosition() : Promise.resolve(null))
+    // Every check-in is location-checked, whatever the mode; checking out is not.
+    return (checkedIn ? getPosition() : Promise.resolve(null))
       .then(function (pos) {
         return post(pos || {}).then(function (r) {
           if (r.ok) return settle(r);
@@ -460,6 +471,12 @@
             // If geofence is disabled, do not show any location reason dialogs
             if (!isGeofenceEnabled()) {
               return settle(r);
+            }
+
+            if (d.code === 'LOCATION_REQUIRED') {
+              notice('Location needed',
+                d.message || 'Allow location access for this site and try again.');
+              return false;
             }
 
             // Already waiting on HR from an earlier attempt today.
@@ -561,6 +578,68 @@
     return device === 'mobile' ? MOBILE_ICON : DESKTOP_ICON;
   }
 
+  /* ── hover tooltip: live time since check-in ("In 02:18:37 Hrs") ──────────
+     The native title= attribute is gone; the wrapper keeps the hint text in
+     data-hint and the tooltip shows it as a second line. While the tooltip
+     is open it re-renders every second from checkInAt, which is learnt from
+     /api/attendance/today, from the check-in response, or optimistically
+     from the click itself. */
+  var TIP_CLASS = 'hrms-ci-tip';
+  var tipTimer  = null;
+  function parseLocal(s) {
+    if (!s) return null;
+    var t = Date.parse(String(s).replace(' ', 'T'));
+    return isNaN(t) ? null : t;
+  }
+  function pad2(n) { return n < 10 ? '0' + n : '' + n; }
+  function hms(ms) {
+    var s = Math.max(0, Math.floor(ms / 1000));
+    return pad2(Math.floor(s / 3600)) + ':' + pad2(Math.floor(s / 60) % 60) + ':' + pad2(s % 60);
+  }
+  function ensureTipStyle() {
+    if (document.getElementById('hrms-ci-tip-style')) return;
+    var st = document.createElement('style');
+    st.id = 'hrms-ci-tip-style';
+    st.textContent =
+      '.hrms-ci-wrap{position:relative;}' +
+      '.' + TIP_CLASS + '{position:absolute!important;top:calc(100% + 9px);right:0;left:auto;width:auto;max-width:none;overflow:visible;background:#0b1220;color:#fff;border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:7px 12px;font-size:12.5px;line-height:1.3;white-space:nowrap;box-shadow:0 8px 24px rgba(0,0,0,.35);z-index:10000;opacity:0;visibility:hidden;transform:translateY(-4px);transition:opacity .15s,transform .15s;pointer-events:none;display:inline-flex!important;align-items:baseline;gap:5px;font-family:var(--font,"DM Sans",sans-serif);}' +
+      '.' + TIP_CLASS + '::before{content:"";position:absolute;top:-5px;right:16px;width:8px;height:8px;background:#0b1220;border-left:1px solid rgba(255,255,255,.12);border-top:1px solid rgba(255,255,255,.12);transform:rotate(45deg);}' +
+      '.hrms-ci-wrap.ci-tip-open .' + TIP_CLASS + '{opacity:1;visibility:visible;transform:none;}' +
+      '.' + TIP_CLASS + ' b{font-weight:700;color:#fff;}' +
+      '.' + TIP_CLASS + ' .hrms-ci-tip-time{color:#22c55e;font-weight:700;font-variant-numeric:tabular-nums;font-family:ui-monospace,Menlo,Consolas,monospace;}' +
+      '.topbar .hrms-ci-wrap{overflow:visible!important;max-width:none!important;}';
+    document.head.appendChild(st);
+  }
+  function paintTip(wrap) {
+    wrap = wrap || document.getElementById(WRAPPER_ID);
+    if (!wrap) return;
+    var tip = wrap.querySelector('.' + TIP_CLASS);
+    if (!tip) return;
+    // Only the live time while checked in ("In 02:18:37 Hrs"). Checked out
+    // shows nothing custom: the native title ("Click to Check In") does.
+    if (!isCheckedIn) {
+      if (tip.innerHTML) tip.innerHTML = '';
+      wrap.classList.remove('ci-tip-open');
+      return;
+    }
+    var since = checkInAt ? hms(Date.now() - checkInAt) : '--:--:--';
+    var html = '<b>In</b><span class="hrms-ci-tip-time">' + since + '</span><b>Hrs</b>';
+    if (tip.innerHTML !== html) tip.innerHTML = html;
+  }
+  function showTip(wrap) {
+    if (!isCheckedIn) return;
+    ensureTipStyle();
+    wrap.classList.add('ci-tip-open');
+    paintTip(wrap);
+    clearInterval(tipTimer);
+    tipTimer = setInterval(function () { paintTip(wrap); }, 1000);
+  }
+  function hideTip(wrap) {
+    wrap.classList.remove('ci-tip-open');
+    clearInterval(tipTimer);
+    tipTimer = null;
+  }
+
   /* ── build the toggle widget ─────────────────────────────────────────── */
   function buildWrapper() {
     var device  = getCheckinDevice();
@@ -576,7 +655,7 @@
        textContent is empty and the label matcher never fires. Fails open: if
        permissions cannot be loaded, nothing is hidden. */
     wrap.setAttribute('data-perm', 'attendance.checkinout');
-    wrap.title     = isCheckedIn ? 'Checked In — click to Check Out' : 'Click to Check In';
+    wrap.title = isCheckedIn ? 'Click to Check Out' : 'Click to Check In';
 
     /* device icon badge */
     var iconEl = document.createElement('span');
@@ -607,15 +686,21 @@
     wrap.appendChild(iconEl);
     wrap.appendChild(toggle);
 
+    /* (The hover tooltip showing time since check-in was removed on request.) */
+
     return wrap;
   }
 
+  // Geofencing is mandatory for every mode of work; the per-browser switch is
+  // gone (the server ignores any bypass flag too).
   function isGeofenceEnabled() {
-    return localStorage.getItem('hrms_geofence_enabled') !== 'false';
+    return true;
   }
 
   function handleToggle(wrap, toggle, iconEl) {
     isCheckedIn = !isCheckedIn;
+    var prevCheckInAt = checkInAt;
+    checkInAt = isCheckedIn ? Date.now() : null;
 
     /* update device on check-in (re-detect each time so switching browsers
        is picked up on next check-in) */
@@ -641,6 +726,7 @@
     syncAttendance(isCheckedIn, device).then(function (ok) {
       if (ok || isCheckedIn !== attempted) return;      // accepted, or toggled again meanwhile
       isCheckedIn = !attempted;
+      checkInAt = isCheckedIn ? prevCheckInAt : null;
       rememberState(isCheckedIn);
       refreshUI(wrap, toggle, iconEl, device);
       window.dispatchEvent(new CustomEvent('hrmsCheckinToggle', {
@@ -659,7 +745,7 @@
       wrap.classList.add('ci-active');
       toggle.classList.add('ci-on');
       toggle.setAttribute('aria-pressed', 'true');
-      wrap.title = 'Checked In — click to Check Out';
+      wrap.title = 'Click to Check Out';
     } else {
       wrap.classList.remove('ci-active');
       toggle.classList.remove('ci-on');
@@ -668,6 +754,7 @@
     }
 
     iconEl.innerHTML = deviceIcon(device);
+    paintTip(wrap);
   }
 
   window.addEventListener('hrmsGeofenceSettingChange', function () {
@@ -987,7 +1074,8 @@
       if (pos.accuracy > HOME_TARGET_ACCURACY_M * 4) {
         throw new Error('Your position is only accurate to ±' +
           Math.round(pos.accuracy) + ' m — too vague to register as a home ' +
-          'address. Try near a window or outside, ideally on a phone with GPS.');
+          'address. Try near a window or outside, ideally on a phone with GPS — or enter your ' +
+          'latitude and longitude on My Profile › Work Setup.');
       }
       return fetch('/api/attendance/home-locations', {
         method: 'POST',
@@ -1061,6 +1149,7 @@
         if (!d) return isCheckedIn;
         var truth = !!d.checkedIn;
         isCheckedIn = truth;
+        checkInAt = (truth && d.checkIn) ? parseLocal(d.checkIn) : null;
         rememberState(truth);
         paintState();
         if (truth) startGeoWatch(); else stopGeoWatch();
@@ -1123,6 +1212,46 @@
       syncFromServer(true);
     }
   }, 2000);
+
+  /* Switching between office and remote work mid-day is verified on the
+     server against the right fence, so it needs a position too. The app's own
+     Switch to Remote / Office buttons send only a label; attach the fix here. */
+  (function () {
+    var nf = window.fetch.bind(window);
+    window.fetch = function (input, init) {
+      try {
+        var url = typeof input === 'string' ? input : (input && input.url) || '';
+        var method = String((init && init.method) || 'GET').toUpperCase();
+        if (method === 'POST' && /\/api\/attendance\/events(\?|$)/.test(url.replace(location.origin, '')) &&
+            init && typeof init.body === 'string') {
+          var body = JSON.parse(init.body || '{}');
+          if ((body.event === 'remote-switch' || body.event === 'office-switch') && body.latitude == null) {
+            return getPosition().then(function (pos) {
+              if (pos) { body.latitude = pos.latitude; body.longitude = pos.longitude; body.accuracy = pos.accuracy; }
+              return nf(input, Object.assign({}, init, { body: JSON.stringify(body) }));
+            }).then(function (resp) {
+              if (!resp.ok) {
+                resp.clone().json().then(function (d) {
+                  if (d && d.message) notice(body.event === 'remote-switch' ? 'Cannot switch to remote' : 'Cannot switch to office', d.message);
+                }).catch(function () {});
+              }
+              return resp;
+            });
+          }
+        }
+      } catch (_) { /* never break the app's own request */ }
+      return nf(input, init);
+    };
+  })();
+
+  // The check-in / check-out response carries the server-stamped time.
+  window.addEventListener('hrmsAttendanceSynced', function (e) {
+    var d = e && e.detail ? e.detail : {};
+    var rec = d.record || {};
+    if (d.checkedIn && rec.checkIn) checkInAt = parseLocal(rec.checkIn) || checkInAt;
+    else if (d.checkedIn === false) checkInAt = null;
+    paintTip();
+  });
 
   console.log('[hrms-checkin v4] loaded — state:', isCheckedIn, '| device:', getCheckinDevice());
 })();

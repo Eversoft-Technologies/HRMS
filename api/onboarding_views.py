@@ -1471,6 +1471,7 @@ def candidate_verification(request, pk):
             f'{candidate.first_name} {candidate.last_name}'.strip()
             + ' passed HR verification and is awaiting your approval.',
             link=f'/onboarding/candidates/{candidate.id}?tab=approval',
+            category='onboarding_milestones',
         )
 
     data = HrVerificationSerializer(verification).data
@@ -1542,6 +1543,7 @@ def candidate_approval(request, pk):
             + (f' Comments: {comments}' if comments else ''),
             'success' if action == 'Approved' else 'warning',
             link=f'/onboarding/candidates/{candidate.id}?tab=approval',
+            category='onboarding_milestones',
         )
 
     return Response(ManagerApprovalSerializer(approval).data, status=201)

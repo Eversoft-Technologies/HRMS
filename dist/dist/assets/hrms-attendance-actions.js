@@ -420,36 +420,146 @@
   /* Tag the live-clock element so CSS can size it responsively. React swaps
      this node every second, so we re-tag each tick (cheap, idempotent). */
   function tagClock(clock) {
-    if (clock.querySelector('.haa-ci-clock')) return;
+    if (clock.querySelector('.haa-ci-clock:not(.haa-tz-clock)')) return;
     var kids = clock.querySelectorAll('div, span, h1, h2, h3, p');
     for (var i = 0; i < kids.length; i++) {
-      if (kids[i].children.length) continue;
+      if (kids[i].children.length || kids[i].classList.contains('haa-tz-clock')) continue;
       var t = (kids[i].textContent || '').trim();
       if (/^\d{1,2}:\d{2}:\d{2}$/.test(t)) { kids[i].classList.add('haa-ci-clock'); return; }
     }
   }
 
   /* ── data ─────────────────────────────────────────────────────────────── */
-  // Loads the overtime + break totals for today (one fetch feeds both lines).
+  /* The app's own clock ticks in the browser's zone. When Settings > General
+     names a different business timezone, show that clock instead (it is the
+     one check-ins are stamped in) and hide React's. React swaps its clock
+     node every second, so this runs on every tick; the override is a sibling
+     node and survives the swap. */
+  function dateLineOf(el) {
+    var n = el && el.nextElementSibling;
+    return (n && /^[A-Z][a-z]+day, /.test((n.textContent || '').trim())) ? n : null;
+  }
+  function paintTzClock(clock) {
+    var C = window.HRMSCompany;
+    var reactClock = clock.querySelector('.haa-ci-clock:not(.haa-tz-clock)');
+    var mine = clock.querySelector('.haa-tz-clock');
+    var mineDate = clock.querySelector('.haa-tz-date');
+    var differs = !!(C && C.tzDiffers && C.tzDiffers());
+    if (!differs || !reactClock) {
+      if (mine && mine.parentNode) mine.parentNode.removeChild(mine);
+      if (mineDate && mineDate.parentNode) mineDate.parentNode.removeChild(mineDate);
+      if (reactClock) { reactClock.style.display = ''; var rd0 = dateLineOf(reactClock); if (rd0) rd0.style.display = ''; }
+      return;
+    }
+    if (!mine) {
+      mine = document.createElement(reactClock.tagName);
+      mine.className = reactClock.className + ' haa-tz-clock';
+      mine.setAttribute('style', reactClock.getAttribute('style') || '');
+      mine.title = 'Business time (' + C.timezone() + ')';
+      reactClock.parentNode.insertBefore(mine, reactClock);
+    }
+    reactClock.style.display = 'none';
+    var t = C.timeString();
+    if (mine.textContent !== t) mine.textContent = t;
+    var rd = dateLineOf(reactClock);
+    if (rd) {
+      rd.style.display = 'none';
+      if (!mineDate) {
+        mineDate = document.createElement(rd.tagName);
+        mineDate.className = (rd.className ? rd.className + ' ' : '') + 'haa-tz-date';
+        mineDate.setAttribute('style', rd.getAttribute('style') || '');
+        rd.parentNode.insertBefore(mineDate, rd);
+      }
+      var ds = C.dateString() + ' · ' + C.timezone();
+      if (mineDate.textContent !== ds) mineDate.textContent = ds;
+    }
+  }
+
+  // Today's row from the server. It only carries what the server has
+  // stamped: workedMinutes is written at check-out, breakMinutes when a break
+  // ends. While the employee is checked in the tiles must tick, so the row is
+  // kept here and the live values are derived from it every second.
+  var todayRec = null;
+  function parseLocal(s) {
+    if (!s) return NaN;
+    var t = Date.parse(String(s).replace(' ', 'T'));
+    return isNaN(t) ? NaN : t;
+  }
+  // Is a break open right now? The server says so (onBreak / breakStartedAt);
+  // a response without those fields falls back to today's activity log.
+  function breakState() {
+    if (todayRec && typeof todayRec.onBreak === 'boolean') {
+      return { on: todayRec.onBreak, since: parseLocal(todayRec.breakStartedAt) };
+    }
+    var on = false, since = NaN;
+    (activityData || []).slice()
+      .sort(function (a, b) { return parseLocal(a.at) - parseLocal(b.at); })
+      .forEach(function (r) {
+        var ty = String(r.type || r.event || '').toLowerCase();
+        if (/break.?start/.test(ty)) { on = true; since = parseLocal(r.at); }
+        else if (/break.?end/.test(ty)) { on = false; since = NaN; }
+      });
+    return { on: on, since: since };
+  }
+  // Mirrors the server's check-out maths (attendance_check_out in api/views.py):
+  // working = session minus breaks; overtime = working minus the shift's
+  // threshold, which the server sends as overtimeAfterMinutes.
+  function liveMinutes() {
+    var rec = todayRec || {};
+    var now = Date.now();
+    var checkedIn = !!rec.checkedIn && !rec.checkOut;
+    var inAt = parseLocal(rec.checkIn);
+    var brk = breakState();
+    var onBreak = checkedIn && brk.on;
+    var brkNow = (onBreak && !isNaN(brk.since)) ? Math.max(0, (now - brk.since) / 60000) : 0;
+    var breakMin = (rec.breakMinutes || 0) + brkNow;
+    var worked = (checkedIn && !isNaN(inAt))
+      ? Math.max(0, (now - inAt) / 60000 - breakMin)
+      : (rec.workedMinutes || 0);
+    var threshold = (rec.overtimeAfterMinutes != null) ? Number(rec.overtimeAfterMinutes) : 540;
+    var ot = checkedIn ? Math.max(0, worked - threshold) : (rec.overtimeMinutes || 0);
+    return { work: Math.floor(worked), ot: Math.floor(ot), brk: Math.floor(breakMin), live: checkedIn, onBreak: onBreak };
+  }
+  function ensureLiveStyle() {
+    if (document.getElementById('haa-live-style')) return;
+    var st = document.createElement('style');
+    st.id = 'haa-live-style';
+    st.textContent =
+      '#' + ID.stats + '.haa-live .haa-ci-work .haa-ci-l::after,' +
+      '#' + ID.stats + '.haa-onbreak .haa-ci-brk .haa-ci-l::after' +
+      '{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;margin-left:5px;vertical-align:middle;background:#22c55e;animation:haa-live-pulse 1.6s infinite;}' +
+      '#' + ID.stats + '.haa-onbreak .haa-ci-work .haa-ci-l::after{display:none;}' +
+      '#' + ID.stats + '.haa-onbreak .haa-ci-brk .haa-ci-l::after{background:#f59e0b;animation-name:haa-break-pulse;}' +
+      '@keyframes haa-live-pulse{0%{box-shadow:0 0 0 0 rgba(34,197,94,.5);}70%{box-shadow:0 0 0 6px rgba(34,197,94,0);}100%{box-shadow:0 0 0 0 rgba(34,197,94,0);}}' +
+      '@keyframes haa-break-pulse{0%{box-shadow:0 0 0 0 rgba(245,158,11,.5);}70%{box-shadow:0 0 0 6px rgba(245,158,11,0);}100%{box-shadow:0 0 0 0 rgba(245,158,11,0);}}';
+    document.head.appendChild(st);
+  }
+  function paintLive() {
+    var v = liveMinutes();
+    workVal = fmtMins(v.work); otVal = fmtMins(v.ot); brkVal = fmtMins(v.brk);
+    var wel = document.getElementById('haa-work-val'); if (wel && wel.textContent !== workVal) wel.textContent = workVal;
+    var oel = document.getElementById('haa-ot-val');   if (oel && oel.textContent !== otVal)   oel.textContent = otVal;
+    var bel = document.getElementById('haa-brk-val');  if (bel && bel.textContent !== brkVal)  bel.textContent = brkVal;
+    var row = document.getElementById(ID.stats);
+    if (row) {
+      ensureLiveStyle();
+      row.classList.toggle('haa-live', v.live);
+      row.classList.toggle('haa-onbreak', v.onBreak);
+    }
+  }
+  // Loads today's row; paintLive() then ticks the tiles from it.
   function loadOvertime() {
     var em = actorEmail(); if (!em) return;
     api('/api/attendance/today?email=' + encodeURIComponent(em))
       .then(function (rec) {
-        rec = Array.isArray(rec) ? (rec[0] || {}) : (rec || {});
-        workVal = fmtMins(rec.workedMinutes || 0);
-        var wel = document.getElementById('haa-work-val'); if (wel) wel.textContent = workVal;
-        otVal = fmtMins(rec.overtimeMinutes || 0);
-        var el = document.getElementById('haa-ot-val'); if (el) el.textContent = otVal;
-        brkVal = fmtMins(rec.breakMinutes || 0);
-        var bel = document.getElementById('haa-brk-val'); if (bel) bel.textContent = brkVal;
+        todayRec = Array.isArray(rec) ? (rec[0] || {}) : (rec || {});
+        paintLive();
       })
       .catch(function () {
-        if (workVal == null) workVal = '0h 0m'; var wel = document.getElementById('haa-work-val'); if (wel) wel.textContent = workVal;
-        if (otVal == null) otVal = '0h 0m'; var el = document.getElementById('haa-ot-val'); if (el) el.textContent = otVal;
-        if (brkVal == null) brkVal = '0h 0m'; var bel = document.getElementById('haa-brk-val'); if (bel) bel.textContent = brkVal;
+        if (!todayRec) todayRec = {};
+        paintLive();
       });
   }
-
   var activityData = [];
   function loadActivity() {
     var em = (actorEmail() || '').trim().toLowerCase();
@@ -1037,6 +1147,7 @@
     // Overtime + break totals inside the check-in card (restored from cache; fetched once).
     clock.classList.add('haa-ci-card');
     tagClock(clock);
+    paintTzClock(clock);
     ensureStatRow(clock);
     hideReactWorkingLine(clock);
     if (otVal === null || brkVal === null || workVal === null) loadOvertime();
@@ -1105,6 +1216,21 @@
     // Check-in toggled (topbar switch) → refresh totals + team status + activity.
     window.addEventListener('hrmsCheckinToggle', function () { loadOvertime(); loadTeam(); loadActivity(); });
     setInterval(function () { if (onCheckinPage() && document.getElementById(ID.team)) { loadTeam(); loadActivity(); loadOvertime(); } }, 30000);
+    // Tick the Working / Overtime / Break tiles once a second while checked
+    // in, and refresh right after a Break / Remote / Office button in the
+    // app's own card is used (the 30s poll is too slow to feel live).
+    setInterval(function () {
+      if (!onCheckinPage()) return;
+      if (todayRec && document.getElementById(ID.stats)) paintLive();
+      var ck = clockCard(); if (ck) paintTzClock(ck);
+    }, 1000);
+    document.addEventListener('click', function (e) {
+      if (!onCheckinPage()) return;
+      var btn = e.target && e.target.closest ? e.target.closest('button') : null;
+      if (btn && /break|remote|office|check/i.test(btn.textContent || '')) {
+        setTimeout(function () { loadOvertime(); loadActivity(); }, 1200);
+      }
+    }, true);
     startLocationTracking();
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);

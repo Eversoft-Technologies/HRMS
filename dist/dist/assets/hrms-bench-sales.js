@@ -58,8 +58,8 @@
   var SUBMISSION_STATUSES = ['Submitted', 'Interview Scheduled', 'Offered', 'Placed', 'Rejected', 'On Hold'];
 
   // Bench Sales file uploads: Resume/DL/I-94 are one file each, Certificates
-  // allows up to this many — all PDF-only (mirrors api/views.py's
-  // MAX_CERTIFICATES_PER_PROFILE and _is_pdf).
+  // allows up to this many — PDF or Word (DOC/DOCX) only (mirrors api/views.py's
+  // MAX_CERTIFICATES_PER_PROFILE and _is_document).
   var MAX_CERTIFICATES_PER_PROFILE = 10;
   // Per-file upload cap (resume / DL / I-94 / each certificate). Mirrors
   // MAX_BENCH_SALES_FILE_MB in api/views.py — keep the two in sync.
@@ -69,10 +69,13 @@
   function tooLargeMsg(file) {
     return file.name + ' is ' + (file.size / (1024 * 1024)).toFixed(1) + ' MB — each file must be ' + MAX_UPLOAD_MB + ' MB or smaller.';
   }
-  function isPdfFile(file) {
+  var DOC_MIMES = ['application/pdf', 'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
+  var DOC_ERROR = ' is not a PDF or Word document — only PDF, DOC and DOCX uploads are allowed.';
+  function isDocFile(file) {
     var type = (file.type || '').toLowerCase();
     var name = (file.name || '').toLowerCase();
-    return type === 'application/pdf' || name.slice(-4) === '.pdf';
+    return DOC_MIMES.indexOf(type) !== -1 || /\.(pdf|docx?)$/.test(name);
   }
 
   /* Column catalog for "Manage Columns" — mirrors Onboarding's candidate grid
@@ -108,7 +111,8 @@
     ['email', 'Mail Id'], ['contactNo', 'Contact No'],
   ];
   var OPTIONAL_SALES_COLS = [
-    ['certificates', 'Certificates'], ['dlStateId', 'DL (Optional)/State ID'],
+    ['dateOfBirth', 'Date of Birth'], ['passportNo', 'Passport No'],
+    ['certificates', 'Certificates'], ['certifications', 'Certifications'], ['dlStateId', 'DL (Optional)/State ID'],
     ['i94', 'I-94'], ['createdBy', 'Created By'],
   ];
   var ALL_SALES_COLS = DEFAULT_SALES_COLS.concat(OPTIONAL_SALES_COLS);
@@ -456,6 +460,7 @@
     if (key === 'dlStateId') return row.dlStateIdHasFile ? 'Uploaded' : '';
     if (key === 'i94') return row.i94HasFile ? 'Uploaded' : '';
     if (key === 'certificates') return certNames(row).join(', ');
+    if (key === 'certifications') return (row.certificationFiles || []).map(function (c) { return c.fileName; }).join(', ');
     var v = row[key];
     return v == null ? '' : String(v);
   }
@@ -499,7 +504,7 @@
   function filteredSalesRows() {
     var q = state.sales.search.trim().toLowerCase();
     return state.sales.rows.filter(function (r) {
-      if (q && ![r.name, r.techStack, r.email, r.contactNo].concat(certNames(r))
+      if (q && ![r.name, r.techStack, r.email, r.contactNo, r.passportNo].concat(certNames(r))
         .some(function (v) { return String(v || '').toLowerCase().indexOf(q) !== -1; })) return false;
       if (state.sales.authFilter && state.sales.authFilter.indexOf(String(r.workAuthorization || '')) === -1) return false;
       if (state.sales.predef !== 'all' && !matchSalesPredef(r)) return false;
@@ -528,6 +533,14 @@
   function salesCell(row, key) {
     if (key === 'resume' || key === 'dlStateId' || key === 'i94') return fileCell(row, key);
     if (key === 'certificates') return certsCell(row);
+    if (key === 'certifications') {
+      var cf = row.certificationFiles || [];
+      if (!cf.length) return badge('—', 'neutral');
+      return cf.map(function (c) {
+        return '<button type="button" class="bss-filebtn bss-badge ok" data-dlcertid="' + row.id + '" data-certid="' + c.id +
+          '" data-dlname="' + esc(c.fileName || '') + '" title="Download ' + esc(c.fileName || 'file') + '">⬇ ' + esc(c.fileName || 'file') + '</button>';
+      }).join(' ');
+    }
     if (key === 'workAuthorization') return row.workAuthorization ? badge(row.workAuthorization, 'neutral') : '—';
     return esc(row[key] || '—');
   }
@@ -855,10 +868,13 @@
       line('Name', row.name),
       line('Tech Stack', row.techStack),
       line('Total Experience', row.experience),
-      line('Certifications', certNames(row).join(', ')),
+      line('Certifications', (row.certificationFiles || []).map(function (c) { return c.fileName; }).join(', ')),
+      line('Certificates', certNames(row).join(', ')),
       line('Work Authorization', row.workAuthorization),
       line('Email', row.email),
       line('Contact No', row.contactNo),
+      line('Date of Birth', row.dateOfBirth),
+      line('Passport No', row.passportNo),
       line('Resume', row.resumeHasFile ? 'Attached' : 'Not attached'),
       line('DL / State ID', row.dlStateIdHasFile ? 'Attached' : 'Not attached'),
       line('I-94', row.i94HasFile ? 'Attached' : 'Not attached'),
@@ -938,6 +954,8 @@
           salesCertsRow2(row) +
           row2('Mail Id', row.email) +
           row2('Contact No', row.contactNo) +
+          row2('Date of Birth', row.dateOfBirth) +
+          row2('Passport No', row.passportNo) +
           row2('Work Authorization', row.workAuthorization) +
           salesFileRow2(row, 'Resume', 'resume') +
           salesFileRow2(row, 'DL (Optional)/State ID', 'dlStateId') +
@@ -1000,20 +1018,47 @@
           : '<input class="bss-in" id="' + id + '" type="' + type + '" value="' + esc(val) + '">') +
         '</div>';
     }
-    function fileField(id, label, currentName, required) {
+    // Resume / DL / I-94: the native input shows the picked name; the status
+    // line under it adds a Remove link — for a freshly picked file (clears the
+    // input) and for the saved file (DELETE .../file/<slug>, after a confirm).
+    function fileField(id, label, currentName, required, prefix, slug) {
       return '<div>' +
         '<label class="bss-lb">' + esc(label) + (required ? ' <span class="req">*</span>' : '') + '</label>' +
-        '<input class="bss-in" id="' + id + '" type="file" accept="application/pdf,.pdf">' +
-        (currentName ? '<div style="font-size:11px;color:var(--muted,#8a9bb8);margin-top:4px">Current: ' + esc(currentName) + ' — choose a PDF to replace it</div>' : '') +
-        '<div style="font-size:11px;color:var(--muted,#8a9bb8);margin-top:4px">PDF only, up to ' + MAX_UPLOAD_MB + ' MB.</div>' +
+        '<input class="bss-in" id="' + id + '" type="file" data-prefix="' + prefix + '" data-slug="' + slug + '" accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document">' +
+        '<div id="' + id + '-stat" style="font-size:11px;color:var(--muted,#8a9bb8);margin-top:4px"></div>' +
+        '<div style="font-size:11px;color:var(--muted,#8a9bb8);margin-top:4px">PDF or Word (DOC/DOCX), up to ' + MAX_UPLOAD_MB + ' MB.</div>' +
       '</div>';
+    }
+    var REMOVE_LINK = ' <button type="button" %ATTR% style="border:none;background:none;padding:0;margin-left:6px;cursor:pointer;font:inherit;font-size:11px;font-weight:600;color:var(--danger,#ef4444)">Remove</button>';
+    function renderFileStatus(id) {
+      var inp = ov.querySelector('#' + id), stat = ov.querySelector('#' + id + '-stat');
+      if (!inp || !stat) return;
+      var picked = inp.files && inp.files[0];
+      var saved = row[inp.getAttribute('data-prefix') + 'FileName'];
+      if (picked) {
+        stat.innerHTML = 'Selected: ' + esc(picked.name) + REMOVE_LINK.replace('%ATTR%', 'data-fileclear="' + id + '" title="Clear the selected file"');
+      } else if (saved) {
+        stat.innerHTML = 'Current: ' + esc(saved) + ' — choose a file to replace it' +
+          (row.id ? REMOVE_LINK.replace('%ATTR%', 'data-fileremove="' + id + '" title="Remove the saved file"') : '');
+      } else {
+        stat.innerHTML = '';
+      }
     }
     // New certificate files picked this session, accumulated across repeated
     // uses of the (native, non-cumulative) file input — each pick replaces
     // input.files, so without this array a second "Choose Files" would
     // discard the first. Removed via the × next to its name, same as an
     // already-uploaded certificate.
-    var pendingCertFiles = [];
+    // Two file lists share the same picker/remove behaviour: the Certificates
+    // upload and the files attached to the Certifications field (stored with
+    // kind 'certification').
+    var CERT_GROUPS = [
+      { slug: 'certificate', rowKey: 'certificates', noun: 'certificates', uploadLabel: 'Certificate',
+        wrapId: 'bsam-certlist-wrap', inputId: 'bsam-certs', countId: 'bsam-certcount' },
+      { slug: 'certification', rowKey: 'certificationFiles', noun: 'certification files', uploadLabel: 'Certification file',
+        wrapId: 'bsam-certnlist-wrap', inputId: 'bsam-certns', countId: 'bsam-certncount' }
+    ];
+    var pendingFiles = { certificate: [], certification: [] };
     // A saved value outside WORK_AUTH_TYPES is a custom "Other" entry: show it
     // as Other with the text pre-filled.
     var savedAuth = row.workAuthorization || '';
@@ -1021,29 +1066,41 @@
     var authOther = authSel === 'Other' && savedAuth !== 'Other' ? savedAuth : '';
     function certListItemHtml(name, removeAttr) {
       return '<div style="display:flex;align-items:center;justify-content:space-between;background:var(--bg3,#1c2433);border:1px solid var(--border,#2a3446);border-radius:6px;padding:4px 8px;font-size:12px">' +
-        '<span>' + esc(name || 'certificate') + '</span>' +
+        '<span>' + esc(name || 'file') + '</span>' +
         '<button type="button" ' + removeAttr + ' title="Remove" style="border:none;background:none;cursor:pointer;font-size:14px;line-height:1;color:var(--muted,#8a9bb8)">×</button>' +
       '</div>';
     }
     function renderCertList() {
-      var wrap = ov.querySelector('#bsam-certlist-wrap');
-      if (!wrap) return;
-      var existing = row.certificates || [];
-      var items = existing.map(function (c) {
-        return certListItemHtml(c.fileName, 'data-certremove="' + c.id + '"');
-      }).concat(pendingCertFiles.map(function (f, i) {
-        return certListItemHtml(f.name, 'data-pendingremove="' + i + '"');
-      }));
-      wrap.innerHTML = items.length ? '<div style="display:flex;flex-direction:column;gap:4px;margin-bottom:8px">' + items.join('') + '</div>' : '';
-      var countEl = ov.querySelector('#bsam-certcount');
-      if (countEl) countEl.textContent = (existing.length + pendingCertFiles.length) + ' of ' + MAX_CERTIFICATES_PER_PROFILE + ' used';
+      CERT_GROUPS.forEach(function (g) {
+        var wrap = ov.querySelector('#' + g.wrapId);
+        if (!wrap) return;
+        var existing = row[g.rowKey] || [];
+        var pending = pendingFiles[g.slug];
+        var items = existing.map(function (c) {
+          return certListItemHtml(c.fileName, 'data-certremove="' + c.id + '" data-grp="' + g.slug + '"');
+        }).concat(pending.map(function (f, i) {
+          return certListItemHtml(f.name, 'data-pendingremove="' + i + '" data-grp="' + g.slug + '"');
+        }));
+        wrap.innerHTML = items.length ? '<div style="display:flex;flex-direction:column;gap:4px;margin-bottom:8px">' + items.join('') + '</div>' : '';
+        var countEl = ov.querySelector('#' + g.countId);
+        if (countEl) countEl.textContent = (existing.length + pending.length) + ' of ' + MAX_CERTIFICATES_PER_PROFILE + ' used';
+      });
+    }
+    var DOC_ACCEPT = '.pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    function certPicker(g) {
+      return '<div id="' + g.wrapId + '"></div>' +
+        '<input class="bss-in" id="' + g.inputId + '" type="file" accept="' + DOC_ACCEPT + '" multiple>' +
+        '<div style="font-size:11px;color:var(--muted,#8a9bb8);margin-top:4px">PDF or Word (DOC/DOCX), up to ' + MAX_UPLOAD_MB + ' MB each — <span id="' + g.countId + '">0 of ' + MAX_CERTIFICATES_PER_PROFILE + ' used</span>.</div>';
     }
     function certsField() {
       return '<div class="full">' +
-        '<label class="bss-lb">Certificates <span class="req">*</span></label>' +
-        '<div id="bsam-certlist-wrap"></div>' +
-        '<input class="bss-in" id="bsam-certs" type="file" accept="application/pdf,.pdf" multiple>' +
-        '<div style="font-size:11px;color:var(--muted,#8a9bb8);margin-top:4px">PDF only, up to ' + MAX_UPLOAD_MB + ' MB each — <span id="bsam-certcount">0 of ' + MAX_CERTIFICATES_PER_PROFILE + ' used</span>.</div>' +
+        '<label class="bss-lb">Certificates</label>' + certPicker(CERT_GROUPS[0]) +
+      '</div>';
+    }
+    // Certifications: its own Choose Files picker, same as Certificates.
+    function certificationsField() {
+      return '<div class="full">' +
+        '<label class="bss-lb">Certifications</label>' + certPicker(CERT_GROUPS[1]) +
       '</div>';
     }
 
@@ -1065,10 +1122,13 @@
           '</div>' +
           field('bsam-email', 'Mail Id', 'email', row.email, true) +
           field('bsam-contact', 'Contact No', 'text', row.contactNo, true) +
-          fileField('bsam-resume', 'Resume', row.resumeFileName, true) +
-          fileField('bsam-dl', 'DL (Optional)/State ID', row.dlStateIdFileName) +
-          fileField('bsam-i94', 'I-94', row.i94FileName, true) +
+          field('bsam-dob', 'Date of Birth', 'date', row.dateOfBirth, true) +
+          field('bsam-passport', 'Passport No', 'text', row.passportNo, true) +
+          fileField('bsam-resume', 'Resume', row.resumeFileName, true, 'resume', 'resume') +
+          fileField('bsam-dl', 'DL (Optional)/State ID', row.dlStateIdFileName, false, 'dlStateId', 'dl-state-id') +
+          fileField('bsam-i94', 'I-94', row.i94FileName, true, 'i94', 'i94') +
           certsField() +
+          certificationsField() +
         '</div>' +
         '<div class="bss-act"><button class="bss-btn primary" id="bsam-save">' + (isEdit ? 'Save Changes' : 'Create Profile') + '</button>' +
         '<button class="bss-btn" id="bsam-cancel">Cancel</button></div>' +
@@ -1082,7 +1142,7 @@
       var pr = e.target && e.target.closest ? e.target.closest('[data-pendingremove]') : null;
       if (pr) {
         e.stopPropagation();
-        pendingCertFiles.splice(Number(pr.getAttribute('data-pendingremove')), 1);
+        pendingFiles[pr.getAttribute('data-grp')].splice(Number(pr.getAttribute('data-pendingremove')), 1);
         renderCertList();
         return;
       }
@@ -1091,30 +1151,59 @@
         e.stopPropagation();
         if (!row.id) return;
         var certId = Number(rm.getAttribute('data-certremove'));
-        if (!window.confirm('Remove this certificate?')) return;
+        var grp = CERT_GROUPS.filter(function (g) { return g.slug === rm.getAttribute('data-grp'); })[0];
+        if (!window.confirm('Remove this file?')) return;
         api('/recruit/bench-sales/' + row.id + '/certificates/' + certId, { method: 'DELETE' }).then(function () {
-          row.certificates = (row.certificates || []).filter(function (c) { return c.id !== certId; });
+          row[grp.rowKey] = (row[grp.rowKey] || []).filter(function (c) { return c.id !== certId; });
           renderCertList();
-        }).catch(function (err) { toast(err.message || 'Failed to remove certificate', 'error'); });
+        }).catch(function (err) { toast(err.message || 'Failed to remove the file', 'error'); });
       }
     });
-    ov.querySelector('#bsam-certs').addEventListener('change', function () {
-      var picked = this.files ? Array.prototype.slice.call(this.files) : [];
-      this.value = '';
-      if (!picked.length) return;
-      var e = ov.querySelector('#bsam-e');
-      for (var i = 0; i < picked.length; i++) {
-        if (!isPdfFile(picked[i])) { e.textContent = picked[i].name + ' is not a PDF — only PDF uploads are allowed.'; return; }
-        if (isTooLarge(picked[i])) { e.textContent = tooLargeMsg(picked[i]); return; }
-      }
-      var existingCount = (row.certificates || []).length;
-      if (existingCount + pendingCertFiles.length + picked.length > MAX_CERTIFICATES_PER_PROFILE) {
-        e.textContent = 'You can upload up to ' + MAX_CERTIFICATES_PER_PROFILE + ' certificates total (' + (existingCount + pendingCertFiles.length) + ' already selected).';
+    ['bsam-resume', 'bsam-dl', 'bsam-i94'].forEach(function (id) {
+      renderFileStatus(id);
+      ov.querySelector('#' + id).addEventListener('change', function () { renderFileStatus(id); });
+    });
+    ov.addEventListener('click', function (e) {
+      var clr = e.target && e.target.closest ? e.target.closest('[data-fileclear]') : null;
+      if (clr) {
+        e.preventDefault();
+        var cid = clr.getAttribute('data-fileclear');
+        ov.querySelector('#' + cid).value = '';
+        renderFileStatus(cid);
         return;
       }
-      e.textContent = '';
-      pendingCertFiles = pendingCertFiles.concat(picked);
-      renderCertList();
+      var rmv = e.target && e.target.closest ? e.target.closest('[data-fileremove]') : null;
+      if (rmv) {
+        e.preventDefault();
+        var rid = rmv.getAttribute('data-fileremove'), rinp = ov.querySelector('#' + rid);
+        if (!row.id || !rinp) return;
+        var slug = rinp.getAttribute('data-slug'), prefix = rinp.getAttribute('data-prefix');
+        if (!window.confirm('Remove the saved ' + (row[prefix + 'FileName'] || 'file') + '?')) return;
+        api('/recruit/bench-sales/' + row.id + '/file/' + slug, { method: 'DELETE' }).then(function (saved) {
+          Object.assign(row, saved);
+          renderFileStatus(rid);
+        }).catch(function (err) { toast(err.message || 'Failed to remove the file', 'error'); });
+      }
+    });
+    CERT_GROUPS.forEach(function (g) {
+      ov.querySelector('#' + g.inputId).addEventListener('change', function () {
+        var picked = this.files ? Array.prototype.slice.call(this.files) : [];
+        this.value = '';
+        if (!picked.length) return;
+        var e = ov.querySelector('#bsam-e');
+        for (var i = 0; i < picked.length; i++) {
+          if (!isDocFile(picked[i])) { e.textContent = picked[i].name + DOC_ERROR; return; }
+          if (isTooLarge(picked[i])) { e.textContent = tooLargeMsg(picked[i]); return; }
+        }
+        var existingCount = (row[g.rowKey] || []).length;
+        if (existingCount + pendingFiles[g.slug].length + picked.length > MAX_CERTIFICATES_PER_PROFILE) {
+          e.textContent = 'You can upload up to ' + MAX_CERTIFICATES_PER_PROFILE + ' ' + g.noun + ' total (' + (existingCount + pendingFiles[g.slug].length) + ' already selected).';
+          return;
+        }
+        e.textContent = '';
+        pendingFiles[g.slug] = pendingFiles[g.slug].concat(picked);
+        renderCertList();
+      });
     });
     ov.querySelector('#bsam-auth').addEventListener('change', function () {
       var other = ov.querySelector('#bsam-auth-other');
@@ -1130,6 +1219,7 @@
       var required = [
         ['bsam-name', 'Name'], ['bsam-tech', 'Tech Stack'], ['bsam-exp', 'Experience'],
         ['bsam-auth', 'Work Authorization'], ['bsam-email', 'Mail Id'], ['bsam-contact', 'Contact No'],
+        ['bsam-dob', 'Date of Birth'], ['bsam-passport', 'Passport No'],
       ];
       for (var r = 0; r < required.length; r++) {
         if (!v(required[r][0])) { e.textContent = required[r][1] + ' is required.'; return; }
@@ -1151,21 +1241,20 @@
       for (var i = 0; i < fileInputs.length; i++) {
         var inp = ov.querySelector('#' + fileInputs[i].id);
         var f = inp && inp.files && inp.files[0];
-        if (f && !isPdfFile(f)) { e.textContent = fileInputs[i].label + ' must be a PDF file.'; return; }
+        if (f && !isDocFile(f)) { e.textContent = fileInputs[i].label + ' must be a PDF or Word (DOC/DOCX) file.'; return; }
         if (f && isTooLarge(f)) { e.textContent = fileInputs[i].label + ': ' + tooLargeMsg(f); return; }
         if (fileInputs[i].required && !f && !row[fileInputs[i].prefix + 'FileName']) {
           e.textContent = fileInputs[i].label + ' is required.'; return;
         }
       }
 
-      var newCertFiles = pendingCertFiles;
-      var existingCertCount = (row.certificates || []).length;
-      if (existingCertCount + newCertFiles.length === 0) {
-        e.textContent = 'At least one certificate is required.'; return;
-      }
-      if (existingCertCount + newCertFiles.length > MAX_CERTIFICATES_PER_PROFILE) {
-        e.textContent = 'You can upload up to ' + MAX_CERTIFICATES_PER_PROFILE + ' certificates total (' + existingCertCount + ' already uploaded).';
-        return;
+      for (var gi = 0; gi < CERT_GROUPS.length; gi++) {
+        var gg = CERT_GROUPS[gi];
+        var alreadyUp = (row[gg.rowKey] || []).length;
+        if (alreadyUp + pendingFiles[gg.slug].length > MAX_CERTIFICATES_PER_PROFILE) {
+          e.textContent = 'You can upload up to ' + MAX_CERTIFICATES_PER_PROFILE + ' ' + gg.noun + ' total (' + alreadyUp + ' already uploaded).';
+          return;
+        }
       }
 
       var btn = ov.querySelector('#bsam-save');
@@ -1175,6 +1264,7 @@
       var payload = {
         name: v('bsam-name'), techStack: v('bsam-tech'), experience: v('bsam-exp'),
         workAuthorization: auth, email: v('bsam-email'), contactNo: v('bsam-contact'),
+        dateOfBirth: v('bsam-dob') || null, passportNo: v('bsam-passport'),
       };
       // Text fields go first as JSON; then every file is sent on its own as
       // multipart (POST .../upload). One JSON body carrying all the PDFs as
@@ -1185,8 +1275,10 @@
         var file = inp2 && inp2.files && inp2.files[0];
         if (file) uploads.push({ field: f.slug, file: file, label: f.label });
       });
-      newCertFiles.slice().forEach(function (file) {
-        uploads.push({ field: 'certificate', file: file, label: 'Certificate' });
+      CERT_GROUPS.forEach(function (g) {
+        pendingFiles[g.slug].slice().forEach(function (file) {
+          uploads.push({ field: g.slug, file: file, label: g.uploadLabel });
+        });
       });
 
       var saveText = row.id
@@ -1207,11 +1299,13 @@
             .catch(function (err) { throw new Error(u.label + ' (' + u.file.name + '): ' + err.message); });
         }).then(function (saved) {
           Object.assign(row, saved);
-          if (u.field === 'certificate') {
-            var at = pendingCertFiles.indexOf(u.file);
-            if (at !== -1) pendingCertFiles.splice(at, 1);
+          if (u.field === 'certificate' || u.field === 'certification') {
+            var at = pendingFiles[u.field].indexOf(u.file);
+            if (at !== -1) pendingFiles[u.field].splice(at, 1);
           } else {
-            ov.querySelector('#' + fileInputs.filter(function (f) { return f.slug === u.field; })[0].id).value = '';
+            var doneId = fileInputs.filter(function (f) { return f.slug === u.field; })[0].id;
+            ov.querySelector('#' + doneId).value = '';
+            renderFileStatus(doneId);
           }
           renderCertList();
         });

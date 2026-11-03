@@ -182,7 +182,7 @@
         { href: '/onboarding/verification', label: 'Verification',        icon: ICON.check },
         { href: '/onboarding/assets',       label: 'IT Asset Allocation', icon: ICON.laptop },
         { href: '/onboarding/payroll',      label: 'Payroll Information', icon: ICON.card },
-        { href: '/onboarding/settings',     label: 'Settings',            icon: ICON.gear },
+        { href: '/onboarding/settings',     label: 'Onboarding Settings',            icon: ICON.gear },
       ]
     }
   ];
@@ -280,6 +280,17 @@
      not every route (which all begin with '/'). */
   function permForPath(path) {
     if (!path) return null;
+    /* Self-service: an employee may open their OWN profile (/hr/hris/<email>)
+       without employee.view. The API enforces the same rule (employee_profile
+       in api/views.py); this only stops the guard covering a page the server
+       is happy to serve. Numeric keys (AppUser ids) are not matched because
+       the session does not carry the id -- self links always use the email. */
+    var selfKey = /^\/hr\/hris\/([^/]+)\/?$/.exec(path);
+    if (selfKey) {
+      var k = selfKey[1];
+      try { k = decodeURIComponent(k); } catch (_) {}
+      if (k && k.toLowerCase() === (sessionEmail() || '').toLowerCase()) return null;
+    }
     for (var i = 0; i < ROUTE_PERMS.length; i++) {
       var prefix = ROUTE_PERMS[i][0], exact = ROUTE_PERMS[i][2];
       var hit = exact ? (path === prefix) : (path.indexOf(prefix) === 0);
