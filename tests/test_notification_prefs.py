@@ -42,6 +42,34 @@ class NotificationPrefsApiTests(TestCase):
         self.assertEqual(self.me.put(url, {'prefs': {'ai_digest': 'yes'}}, content_type='application/json').status_code, 400)
         self.assertEqual(self.me.put(url, {'prefs': {}}, content_type='application/json').status_code, 400)
 
+    def test_sound_settings_default_save_and_merge(self):
+        url = '/api/user-settings/me@co.com/notification-preferences'
+        snd = self.me.get(url).json()['sound']
+        self.assertEqual(snd, {'notificationSound': True, 'messageSound': True, 'notificationTone': 'chime',
+                               'messageTone': 'pop', 'volume': 70, 'inAppPopups': True,
+                               'desktopPopups': False, 'muteInDnd': True})
+        r0 = self.me.put(url, {'sound': {'notificationTone': 'marimba', 'messageTone': 'bubble', 'inAppPopups': False}},
+                         content_type='application/json')
+        self.assertEqual((r0.json()['sound']['notificationTone'], r0.json()['sound']['messageTone'],
+                          r0.json()['sound']['inAppPopups']), ('marimba', 'bubble', False))
+        r = self.me.put(url, {'sound': {'messageSound': False, 'volume': 35}}, content_type='application/json')
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual((r.json()['sound']['messageSound'], r.json()['sound']['volume'],
+                          r.json()['sound']['notificationSound']), (False, 35, True))
+        # category prefs and sound settings live side by side and merge
+        self.me.put(url, {'prefs': {'ai_digest': True}, 'sound': {'desktopPopups': True}}, content_type='application/json')
+        body = self.me.get(url).json()
+        self.assertEqual((body['sound']['volume'], body['sound']['desktopPopups'], body['sound']['messageSound']), (35, True, False))
+        self.assertTrue({c['key']: c['enabled'] for c in body['categories']}['ai_digest'])
+
+    def test_bad_sound_settings_are_rejected(self):
+        url = '/api/user-settings/me@co.com/notification-preferences'
+        for bad in ({'volume': 150}, {'volume': '50'}, {'volume': True}, {'messageSound': 'no'}, {'loud': True}, {},
+                    {'notificationTone': 'pop'}, {'messageTone': 'siren'}, {'inAppPopups': 'yes'}):
+            self.assertEqual(self.me.put(url, {'sound': bad}, content_type='application/json').status_code, 400, bad)
+        self.assertEqual(self.me.put(url, {}, content_type='application/json').status_code, 400)
+        self.assertFalse(NotificationPreference.objects.filter(pk='me@co.com').exists())
+
     def test_cannot_change_someone_elses_without_settings_manage(self):
         r = self.me.put('/api/user-settings/other@co.com/notification-preferences',
                         {'prefs': {'leave_approvals': False}}, content_type='application/json')

@@ -66,7 +66,7 @@
   function getJSON(url) {
     return fetch(url, { headers: { Accept: 'application/json' } }).then(function (r) {
       return r.json().catch(function () { return null; }).then(function (d) {
-        if (!r.ok) throw new Error((d && d.message) || ('HTTP ' + r.status));
+        if (!r.ok) { var e = new Error((d && d.message) || ('HTTP ' + r.status)); e.status = r.status; throw e; }
         return d;
       });
     });
@@ -106,12 +106,27 @@
     var c = (mini.contacts || []).filter(function (x) { return x.email === email; })[0];
     return c && c.online ? { color: '#22c55e', label: 'Online' } : { color: '#9ca3af', label: 'Offline' };
   }
+  /* Status changed (mine or anyone's): repaint dots and the header line. */
+  function repaintPresence() {
+    Array.prototype.forEach.call(document.querySelectorAll('[data-pd-email]'), function (el) {
+      var pr = presence(el.getAttribute('data-pd-email'));
+      if (el.style.background !== pr.color) el.style.background = pr.color;
+      if (el.title !== pr.label) el.title = pr.label;
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('[data-dock-status]'), function (el) {
+      var pr = presence(el.getAttribute('data-dock-status'));
+      if (el.textContent !== pr.label) el.textContent = pr.label;
+      el.style.color = pr.color;
+    });
+  }
+  window.addEventListener('hrmsPresenceUpdated', repaintPresence);
+
   function avatar(name, email, pic, isChannel, withDot) {
     var inner = isChannel ? ICO.hash : (pic ? '<img src="' + esc(pic) + '" alt="">' : esc(initials(name)));
     var dot = '';
     if (withDot && email) {
       var pr = presence(email);
-      dot = '<span class="pd" style="background:' + esc(pr.color) + '" title="' + esc(pr.label) + '"></span>';
+      dot = '<span class="pd" data-pd-email="' + esc(email) + '" style="background:' + esc(pr.color) + '" title="' + esc(pr.label) + '"></span>';
     }
     return '<span class="av' + (isChannel ? ' ch' : '') + '">' + inner + dot + '</span>';
   }
@@ -323,6 +338,7 @@
       if (!d) return;
       unread.direct = d.direct || 0;
       unread.channels = d.channels || 0;
+      if (window.__hrmsAlerts && typeof d.total === 'number') window.__hrmsAlerts.chatUnread(d.total, 'dock');
       place();
     }).catch(function () {});
   }
@@ -416,6 +432,7 @@
       if (mini.rooms) {
         unread.direct = 0; unread.channels = 0;
         mini.rooms.forEach(function (r) { if (r.unread > 0) unread[r.is_group ? 'channels' : 'direct'] += r.unread; });
+        if (window.__hrmsAlerts) window.__hrmsAlerts.chatUnread(unread.direct + unread.channels, 'mini');
       }
       renderList();
       place();
@@ -525,10 +542,32 @@
       if (!mini.room || String(mini.room.id) !== String(r.id)) return;
       var changed = JSON.stringify((list || []).map(function (m) { return [m.id, m.message, m.is_deleted, m.reactions]; })) !==
                     JSON.stringify(mini.messages.map(function (m) { return [m.id, m.message, m.is_deleted, m.reactions]; }));
+      var before = {};
+      mini.messages.forEach(function (m) { before[m.id] = true; });
+      var hadAny = mini.messages.length > 0;
       mini.messages = Array.isArray(list) ? list : [];
       if (first) { r.unread = 0; refreshUnread(); }
+      // New message from someone else in the conversation open in the panel:
+      // sound / pop-up only when the tab is in the background (hrms-sounds.js).
+      if (!first && hadAny && window.__hrmsAlerts) {
+        mini.messages.forEach(function (m) {
+          if (!before[m.id] && String(m.sender_email || '').toLowerCase() !== me()) window.__hrmsAlerts.chatMessage(m, r);
+        });
+      }
       if (first || changed) renderMessages(first);
     }).catch(function (e) {
+      if (e && (e.status === 404 || e.status === 403)) {
+        // Deleted, or you were removed: stop polling it and drop it from the list.
+        stopRoomPoll();
+        mini.rooms = (mini.rooms || []).filter(function (x) { return String(x.id) !== String(r.id); });
+        if (mini.room && String(mini.room.id) === String(r.id)) {
+          mini.room = null;
+          renderShell();
+          var list = document.querySelector('#' + MINI + ' [data-m="list"]');
+          if (list) list.insertAdjacentHTML('afterbegin', '<div class="em">That conversation is no longer available — it was deleted, or you were removed from it.</div>');
+        }
+        return;
+      }
       var box = document.querySelector('#' + MINI + ' [data-m="msgs"]');
       if (box && first) box.innerHTML = '<div class="em">Could not load messages: ' + esc(e.message) + '</div>';
     });
@@ -546,7 +585,7 @@
     panel.innerHTML =
       '<div class="hd"><button type="button" class="ib" data-m="back" title="Back" aria-label="Back">' + ICO.back + '</button>' +
       avatar(name, other, mem && mem.profilePic, isCh, !isCh) +
-      '<div class="tt"><b>' + (isCh ? '#' : '') + esc(name) + '</b><small>' + esc(sub) + '</small></div>' +
+      '<div class="tt"><b>' + (isCh ? '#' : '') + esc(name) + '</b><small' + (isCh ? '' : ' data-dock-status="' + esc(other) + '" style="color:' + esc(presence(other).color) + '"') + '>' + esc(sub) + '</small></div>' +
       '<button type="button" class="ib" data-m="open-full" data-id="' + esc(r.id) + '" title="Open in full chat" aria-label="Open in full chat">' + ICO.expand + '</button>' +
       '<button type="button" class="ib" data-m="close" title="Close (Esc)" aria-label="Close">' + ICO.close + '</button></div>' +
       '<div class="ms" data-m="msgs"><div class="em">Loading…</div></div>' +

@@ -178,6 +178,7 @@ urlpatterns = [
     # Employees module — Leave Management
     path('leave', views.leave),
     path('leave/balance', views.leave_balance),
+    path('leave/policy', views.leave_policy),
     path('holidays', views.holidays),
     path('leave/<int:pk>', views.leave_detail),
     path('leave/<int:pk>/approver', views.leave_approver),

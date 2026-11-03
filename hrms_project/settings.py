@@ -182,6 +182,11 @@ DEFAULT_AUTO_FIELD = 'django.db.models.AutoField'
 # only under `manage.py test`, never in a running server.
 if len(sys.argv) > 1 and sys.argv[1] == 'test':
     PASSWORD_HASHERS = ['django.contrib.auth.hashers.MD5PasswordHasher']
+    # Tests decide for themselves whether an encryption key exists: never read
+    # or create the real key file in the developer's home folder.
+    import tempfile as _tempfile
+    os.environ['HRMS_SECRETS_FILE'] = os.path.join(_tempfile.mkdtemp(prefix='hrms-test-secrets-'), 'secrets.key')
+    os.environ['HRMS_SECRETS_AUTOGEN'] = '0'
 
 # ---------------------------------------------------------------------------
 # Large payloads: base64 video (recordingData) and document uploads can be big.

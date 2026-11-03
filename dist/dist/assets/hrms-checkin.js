@@ -240,7 +240,8 @@
       })
         .then(function (r) { return r.ok ? r.json() : null; })
         .then(function (d) {
-          if (!d || d.enforced === false || d.wfh) { stopGeoWatch(); return; }
+          // Off-site / WFH sessions have no office to leave: stop watching.
+          if (!d || d.enforced === false || d.wfh || d.offsite) { stopGeoWatch(); return; }
           if (d.inside || d.uncertain) { geoWatch.strikes = 0; geoWatch.warned = false; return; }
 
           geoWatch.strikes++;
@@ -257,14 +258,14 @@
           }
 
           if (geoWatch.strikes >= requiredStrikes) {
-            autoCheckOut(d, timeoutMinutes);
+            autoCheckOut(d, timeoutMinutes, pos);
           }
         })
         .catch(function () {});
     });
   }
 
-  function autoCheckOut(d, timeoutMinutes) {
+  function autoCheckOut(d, timeoutMinutes, pos) {
     stopGeoWatch();
     var actor = getActor();
     fetch('/api/attendance/check-out', {
@@ -273,7 +274,12 @@
       body: JSON.stringify({
         email: actor.email,
         auto: 'geofence_departure',
-        outside_minutes: timeoutMinutes || 15
+        outside_minutes: timeoutMinutes || 15,
+        // where they were, so the employee, HR and the timeline can see why
+        distance: d && d.distance != null ? d.distance : undefined,
+        fence: d && d.fence ? d.fence : undefined,
+        latitude: pos ? pos.latitude : undefined,
+        longitude: pos ? pos.longitude : undefined
       })
     })
       .then(function (r) { return r.ok ? r.json().catch(function () { return null; }) : null; })
@@ -306,7 +312,10 @@
       '<div style="font-size:12px;opacity:.85;line-height:1.5;">' +
       String(body).replace(/</g, '&lt;') + '</div>';
     document.body.appendChild(el);
-    setTimeout(function () { if (el.parentNode) el.remove(); }, 6000);
+    // Long enough to read; click to dismiss. The bell keeps a copy.
+    el.style.cursor = 'pointer';
+    el.addEventListener('click', function () { el.remove(); });
+    setTimeout(function () { if (el.parentNode) el.remove(); }, 20000);
   }
 
   /* ── "why are you off-site?" prompt ───────────────────────────────────

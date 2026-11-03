@@ -194,8 +194,12 @@ class AutoCheckoutTests(TestCase):
         self.client = Client()
         self.email = 'auto@example.com'
         AppUser.objects.create(email=self.email, status='active', role='admin')
+        # Auto check-out is for leaving the OFFICE: the session must have
+        # started inside an office fence (off-site days are never auto-closed).
+        from api.models import GeoFence
+        GeoFence.objects.create(name='HQ', latitude=17.0, longitude=78.0, radius_meters=200)
         EmployeeAttendance.objects.create(
-            email=self.email, date=local_today(), check_in=datetime.now(),
+            email=self.email, date=local_today(), check_in=datetime.now(), geo_verified=True,
         )
 
     def test_an_auto_checkout_is_stamped_and_labelled(self):

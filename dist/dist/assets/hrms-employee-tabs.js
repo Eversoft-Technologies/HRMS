@@ -260,7 +260,7 @@
       var lat = parseFloat(p.latitude), lng = parseFloat(p.longitude);
       var link = (isFinite(lat) && isFinite(lng))
         ? '<a href="https://www.google.com/maps?q=' + lat + ',' + lng + '" target="_blank" rel="noopener">Map ↗</a>' : '';
-      return '<div class="het-log"><span class="het-lt">' + esc(p.time || '') + '</span><span class="het-le">' + esc(p.label || 'Location recorded') + '</span><span class="het-ll">' + link + '</span></div>';
+      return '<div class="het-log"><span class="het-lt">' + esc(p.time || '') + '</span><span class="het-le">' + esc(p.label || 'Location recorded') + (p.approximate && !/^Approximate/.test(p.label || '') ? ' <small title="Device location was not precise">(approximate)</small>' : '') + '</span><span class="het-ll">' + link + '</span></div>';
     }).join('') : empty('No location punches recorded on this day.');
     box.innerHTML = bar +
       '<div class="het-two">' +
