@@ -66,6 +66,7 @@
     // Show it on my own avatar at once. The next poll replaces this with the
     // server's version, which is what everybody else is seeing.
     if (st) PRESENCE[String(em).trim().toLowerCase()] = { label: st.label, color: st.color };
+    announce();
     fetch('/api/attendance/presence', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -73,6 +74,8 @@
     })
       .then(function () {
         window.dispatchEvent(new CustomEvent('hrmsAttendanceSynced', { detail: {} }));
+        // Everyone else learns it on their next poll (<= 20 s); refresh mine now.
+        refreshPresence(true);
       })
       .catch(function () {});
   }
@@ -279,7 +282,7 @@
   var PRESENCE = {};          // email -> { label, color }
   var presenceFetchedAt = 0;
   var presenceInFlight = false;
-  var PRESENCE_TTL = 45000;
+  var PRESENCE_TTL = 20000;
 
   /* The API answers with a label, not a key: In Office / Remote / In Break /
      Absent, or whatever presence the person picked (Busy, Travelling, …). */
@@ -287,6 +290,7 @@
     var t = String(label || '').toLowerCase().replace(/[\s._-]+/g, '');
     if (/inoffice|available|online|active/.test(t)) return '#22c55e';
     if (/remote|wfh|home/.test(t)) return '#4f8ef7';
+    if (/offline|absent|invisible/.test(t)) return '#9ca3af';
     if (/break|away|coffee/.test(t)) return '#f59e0b';
     if (/donotdisturb|dnd|busy/.test(t)) return '#ef4444';
     if (/meeting/.test(t)) return '#8b5cf6';
@@ -306,12 +310,16 @@
         (Array.isArray(rows) ? rows : []).forEach(function (r) {
           var em = String(r.email || '').trim().toLowerCase();
           if (!em) return;
-          map[em] = { label: r.status || 'Absent', color: colorForLabel(r.status), since: r.since || '' };
+          // The person's own status (Available, Busy, In Break, …); the
+          // location (In Office / Remote) is kept alongside for whoever wants it.
+          var lbl = r.presence || r.status || 'Offline';
+          map[em] = { label: lbl, color: colorForLabel(lbl), since: r.since || '', location: r.status || '' };
         });
         PRESENCE = map;
         presenceFetchedAt = Date.now();
         reconcileLocalStatus();
         paintTagged();
+        announce();
       })
       .catch(function () { /* offline: keep the last snapshot */ })
       .then(function () { presenceInFlight = false; });
@@ -327,11 +335,21 @@
    * instant I choose, and the next poll confirms or corrects it.
    *
    * The picker only speaks for me before the first poll answers. */
+  /* Tell chat & co. the snapshot changed so they repaint labels and dots. */
+  function announce() {
+    try { window.dispatchEvent(new CustomEvent('hrmsPresenceUpdated')); } catch (_) {}
+  }
+
   function presenceFor(email) {
     var em = String(email || '').trim().toLowerCase();
     if (!em) return null;
     var snap = PRESENCE[em];
     if (em === String(actorEmail()).trim().toLowerCase()) {
+      // Others see me as Offline while invisible; I see that I am Invisible.
+      if (isCheckedIn() && getStatusKey() === 'invisible') {
+        var inv = findStatus('invisible');
+        return { label: inv.label, color: inv.color };
+      }
       if (snap) return snap;
       var st = findStatus(getStatusKey()) || OFFLINE;
       return { label: st.label, color: st.color };
@@ -558,7 +576,8 @@
     refreshPresence(true);
     // Only while the tab is in front: a background tab polling every minute
     // for presence nobody is looking at is just load.
-    setInterval(function () { if (!document.hidden) refreshPresence(false); }, PRESENCE_TTL);
+    // Every 15 s while visible, so a colleague's new status shows within ~15 s.
+    setInterval(function () { if (!document.hidden) refreshPresence(true); }, 15000);
     document.addEventListener('visibilitychange', function () {
       if (!document.hidden) refreshPresence(true);
     });

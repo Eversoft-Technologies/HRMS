@@ -52,6 +52,59 @@ def allows(email, category):
         return True   # a preferences problem must never swallow notifications
 
 
+# Sounds & desktop pop-ups (played by dist/dist/assets/hrms-sounds.js). Stored
+# in the same per-user prefs JSON under SOUND_KEY so they follow the user to
+# every device; no extra table.
+SOUND_KEY = '_sound'
+# The five sounds offered for each kind (synthesised in hrms-sounds.js).
+NOTIFICATION_TONES = ('chime', 'bell', 'marimba', 'glass', 'alert')
+MESSAGE_TONES = ('pop', 'blip', 'bubble', 'drop', 'click')
+SOUND_DEFAULTS = {
+    'notificationSound': True,
+    'messageSound': True,
+    'notificationTone': 'chime',
+    'messageTone': 'pop',
+    'volume': 70,
+    'inAppPopups': True,      # pop-up cards inside HRMS while you are using it
+    'desktopPopups': False,   # OS pop-ups while HRMS is in the background
+    'muteInDnd': True,
+}
+TONE_CHOICES = {'notificationTone': NOTIFICATION_TONES, 'messageTone': MESSAGE_TONES}
+
+
+def sound_for(email):
+    row = NotificationPreference.objects.filter(pk=_norm(email)).first()
+    stored = (row.prefs or {}).get(SOUND_KEY) if row and isinstance(row.prefs, dict) else None
+    out = dict(SOUND_DEFAULTS)
+    if isinstance(stored, dict):
+        out.update({k: stored[k] for k in SOUND_DEFAULTS if k in stored})
+    return out
+
+
+def _clean_sound(incoming):
+    """(clean dict, error message)."""
+    if not isinstance(incoming, dict) or not incoming:
+        return None, 'sound must be an object of settings.'
+    unknown = sorted(k for k in incoming if k not in SOUND_DEFAULTS)
+    if unknown:
+        return None, 'Unknown sound setting: ' + ', '.join(unknown)
+    clean = {}
+    for k, v in incoming.items():
+        if k == 'volume':
+            if isinstance(v, bool) or not isinstance(v, (int, float)) or not 0 <= v <= 100:
+                return None, 'volume must be a number from 0 to 100.'
+            clean[k] = int(round(v))
+        elif k in TONE_CHOICES:
+            if v not in TONE_CHOICES[k]:
+                return None, f'{k} must be one of: ' + ', '.join(TONE_CHOICES[k])
+            clean[k] = v
+        else:
+            if not isinstance(v, bool):
+                return None, f'{k} must be true or false.'
+            clean[k] = v
+    return clean, None
+
+
 def _payload(email):
     p = prefs_for(email)
     return {
@@ -60,29 +113,46 @@ def _payload(email):
             'key': k, 'label': label, 'channels': channels, 'default': default,
             'active': active, 'enabled': p[k],
         } for k, label, channels, default, active in CATEGORIES],
+        'sound': sound_for(email),
     }
 
 
 @api_view(['GET', 'PUT'])
 @require_perm({'GET': 'settings.view', 'PUT': 'settings.manage'}, or_self=True)
 def notification_preferences(request, email):
-    """GET: the user's preferences. PUT {prefs: {key: bool}}: update some or all.
-    Everyone manages their own; changing someone else's needs settings.manage."""
+    """GET: the user's preferences. PUT {prefs: {key: bool}} and/or
+    {sound: {...}}: update some or all. Everyone manages their own; changing
+    someone else's needs settings.manage."""
     email = _norm(email)
     if not email:
         return Response({'message': 'email is required'}, status=400)
     if request.method == 'PUT':
-        incoming = request.data.get('prefs') if hasattr(request.data, 'get') else None
-        if not isinstance(incoming, dict) or not incoming:
-            return Response({'message': 'prefs must be an object of {category: true/false}'}, status=400)
-        unknown = [k for k in incoming if k not in KEYS]
-        if unknown:
-            return Response({'message': 'Unknown notification category: ' + ', '.join(sorted(unknown))}, status=400)
-        if any(not isinstance(v, bool) for v in incoming.values()):
-            return Response({'message': 'Each preference must be true or false.'}, status=400)
+        data = request.data if hasattr(request.data, 'get') else {}
+        incoming = data.get('prefs')
+        sound_in = data.get('sound')
+        if incoming is None and sound_in is None:
+            return Response({'message': 'Send prefs ({category: true/false}) and/or sound settings.'}, status=400)
+        if incoming is not None:
+            if not isinstance(incoming, dict) or not incoming:
+                return Response({'message': 'prefs must be an object of {category: true/false}'}, status=400)
+            unknown = [k for k in incoming if k not in KEYS]
+            if unknown:
+                return Response({'message': 'Unknown notification category: ' + ', '.join(sorted(unknown))}, status=400)
+            if any(not isinstance(v, bool) for v in incoming.values()):
+                return Response({'message': 'Each preference must be true or false.'}, status=400)
+        sound_clean = None
+        if sound_in is not None:
+            sound_clean, problem = _clean_sound(sound_in)
+            if problem:
+                return Response({'message': problem}, status=400)
         row, _ = NotificationPreference.objects.get_or_create(email=email, defaults={'prefs': {}})
         prefs = dict(row.prefs or {})
-        prefs.update(incoming)
+        if incoming:
+            prefs.update(incoming)
+        if sound_clean:
+            snd = dict(prefs.get(SOUND_KEY) or {})
+            snd.update(sound_clean)
+            prefs[SOUND_KEY] = snd
         row.prefs = prefs
         row.save()
     return Response(_payload(email))

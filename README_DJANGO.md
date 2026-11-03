@@ -83,7 +83,9 @@ project-root `.env.local`.
 | `DB_HOST/PORT/USER/PASSWORD/NAME` | MySQL connection (same as the old Node `.env.local`). |
 | `REACT_BUILD_DIR` | Optional. Absolute path to the Vite `dist/`. Defaults to `../dist`. |
 | `ANTHROPIC_API_KEY` | AI provider key, server-side only. Used when no key is saved in Settings › AI Settings. |
-| `HRMS_SECRETS_KEY` | Fernet key that encrypts secrets saved from the UI (the AI key). Required to save/rotate the AI key from the UI. Keep it outside the database and its backups. |
+| `HRMS_SECRETS_KEY` | Fernet key that encrypts secrets saved from the UI (the AI key, SMTP passwords). **Optional:** when it is not set, the server uses the key file below and creates it the first time something is saved. Set it only if you want to manage the key yourself (it always wins over the file). |
+| `HRMS_SECRETS_FILE` | Optional. Where the automatic key file lives. Default `~/.hrms/secrets.key` (the server account's home: outside the code, the deploy release folders and the database). Created with owner-only permissions. **Back it up** — without it, saved secrets must be entered again. |
+| `HRMS_SECRETS_AUTOGEN` | Optional. `0` stops the server from creating the key file (then saving secrets needs `HRMS_SECRETS_KEY` or an existing file). |
 | `VITE_ANTHROPIC_API_KEY` | **Deprecated — do not use.** Still read as a last-resort fallback so old deployments keep working, but `VITE_` values can be compiled into browser code. Move the value to `ANTHROPIC_API_KEY` and delete this variable. |
 
 ## Passwords and stored credentials
@@ -154,7 +156,8 @@ off. Every save, rotation, test and removal is recorded in `ai_settings_audit`
 * *`HRMS_SECRETS_KEY` lost or changed:* the saved key can no longer be
   decrypted. AI falls back to the environment key and the page says so. Set a
   new `HRMS_SECRETS_KEY` and save the AI key again.
-* *Generate `HRMS_SECRETS_KEY`:*
+* *Moving to another server:* copy `~/.hrms/secrets.key` (or the `HRMS_SECRETS_KEY` value) with the database, or the saved secrets cannot be read there.
+* *Generate `HRMS_SECRETS_KEY` (only if you want to set it yourself):*
   `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`
 
 ## Production deployment

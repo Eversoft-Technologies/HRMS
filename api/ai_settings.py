@@ -174,6 +174,8 @@ def metadata():
         'environmentKeyPresent': bool((os.environ.get('ANTHROPIC_API_KEY') or '').strip()),
         'legacyViteKeyPresent': bool((os.environ.get('VITE_ANTHROPIC_API_KEY') or '').strip()),
         'encryptionReady': encryption_ready(),
+        # Where the encryption key comes from (never the key itself).
+        'encryptionKeySource': secret_box.key_source(),
         'fallbackPolicy': ('Removing the saved key makes AI use ANTHROPIC_API_KEY from the server '
                            'environment if it is set; otherwise AI features are switched off.'),
     }
@@ -274,9 +276,10 @@ def ai_settings_key(request):
 
     # PUT: validate first, then save (or rotate) — never activate a broken key.
     if not encryption_ready():
-        return _msg(f'Saving a key from the UI is disabled because {SECRETS_ENV} is not set on the '
-                    f'server. Set it (see README_DJANGO.md), or put the key in ANTHROPIC_API_KEY instead.',
-                    503, 'ENCRYPTION_NOT_CONFIGURED')
+        return _msg(f'Saving a key from the UI is disabled: the server has no usable encryption key '
+                    f'({SECRETS_ENV} is not set or not valid, and creating {secret_box.key_file_path()} '
+                    f'is switched off or failed). See README_DJANGO.md, or put the key in '
+                    f'ANTHROPIC_API_KEY instead.', 503, 'ENCRYPTION_NOT_CONFIGURED')
     key, problem = _proposed_key(request)
     if problem:
         return _msg(problem, 400)
