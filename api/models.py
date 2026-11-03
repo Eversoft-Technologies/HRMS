@@ -232,10 +232,32 @@ class InterviewRecording(models.Model):
     executive_summary = models.TextField(null=True, blank=True)
     round2_questions = models.JSONField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    # Cheap flags for the list view. True when a playable video (disk file,
+    # LONGBLOB, or legacy base64) / a legacy base64 recording exists. save()
+    # and the video upload paths keep them current, so listing recordings never
+    # touches the blob columns: evaluating ``video_buffer > ''`` per row made
+    # MySQL read every stored video, which is what made the Recordings tab
+    # crawl once the table held gigabytes of legacy recordings.
+    has_video = models.BooleanField(default=False, db_index=True)
+    has_recording = models.BooleanField(default=False)
 
     class Meta:
         db_table = 'interview_recordings'
         ordering = ['id']
+
+    def save(self, *args, **kwargs):
+        deferred = self.get_deferred_fields()
+        if 'recording_data' not in deferred:
+            self.has_recording = bool(self.recording_data)
+        if 'video_buffer' not in deferred:
+            has_buffer = bool(self.video_buffer)
+        else:
+            has_buffer = self.has_video          # blob not loaded: trust the stored flag
+        self.has_video = bool(self.video_file) or self.has_recording or has_buffer
+        update_fields = kwargs.get('update_fields')
+        if update_fields is not None:
+            kwargs['update_fields'] = list(update_fields) + ['has_video', 'has_recording']
+        super().save(*args, **kwargs)
 
 
 class QuestionSet(models.Model):
@@ -717,6 +739,8 @@ class BenchSalesProfile(models.Model):
     experience = models.CharField(max_length=60, default='', blank=True)
     email = models.CharField(max_length=255, default='', blank=True)
     contact_no = models.CharField(max_length=60, default='', blank=True)
+    date_of_birth = models.DateField(null=True, blank=True)
+    passport_no = models.CharField(max_length=40, default='', blank=True)
     work_authorization = models.CharField(max_length=40, default='', blank=True)
 
     resume_file_name = models.CharField(max_length=255, default='', blank=True)
@@ -746,6 +770,9 @@ class BenchSalesCertificate(models.Model):
     base64-in-row storage as BenchSalesProfile's resume/DL/I-94 fields.
     """
     profile = models.ForeignKey(BenchSalesProfile, related_name='certificate_files', on_delete=models.CASCADE)
+    # 'certificate' = the Certificates upload, 'certification' = the files attached
+    # to the Certifications field. Each kind has its own per-profile limit.
+    kind = models.CharField(max_length=20, default='certificate', db_index=True)
     file_name = models.CharField(max_length=255, default='', blank=True)
     file_mime = models.CharField(max_length=100, default='', blank=True)
     file_data = models.TextField(default='', blank=True)  # base64
