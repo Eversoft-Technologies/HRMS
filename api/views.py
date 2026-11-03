@@ -6124,20 +6124,32 @@ def _store_bench_sales_file_data(pk, files):
         BenchSalesProfile.objects.filter(pk=pk).update(**{col: data})
 
 
-def _is_pdf(mime, file_name):
+BENCH_SALES_DOC_MIMES = {
+    'application/pdf',
+    'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+}
+BENCH_SALES_DOC_EXTS = ('.pdf', '.doc', '.docx')
+BENCH_SALES_DOC_ERROR = ' is not a PDF or Word document — only PDF, DOC and DOCX uploads are allowed.'
+
+
+def _is_document(mime, file_name):
+    """PDF or Word (DOC/DOCX) — the formats a vendor accepts for a resume,
+    DL, I-94 or certificate. The browser's MIME for .doc/.docx is unreliable,
+    so the extension is checked too."""
     mime = (mime or '').lower()
     file_name = (file_name or '').lower()
-    return mime == 'application/pdf' or file_name.endswith('.pdf')
+    return mime in BENCH_SALES_DOC_MIMES or file_name.endswith(BENCH_SALES_DOC_EXTS)
 
 
 def _validate_bench_sales_files(body):
-    """Rejects non-PDF uploads and files over MAX_BENCH_SALES_FILE_MB for
-    resume/DL/I-94/certificates. Returns an error string, or None if every
-    provided file is an acceptable PDF."""
+    """Rejects uploads that are not PDF/DOC/DOCX and files over
+    MAX_BENCH_SALES_FILE_MB for resume/DL/I-94/certificates. Returns an error
+    string, or None if every provided file is acceptable."""
     for name_key, mime_key in _BENCH_SALES_SINGLE_FILE_FIELDS.values():
         file_name = body.get(name_key)
-        if file_name and not _is_pdf(body.get(mime_key), file_name):
-            return f'{file_name} is not a PDF — only PDF uploads are allowed.'
+        if file_name and not _is_document(body.get(mime_key), file_name):
+            return file_name + BENCH_SALES_DOC_ERROR
         data_key = name_key[:-len('FileName')] + 'FileData'
         size_error = _bench_sales_file_too_large(file_name or data_key, body.get(data_key))
         if size_error:
@@ -6147,8 +6159,8 @@ def _validate_bench_sales_files(body):
         return 'certificates must be a list of files'
     for c in certs:
         file_name = (c or {}).get('fileName')
-        if file_name and not _is_pdf((c or {}).get('fileMime'), file_name):
-            return f'{file_name} is not a PDF — only PDF uploads are allowed.'
+        if file_name and not _is_document((c or {}).get('fileMime'), file_name):
+            return file_name + BENCH_SALES_DOC_ERROR
         size_error = _bench_sales_file_too_large(file_name or 'certificate', (c or {}).get('fileData'))
         if size_error:
             return size_error
@@ -6164,7 +6176,8 @@ def bench_sales_profiles(request):
         if search:
             qs = qs.filter(
                 Q(name__icontains=search) | Q(tech_stack__icontains=search) |
-                Q(email__icontains=search) | Q(contact_no__icontains=search)
+                Q(email__icontains=search) | Q(contact_no__icontains=search) |
+                Q(passport_no__icontains=search)
             )
         return Response(BenchSalesProfileSerializer(qs, many=True).data)
 
@@ -6211,7 +6224,7 @@ def bench_sales_profile_detail(request, pk):
 
     body = dict(request.data or {})
     new_certs = body.pop('certificates', None) or []
-    existing_count = obj.certificate_files.count()
+    existing_count = obj.certificate_files.filter(kind='certificate').count()
     if existing_count + len(new_certs) > MAX_CERTIFICATES_PER_PROFILE:
         return err(f'You can upload up to {MAX_CERTIFICATES_PER_PROFILE} certificates per profile.')
     file_error = _validate_bench_sales_files(dict(body, certificates=new_certs))
@@ -6266,19 +6279,20 @@ def bench_sales_profile_upload(request, pk):
     upload = request.FILES.get('file')
     if not upload:
         return err('file is required')
-    if not _is_pdf(upload.content_type, upload.name):
-        return err(f'{upload.name} is not a PDF — only PDF uploads are allowed.')
+    if not _is_document(upload.content_type, upload.name):
+        return err(upload.name + BENCH_SALES_DOC_ERROR)
     if upload.size > MAX_BENCH_SALES_FILE_BYTES:
         return err(f'{upload.name} is larger than {MAX_BENCH_SALES_FILE_MB} MB — '
                    f'each file must be {MAX_BENCH_SALES_FILE_MB} MB or smaller.')
-    mime = upload.content_type or 'application/pdf'
+    mime = upload.content_type or mimetypes.guess_type(upload.name)[0] or 'application/octet-stream'
     data = base64.b64encode(upload.read()).decode('ascii')
 
-    if field == 'certificate':
-        if obj.certificate_files.count() >= MAX_CERTIFICATES_PER_PROFILE:
-            return err(f'You can upload up to {MAX_CERTIFICATES_PER_PROFILE} certificates per profile.')
+    if field in ('certificate', 'certification'):
+        noun = 'certificates' if field == 'certificate' else 'certification files'
+        if obj.certificate_files.filter(kind=field).count() >= MAX_CERTIFICATES_PER_PROFILE:
+            return err(f'You can upload up to {MAX_CERTIFICATES_PER_PROFILE} {noun} per profile.')
         BenchSalesCertificate.objects.create(
-            profile=obj, file_name=upload.name, file_mime=mime, file_data=data,
+            profile=obj, kind=field, file_name=upload.name, file_mime=mime, file_data=data,
         )
     elif field in _BENCH_SALES_UPLOAD_COLS:
         name_col, mime_col, data_col = _BENCH_SALES_UPLOAD_COLS[field]
@@ -6287,7 +6301,7 @@ def bench_sales_profile_upload(request, pk):
         BenchSalesProfile.objects.filter(pk=pk).update(**{name_col: upload.name, mime_col: mime})
         _store_bench_sales_file_data(pk, {data_col: data})
     else:
-        return err('field must be one of: resume, dl-state-id, i94, certificate')
+        return err('field must be one of: resume, dl-state-id, i94, certificate, certification')
 
     inst = _bench_sales_profile_qs().get(pk=pk)
     return Response(BenchSalesProfileSerializer(inst).data)
@@ -6311,11 +6325,13 @@ _BENCH_SALES_FILE_FIELDS = {
 }
 
 
-@api_view(['GET'])
-@require_perm('recruitment.view')
+@api_view(['GET', 'DELETE'])
+@require_perm({'GET': 'recruitment.view', 'DELETE': 'recruitment.edit'})
 def bench_sales_profile_file(request, pk, field):
     """Serve a stored Bench Sales document (resume / DL / State ID / I-94) as
     a download/inline view — same base64-in-row approach as resume_score_file.
+    DELETE clears that one document (the form's "Remove" next to a saved file),
+    leaving the rest of the profile untouched.
     """
     import base64
     from django.http import HttpResponse
@@ -6323,6 +6339,11 @@ def bench_sales_profile_file(request, pk, field):
     cols = _BENCH_SALES_FILE_FIELDS.get(field)
     if not cols:
         return HttpResponse('Unknown file field', status=404)
+    if request.method == 'DELETE':
+        if not BenchSalesProfile.objects.filter(pk=pk).exists():
+            return err('Profile not found', 404)
+        BenchSalesProfile.objects.filter(pk=pk).update(**{c: '' for c in cols})
+        return Response(BenchSalesProfileSerializer(_bench_sales_profile_qs().get(pk=pk)).data)
     # only() the requested document: never drag the other two blobs along.
     obj = BenchSalesProfile.objects.only(*cols).filter(pk=pk).first()
     if not obj:
