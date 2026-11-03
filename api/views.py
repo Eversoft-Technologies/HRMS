@@ -25,6 +25,7 @@ from pathlib import Path
 from urllib.parse import urlencode
 
 from django.conf import settings
+from django.contrib.auth.hashers import make_password
 from django.db import transaction
 from django.db.models import (
     BinaryField, BooleanField, Case, CharField, Count, ExpressionWrapper, F, Func,
@@ -316,7 +317,8 @@ def notify_approvers(perm_code, title, message, link='', category=None):
 def app_user_dict(o):
     return {
         'id': o.id, 'name': o.full_name, 'email': o.email,
-        'password': o.password, 'initials': o.initials,
+        'password': '',   # never expose the stored hash to the client
+        'initials': o.initials,
         'role': o.role, 'status': o.status,
         'authProvider': o.auth_provider,
         'profilePic': o.profile_pic or '',
@@ -1969,13 +1971,29 @@ def user_email_config(request, email):
         return err('email is required')
     body = request.data
     social = _merge_social(email, body.get('social', {}))
+    # The SMTP password is stored encrypted and never sent back to the browser,
+    # so the form submits it blank unless the user typed a new one: blank keeps
+    # the saved password, ``clearSmtpPassword: true`` removes it.
+    from .secret_box import SecretsNotConfigured, encrypt
+    existing = UserEmailConfig.objects.filter(user_email=email).first()
+    new_pw = str(body.get('smtpPassword') or '')
+    if body.get('clearSmtpPassword'):
+        stored_pw = ''
+    elif new_pw:
+        try:
+            stored_pw = encrypt(new_pw)
+        except SecretsNotConfigured:
+            return err('The SMTP password cannot be stored securely because HRMS_SECRETS_KEY is not '
+                       'set on the server. Ask an administrator to set it (see README_DJANGO.md).', 503)
+    else:
+        stored_pw = existing.smtp_password if existing else ''
     obj, _ = UserEmailConfig.objects.update_or_create(
         user_email=email,
         defaults={
             'smtp_host': body.get('smtpHost', ''),
             'smtp_port': str(body.get('smtpPort', '') or ''),
             'smtp_user': body.get('smtpUser', ''),
-            'smtp_password': body.get('smtpPassword', ''),
+            'smtp_password': stored_pw,
             'smtp_secure': bool(body.get('smtpSecure', False)),
             'from_name': body.get('fromName', ''),
             'from_email': body.get('fromEmail', ''),
@@ -2460,7 +2478,7 @@ def user_detail(request, email):
             obj.full_name = str(body['name']).strip()
             obj.initials = make_initials(obj.full_name)
         if body.get('password'):
-            obj.password = body['password']
+            obj.password = make_password(body['password'])
         if body.get('role'):
             obj.role = body['role']
         if body.get('status'):
@@ -7338,7 +7356,7 @@ def rbac_users(request):
     u = AppUser.objects.create(
         full_name=name,
         email=email,
-        password=password,
+        password=make_password(password),
         initials=make_initials(name),
         role=_legacy_from_role(role.name),
         role_ref=role,
@@ -7369,7 +7387,7 @@ def rbac_user_detail(request, pk):
         u.full_name = str(body['name']).strip()
         u.initials = make_initials(u.full_name)
     if body.get('password'):
-        u.password = body['password']
+        u.password = make_password(body['password'])
     if body.get('status'):
         u.status = body['status']
     u.save()
@@ -8485,6 +8503,11 @@ def _parse_dt(value):
     return datetime.fromisoformat(str(value).replace("Z", ""))
 
 
+from .chat_extras import (attachment_url as _chat_attachment_url, chat_guard,  # noqa: E402
+                          notify_mentions as _chat_notify_mentions, reactions_for as _chat_reactions_for,
+                          unread_counts as _chat_unread_counts)
+
+
 def _broadcast_message(room_id, payload):
     """Best-effort push of a saved message to the room's WebSocket group."""
     try:
@@ -8714,11 +8737,10 @@ def _rooms_payload(rooms, viewer):
         m.room_id: m for m in ChatMessage.objects
         .filter(id__in=[i for i in last_ids.values() if i]).only(*_LAST_MSG_FIELDS)
     }
-    unread_by_room = dict(
-        ChatMessage.objects.filter(room_id__in=ids, is_read=False)
-        .exclude(sender_email=viewer)
-        .values("room_id").annotate(n=Count("id")).values_list("room_id", "n")
-    )
+    # Per member: messages from others newer than *this viewer's* last read.
+    # (The shared ChatMessage.is_read flag cleared everyone's badge as soon as
+    # one member of a channel opened it.)
+    unread_by_room = _chat_unread_counts(viewer, ids)
 
     out = []
     for room in rooms:
@@ -8761,6 +8783,7 @@ def _rooms_payload(rooms, viewer):
 
 
 @api_view(["GET", "POST"])
+@chat_guard(membership=False)
 def chat_rooms(request):
     if request.method == "POST":
         body = request.data or {}
@@ -8817,6 +8840,7 @@ def chat_rooms(request):
 
 
 @api_view(["GET", "POST"])
+@chat_guard()
 def chat_messages(request, room_id):
     room = ChatRoom.objects.filter(id=room_id).first()
     if not room:
@@ -8867,6 +8891,15 @@ def chat_messages(request, room_id):
                 if others:
                     seen = all(r is not None and r >= msg.created_at for r in others)
             data[i]["seen"] = seen
+        ids = [msg.id for msg in msgs]
+        reactions = _chat_reactions_for(ids)
+        reply_counts = dict(
+            ChatMessage.objects.filter(room_id=room_id, reply_to_id__in=ids, is_deleted=False)
+            .values("reply_to_id").annotate(n=Count("id")).values_list("reply_to_id", "n")
+        )
+        for i, msg in enumerate(msgs):
+            data[i]["reactions"] = reactions.get(msg.id, [])
+            data[i]["reply_count"] = reply_counts.get(msg.id, 0)
         return Response(data)
 
     # POST — persist + broadcast (REST fallback for the WebSocket). Supports an
@@ -8935,15 +8968,21 @@ def chat_messages(request, room_id):
         "created_at": _fmt_dt(now),
         "attachment_name": att_name,
         "attachment_type": att_type,
-        "attachment_url": (f"/api/chat/attachment/{msg.id}" if att_path else ""),
+        "attachment_url": (_chat_attachment_url(msg.id) if att_path else ""),
         "reply_to_id": reply_to_id,
         "reply_to_sender": reply_to_sender,
         "reply_to_text": reply_to_text,
     })
+    mentions = body.get("mentions") if isinstance(body.get("mentions"), list) else []
+    try:
+        _chat_notify_mentions(room, msg, mentions)
+    except Exception:
+        logger.exception("chat mention notifications failed")
     return Response(ChatMessageSerializer(msg).data, status=201)
 
 
 @api_view(["PUT", "DELETE"])
+@chat_guard()
 def chat_message_detail(request, msg_id):
     """Edit (PUT) or soft-delete (DELETE) a single message. Sender only."""
     msg = ChatMessage.objects.filter(id=msg_id).first()
@@ -9026,6 +9065,7 @@ def chat_message_detail(request, msg_id):
 
 
 @api_view(["GET"])
+@chat_guard(allow_signed_attachment=True)
 def chat_attachment(request, msg_id):
     """Return a message's file attachment with the right content type."""
     import base64
@@ -9066,6 +9106,7 @@ def chat_attachment(request, msg_id):
 
 
 @api_view(["POST"])
+@chat_guard()
 def chat_mark_read(request, room_id):
     viewer = norm_email(
         (request.data or {}).get("email") or request.headers.get("X-Actor-Email") or ""
@@ -9074,6 +9115,7 @@ def chat_mark_read(request, room_id):
         ChatMessage.objects.filter(room_id=room_id, is_read=False).exclude(
             sender_email=viewer
         ).update(is_read=True)
+        ChatMember.objects.filter(room_id=room_id, employee_email=viewer).update(last_read_at=_chat_now())
     return Response({"ok": True})
 
 
@@ -9111,6 +9153,7 @@ def _actor_of(request):
 
 
 @api_view(["GET", "POST"])
+@chat_guard()
 def chat_room_members(request, room_id):
     room = ChatRoom.objects.filter(id=room_id).first()
     if not room:
@@ -9144,6 +9187,7 @@ def chat_room_members(request, room_id):
 
 
 @api_view(["PUT", "DELETE"])
+@chat_guard()
 def chat_room_member_detail(request, room_id, email):
     room = ChatRoom.objects.filter(id=room_id).first()
     if not room:
@@ -9187,6 +9231,7 @@ def chat_room_member_detail(request, room_id, email):
 
 
 @api_view(["GET"])
+@chat_guard(membership=False)
 def chat_contacts(request):
     """The company directory a user can start a chat with.
 
@@ -9271,6 +9316,7 @@ def chat_contacts(request):
 
 
 @api_view(["GET", "POST"])
+@chat_guard(room_param="room_id")
 def chat_meetings(request):
     if request.method == "GET":
         room_id = request.GET.get("room_id")
@@ -9360,6 +9406,7 @@ def chat_meetings(request):
 
 
 @api_view(["DELETE"])
+@chat_guard(membership=False)
 def chat_meeting_detail(request, meeting_id):
     """Cancel a scheduled meeting (organiser or channel admin)."""
     mt = ChatMeeting.objects.filter(id=meeting_id).first()
@@ -9375,7 +9422,8 @@ def chat_meeting_detail(request, meeting_id):
     return Response({"ok": True, "id": meeting_id})
 
 
-@api_view(["DELETE"])
+@api_view(["PATCH", "DELETE"])
+@chat_guard()
 def chat_room_detail(request, room_id):
     """Delete a whole conversation.
 
@@ -9387,6 +9435,27 @@ def chat_room_detail(request, room_id):
         return err("Room not found", 404)
     actor = _actor_of(request)
     is_member = ChatMember.objects.filter(room_id=room_id, employee_email=actor).exists()
+
+    if request.method == "PATCH":
+        # Channel settings: rename and public/private. Channel admins only.
+        if not room.is_group:
+            return err("Only channels have settings", 400)
+        if not _is_room_admin(room_id, actor):
+            return err("Only a channel admin can change channel settings", 403)
+        body = request.data or {}
+        fields = []
+        if "name" in body:
+            name = str(body.get("name") or "").strip()
+            if not name or len(name) > 80:
+                return err("Channel name must be 1–80 characters")
+            room.name = name
+            fields.append("name")
+        if "is_private" in body:
+            room.is_private = bool(body.get("is_private"))
+            fields.append("is_private")
+        if fields:
+            room.save(update_fields=fields)
+        return Response(_room_payload(room, actor))
 
     if room.is_group:
         if not _is_room_admin(room_id, actor):
@@ -9430,6 +9499,7 @@ def _expire_stale_pins(room_id):
 
 
 @api_view(["POST"])
+@chat_guard()
 def chat_message_pin(request, msg_id):
     """Pin or unpin a message.
 
@@ -9501,6 +9571,7 @@ CHAT_TRANSLATE_LANGS = {
 
 
 @api_view(["POST"])
+@chat_guard(membership=False)
 def chat_translate(request):
     """Translate the composer's text into the requested language.
 

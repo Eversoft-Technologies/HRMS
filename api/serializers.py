@@ -745,12 +745,14 @@ class AppUserSerializer(serializers.ModelSerializer):
 
     def to_representation(self, instance):
         # Keys match what the React app (services/usersApi.js + AuthContext) reads.
+        # Password is never returned to the client — hashed values are meaningless
+        # to the UI and exposing any form of the credential is a security risk.
         return {
             'id': instance.id,
             'employeeId': instance.employee_id or '',
             'name': instance.full_name,
             'email': instance.email,
-            'password': instance.password,
+            'password': '',   # intentionally blank — never expose the stored hash
             'initials': instance.initials,
             'role': instance.role,
             'status': instance.status,
@@ -760,8 +762,13 @@ class AppUserSerializer(serializers.ModelSerializer):
         }
 
     def create(self, validated_data):
+        from django.contrib.auth.hashers import make_password as _make_password
         if not validated_data.get('initials'):
             validated_data['initials'] = make_initials(validated_data.get('full_name'))
+        # Always store a proper hash — never save a raw password.
+        raw = validated_data.get('password') or ''
+        if raw and not raw.startswith(('pbkdf2_', 'argon2$', 'bcrypt$')):
+            validated_data['password'] = _make_password(raw)
         return super().create(validated_data)
 
 
@@ -847,7 +854,10 @@ class UserEmailConfigSerializer(serializers.ModelSerializer):
             'smtpHost': instance.smtp_host or '',
             'smtpPort': instance.smtp_port or '',
             'smtpUser': instance.smtp_user or '',
-            'smtpPassword': instance.smtp_password or '',
+            # Never sent to the browser. The form leaves the field blank and
+            # a blank value on save keeps the stored (encrypted) password.
+            'smtpPassword': '',
+            'smtpPasswordSet': bool(instance.smtp_password),
             'smtpSecure': bool(instance.smtp_secure),
             'fromName': instance.from_name or '',
             'fromEmail': instance.from_email or '',
@@ -2361,8 +2371,9 @@ class ChatMessageSerializer(serializers.ModelSerializer):
         # message list. Empty when deleted or when there's no attachment.
         if getattr(obj, "is_deleted", False):
             return ""
+        from .chat_extras import attachment_url
         if getattr(obj, "attachment_path", None):
-            return f"/api/chat/attachment/{obj.id}"
+            return attachment_url(obj.id)
         # The message list defers the attachment_data blob and annotates
         # has_attachment_blob instead; touching obj.attachment_data there would
         # load the blob back, one query per message.
@@ -2370,7 +2381,7 @@ class ChatMessageSerializer(serializers.ModelSerializer):
         if has_blob is None:
             has_blob = bool(obj.attachment_data)
         if has_blob:
-            return f"/api/chat/attachment/{obj.id}"
+            return attachment_url(obj.id)
         return ""
 
 

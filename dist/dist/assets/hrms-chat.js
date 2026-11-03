@@ -58,6 +58,15 @@
     dictBase: "",
     msgSearch: { q: "", matches: [], idx: -1 },
     replyingTo: null,
+    unreadOnly: false,   // sidebar "Unread" filter
+    threads: [],         // Threads tab (GET /api/chat/threads)
+    threadsLoaded: false,
+    myPins: [],
+    myPinsLoaded: false,
+    mentionPick: null,   // @mention popover: {start, items, idx}
+    mentions: {},        // name -> email picked in the composer
+    pendingOpen: null,   // {thread|msg} to open after the room's messages load
+    deepLinked: false,
     pendingFile: null, // { file, dataUrl } staged in the composer, sent on Send
     toolsOpen: false,  // composer "^" tools menu open?
     camStream: null,   // active getUserMedia stream while the camera is open
@@ -230,6 +239,11 @@
 
   // ───────────────────────────────────────────── icons
   var ICON = {
+    navPin: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3h6l-1 6 4 4H6l4-4-1-6z"/><line x1="12" y1="13" x2="12" y2="21"/></svg>',
+    navChat: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v12H8l-4 4z"/><line x1="8" y1="9" x2="16" y2="9"/><line x1="8" y1="12" x2="13" y2="12"/></svg>',
+    navHash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><rect x="3.5" y="3.5" width="17" height="17" rx="3"/><line x1="10" y1="7" x2="9" y2="17"/><line x1="15" y1="7" x2="14" y2="17"/><line x1="7" y1="10" x2="17" y2="10"/><line x1="7" y1="14" x2="17" y2="14"/></svg>',
+    navThread: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v11h-9l-4 4v-4H4z"/><line x1="8" y1="8.5" x2="16" y2="8.5"/><line x1="8" y1="11.5" x2="16" y2="11.5"/></svg>',
+    navPeople: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.6-3.6 3.3-5.5 6.5-5.5s5.9 1.9 6.5 5.5"/><circle cx="17" cy="9" r="2.6"/><path d="M16.5 14.6c2.6.2 4.4 1.9 5 4.9"/></svg>',
     chat: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/></svg>',
     search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>',
     send: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>',
@@ -348,6 +362,46 @@
       "#" + ROOT_ID + " .hcx-tab{flex:1;padding:8px;border:none;background:transparent;color:var(--hcx-muted);font-family:inherit;font-size:13px;font-weight:600;border-radius:9px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;}",
       "#" + ROOT_ID + " .hcx-tab svg{width:15px;height:15px;}",
       "#" + ROOT_ID + " .hcx-tab.on{background:var(--hcx-primary);color:#fff;}",
+      "#" + ROOT_ID + " .hcx-bnav{display:flex;border-top:1px solid var(--hcx-border);background:var(--hcx-surface);padding:4px 4px 6px;flex-shrink:0;}",
+      "#" + ROOT_ID + " .hcx-bnav .hcx-tab{flex:1;flex-direction:column;gap:3px;padding:7px 2px 5px;border-radius:8px;font-size:11px;font-weight:500;color:var(--hcx-muted);background:transparent;position:relative;min-width:0;}",
+      "#" + ROOT_ID + " .hcx-bnav .hcx-tab svg{width:20px;height:20px;}",
+      "#" + ROOT_ID + " .hcx-bnav .hcx-tab:hover{background:var(--hcx-hover);color:var(--hcx-text,inherit);}",
+      "#" + ROOT_ID + " .hcx-bnav .hcx-tab.on{background:rgba(37,99,235,.12);color:var(--hcx-primary);font-weight:600;}",
+      "#" + ROOT_ID + " .hcx-bnav .hcx-tab .ic{position:relative;display:inline-flex;}",
+      "#" + ROOT_ID + " .hcx-bnav .hcx-tab .dot{position:absolute;top:-3px;right:-6px;min-width:9px;height:9px;padding:0 3px;border-radius:99px;background:#ef4444;border:2px solid var(--hcx-surface);box-sizing:content-box;color:#fff;font-size:9px;line-height:9px;font-weight:700;text-align:center;}",
+      "#" + ROOT_ID + " .hcx-bnav .hcx-tab .lb{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;}",
+      "#" + ROOT_ID + " .hcx-filters{display:flex;align-items:center;gap:6px;padding:0 14px 8px;}",
+      "#" + ROOT_ID + " .hcx-chip{border:1px solid var(--hcx-line,#e2e8f0);background:transparent;color:var(--hcx-muted);border-radius:99px;padding:3px 10px;font:600 11.5px inherit;font-family:inherit;cursor:pointer;}",
+      "#" + ROOT_ID + " .hcx-chip.on{background:var(--hcx-primary);border-color:var(--hcx-primary);color:#fff;}",
+      "#" + ROOT_ID + " .hcx-chip.ghost{margin-left:auto;}",
+      "#" + ROOT_ID + " .hcx-trow{display:block;padding:10px 14px;border-bottom:1px solid var(--hcx-line,#eef2f7);cursor:pointer;}",
+      "#" + ROOT_ID + " .hcx-trow:hover{background:var(--hcx-hover,rgba(37,99,235,.06));}",
+      "#" + ROOT_ID + " .hcx-trow .room{font-size:11px;font-weight:700;color:var(--hcx-primary);}",
+      "#" + ROOT_ID + " .hcx-trow .txt{font-size:12.5px;margin:2px 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}",
+      "#" + ROOT_ID + " .hcx-trow .meta{font-size:11px;color:var(--hcx-muted);}",
+      "#" + ROOT_ID + " .hcx-dmbtn{border:1px solid var(--hcx-primary);color:var(--hcx-primary);background:transparent;border-radius:7px;padding:3px 9px;font:600 11.5px inherit;font-family:inherit;cursor:pointer;}",
+      "#" + ROOT_ID + " .hcx-reacts{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px;}",
+      "#" + ROOT_ID + " .hcx-msg.sent .hcx-reacts{justify-content:flex-end;}",
+      "#" + ROOT_ID + " .hcx-react{border:1px solid var(--hcx-line,#e2e8f0);background:var(--hcx-surface,#fff);color:var(--hcx-text,#0f172a);border-radius:99px;padding:1px 8px;font-size:12px;cursor:pointer;line-height:20px;}",
+      "#" + ROOT_ID + " .hcx-react.mine{border-color:var(--hcx-primary);background:rgba(37,99,235,.12);}",
+      "#" + ROOT_ID + " .hcx-threadlink{display:inline-block;margin-top:4px;border:none;background:transparent;color:var(--hcx-primary);font:600 11.5px inherit;font-family:inherit;cursor:pointer;padding:0;}",
+      "#" + ROOT_ID + " .hcx-msg.sent .hcx-threadlink{color:inherit;opacity:.9;text-decoration:underline;}",
+      "#" + ROOT_ID + " .hcx-reactpop{position:absolute;z-index:40;display:flex;gap:2px;padding:4px;border-radius:12px;background:var(--hcx-surface,#fff);border:1px solid var(--hcx-line,#e2e8f0);box-shadow:0 8px 24px rgba(0,0,0,.18);}",
+      "#" + ROOT_ID + " .hcx-reactpop button{border:none;background:transparent;font-size:18px;width:32px;height:32px;border-radius:8px;cursor:pointer;}",
+      "#" + ROOT_ID + " .hcx-reactpop button:hover{background:rgba(37,99,235,.1);}",
+      "#" + ROOT_ID + " .hcx-mention{font-weight:700;color:var(--hcx-primary);}",
+      "#" + ROOT_ID + " .hcx-msg.sent .hcx-mention{color:inherit;text-decoration:underline;}",
+      "#" + ROOT_ID + " .hcx-mention.me{background:rgba(234,179,8,.25);border-radius:4px;padding:0 2px;}",
+      "#" + ROOT_ID + " .hcx-mentionpop{position:absolute;left:12px;bottom:100%;margin-bottom:6px;z-index:40;min-width:220px;max-width:320px;background:var(--hcx-surface,#fff);border:1px solid var(--hcx-line,#e2e8f0);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.18);padding:4px;}",
+      "#" + ROOT_ID + " .hcx-mentionpop button{display:flex;width:100%;align-items:center;gap:8px;border:none;background:transparent;padding:6px 8px;border-radius:7px;cursor:pointer;font:13px inherit;font-family:inherit;color:inherit;text-align:left;}",
+      "#" + ROOT_ID + " .hcx-mentionpop button.on,#" + ROOT_ID + " .hcx-mentionpop button:hover{background:rgba(37,99,235,.1);}",
+      "#" + ROOT_ID + " .hcx-mentionpop small{color:var(--hcx-muted);font-size:11px;}",
+      "#" + ROOT_ID + " .hcx-inbar{position:relative;}",
+      "#" + ROOT_ID + " .hcx-thread-parent{padding:10px 12px;border-radius:10px;background:rgba(37,99,235,.06);margin-bottom:10px;}",
+      "#" + ROOT_ID + " .hcx-thread-item{padding:8px 0;border-bottom:1px solid var(--hcx-line,#eef2f7);font-size:13px;}",
+      "#" + ROOT_ID + " .hcx-thread-item b{font-size:12px;}",
+      "#" + ROOT_ID + " .hcx-thread-item small,#" + ROOT_ID + " .hcx-thread-parent small{color:var(--hcx-muted);font-size:11px;margin-left:6px;}",
+      "#" + ROOT_ID + " .hcx-check{display:flex;gap:8px;align-items:flex-start;font-size:13px;cursor:pointer;}",
       "#" + ROOT_ID + " .hcx-searchwrap{padding:10px 14px;border-bottom:1px solid var(--hcx-border);}",
       "#" + ROOT_ID + " .hcx-searchbox{position:relative;display:flex;align-items:center;}",
       "#" + ROOT_ID + " .hcx-searchbox svg{position:absolute;left:11px;width:15px;height:15px;color:var(--hcx-muted);}",
@@ -729,7 +783,35 @@
 
   // Silent background refresh of the sidebar room list (does not touch the open
   // conversation's message state).
+  // Unread badge on the main HRMS sidebar's "Employee Chat" link.
+  function setNavBadge(total) {
+    document.querySelectorAll('a.nav-item[href="/employees/chat"]').forEach(function (a) {
+      var b = a.querySelector(".hcx-navbadge");
+      if (!total) { if (b) b.remove(); return; }
+      if (!b) {
+        b = document.createElement("span");
+        b.className = "hcx-navbadge";
+        b.style.cssText = "margin-left:auto;min-width:18px;height:18px;padding:0 5px;border-radius:99px;background:var(--accent,#2f6fe0);color:#fff;font-size:10.5px;font-weight:700;display:inline-flex;align-items:center;justify-content:center;";
+        a.appendChild(b);
+      }
+      var txt = total > 99 ? "99+" : String(total);
+      if (b.textContent !== txt) b.textContent = txt;
+      b.title = total + " unread chat message" + (total === 1 ? "" : "s");
+    });
+  }
+
+  function updateNavBadge() {
+    if (state.rooms && state.rooms.length && state.root && state.root.isConnected) {
+      setNavBadge(state.rooms.reduce(function (n, r) { return n + (r.unread || 0); }, 0));
+      return;
+    }
+    if (!getSession().email) { setNavBadge(0); return; }
+    apiGet("/api/chat/unread").then(function (d) { setNavBadge((d && d.total) || 0); }).catch(function () {});
+  }
+
   function refreshRooms() {
+    if (state.tab === "threads") loadThreads();
+    if (state.tab === "pins") loadMyPins();
     apiGet("/api/chat/rooms?email=" + encodeURIComponent(state.me.email))
       .then(function (list) {
         if (!Array.isArray(list)) return;
@@ -906,6 +988,12 @@
     obs.observe(document.body, { childList: true, subtree: true });
   }
 
+  function navTab(tab, icon, label) {
+    return '<button class="hcx-tab" data-tab="' + tab + '" title="' + label + '" aria-label="' + label + '">' +
+      '<span class="ic">' + icon + '<span class="dot" data-dot="' + tab + '" style="display:none"></span></span>' +
+      '<span class="lb">' + label + "</span></button>";
+  }
+
   function layoutHTML() {
     return (
       '<div class="hcx-side">' +
@@ -916,14 +1004,19 @@
       "      <div><h2>Chat</h2><p>Team messaging</p></div>" +
       '      <button class="hcx-newbtn" data-act="new-menu" title="New chat / channel">' + ICON.plus + "</button>" +
       "    </div>" +
-      '    <div class="hcx-tabs">' +
-      '      <button class="hcx-tab on" data-tab="direct">' + ICON.chat + " Direct</button>" +
-      '      <button class="hcx-tab" data-tab="channels">' + ICON.hash + " Channels</button>" +
-      "    </div>" +
+  
       "  </div>" +
       '  <div class="hcx-searchwrap"><div class="hcx-searchbox">' + ICON.search +
       '    <input type="search" placeholder="Search…" data-role="search" autocomplete="off"></div></div>' +
+      '  <div class="hcx-filters" data-role="filters"></div>' +
       '  <div class="hcx-list" data-role="list"><div class="hcx-empty">Loading…</div></div>' +
+      '  <nav class="hcx-bnav" aria-label="Chat sections">' +
+      navTab("pins", ICON.navPin, "My Pins") +
+      navTab("direct", ICON.navChat, "Chats") +
+      navTab("channels", ICON.navHash, "Channels") +
+      navTab("threads", ICON.navThread, "Threads") +
+      navTab("people", ICON.navPeople, "People") +
+      "  </nav>" +
       "</div>" +
       '<div class="hcx-resizer" data-role="resizer" role="separator" aria-orientation="vertical" aria-label="Drag to resize the chat list" title="Drag to resize"></div>' +
       '<div class="hcx-main" data-role="main">' + welcomeHTML() + "</div>"
@@ -1021,6 +1114,8 @@
       .then(function () {
         state.loadingRooms = false;
         renderList();
+        applyDeepLink();
+        updateNavBadge();
       });
   }
 
@@ -1029,6 +1124,7 @@
     var q = state.search.toLowerCase().trim();
     return state.rooms.filter(function (r) {
       if (!!r.is_group !== wantGroup) return false;
+      if (state.unreadOnly && !(r.unread > 0)) return false;
       if (!q) return true;
       var name = (r.display_name || r.name || "").toLowerCase();
       var members = (r.member_emails || []).join(" ").toLowerCase();
@@ -1036,16 +1132,125 @@
     });
   }
 
+  function renderFilters() {
+    var bar = state.root && state.root.querySelector('[data-role="filters"]');
+    if (!bar) return;
+    if (state.tab === "direct" || state.tab === "channels") {
+      bar.style.display = "";
+      bar.innerHTML =
+        '<button class="hcx-chip' + (state.unreadOnly ? "" : " on") + '" data-act="flt-all">All</button>' +
+        '<button class="hcx-chip' + (state.unreadOnly ? " on" : "") + '" data-act="flt-unread">Unread</button>' +
+        (state.tab === "channels" ? '<button class="hcx-chip ghost" data-act="browse-channels" title="Find public channels to join">Browse</button>' : "");
+    } else {
+      bar.style.display = "none";
+      bar.innerHTML = "";
+    }
+  }
+
+  function renderThreadsList(list) {
+    var q = state.search.toLowerCase().trim();
+    var items = state.threads.filter(function (th) {
+      if (!q) return true;
+      return ((th.room_label || "") + " " + (th.parent.text || "") + " " + (th.parent.sender_name || "")).toLowerCase().indexOf(q) !== -1;
+    });
+    if (!state.threadsLoaded) { list.innerHTML = '<div class="hcx-empty">Loading…</div>'; return; }
+    if (!items.length) {
+      list.innerHTML = '<div class="hcx-empty">No threads yet.<small>Reply to a message to start one.</small></div>';
+      return;
+    }
+    list.innerHTML = items.map(function (th) {
+      var who = th.parent.sender_email === state.me.email ? "You" : (th.parent.sender_name || th.parent.sender_email);
+      return '<div class="hcx-trow" data-act="thread-row" data-room-id="' + esc(th.room_id) + '" data-mid="' + esc(th.parent.id) + '">' +
+        '<div class="room">' + esc(th.room_label) + "</div>" +
+        '<div class="txt"><b>' + esc(who) + ":</b> " + esc(th.parent.is_deleted ? "(deleted message)" : th.parent.text) + "</div>" +
+        '<div class="meta">' + th.reply_count + (th.reply_count === 1 ? " reply" : " replies") +
+        " · last by " + esc(th.last_reply_sender) + " · " + esc(relTime(th.last_reply_at)) + "</div></div>";
+    }).join("");
+  }
+
+  function renderPeopleList(list) {
+    var q = state.search.toLowerCase().trim();
+    var people = state.contacts.filter(function (c) {
+      if (!q) return true;
+      return [c.name, c.email, c.department, c.designation].join(" ").toLowerCase().indexOf(q) !== -1;
+    });
+    if (!people.length) { list.innerHTML = '<div class="hcx-empty">' + (state.loadingContacts ? "Loading…" : "No people found.") + "</div>"; return; }
+    list.innerHTML = people.map(function (c) {
+      return '<div class="hcx-row" data-act="people-dm" data-email="' + esc(c.email) + '">' +
+        avatarHTML(c.name, c.email, c.profilePic, "", c.email) +
+        '<div class="hcx-mid"><div class="hcx-rn">' + esc(c.name) + '</div><div class="hcx-rl">' +
+        esc([c.designation, c.department].filter(Boolean).join(" · ") || c.email) + "</div></div>" +
+        '<div class="hcx-right"><button class="hcx-dmbtn" data-act="people-dm" data-email="' + esc(c.email) + '">Message</button></div></div>';
+    }).join("");
+  }
+
+  function loadThreads() {
+    return apiGet("/api/chat/threads")
+      .then(function (list) { state.threads = Array.isArray(list) ? list : []; })
+      .catch(function () { state.threads = []; })
+      .then(function () { state.threadsLoaded = true; if (state.tab === "threads") renderList(); });
+  }
+
+  function renderNavDots() {
+    if (!state.root) return;
+    var counts = { direct: 0, channels: 0 };
+    (state.rooms || []).forEach(function (r) {
+      if (r.unread > 0) counts[r.is_group ? "channels" : "direct"] += r.unread;
+    });
+    Object.keys(counts).forEach(function (k) {
+      var dot = state.root.querySelector('[data-dot="' + k + '"]');
+      if (!dot) return;
+      var n = counts[k];
+      dot.style.display = n ? "" : "none";
+      dot.textContent = n > 9 ? "9+" : (n ? String(n) : "");
+      var tab = dot.closest(".hcx-tab");
+      if (tab) tab.title = (k === "direct" ? "Chats" : "Channels") + (n ? " — " + n + " unread" : "");
+    });
+  }
+
+  function renderPinsList(list) {
+    var q = state.search.toLowerCase().trim();
+    if (!state.myPinsLoaded) { list.innerHTML = '<div class="hcx-empty">Loading…</div>'; return; }
+    var items = (state.myPins || []).filter(function (x) {
+      return !q || ((x.room_label || "") + " " + (x.text || "") + " " + (x.sender_name || "")).toLowerCase().indexOf(q) !== -1;
+    });
+    if (!items.length) {
+      list.innerHTML = '<div class="hcx-empty">No pins yet.<small>Hover a message and use the pin to keep it here for 30 days.</small></div>';
+      return;
+    }
+    list.innerHTML = items.map(function (x) {
+      var who = x.sender_email === state.me.email ? "You" : (x.sender_name || x.sender_email);
+      return '<div class="hcx-trow" data-act="pin-row" data-room-id="' + esc(x.room_id) + '" data-mid="' + esc(x.id) + '">' +
+        '<div class="room">' + esc(x.room_label) + "</div>" +
+        '<div class="txt"><b>' + esc(who) + ":</b> " + esc(x.text) + "</div>" +
+        '<div class="meta">Pinned ' + esc(relTime(x.pinned_at || x.created_at)) + "</div></div>";
+    }).join("");
+  }
+
+  function loadMyPins() {
+    return apiGet("/api/chat/pins")
+      .then(function (list) { state.myPins = Array.isArray(list) ? list : []; })
+      .catch(function () { state.myPins = []; })
+      .then(function () { state.myPinsLoaded = true; if (state.tab === "pins") renderList(); });
+  }
+
   function renderList() {
     if (!state.root) return;
     var list = state.root.querySelector('[data-role="list"]');
     if (!list) return;
+    renderFilters();
+    renderNavDots();
+    if (state.tab === "pins") return renderPinsList(list);
+    if (state.tab === "threads") return renderThreadsList(list);
+    if (state.tab === "people") return renderPeopleList(list);
     var rooms = roomsForTab();
 
     if (!rooms.length) {
       var msg =
-        state.tab === "channels"
-          ? "No channels yet.<small>Create one with the + button.</small>"
+        state.unreadOnly
+          ? "You're all caught up.<small>No unread conversations.</small>"
+          : state.tab === "channels"
+          ? "No channels yet.<small>Create one with the + button, or Browse public channels.</small>"
           : "No direct chats yet.<small>Start one with the + button.</small>";
       list.innerHTML = '<div class="hcx-empty">' + msg + "</div>";
       return;
@@ -1102,8 +1307,10 @@
     closeCamera();
     if (state.listening) stopDictation();
 
-    // Keep the active tab consistent with the room being opened.
-    state.tab = room.is_group ? "channels" : "direct";
+    // Keep the active tab consistent with the room being opened (but leave the
+    // Threads / People views where they are).
+    if (state.tab === "direct" || state.tab === "channels") state.tab = room.is_group ? "channels" : "direct";
+    // (Threads / People / My Pins stay where they are.)
     rebuildOnlineMap();
 
     renderConversation(room);
@@ -1234,6 +1441,12 @@
         });
         renderMessages();
         startPolling(roomId);
+        var po = state.pendingOpen;
+        if (po && String(po.room) === String(roomId)) {
+          state.pendingOpen = null;
+          if (po.thread) openThread(po.thread);
+          else if (po.msg) jumpToMessage(po.msg);
+        }
       })
       .catch(function (e) {
         console.warn("[hcx] messages load failed", e);
@@ -1409,11 +1622,17 @@
         '<div class="qt">' + esc(m.reply_to_text || "") + "</div></div>";
     }
 
-    var body = quote + attachmentHTML(m) + (m.message ? linkify(m.message) : "");
+    var body = quote + attachmentHTML(m) + (m.message ? highlightMentions(linkify(m.message)) : "");
+    body += reactionsHTML(m);
+    if (m.reply_count > 0 && m.id != null) {
+      body += '<div><button class="hcx-threadlink" data-act="thread-open" data-mid="' + esc(m.id) + '">' +
+        "💬 " + m.reply_count + (m.reply_count === 1 ? " reply" : " replies") + "</button></div>";
+    }
 
     // Hover actions: reply always; pin/unpin per ownership; edit/delete for own within window.
     var active = isActivePin(m);
-    var btns = '<button class="hcx-actbtn" data-act="msg-reply" title="Reply" aria-label="Reply">' + ICON.reply + "</button>";
+    var btns = '<button class="hcx-actbtn" data-act="react-open" title="Add reaction" aria-label="Add reaction">' + ICON.smile + "</button>" +
+      '<button class="hcx-actbtn" data-act="msg-reply" title="Reply" aria-label="Reply">' + ICON.reply + "</button>";
     if (!active) {
       // Not pinned → anyone can pin.
       btns += '<button class="hcx-actbtn" data-act="msg-pin" title="Pin" aria-label="Pin message">' + ICON.pin + "</button>";
@@ -1435,6 +1654,264 @@
       '<div class="hcx-meta">' + pinnedTag + editedLabel + '<span class="tm">' + esc(fmtTimeOf(msgDate(m))) + "</span>" + tick + "</div>" +
       "</div>" + actions + "</div>"
     );
+  }
+
+  // ───────────────────────────────────────────── reactions / mentions / threads
+  var QUICK_REACTIONS = ["👍", "❤️", "😂", "🎉", "😮", "🙏"];
+
+  function reactionsHTML(m) {
+    var rs = m.reactions || [];
+    if (!rs.length || m.is_deleted) return "";
+    return '<div class="hcx-reacts">' + rs.map(function (g) {
+      var mine = (g.emails || []).indexOf(state.me.email) !== -1;
+      var who = (g.names || []).slice(0, 10).join(", ");
+      return '<button class="hcx-react' + (mine ? " mine" : "") + '" data-act="react-toggle" data-emoji="' + esc(g.emoji) +
+        '" title="' + esc(who) + '">' + esc(g.emoji) + " " + g.count + "</button>";
+    }).join("") + "</div>";
+  }
+
+  function closeReactPop() {
+    var old = state.root && state.root.querySelector(".hcx-reactpop");
+    if (old) old.remove();
+  }
+
+  function openReactPop(btn, mid) {
+    closeReactPop();
+    var area = areaEl();
+    if (!area) return;
+    var pop = document.createElement("div");
+    pop.className = "hcx-reactpop";
+    pop.innerHTML = QUICK_REACTIONS.map(function (em) {
+      return '<button type="button" data-act="react-pick" data-mid="' + esc(mid) + '" data-emoji="' + esc(em) + '" aria-label="React ' + esc(em) + '">' + em + "</button>";
+    }).join("");
+    state.root.appendChild(pop);
+    var r = btn.getBoundingClientRect(), base = state.root.getBoundingClientRect();
+    var top = r.top - base.top - pop.offsetHeight - 6;
+    if (top < 4) top = r.bottom - base.top + 6;
+    pop.style.top = top + "px";
+    pop.style.left = Math.max(4, Math.min(r.left - base.left - pop.offsetWidth / 2, base.width - pop.offsetWidth - 4)) + "px";
+  }
+
+  function toggleReaction(mid, emoji) {
+    var m = findMsgById(mid);
+    if (!m || !emoji) return;
+    // Optimistic update, then the server's summary wins.
+    var rs = (m.reactions || []).map(function (g) { return Object.assign({}, g, { emails: (g.emails || []).slice(), names: (g.names || []).slice() }); });
+    var g = rs.find(function (x) { return x.emoji === emoji; });
+    var me = state.me.email;
+    if (g && g.emails.indexOf(me) !== -1) {
+      var at = g.emails.indexOf(me);
+      g.emails.splice(at, 1); g.names.splice(at, 1); g.count -= 1;
+      if (g.count <= 0) rs.splice(rs.indexOf(g), 1);
+    } else if (g) { g.emails.push(me); g.names.push("You"); g.count += 1; }
+    else rs.push({ emoji: emoji, count: 1, emails: [me], names: ["You"] });
+    m.reactions = rs;
+    state.keepScroll = true;
+    renderMessages();
+    apiPost("/api/chat/message/" + mid + "/react", { emoji: emoji })
+      .then(function (res) { applyReactions(mid, res.reactions || []); })
+      .catch(function (e) { console.warn("[hcx] reaction failed", e); });
+  }
+
+  function applyReactions(mid, reactions) {
+    var m = findMsgById(mid);
+    if (!m) return;
+    m.reactions = reactions || [];
+    state.keepScroll = true;
+    renderMessages();
+  }
+
+  function escRe(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
+
+  function highlightMentions(html) {
+    var room = state.activeRoom;
+    if (!room || html.indexOf("@") === -1) return html;
+    var people = (room.members || []).filter(function (x) { return x && x.name; })
+      .sort(function (a, b) { return b.name.length - a.name.length; });
+    people.forEach(function (x) {
+      var nm = esc(x.name);
+      var re = new RegExp("@" + escRe(nm) + "(?![\\w])", "g");
+      html = html.replace(re, '<span class="hcx-mention' + (x.email === state.me.email ? " me" : "") + '">@' + nm + "</span>");
+    });
+    return html;
+  }
+
+  // ── @mention picker in the composer
+  function mentionCandidates(q) {
+    var room = state.activeRoom;
+    if (!room) return [];
+    q = (q || "").toLowerCase();
+    return (room.members || []).filter(function (x) {
+      if (!x || x.email === state.me.email) return false;
+      return !q || (x.name || "").toLowerCase().indexOf(q) !== -1 || (x.email || "").toLowerCase().indexOf(q) === 0;
+    }).slice(0, 6);
+  }
+
+  function closeMentionPop() {
+    state.mentionPick = null;
+    var pop = state.root && state.root.querySelector(".hcx-mentionpop");
+    if (pop) pop.remove();
+  }
+
+  function updateMentionPop(input) {
+    var caret = typeof input.selectionStart === "number" ? input.selectionStart : input.value.length;
+    var before = input.value.slice(0, caret);
+    var m = /(^|\s)@([^\s@]{0,30})$/.exec(before);
+    if (!m) { closeMentionPop(); return; }
+    var items = mentionCandidates(m[2]);
+    if (!items.length) { closeMentionPop(); return; }
+    state.mentionPick = { start: caret - m[2].length - 1, end: caret, items: items, idx: 0 };
+    renderMentionPop();
+  }
+
+  function renderMentionPop() {
+    var pick = state.mentionPick;
+    var bar = state.root && state.root.querySelector(".hcx-inbar");
+    if (!pick || !bar) return;
+    var pop = bar.querySelector(".hcx-mentionpop");
+    if (!pop) { pop = document.createElement("div"); pop.className = "hcx-mentionpop"; pop.setAttribute("role", "listbox"); bar.appendChild(pop); }
+    pop.innerHTML = pick.items.map(function (x, i) {
+      return '<button type="button" role="option" class="' + (i === pick.idx ? "on" : "") + '" data-act="mention-pick" data-i="' + i + '">' +
+        avatarHTML(x.name, x.email, x.profilePic, "sm") + "<span>" + esc(x.name) + "<br><small>" + esc(x.email) + "</small></span></button>";
+    }).join("");
+  }
+
+  function applyMention(i) {
+    var pick = state.mentionPick;
+    var input = state.root && state.root.querySelector('[data-role="input"]');
+    if (!pick || !input) return;
+    var x = pick.items[i];
+    if (!x) return;
+    var token = "@" + x.name + " ";
+    input.value = input.value.slice(0, pick.start) + token + input.value.slice(pick.end);
+    var caret = pick.start + token.length;
+    state.mentions[x.name] = x.email;
+    closeMentionPop();
+    input.focus();
+    try { input.setSelectionRange(caret, caret); } catch (_) {}
+    autoresize(input);
+  }
+
+  function mentionsIn(text) {
+    var out = [];
+    Object.keys(state.mentions).forEach(function (name) {
+      if (text.indexOf("@" + name) !== -1 && out.indexOf(state.mentions[name]) === -1) out.push(state.mentions[name]);
+    });
+    return out;
+  }
+
+  // ── thread panel
+  function openThread(parentId) {
+    var parent = findMsgById(parentId);
+    if (!parent) { jumpToMessage(parentId); return; }
+    var replies = state.messages.filter(function (x) { return String(x.reply_to_id) === String(parentId) && !x.is_deleted; });
+    function line(x, cls) {
+      var who = x.sender_email === state.me.email ? "You" : (x.sender_name || x.sender_email);
+      return '<div class="' + cls + '"><b>' + esc(who) + "</b><small>" + esc(fmtTimeOf(msgDate(x))) + "</small><div>" +
+        (x.is_deleted ? "<i>This message was deleted</i>" : highlightMentions(linkify(x.message || (x.attachment_name ? "📎 " + x.attachment_name : "")))) + "</div></div>";
+    }
+    var html =
+      '<div class="hcx-modal-h"><h3>Thread</h3><button class="hcx-modal-x" data-act="modal-close">' + ICON.close + "</button></div>" +
+      '<div class="hcx-modal-b">' + line(parent, "hcx-thread-parent") +
+      (replies.length ? replies.map(function (x) { return line(x, "hcx-thread-item"); }).join("") : '<div class="hcx-empty">No replies yet.</div>') +
+      "</div>" +
+      '<div class="hcx-modal-f"><button class="hcx-btn" data-act="thread-jump" data-mid="' + esc(parentId) + '">Show in chat</button>' +
+      '<button class="hcx-btn primary" data-act="thread-reply" data-mid="' + esc(parentId) + '">Reply in thread</button></div>';
+    openModal(html);
+  }
+
+  function openRoomAt(roomId, opts) {
+    var room = state.rooms.find(function (r) { return String(r.id) === String(roomId); });
+    if (!room) return false;
+    state.pendingOpen = Object.assign({ room: room.id }, opts || {});
+    if (String(state.activeRoomId) === String(room.id) && state.messages.length) {
+      var po = state.pendingOpen; state.pendingOpen = null;
+      if (po.thread) openThread(po.thread); else if (po.msg) jumpToMessage(po.msg);
+    } else {
+      openRoom(room.id);
+    }
+    return true;
+  }
+
+  // ── channel settings / browse
+  function openChannelSettings() {
+    var room = state.activeRoom;
+    if (!room || !room.is_group) return;
+    var html =
+      '<div class="hcx-modal-h"><h3>Channel settings</h3><button class="hcx-modal-x" data-act="modal-close">' + ICON.close + "</button></div>" +
+      '<div class="hcx-modal-b">' +
+      '<div class="hcx-field"><label>Channel name</label><input class="hcx-input" data-role="cs-name" maxlength="80" value="' + esc(room.name || "") + '"></div>' +
+      '<label class="hcx-check"><input type="checkbox" data-role="cs-public"' + (room.is_private ? "" : " checked") + '>' +
+      "<span><b>Public channel</b><br><small>Anyone in the company can find it under Browse and join. Untick to make it invite-only.</small></span></label>" +
+      "</div>" +
+      '<div class="hcx-modal-f"><button class="hcx-btn" data-act="modal-close">Cancel</button>' +
+      '<button class="hcx-btn primary" data-role="cs-save">Save</button></div>';
+    var bg = openModal(html);
+    bg.querySelector('[data-role="cs-save"]').addEventListener("click", function () {
+      var btn = this;
+      var name = (bg.querySelector('[data-role="cs-name"]').value || "").trim();
+      if (!name) { alert("Please enter a channel name."); return; }
+      btn.disabled = true; btn.textContent = "Saving…";
+      apiFetch("PATCH", "/api/chat/rooms/" + room.id, { name: name, is_private: !bg.querySelector('[data-role="cs-public"]').checked })
+        .then(function (updated) {
+          closeModal();
+          applyRoomUpdate(updated);
+          var hn = state.root.querySelector(".hcx-hn");
+          if (hn) hn.textContent = updated.display_name || updated.name;
+        })
+        .catch(function (e) { btn.disabled = false; btn.textContent = "Save"; alert(e.message); });
+    });
+  }
+
+  function openBrowseChannels() {
+    openModal('<div class="hcx-modal-h"><h3>Browse public channels</h3><button class="hcx-modal-x" data-act="modal-close">' + ICON.close +
+      '</button></div><div class="hcx-modal-b" data-role="browse-body"><div class="hcx-empty">Loading…</div></div>');
+    apiGet("/api/chat/channels/browse").then(function (list) {
+      var body = state.root.querySelector('[data-role="browse-body"]');
+      if (!body) return;
+      if (!list.length) { body.innerHTML = '<div class="hcx-empty">No public channels to join.<small>Channels you are already in are not listed.</small></div>'; return; }
+      body.innerHTML = list.map(function (c) {
+        return '<div class="hcx-row"><span class="hcx-av ch">' + ICON.hash + '</span><div class="hcx-mid"><div class="hcx-rn">' + esc(c.name) +
+          '</div><div class="hcx-rl">' + c.members + (c.members === 1 ? " member" : " members") + "</div></div>" +
+          '<div class="hcx-right"><button class="hcx-dmbtn" data-act="channel-join" data-room-id="' + esc(c.id) + '">Join</button></div></div>';
+      }).join("");
+    }).catch(function () {
+      var body = state.root.querySelector('[data-role="browse-body"]');
+      if (body) body.innerHTML = '<div class="hcx-empty">Could not load channels.</div>';
+    });
+  }
+
+  function joinChannel(roomId, btn) {
+    if (btn) { btn.disabled = true; btn.textContent = "Joining…"; }
+    apiPost("/api/chat/rooms/" + roomId + "/join", {}).then(function (room) {
+      closeModal();
+      upsertRoom(room);
+      state.tab = "channels";
+      syncTabs();
+      openRoom(room.id);
+    }).catch(function (e) { if (btn) { btn.disabled = false; btn.textContent = "Join"; } alert(e.message); });
+  }
+
+  // ── deep link: /employees/chat?room=<id>&msg=<id> (mention notifications)
+  // Also /employees/chat?tab=pins|direct|channels|threads|people — used by the
+  // chat shortcut bar at the bottom of the HRMS sidebar (hrms-chat-dock.js).
+  function applyDeepLink() {
+    var qs;
+    try { qs = new URLSearchParams(location.search); } catch (_) { return; }
+    var tab = qs.get("tab");
+    var room = qs.get("room");
+    if (!tab && !room) return;
+    if (tab && ["pins", "direct", "channels", "threads", "people"].indexOf(tab) !== -1) {
+      state.tab = tab;
+      if (tab === "threads") loadThreads();
+      if (tab === "pins") loadMyPins();
+      syncTabs();
+    }
+    var msg = qs.get("msg");
+    var done = !room || openRoomAt(room, msg ? { msg: msg } : null);
+    if (done) {
+      try { history.replaceState(history.state, "", location.pathname); } catch (_) {}
+    }
   }
 
   function scrollBottom() {
@@ -1575,6 +2052,7 @@
   }
 
   function applyPin(id, isPinned, pinnedBy) {
+    if (state.myPinsLoaded) loadMyPins();
     var m = state.messages.find(function (x) { return String(x.id) === String(id); });
     if (m) {
       m.is_pinned = !!isPinned;
@@ -1661,6 +2139,9 @@
 
     var replyTo = state.replyingTo;
     cancelReply();
+    var mentioned = mentionsIn(text);
+    state.mentions = {};
+    closeMentionPop();
 
     var now = new Date().toISOString();
     var temp = {
@@ -1685,7 +2166,7 @@
 
     // A reply carries extra fields the WebSocket send path doesn't handle, so
     // replies always go via REST. Plain text prefers the socket.
-    if (!replyTo && state.ws && state.ws.readyState === 1 && String(state.wsRoomId) === String(state.activeRoomId)) {
+    if (!replyTo && !mentioned.length && state.ws && state.ws.readyState === 1 && String(state.wsRoomId) === String(state.activeRoomId)) {
       try {
         state.ws.send(JSON.stringify({
           sender_email: state.me.email,
@@ -1701,6 +2182,7 @@
       message: text,
     };
     if (replyTo) payload.reply_to_id = replyTo.id;
+    if (mentioned.length) payload.mentions = mentioned;
     apiPost("/api/chat/messages/" + state.activeRoomId, payload)
       .then(function (saved) { reconcileSaved(temp, saved); })
       .catch(function (e) { console.warn("[hcx] send failed", e); });
@@ -2182,9 +2664,18 @@
   // ───────────────────────────────────────────── websocket
   function connectWS(roomId) {
     teardownWS();
+    // The socket only accepts a short-lived ticket for a room you belong to
+    // (/api/chat/ws-ticket). If that fails, REST polling keeps chat working.
+    apiGet("/api/chat/ws-ticket/" + roomId).then(function (res) {
+      if (String(state.activeRoomId) !== String(roomId) || !res || !res.ticket) return;
+      openSocket(roomId, res.ticket);
+    }).catch(function () {});
+  }
+
+  function openSocket(roomId, ticket) {
     try {
       var proto = location.protocol === "https:" ? "wss" : "ws";
-      var url = proto + "://" + location.host + "/ws/chat/" + roomId + "/";
+      var url = proto + "://" + location.host + "/ws/chat/" + roomId + "/?ticket=" + encodeURIComponent(ticket);
       var ws = new WebSocket(url);
       state.ws = ws;
       state.wsRoomId = roomId;
@@ -2194,6 +2685,7 @@
           var data = JSON.parse(ev.data);
           if (!data) return;
           if (data.event === "deleted") { applyDelete(data.id); return; }
+          if (data.event === "reactions") { applyReactions(data.id, data.reactions || []); return; }
           if (data.event === "edited") { applyEdit(data.id, data.message || ""); return; }
           if (data.event === "pinned") {
             var pm2 = state.messages.find(function (x) { return String(x.id) === String(data.id); });
@@ -2267,6 +2759,12 @@
             } else {
               // Existing message — sync edited/deleted/read changes.
               var cur = byId[String(m.id)];
+              if (cur && (JSON.stringify(cur.reactions || []) !== JSON.stringify(m.reactions || []) ||
+                          (cur.reply_count || 0) !== (m.reply_count || 0))) {
+                cur.reactions = m.reactions || [];
+                cur.reply_count = m.reply_count || 0;
+                added = true;
+              }
               if (cur && (cur.is_deleted !== m.is_deleted || cur.edited !== m.edited ||
                           cur.message !== m.message || cur.is_read !== m.is_read ||
                           cur.seen !== m.seen ||
@@ -2495,6 +2993,8 @@
       '<div class="hcx-modal-b">' +
       '<div class="hcx-field"><label>Channel name</label>' +
       '<input class="hcx-input" data-role="ch-name" placeholder="e.g. Engineering, Design team"></div>' +
+      '<label class="hcx-check" style="margin-bottom:12px"><input type="checkbox" data-role="ch-public">' +
+      "<span><b>Public channel</b><br><small>Anyone in the company can find it under Browse and join. Leave unticked for invite-only.</small></span></label>" +
       '<div class="hcx-field"><label>Add members</label>' +
       (state.contacts.length
         ? '<div class="hcx-picksearch">' + ICON.search +
@@ -2520,17 +3020,19 @@
       if (!name) { alert("Please enter a channel name."); return; }
       var members = Object.keys(selected);
       members.push(state.me.email);
-      createChannel(name, members, this);
+      var pub = bg.querySelector('[data-role="ch-public"]');
+      createChannel(name, members, this, !(pub && pub.checked));
     });
   }
 
-  function createChannel(name, members, btn) {
+  function createChannel(name, members, btn, isPrivate) {
     if (btn) { btn.disabled = true; btn.textContent = "Creating…"; }
     apiPost("/api/chat/rooms", {
       type: "channel",
       name: name,
       members: members,
       created_by: state.me.email,
+      is_private: isPrivate !== false,
     })
       .then(function (room) {
         closeModal();
@@ -2645,6 +3147,32 @@
       // that isn't inside the tools cluster.
       if (!(t.closest && t.closest(".hcx-toolswrap"))) closeToolsMenu();
 
+      if (act !== "react-open" && !(t.closest && t.closest(".hcx-reactpop"))) closeReactPop();
+      if (act !== "mention-pick") closeMentionPop();
+      if (act === "react-open") {
+        e.stopPropagation();
+        var rm0 = actEl.closest(".hcx-msg");
+        if (rm0) openReactPop(actEl, rm0.getAttribute("data-mid"));
+        return;
+      }
+      if (act === "react-pick") { closeReactPop(); return toggleReaction(actEl.getAttribute("data-mid"), actEl.getAttribute("data-emoji")); }
+      if (act === "react-toggle") {
+        var rm1 = actEl.closest(".hcx-msg");
+        if (rm1) toggleReaction(rm1.getAttribute("data-mid"), actEl.getAttribute("data-emoji"));
+        return;
+      }
+      if (act === "mention-pick") { e.preventDefault(); return applyMention(Number(actEl.getAttribute("data-i"))); }
+      if (act === "thread-open") return openThread(actEl.getAttribute("data-mid"));
+      if (act === "thread-reply") { var tid = actEl.getAttribute("data-mid"); closeModal(); return startReply(tid); }
+      if (act === "thread-jump") { var tj = actEl.getAttribute("data-mid"); closeModal(); return jumpToMessage(tj); }
+      if (act === "pin-row") return openRoomAt(actEl.getAttribute("data-room-id"), { msg: actEl.getAttribute("data-mid") });
+      if (act === "thread-row") return openRoomAt(actEl.getAttribute("data-room-id"), { thread: actEl.getAttribute("data-mid") });
+      if (act === "people-dm") { e.stopPropagation(); return startDirect(actEl.getAttribute("data-email")); }
+      if (act === "flt-all") { state.unreadOnly = false; return renderList(); }
+      if (act === "flt-unread") { state.unreadOnly = true; return renderList(); }
+      if (act === "browse-channels") return openBrowseChannels();
+      if (act === "channel-join") return joinChannel(actEl.getAttribute("data-room-id"), actEl);
+      if (act === "room-settings") { closeRoomMenu(); return openChannelSettings(); }
       if (act === "exit-chat") return exitChat();
       if (act === "new-menu") return openNewMenu();
       if (act === "modal-close") return closeModal();
@@ -2726,6 +3254,8 @@
       var tab = t.closest ? t.closest(".hcx-tab") : null;
       if (tab) {
         state.tab = tab.getAttribute("data-tab");
+        if (state.tab === "threads") loadThreads();
+        if (state.tab === "pins") loadMyPins();
         syncTabs();
         return;
       }
@@ -2761,6 +3291,7 @@
       }
       if (e.target.getAttribute("data-role") === "input") {
         autoresize(e.target);
+        updateMentionPop(e.target);
       }
       if (e.target.getAttribute("data-role") === "msg-search") {
         runSearch(e.target.value);
@@ -2780,6 +3311,17 @@
         if (e.key === "Enter") { e.preventDefault(); stepSearch(e.shiftKey ? -1 : 1); }
         else if (e.key === "Escape") { e.preventDefault(); closeSearch(); }
         return;
+      }
+      if (role === "input" && state.mentionPick) {
+        var mp = state.mentionPick;
+        if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+          e.preventDefault();
+          mp.idx = (mp.idx + (e.key === "ArrowDown" ? 1 : mp.items.length - 1)) % mp.items.length;
+          renderMentionPop();
+          return;
+        }
+        if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); applyMention(mp.idx); return; }
+        if (e.key === "Escape") { e.preventDefault(); closeMentionPop(); return; }
       }
       if (role === "input") {
         if (e.key === "Enter" && !e.shiftKey) {
@@ -3110,6 +3652,7 @@
     var items = "";
     if (room.is_group) {
       if (room.viewer_is_admin) {
+        items += '<button data-act="room-settings">' + ICON.edit + " Channel settings</button>";
         items += '<button class="danger" data-act="room-delete">' + ICON.trash + " Delete channel</button>";
       }
       var iAmCreator = ((room.created_by || "").toLowerCase() === state.me.email.toLowerCase());
@@ -3184,6 +3727,11 @@
   }
 
   global.__hrmsOpenChat = openChat;
+
+  // Keep the sidebar badge current on every page (cheap: one counted query).
+  setInterval(updateNavBadge, 30000);
+  setTimeout(updateNavBadge, 2500);
+  window.addEventListener("focus", updateNavBadge);
 
   // Auto-mount when the chat page appears (covers navigation without an
   // explicit __hrmsOpenChat() call), and re-mount on route re-entry.

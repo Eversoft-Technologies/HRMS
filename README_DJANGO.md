@@ -86,6 +86,23 @@ project-root `.env.local`.
 | `HRMS_SECRETS_KEY` | Fernet key that encrypts secrets saved from the UI (the AI key). Required to save/rotate the AI key from the UI. Keep it outside the database and its backups. |
 | `VITE_ANTHROPIC_API_KEY` | **Deprecated — do not use.** Still read as a last-resort fallback so old deployments keep working, but `VITE_` values can be compiled into browser code. Move the value to `ANTHROPIC_API_KEY` and delete this variable. |
 
+## Passwords and stored credentials
+
+* **Login passwords are hashed** (Django `make_password`, PBKDF2). `AppUser.save()`
+  hashes any raw value, so plain text cannot be written through the app, and
+  migration `0082` hashed every existing plain-text password (users keep the
+  same password). Hashes cannot be shown — User Access says *hashed · not
+  viewable*; a forgotten password is reset with *Forgot password*.
+* **SMTP passwords are encrypted, not hashed** — the server needs the real value
+  to log in to the mail server. They are stored encrypted with `HRMS_SECRETS_KEY`
+  and never sent to the browser (the form stays blank; blank = keep the saved one).
+* **Deploy:** set `HRMS_SECRETS_KEY` *before* `python manage.py migrate` so the
+  migration can encrypt existing SMTP passwords. If it was set later, run
+  `python manage.py hash_existing_passwords` once (safe to re-run; also hashes
+  any plain-text login written outside the app, e.g. by raw SQL).
+* The browser no longer stores logins or passwords (the old `hrms_users` cache
+  and its built-in default admin account were removed).
+
 ## AI provider key (Settings › AI Settings)
 
 The AI key lives on the server only. Browsers never see it, never store it, and

@@ -8,9 +8,21 @@ from .models import ChatMessage, ChatRoom
 
 
 class ChatConsumer(AsyncWebsocketConsumer):
+    """Live room channel. Joining needs a ticket from /api/chat/ws-ticket/<room>
+    (signed, 5 minutes, room members only — see api/chat_extras.py); messages
+    sent over the socket are always attributed to the ticket's owner."""
+
     async def connect(self):
+        from urllib.parse import parse_qs
         self.room_id = self.scope["url_route"]["kwargs"]["room_id"]
         self.room_group_name = f"chat_{self.room_id}"
+        query = parse_qs((self.scope.get("query_string") or b"").decode())
+        ticket = (query.get("ticket") or [""])[0]
+        self.email = await self.check_ticket(ticket)
+        if not self.email:
+            await self.close(code=4403)
+            return
+        self.display_name = await self.name_for(self.email)
 
         await self.channel_layer.group_add(
             self.room_group_name,
@@ -20,17 +32,36 @@ class ChatConsumer(AsyncWebsocketConsumer):
         await self.accept()
 
     async def disconnect(self, close_code):
-        await self.channel_layer.group_discard(
-            self.room_group_name,
-            self.channel_name,
-        )
+        if getattr(self, "email", None):
+            await self.channel_layer.group_discard(
+                self.room_group_name,
+                self.channel_name,
+            )
+
+    @sync_to_async
+    def check_ticket(self, ticket):
+        from .chat_extras import read_ws_ticket
+        return read_ws_ticket(ticket, self.room_id)
+
+    @sync_to_async
+    def name_for(self, email):
+        from .models import AppUser
+        u = AppUser.objects.filter(email=email).first()
+        return (u.full_name if u and u.full_name else "") or email.split("@")[0]
 
     async def receive(self, text_data):
-        data = json.loads(text_data)
+        if not getattr(self, "email", None):
+            return
+        try:
+            data = json.loads(text_data)
+        except ValueError:
+            return
 
-        sender_email = data.get("sender_email")
-        sender_name = data.get("sender_name")
-        message = data.get("message")
+        sender_email = self.email
+        sender_name = self.display_name
+        message = str(data.get("message") or "").strip()
+        if not message:
+            return
 
         chat_message = await self.save_message(
             sender_email,
@@ -93,6 +124,13 @@ class ChatConsumer(AsyncWebsocketConsumer):
                     "edited": True,
                     "edited_at": event.get("edited_at"),
                 }
+            )
+        )
+
+    async def reaction_update(self, event):
+        await self.send(
+            text_data=json.dumps(
+                {"event": "reactions", "id": event["id"], "reactions": event.get("reactions", [])}
             )
         )
 
