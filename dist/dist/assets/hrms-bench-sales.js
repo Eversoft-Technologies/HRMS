@@ -288,6 +288,8 @@
       '.bss-btn:hover{border-color:var(--accent,#4f8ef7)}',
       '.bss-btn.primary{background:var(--accent,#4f8ef7);border-color:var(--accent,#4f8ef7);color:#fff}',
       '.bss-btn.danger{background:#ef4444;border-color:#ef4444;color:#fff}',
+      '#bs-fd-reset,#bss-fd-reset{background:var(--bg3,#1e293b);border-color:var(--danger,#f75f4f);color:var(--danger,#f75f4f)}',
+      '#bs-fd-reset:hover,#bss-fd-reset:hover{background:var(--bg3,#1e293b);border-color:var(--danger,#f75f4f);color:var(--danger,#f75f4f)}',
       '.bss-btn:disabled{opacity:.5;cursor:not-allowed}',
       '.bss-in,.bss-sel,.bss-ta{background:var(--bg2,#141b26);color:var(--text,#e6edf7);border:1px solid var(--border,#2a3446);',
       'border-radius:8px;padding:8px 10px;font-size:13px;font-family:inherit;width:100%;box-sizing:border-box}',
@@ -736,9 +738,9 @@
           '<button class="bss-fd-add" id="bs-fd-add">+ Add Filter</button>' +
         '</div>' +
         '<div class="bss-cd-f">' +
-          '<button class="bss-btn primary" id="bs-fd-apply">Apply</button>' +
           '<button class="bss-btn" id="bs-fd-reset">Reset</button>' +
           '<button class="bss-btn" id="bs-fd-cancel">Cancel</button>' +
+          '<button class="bss-btn primary" id="bs-fd-apply">Apply Filter</button>' +
         '</div>' +
       '</div>';
     document.body.appendChild(ov);
@@ -1666,9 +1668,9 @@
           '<button class="bss-fd-add" id="bss-fd-add">+ Add Filter</button>' +
         '</div>' +
         '<div class="bss-cd-f">' +
-          '<button class="bss-btn primary" id="bss-fd-apply">Apply</button>' +
           '<button class="bss-btn" id="bss-fd-reset">Reset</button>' +
           '<button class="bss-btn" id="bss-fd-cancel">Cancel</button>' +
+          '<button class="bss-btn primary" id="bss-fd-apply">Apply Filter</button>' +
         '</div>' +
       '</div>';
     document.body.appendChild(ov);

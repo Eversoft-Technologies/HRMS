@@ -232,10 +232,32 @@ class InterviewRecording(models.Model):
     executive_summary = models.TextField(null=True, blank=True)
     round2_questions = models.JSONField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    # Cheap flags for the list view. True when a playable video (disk file,
+    # LONGBLOB, or legacy base64) / a legacy base64 recording exists. save()
+    # and the video upload paths keep them current, so listing recordings never
+    # touches the blob columns: evaluating ``video_buffer > ''`` per row made
+    # MySQL read every stored video, which is what made the Recordings tab
+    # crawl once the table held gigabytes of legacy recordings.
+    has_video = models.BooleanField(default=False, db_index=True)
+    has_recording = models.BooleanField(default=False)
 
     class Meta:
         db_table = 'interview_recordings'
         ordering = ['id']
+
+    def save(self, *args, **kwargs):
+        deferred = self.get_deferred_fields()
+        if 'recording_data' not in deferred:
+            self.has_recording = bool(self.recording_data)
+        if 'video_buffer' not in deferred:
+            has_buffer = bool(self.video_buffer)
+        else:
+            has_buffer = self.has_video          # blob not loaded: trust the stored flag
+        self.has_video = bool(self.video_file) or self.has_recording or has_buffer
+        update_fields = kwargs.get('update_fields')
+        if update_fields is not None:
+            kwargs['update_fields'] = list(update_fields) + ['has_video', 'has_recording']
+        super().save(*args, **kwargs)
 
 
 class QuestionSet(models.Model):

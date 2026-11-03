@@ -1371,19 +1371,10 @@ def resume_score_file(request, pk):
 # Interview Recordings
 # ---------------------------------------------------------------------------
 def _recording_list_qs():
-    return InterviewRecording.objects.annotate(
-        # ``_has_video`` is True when disk file, binary blob, or legacy base64 has data
-        _has_video=Case(
-            When(video_file__isnull=False, video_file__gt='', then=Value(True)),
-            When(video_buffer__isnull=False, video_buffer__gt=b'', then=Value(True)),
-            When(recording_data__isnull=False, recording_data__gt='', then=Value(True)),
-            default=Value(False), output_field=BooleanField(),
-        ),
-        _has_recording=Case(
-            When(recording_data__isnull=False, recording_data__gt='', then=Value(True)),
-            default=Value(False), output_field=BooleanField(),
-        ),
-    ).defer('video_buffer', 'recording_data')
+    """Recordings without their blob columns. ``hasVideo`` comes from the stored
+    ``has_video`` flag (see the model) rather than a per-row test of the
+    LONGBLOB / LONGTEXT columns, so this query never reads a video."""
+    return InterviewRecording.objects.defer('video_buffer', 'recording_data')
 
 
 RECORDING_FIELD_MAP = {
@@ -1433,15 +1424,18 @@ def _mark_interview_taken(email, role, total_score=None):
               anonymous_methods=('POST',))
 def recordings(request):
     if request.method == 'GET':
-        if request.query_params.get('summary') == '1':
-            qs = _recording_list_qs().defer(
-                'transcript', 'responses', 'ai_evaluation',
-                'executive_summary', 'round2_questions',
-            )
-            return Response(InterviewRecordingSerializer(
-                qs, many=True, context={'summary': True},
-            ).data)
-        return Response(InterviewRecordingSerializer(_recording_list_qs(), many=True).data)
+        # The list is row metadata only; the panel loads a recording's
+        # transcript and evaluation from the detail endpoint when it is opened.
+        # ``?full=1`` keeps the old heavy shape for any caller that wants it.
+        if request.query_params.get('full') == '1':
+            return Response(InterviewRecordingSerializer(_recording_list_qs(), many=True).data)
+        qs = _recording_list_qs().defer(
+            'transcript', 'responses', 'ai_evaluation',
+            'executive_summary', 'round2_questions',
+        )
+        return Response(InterviewRecordingSerializer(
+            qs, many=True, context={'summary': True},
+        ).data)
 
     body = request.data
     if not body.get('candidateName'):
@@ -1457,13 +1451,16 @@ def recordings(request):
 @api_view(['GET', 'PUT', 'DELETE'])
 @require_perm({'GET': 'recruitment.view', 'PUT': 'recruitment.edit', 'DELETE': 'recruitment.delete'})
 def recording_detail(request, pk):
-    obj = InterviewRecording.objects.filter(pk=pk).first()
+    # Blob columns stay deferred: the player streams video from the /video
+    # endpoint, so the legacy base64 copy is only sent back on ``?full=1``.
+    obj = InterviewRecording.objects.defer('video_buffer', 'recording_data').filter(pk=pk).first()
     if not obj:
         return err('Recording not found', 404)
 
     if request.method == 'GET':
         data = InterviewRecordingSerializer(obj).data
-        data['recordingData'] = obj.recording_data
+        if request.query_params.get('full') == '1':
+            data['recordingData'] = obj.recording_data
         return Response(data)
 
     if request.method == 'PUT':
@@ -1614,7 +1611,8 @@ def recording_video(request, pk):
         except Exception as exc:
             logger.error(f"[RecordingVideo] Disk save failed: {exc}", exc_info=True)
             # Fallback direct buffer write if disk save encounters an unexpected error
-            InterviewRecording.objects.filter(pk=pk).update(video_buffer=data, video_mime=mime)
+            InterviewRecording.objects.filter(pk=pk).update(
+                video_buffer=data, video_mime=mime, has_video=True)
             return JsonResponse({'ok': True, 'fallback': 'buffer'})
 
     if request.method != 'GET':

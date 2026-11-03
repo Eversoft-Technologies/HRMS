@@ -577,15 +577,10 @@ class InterviewRecordingSerializer(serializers.ModelSerializer):
         }
 
     def to_representation(self, instance):
-        # ``_has_video`` / ``_has_recording`` are annotated by the list queryset
-        # (which defers the heavy columns); fall back to the columns otherwise.
-        has_video = getattr(instance, '_has_video', None)
-        if has_video is None:                       # unannotated (detail view)
-            # True when disk file, binary LONGBLOB, or legacy base64 column has data.
-            has_video = bool(instance.video_file or instance.video_buffer is not None or instance.recording_data is not None)
-        has_recording = getattr(instance, '_has_recording', None)
-        if has_recording is None:
-            has_recording = bool(instance.recording_data is not None or instance.video_file)
+        # Stored flags (kept current by the model's save() and the upload
+        # paths) so neither the list nor the detail view reads a blob column.
+        has_video = bool(instance.has_video)
+        has_recording = bool(instance.has_recording)
 
         if self.context.get('summary'):
             return {
