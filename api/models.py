@@ -311,9 +311,12 @@ class CompanyDetail(models.Model):
 
 class AppUser(models.Model):
     """Login accounts created in Settings -> User Access (and via Sign-up).
-    Maps onto the existing `app_users` table so every login persists in MySQL
-    instead of only the browser's localStorage. `password` is plain text to
-    match the admin UI's "SHOW" reveal button (see hrms_system_schema.sql)."""
+    Maps onto the existing `app_users` table so every login persists in MySQL.
+
+    ``password`` only ever holds a Django password hash (or '' for Google/SSO
+    accounts): ``save()`` hashes any raw value that reaches it, whichever code
+    path set it, so a plain-text password can never be written through the ORM.
+    Hashes cannot be shown; a forgotten password is reset, not revealed."""
     employee_id = models.CharField(max_length=64, default='', blank=True, db_index=True)
     full_name = models.CharField(max_length=255)
     email = models.CharField(max_length=255, unique=True)
@@ -337,6 +340,11 @@ class AppUser(models.Model):
     profile_pic = models.TextField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    def save(self, *args, **kwargs):
+        from .secret_box import hash_password
+        self.password = hash_password(self.password or '')
+        super().save(*args, **kwargs)
 
     class Meta:
         db_table = 'app_users'
@@ -375,7 +383,10 @@ class UserEmailConfig(models.Model):
     smtp_host = models.CharField(max_length=255, default='', blank=True)
     smtp_port = models.CharField(max_length=10, default='', blank=True)
     smtp_user = models.CharField(max_length=255, default='', blank=True)
-    smtp_password = models.CharField(max_length=255, default='', blank=True)
+    # Encrypted (``enc1:`` + Fernet token, see api/secret_box.py) — it must be
+    # re-used to log in to the mail server, so it cannot be hashed. Never
+    # returned to the browser.
+    smtp_password = models.CharField(max_length=512, default='', blank=True)
     smtp_secure = models.BooleanField(default=False)
     from_name = models.CharField(max_length=255, default='', blank=True)
     from_email = models.CharField(max_length=255, default='', blank=True)
@@ -2065,3 +2076,18 @@ class AISettingsAudit(models.Model):
     class Meta:
         db_table = 'ai_settings_audit'
         ordering = ['-created_at', '-id']
+
+
+class ChatReaction(models.Model):
+    """One person's emoji reaction to one chat message (toggle on/off).
+    ``message_id`` / ``room_id`` are plain ids: the chat tables are unmanaged."""
+    message_id = models.IntegerField(db_index=True)
+    room_id = models.IntegerField(db_index=True)
+    email = models.CharField(max_length=255)
+    emoji = models.CharField(max_length=16)
+    created_at = models.DateTimeField()
+
+    class Meta:
+        db_table = 'chat_reactions'
+        unique_together = (('message_id', 'email', 'emoji'),)
+        ordering = ['created_at', 'id']

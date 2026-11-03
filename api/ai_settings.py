@@ -33,6 +33,7 @@ from django.utils import timezone
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
+from . import secret_box
 from .models import AIProviderSetting, AISettingsAudit
 from .permissions import _CACHE as _PERM_CACHE, check_perm, require_perm
 
@@ -40,33 +41,17 @@ logger = logging.getLogger(__name__)
 
 PROVIDER = 'anthropic'
 PROVIDER_LABEL = 'Anthropic'
-SECRETS_ENV = 'HRMS_SECRETS_KEY'
+SECRETS_ENV = secret_box.SECRETS_ENV
+SecretsNotConfigured = secret_box.SecretsNotConfigured
 MIN_KEY_LEN = 20
 MAX_KEY_LEN = 400
 
 
-class SecretsNotConfigured(Exception):
-    pass
-
-
 # ---------------------------------------------------------------------------
-# encryption
+# encryption (shared Fernet key, see api/secret_box.py)
 # ---------------------------------------------------------------------------
-def _fernet():
-    raw = (os.environ.get(SECRETS_ENV) or '').strip()
-    if not raw:
-        return None
-    try:
-        from cryptography.fernet import Fernet
-        return Fernet(raw.encode())
-    except Exception:
-        # Never log the value; only that it is unusable.
-        logger.error('%s is set but is not a valid Fernet key; managed secrets are disabled.', SECRETS_ENV)
-        return None
-
-
-def encryption_ready():
-    return _fernet() is not None
+_fernet = secret_box.fernet
+encryption_ready = secret_box.encryption_ready
 
 
 def _encrypt(plain):

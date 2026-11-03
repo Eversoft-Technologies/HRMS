@@ -1,6 +1,7 @@
 from django.urls import path
 
 from . import ai_settings
+from . import chat_extras
 from . import notification_prefs
 from . import org_views
 from . import submission_discussion
@@ -353,6 +354,13 @@ urlpatterns += [
     path("chat/rooms/<int:room_id>/members", views.chat_room_members),
     path("chat/rooms/<int:room_id>/members/<str:email>", views.chat_room_member_detail),
     path("chat/contacts", views.chat_contacts),
+    path("chat/ws-ticket/<int:room_id>", chat_extras.chat_ws_ticket),
+    path("chat/unread", chat_extras.chat_unread_total),
+    path("chat/threads", chat_extras.chat_threads),
+    path("chat/pins", chat_extras.chat_my_pins),
+    path("chat/channels/browse", chat_extras.chat_browse_channels),
+    path("chat/rooms/<int:room_id>/join", chat_extras.chat_join_channel),
+    path("chat/message/<int:msg_id>/react", chat_extras.chat_message_react),
     path("chat/meetings", views.chat_meetings),
     path("chat/meetings/<int:meeting_id>", views.chat_meeting_detail),
 ]

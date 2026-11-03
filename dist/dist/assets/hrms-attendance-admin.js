@@ -1785,8 +1785,15 @@
   /* ── tab: shifts ─────────────────────────────────────────────────────── */
   function shiftsHtml() {
     var rows = state.shifts.map(function (s) {
+      var st = String(s.startTime || s.start_time || '').slice(0, 5);
+      var en = String(s.endTime || s.end_time || '').slice(0, 5);
+      var night = !!(s.isNightShift != null ? s.isNightShift : s.is_night_shift);
+      var crosses = st && en && en <= st;   // e.g. 18:00 – 03:00
       return '<tr><td>' + esc(s.name) + '</td>' +
-        '<td>' + esc(s.startTime || s.start_time || '') + ' – ' + esc(s.endTime || s.end_time || '') + '</td>' +
+        '<td>' + esc(st) + ' – ' + esc(en) + (night ? ' <span style="font-size:11px;color:var(--haa-faint)">(next day)</span>' : '') +
+        (crosses && !night ? '<div style="font-size:11px;color:var(--haa-warn-fg);margin-top:2px">⚠ Ends after midnight — tick Night shift</div>' : '') + '</td>' +
+        '<td><label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-size:12.5px" title="Ends the next day: check-out after midnight closes this session">' +
+        '<input type="checkbox" data-night-shift="' + s.id + '"' + (night ? ' checked' : '') + '> Night shift</label></td>' +
         '<td>' + esc(s.graceMinutes != null ? s.graceMinutes : s.grace_minutes) + ' min</td>' +
         '<td>' + Math.round((s.overtimeAfterMinutes != null ? s.overtimeAfterMinutes : s.overtime_after_minutes || 540) / 60) + ' h</td>' +
         '<td style="text-align:right"><button class="haa-btn dgr" data-del-shift="' + s.id + '">Delete</button></td></tr>';
@@ -1822,9 +1829,13 @@
       '<div><label class="haa-lbl">End</label><input class="haa-in" id="haa-s-end" type="time" value="18:00"></div>' +
       '<div><label class="haa-lbl">Grace (min)</label><input class="haa-in" id="haa-s-grace" value="15"></div>' +
       '<div><label class="haa-lbl">Overtime after (h)</label><input class="haa-in" id="haa-s-ot" value="9"></div>' +
-      '</div><div style="margin-top:12px"><button class="haa-btn" id="haa-s-add">Create shift</button></div></div>' +
+      '</div>' +
+      '<label style="display:flex;align-items:center;gap:8px;margin-top:12px;font-size:13px;cursor:pointer">' +
+      '<input type="checkbox" id="haa-s-night"> <span><b>Night shift</b> — ends the next day (e.g. 18:00 – 03:00). ' +
+      '<span style="color:var(--haa-faint)">Ticked automatically when the end time is earlier than the start.</span></span></label>' +
+      '<div style="margin-top:12px"><button class="haa-btn" id="haa-s-add">Create shift</button></div></div>' +
       (state.shifts.length
-        ? '<table class="haa-tbl"><thead><tr><th>Shift</th><th>Timing</th><th>Grace</th><th>OT after</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>'
+        ? '<table class="haa-tbl"><thead><tr><th>Shift</th><th>Timing</th><th>Night shift</th><th>Grace</th><th>OT after</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>'
         : '<div class="haa-empty">No shifts defined — everyone falls back to General Shift (09:00–18:00).</div>') +
       '<div class="haa-card" style="margin-top:18px"><div style="font-weight:700;margin-bottom:12px;font-size:14px;">Assign a shift</div>' +
       '<div class="haa-grid">' +
@@ -2465,11 +2476,33 @@
           endTime: val('haa-s-end') || '18:00', end_time: val('haa-s-end') || '18:00',
           graceMinutes: parseInt(val('haa-s-grace'), 10) || 15,
           grace_minutes: parseInt(val('haa-s-grace'), 10) || 15,
-          overtimeAfterMinutes: Math.round(otH * 60), overtime_after_minutes: Math.round(otH * 60)
+          overtimeAfterMinutes: Math.round(otH * 60), overtime_after_minutes: Math.round(otH * 60),
+          isNightShift: !!(body.querySelector('#haa-s-night') || {}).checked
         })
       }).then(function () { toast('Shift created'); loadAll(); })
         .catch(function (e) { toast(e.message, true); });
     };
+
+    // Night shift: tick automatically when the end is earlier than the start.
+    var sStart = body.querySelector('#haa-s-start'), sEnd = body.querySelector('#haa-s-end'), sNight = body.querySelector('#haa-s-night');
+    if (sStart && sEnd && sNight) {
+      var autoNight = function () { if (sStart.value && sEnd.value) sNight.checked = sEnd.value <= sStart.value; };
+      sStart.addEventListener('change', autoNight);
+      sEnd.addEventListener('change', autoNight);
+    }
+    // Per-shift Night shift toggle — saves straight away.
+    body.querySelectorAll('[data-night-shift]').forEach(function (cb) {
+      cb.addEventListener('change', function () {
+        var on = cb.checked;
+        cb.disabled = true;
+        api('/api/shifts/' + cb.getAttribute('data-night-shift'), {
+          method: 'PUT', body: JSON.stringify({ isNightShift: on })
+        }).then(function () {
+          toast(on ? 'Marked as a night shift — check-out after midnight now closes the session' : 'No longer a night shift');
+          loadAll();
+        }).catch(function (e) { cb.checked = !on; cb.disabled = false; toast(e.message, true); });
+      });
+    });
 
     var aAdd = body.querySelector('#haa-a-add');
     if (aAdd) aAdd.onclick = function () {

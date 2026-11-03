@@ -46,7 +46,7 @@ def _cfg_to_settings(cfg):
         'host': cfg.smtp_host.strip(),
         'port': port,
         'user': cfg.smtp_user.strip(),
-        'password': cfg.smtp_password or '',
+        'password': _stored_smtp_password(cfg.smtp_password),
         'secure': bool(cfg.smtp_secure),
         'from_name': (cfg.from_name or 'HRMS').strip(),
         'from_email': (cfg.from_email or cfg.smtp_user).strip(),
@@ -68,6 +68,13 @@ def _get_resend_settings(sender_email=None):
         'from_name': _env('RESEND_FROM_NAME', 'HRMS').strip() or 'HRMS',
         'from_email': from_email,
     }
+
+
+def _stored_smtp_password(value):
+    """The usable SMTP password from the encrypted column (legacy plain text
+    is still accepted until the config is saved again)."""
+    from .secret_box import decrypt
+    return decrypt(value or '')
 
 
 def _normalize_smtp_password(password):
