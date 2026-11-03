@@ -159,9 +159,10 @@
         '</div>';
     }).join('');
     root.innerHTML = '<div class="card-title">Notification Preferences</div>' + rows +
-      '<div class="hsp-msg" data-n="msg" aria-live="polite"></div>';
+      '<div class="hsp-msg" data-n="msg" aria-live="polite"></div>' + soundHtml(d.sound || {});
     var msg = root.querySelector('[data-n="msg"]');
-    root.querySelectorAll('.hsp-tg').forEach(function (b) {
+    wireSound(root, url, d.sound || {});
+    root.querySelectorAll('.hsp-tg[data-cat]').forEach(function (b) {
       b.addEventListener('click', function () {
         var key = b.getAttribute('data-cat');
         var next = b.getAttribute('aria-checked') !== 'true';
@@ -176,6 +177,128 @@
           msg.className = 'hsp-msg err'; msg.textContent = 'Not saved: ' + e.message;
         }).then(function () { b.disabled = false; });
       });
+    });
+  }
+
+  /* ── Sounds & desktop pop-ups (played by hrms-sounds.js) ─────────────── */
+  function popupState() {
+    if (!('Notification' in window)) return 'unsupported';
+    return Notification.permission;   // default | granted | denied
+  }
+  function soundRow(key, label, sub, on, test) {
+    return '<div class="hsp-row"><div class="hsp-l"><div class="hsp-t">' + esc(label) + '</div>' +
+      '<div class="hsp-s" data-snd-sub="' + key + '">' + sub + '</div></div>' +
+      (test ? '<button type="button" class="btn-sm" data-snd-test="' + test + '" style="font-size:11.5px;padding:4px 10px">▶ Test</button>' : '') +
+      '<button type="button" class="hsp-tg" role="switch" aria-label="' + esc(label) + '" aria-checked="' + (on ? 'true' : 'false') + '" data-snd="' + key + '"></button></div>';
+  }
+  function popupSub(on) {
+    var st = popupState();
+    if (st === 'unsupported') return 'This browser cannot show desktop pop-ups.';
+    if (st === 'denied') return '<span style="color:var(--red,#ef4444)">Blocked by the browser.</span> Click the lock icon in the address bar → Notifications → Allow, then turn this on again.';
+    return on && st === 'granted' ? 'Shown in the corner of your screen when HRMS is in the background.'
+                                   : 'Show new notifications and messages as a pop-up when HRMS is in the background.';
+  }
+  var TONE_FALLBACK = {
+    notify: [['chime', 'Chime'], ['bell', 'Bell'], ['marimba', 'Marimba'], ['glass', 'Glass'], ['alert', 'Alert']],
+    message: [['pop', 'Pop'], ['blip', 'Blip'], ['bubble', 'Bubble'], ['drop', 'Drop'], ['click', 'Click']]
+  };
+  function toneOptions(kind, current) {
+    var list = (window.__hrmsAlerts && window.__hrmsAlerts.tones ? window.__hrmsAlerts.tones() : TONE_FALLBACK)[kind];
+    return '<select class="haa-in" data-snd-tone="' + (kind === 'message' ? 'messageTone' : 'notificationTone') + '" data-kind="' + kind + '"' +
+      ' aria-label="' + (kind === 'message' ? 'Chat message' : 'Notification') + ' sound" style="background:var(--bg3,#f8fafc);border:1px solid var(--border2,#e5e7eb);color:var(--text,#0f172a);border-radius:7px;padding:4px 8px;font:inherit;font-size:12.5px;margin-right:6px">' +
+      list.map(function (o) { return '<option value="' + o[0] + '"' + (o[0] === current ? ' selected' : '') + '>' + esc(o[1]) + '</option>'; }).join('') + '</select>';
+  }
+  function soundHtml(s) {
+    var vol = typeof s.volume === 'number' ? s.volume : 70;
+    return '<div style="margin-top:18px"><div class="card-title">Sounds &amp; pop-ups</div>' +
+      soundRow('notificationSound', 'Notification sound', 'Pick one of 5 sounds for new notifications.', s.notificationSound !== false, 'notify')
+        .replace('<button type="button" class="btn-sm" data-snd-test', toneOptions('notify', s.notificationTone || 'chime') + '<button type="button" class="btn-sm" data-snd-test') +
+      soundRow('messageSound', 'Chat message sound', 'Pick one of 5 sounds for new chat messages.', s.messageSound !== false, 'message')
+        .replace('<button type="button" class="btn-sm" data-snd-test', toneOptions('message', s.messageTone || 'pop') + '<button type="button" class="btn-sm" data-snd-test') +
+      soundRow('inAppPopups', 'Pop-ups in HRMS', 'A card in the top-right corner for each new notification or message while you use HRMS.', s.inAppPopups !== false, '') +
+      '<div class="hsp-row"><div class="hsp-l"><div class="hsp-t">Volume</div><div class="hsp-s">Applies to both sounds.</div></div>' +
+      '<input type="range" min="0" max="100" step="5" value="' + vol + '" data-snd-vol aria-label="Alert volume" style="width:160px">' +
+      '<span class="hsp-s" data-snd-volv style="min-width:36px;text-align:right">' + vol + '%</span></div>' +
+      soundRow('desktopPopups', 'Desktop pop-ups', popupSub(!!s.desktopPopups), !!s.desktopPopups && popupState() === 'granted', '') +
+      soundRow('muteInDnd', 'Silence while "Do not disturb"', 'No sounds or pop-ups while your status is Do not disturb.', s.muteInDnd !== false, '') +
+      '<div class="hsp-row"><div class="hsp-l"><div class="hsp-t">Check pop-ups</div><div class="hsp-s">Shows a test pop-up and tells you if anything is blocking it.</div></div>' +
+      '<button type="button" class="btn-sm" data-snd-testpop style="font-size:11.5px;padding:4px 10px">Test pop-up</button></div>' +
+      '<div class="hsp-msg" data-snd-msg aria-live="polite"></div></div>';
+  }
+  function wireSound(root, url, s) {
+    var msg = root.querySelector('[data-snd-msg]');
+    function say(text, kind) { msg.className = 'hsp-msg ' + (kind || ''); msg.textContent = text; if (kind === 'ok') setTimeout(function () { if (msg.textContent === text) msg.textContent = ''; }, 1800); }
+    function save(patch) {
+      return api(url, jsonOpts('PUT', { sound: patch })).then(function (d) {
+        window.dispatchEvent(new CustomEvent('hrmsAlertSettings', { detail: d.sound }));   // hrms-sounds.js applies it now
+        say('Saved.', 'ok');
+        return d.sound;
+      });
+    }
+    root.querySelectorAll('.hsp-tg[data-snd]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        var key = b.getAttribute('data-snd');
+        var next = b.getAttribute('aria-checked') !== 'true';
+        var ask = Promise.resolve('granted');
+        if (key === 'desktopPopups' && next) {
+          var st = popupState();
+          if (st === 'unsupported') { say('This browser cannot show desktop pop-ups.', 'err'); return; }
+          ask = st === 'default' ? Notification.requestPermission() : Promise.resolve(st);
+        }
+        b.disabled = true;
+        ask.then(function (perm) {
+          if (key === 'desktopPopups' && next && perm !== 'granted') {
+            var sub = root.querySelector('[data-snd-sub="desktopPopups"]');
+            if (sub) sub.innerHTML = popupSub(false);
+            throw new Error('Pop-ups are blocked for this site. Allow notifications for this site in the browser, then try again.');
+          }
+          b.setAttribute('aria-checked', next ? 'true' : 'false');
+          var patch = {}; patch[key] = next;
+          return save(patch).then(function () {
+            if (key === 'desktopPopups') {
+              var sub2 = root.querySelector('[data-snd-sub="desktopPopups"]');
+              if (sub2) sub2.innerHTML = popupSub(next);
+            }
+          });
+        }).catch(function (e) {
+          b.setAttribute('aria-checked', next ? 'false' : 'true');
+          say(e.message, 'err');
+        }).then(function () { b.disabled = false; });
+      });
+    });
+    var vol = root.querySelector('[data-snd-vol]'), volv = root.querySelector('[data-snd-volv]');
+    if (vol) {
+      vol.addEventListener('input', function () { volv.textContent = vol.value + '%'; });
+      vol.addEventListener('change', function () {
+        save({ volume: Number(vol.value) }).then(function () {
+          if (window.__hrmsAlerts) window.__hrmsAlerts.test('notify');   // hear the new level
+        }).catch(function (e) { say('Not saved: ' + e.message, 'err'); });
+      });
+    }
+    root.querySelectorAll('[data-snd-test]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        if (!window.__hrmsAlerts) { say('Sounds are still loading — try again in a moment.', 'err'); return; }
+        var kind = b.getAttribute('data-snd-test');
+        var sel = root.querySelector('[data-snd-tone][data-kind="' + kind + '"]');
+        if (!window.__hrmsAlerts.test(kind, sel && sel.value)) say('Your browser blocked the sound, or the volume is 0.', 'err');
+      });
+    });
+    root.querySelectorAll('[data-snd-tone]').forEach(function (sel) {
+      sel.addEventListener('change', function () {
+        if (window.__hrmsAlerts) window.__hrmsAlerts.test(sel.getAttribute('data-kind'), sel.value);   // hear it now
+        var patch = {}; patch[sel.getAttribute('data-snd-tone')] = sel.value;
+        save(patch).catch(function (e) { say('Not saved: ' + e.message, 'err'); });
+      });
+    });
+    var tp = root.querySelector('[data-snd-testpop]');
+    if (tp) tp.addEventListener('click', function () {
+      if (!window.__hrmsAlerts || !window.__hrmsAlerts.testPopup) { say('Pop-ups are still loading — try again in a moment.', 'err'); return; }
+      var r = window.__hrmsAlerts.testPopup();
+      say(r.desktop === 'shown'
+        ? 'Shown inside HRMS and as a desktop pop-up. If no desktop pop-up appeared, allow notifications for your browser in Windows Settings › System › Notifications and switch off Focus assist.'
+        : r.desktop === 'denied' ? 'Shown inside HRMS. Desktop pop-ups are blocked for this site: lock icon in the address bar › Notifications › Allow.'
+        : r.desktop === 'default' ? 'Shown inside HRMS. Turn on Desktop pop-ups to also get them when HRMS is in the background.'
+        : 'Shown inside HRMS. This browser cannot show desktop pop-ups here (they need https or localhost).', '');
     });
   }
 
@@ -206,10 +329,11 @@
     if (managed.present && !managed.readable)
       warn += '<div class="hsp-warn">A key is saved but the server cannot decrypt it (HRMS_SECRETS_KEY changed or missing). AI is using the fallback. Save the key again to fix this.</div>';
     if (m.canManage && !m.encryptionReady)
-      warn += '<div class="hsp-warn">Saving a key here is disabled until <b>HRMS_SECRETS_KEY</b> is set on the server. You can still set <b>ANTHROPIC_API_KEY</b> in the server environment.</div>';
+      warn += '<div class="hsp-warn">Saving a key here is disabled: the server has no usable encryption key (<b>HRMS_SECRETS_KEY</b> is invalid, or the automatic key file is switched off). You can still set <b>ANTHROPIC_API_KEY</b> in the server environment.</div>';
 
     var html = '<div class="card-title">AI Provider Key</div>' + warn +
       '<dl class="hsp-kv">' +
+      (m.canManage && m.encryptionKeySource ? '<dt>Encryption key</dt><dd>' + ({ environment: 'Set in the server environment (HRMS_SECRETS_KEY)', file: 'Kept in a key file on the server (outside the database)', auto: 'Created automatically on the server when you first save' }[m.encryptionKeySource] || '') + '</dd>' : '') +
       '<dt>Status</dt><dd><span class="hsp-dot" style="background:' + (ok ? 'var(--green,#22c55e)' : 'var(--text3)') + '"></span>' + (ok ? 'Configured' : 'Not configured — AI features are off') + '</dd>' +
       '<dt>Provider</dt><dd>' + esc(m.providerLabel || m.provider) + '</dd>' +
       '<dt>Model</dt><dd>' + esc(m.model) + (m.validationModel ? ' <span class="hsp-s">(checks: ' + esc(m.validationModel) + ')</span>' : '') + '</dd>' +

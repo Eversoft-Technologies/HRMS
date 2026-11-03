@@ -939,6 +939,8 @@ class EmployeeAttendanceSerializer(serializers.ModelSerializer):
             'locationLat': instance.location_lat,
             'locationLng': instance.location_lng,
             'geoVerified': bool(instance.geo_verified),
+            # Closed by the leave-the-office watcher, not by the employee.
+            'autoCheckedOut': bool(getattr(instance, 'auto_checkout_at', None)),
         }
 
 
@@ -1560,7 +1562,18 @@ class AttendanceCorrectionSerializer(serializers.ModelSerializer):
             'reviewerNote': instance.reviewer_note or '',
             'reviewedAt': instance.reviewed_at.strftime(DATETIME_FMT) if instance.reviewed_at else None,
             'createdAt': instance.created_at.strftime(DATETIME_FMT) if instance.created_at else None,
+            'preview': self._preview(instance),
         }
+
+    @staticmethod
+    def _preview(instance):
+        # Hours the requested clock-out would give (gross, worked, overtime) —
+        # shown on the request and in the history while it waits for approval.
+        try:
+            from .views import _correction_preview
+            return _correction_preview(instance)
+        except Exception:
+            return None
 
 
 class GeoFenceSerializer(serializers.ModelSerializer):

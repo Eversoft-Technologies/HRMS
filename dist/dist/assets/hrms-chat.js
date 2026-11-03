@@ -91,9 +91,31 @@
 
   function apiGet(path) {
     return fetch(path, { headers: { Accept: "application/json" } }).then(function (r) {
-      if (!r.ok) throw new Error("GET " + path + " → " + r.status);
+      if (!r.ok) { var e = new Error("GET " + path + " → " + r.status); e.status = r.status; throw e; }
       return r.json();
     });
+  }
+
+  // A conversation that was deleted (404) or that you were removed from (403)
+  // must stop being polled — otherwise every open tab hits it every 5 s for
+  // as long as it stays open. Drop it and say why. Returns true when handled.
+  function roomGone(roomId, err) {
+    if (!err || (err.status !== 404 && err.status !== 403)) return false;
+    delete state.msgCache[roomId];
+    delete state.prefetchAt[roomId];
+    removeRoomFromState(roomId);
+    if (String(state.activeRoomId) === String(roomId)) {
+      closeActiveRoom();
+      var main = state.root && state.root.querySelector('[data-role="main"]');
+      if (main) {
+        main.innerHTML = '<div class="hcx-welcome"><div class="ic">' + ICON.chat + "</div>" +
+          "<h3>This conversation is no longer available</h3>" +
+          "<p>It was deleted, or you were removed from it. Pick another conversation on the left.</p></div>";
+      }
+    } else {
+      renderList();
+    }
+    return true;
   }
 
   function apiPost(path, body) {
@@ -155,11 +177,26 @@
   }
 
   // Small presence dot rendered at the corner of an avatar.
+  /* The person's status (Available / Busy / In Break / …) from the shared
+     presence snapshot (hrms-status.js); Online/Offline only as a fallback. */
+  function statusOf(email) {
+    var P = window.__hrmsPresence;
+    if (P && email) { try { var g = P.get(email); if (g) return g; } catch (_) {} }
+    return isOnline(email) ? { label: "Online", color: "#22c55e" } : { label: "Offline", color: "#9ca3af" };
+  }
   function presenceDot(email) {
     if (!email) return "";
-    return '<span class="hcx-dot ' + (isOnline(email) ? "on" : "off") +
-      '" title="' + (isOnline(email) ? "Online" : "Offline") + '"></span>';
+    var s = statusOf(email);
+    return '<span class="hcx-dot ' + (isOnline(email) ? "on" : "off") + '" data-hcx-email="' + esc(email) +
+      '" style="background:' + esc(s.color) + '" title="' + esc(s.label) + '"></span>';
   }
+  window.addEventListener("hrmsPresenceUpdated", function () {
+    Array.prototype.forEach.call(document.querySelectorAll(".hcx-dot[data-hcx-email]"), function (el) {
+      var s = statusOf(el.getAttribute("data-hcx-email"));
+      el.style.background = s.color; el.title = s.label;
+    });
+    try { refreshHeaderPresence(); } catch (_) {}
+  });
 
   function avatarHTML(name, key, pic, cls, email) {
     cls = cls || "";
@@ -825,8 +862,21 @@
           if (found) { found.unread = 0; state.activeRoom = found; }
         }
         renderList();
+        reportUnread();
       })
       .catch(function () {});
+  }
+
+  // Unread total → message sound / pop-up for other conversations (hrms-sounds.js).
+  function reportUnread() {
+    if (!window.__hrmsAlerts) return;
+    window.__hrmsAlerts.chatUnread(state.rooms.reduce(function (n, r) { return n + (r.unread || 0); }, 0), "chat-page");
+  }
+  // A message from someone else in the conversation that is open: sound only
+  // when the tab is in the background (hrms-sounds.js decides).
+  function reportIncoming(m) {
+    if (!window.__hrmsAlerts || !m || m.sender_email === state.me.email) return;
+    window.__hrmsAlerts.chatMessage(m, state.activeRoom);
   }
 
   // Draggable divider between the chat list and the conversation so each user
@@ -1095,9 +1145,10 @@
     if (hm) hm.textContent = directSubline(room);
     var dot = state.root.querySelector(".hcx-head .hcx-av .hcx-dot");
     if (dot && room.other_email) {
-      var on = isOnline(room.other_email);
+      var on = isOnline(room.other_email), s = statusOf(room.other_email);
       dot.className = "hcx-dot " + (on ? "on" : "off");
-      dot.title = on ? "Online" : "Offline";
+      dot.title = s.label;
+      dot.style.background = s.color;
     }
   }
 
@@ -1406,7 +1457,7 @@
   // 1:1 header sub-line: contact info + live Online/Offline (from check-in).
   function directSubline(room) {
     var base = memberInfo(room, room.other_email);
-    var status = isOnline(room.other_email) ? "Online" : "Offline";
+    var status = statusOf(room.other_email).label;
     return base ? base + " · " + status : status;
   }
 
@@ -1425,7 +1476,7 @@
         list.forEach(stampMsg);
         state.msgCache[roomId] = list;
       })
-      .catch(function () { delete state.prefetchAt[roomId]; });
+      .catch(function (e) { delete state.prefetchAt[roomId]; roomGone(roomId, e); });
   }
 
   function loadMessages(roomId) {
@@ -1449,6 +1500,7 @@
         }
       })
       .catch(function (e) {
+        if (roomGone(roomId, e)) return;
         console.warn("[hcx] messages load failed", e);
         var area = areaEl();
         if (area) area.innerHTML = '<div class="hcx-empty">Could not load messages.</div>';
@@ -1944,6 +1996,7 @@
     state.messages.push(stampMsg(m));
     renderMessages();
     bumpRoomPreview(state.activeRoomId, m);
+    reportIncoming(m);
   }
 
   function applyEdit(id, text) {
@@ -2756,6 +2809,7 @@
               state.knownIds["id_" + m.id] = true;
               state.messages.push(stampMsg(m));
               added = true;
+              reportIncoming(m);
             } else {
               // Existing message — sync edited/deleted/read changes.
               var cur = byId[String(m.id)];
@@ -2791,7 +2845,7 @@
             renderMessages();
           }
         })
-        .catch(function () {});
+        .catch(function (e) { if (roomGone(roomId, e) && state.pollTimer) { clearInterval(state.pollTimer); state.pollTimer = null; } });
     }, 5000);
   }
 
