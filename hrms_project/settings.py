@@ -260,6 +260,9 @@ REACT_BUILD_DIR = Path(
 # asset paths Vite emits (e.g. /assets/index-xxx.js, /favicon.svg) resolve.
 WHITENOISE_ROOT = str(REACT_BUILD_DIR)
 WHITENOISE_INDEX_FILE = True
+# The installable-app manifest (dist/dist/manifest.webmanifest) needs its own
+# type; WhiteNoise would otherwise serve it as application/octet-stream.
+WHITENOISE_MIMETYPES = {'.webmanifest': 'application/manifest+json'}
 
 STORAGES = {
     'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},

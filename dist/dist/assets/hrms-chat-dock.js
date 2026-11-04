@@ -46,6 +46,19 @@
   var unread = { direct: 0, channels: 0 };
   var fetched = false;
   var RAIL_BAR_W = 260;   // bar width when the sidebar is collapsed / hidden
+  var FREE_BAR_W = 300;   // bar width once it has been dragged somewhere
+  var LAUNCH_ID = 'hrms-chat-launch';
+
+  /* Where the user put the bar, per user: { free, left, bottom, closed }.
+     free = dragged off its spot under the sidebar; closed = folded into the
+     chat bubble. */
+  function prefKey() { return 'hrms_chat_dock_pos_v1_' + me(); }
+  function loadPref() {
+    try { var p = JSON.parse(localStorage.getItem(prefKey()) || 'null'); return p && typeof p === 'object' ? p : {}; }
+    catch (_) { return {}; }
+  }
+  function savePref(p) { try { localStorage.setItem(prefKey(), JSON.stringify(p)); } catch (_) {} }
+  function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
   var mini = {
     open: false, tab: 'direct', filter: 'recent', q: '',
     rooms: null, contacts: null, contactsAt: 0, threads: null, pins: null,
@@ -155,6 +168,22 @@
       // rail, with a rounded top edge where it sticks out over the page
       D + '.rail,' + D + '.float{border:1px solid var(--border2,#e5e7eb);border-bottom:none;border-left:none;border-radius:0 12px 0 0;}' +
       'body.hrms-chat-dock-rail .sidebar{padding-bottom:64px!important;}' +
+      // grip (drag) + close at the bar's two ends
+      // corner controls: they take no width from the five tabs
+      D + ' .gr,' + D + ' .cx{position:absolute;top:2px;flex:none;width:18px;height:18px;min-width:0;padding:0;gap:0;border-radius:5px;justify-content:center;color:var(--text3,#64748b);opacity:.45;background:transparent;z-index:1;}' +
+      D + ' .gr{left:2px;}' + D + ' .cx{right:2px;}' +
+      D + ' .gr{cursor:grab;touch-action:none;}' + D + ' .gr:active{cursor:grabbing;}' +
+      D + ' .gr:hover,' + D + ' .cx:hover{opacity:1;background:var(--bg3,#f1f5f9);}' +
+      D + ' .gr svg,' + D + ' .cx svg{width:13px;height:13px;}' +
+      D + ':hover .gr,' + D + ':hover .cx{opacity:.9;}' +
+      D + '.dragging{opacity:.92;box-shadow:0 10px 32px rgba(0,0,0,.28)!important;transition:none;}' +
+      D + '.free{border:1px solid var(--border2,#e5e7eb)!important;border-radius:14px!important;box-shadow:0 8px 28px rgba(0,0,0,.18);padding:4px 2px;}' +
+      '#' + LAUNCH_ID + '{position:fixed;width:46px;height:46px;border-radius:50%;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;' +
+      'background:linear-gradient(135deg,var(--accent,#4f8ef7),var(--accent2,#7c5cfc));color:#fff;box-shadow:0 6px 20px rgba(0,0,0,.25);}' +
+      '#' + LAUNCH_ID + ':hover{transform:scale(1.06);}' + '#' + LAUNCH_ID + ' svg{width:22px;height:22px;}' +
+      '#' + LAUNCH_ID + ' .dot{position:absolute;top:-2px;right:-2px;min-width:18px;height:18px;padding:0 5px;box-sizing:border-box;border-radius:9px;' +
+      'background:#ef4444;color:#fff;font-size:10.5px;font-weight:700;line-height:18px;text-align:center;border:2px solid var(--bg2,#fff);}' +
+      '@media(max-width:768px){body.hrms-has-tabbar #' + LAUNCH_ID + '{display:none!important;}}' +
       // mini panel
       M + '{position:fixed;width:350px;max-width:calc(100vw - 16px);display:flex;flex-direction:column;box-sizing:border-box;' +
       'background:var(--bg2,var(--surface,#fff));color:var(--text,#0f172a);border:1px solid var(--border2,#e5e7eb);border-bottom:none;' +
@@ -230,12 +259,19 @@
     var bar = document.createElement('nav');
     bar.id = ID;
     bar.setAttribute('aria-label', 'Chat shortcuts');
-    bar.innerHTML = TABS.map(function (t) {
+    bar.innerHTML =
+      '<button type="button" class="gr" data-a="grip" title="Drag to move · double-click to put it back · arrow keys move it" aria-label="Move chat bar">' +
+        '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.7"/><circle cx="15" cy="6" r="1.7"/><circle cx="9" cy="12" r="1.7"/><circle cx="15" cy="12" r="1.7"/><circle cx="9" cy="18" r="1.7"/><circle cx="15" cy="18" r="1.7"/></svg></button>' +
+      TABS.map(function (t) {
       return '<button type="button" data-tab="' + t[0] + '" title="' + t[1] + '" aria-label="' + t[1] + '">' +
         '<span class="ic">' + ICO[t[0]] + (t[0] === 'direct' || t[0] === 'channels' ? '<span class="dot" style="display:none"></span>' : '') +
         '</span><span class="lb">' + t[1] + '</span></button>';
-    }).join('');
+    }).join('') +
+      '<button type="button" class="cx" data-a="hide" title="Hide the chat bar (the chat bubble brings it back)" aria-label="Hide chat bar">' +
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>';
+    wireDrag(bar);
     bar.addEventListener('click', function (e) {
+      if (e.target.closest && e.target.closest('[data-a="hide"]')) { hideBar(); return; }
       var b = e.target.closest && e.target.closest('button[data-tab]');
       if (!b) return;
       var tab = b.getAttribute('data-tab');
@@ -244,6 +280,89 @@
     });
     document.body.appendChild(bar);
     return bar;
+  }
+
+  function wireDrag(bar) {
+    var grip = bar.querySelector('[data-a="grip"]');
+    var drag = null;
+    grip.addEventListener('pointerdown', function (e) {
+      if (e.button !== undefined && e.button !== 0) return;
+      e.preventDefault();
+      var r = bar.getBoundingClientRect();
+      drag = { dx: e.clientX - r.left, dy: e.clientY - r.top, id: e.pointerId };
+      try { grip.setPointerCapture(e.pointerId); } catch (_) {}
+      bar.classList.add('dragging');
+    });
+    grip.addEventListener('pointermove', function (e) {
+      if (!drag) return;
+      var w = FREE_BAR_W, h = bar.offsetHeight || 56;
+      var left = clamp(e.clientX - drag.dx, 0, Math.max(0, window.innerWidth - Math.min(w, window.innerWidth)));
+      var top = clamp(e.clientY - drag.dy, 0, Math.max(0, window.innerHeight - h));
+      var p = loadPref();
+      p.free = true; p.left = Math.round(left); p.bottom = Math.round(window.innerHeight - top - h);
+      savePref(p);
+      place();
+    });
+    function end() {
+      if (!drag) return;
+      drag = null;
+      bar.classList.remove('dragging');
+    }
+    grip.addEventListener('pointerup', end);
+    grip.addEventListener('pointercancel', end);
+    grip.addEventListener('dblclick', function () { resetBar(); });
+    grip.addEventListener('keydown', function (e) {
+      var step = e.shiftKey ? 40 : 10, dx = 0, dy = 0;
+      if (e.key === 'ArrowLeft') dx = -step; else if (e.key === 'ArrowRight') dx = step;
+      else if (e.key === 'ArrowUp') dy = step; else if (e.key === 'ArrowDown') dy = -step;
+      else if (e.key === 'Home') { e.preventDefault(); resetBar(); return; }
+      else return;
+      e.preventDefault();
+      var r = bar.getBoundingClientRect(), p = loadPref();
+      p.free = true;
+      p.left = Math.round((p.free && p.left != null ? p.left : r.left) + dx);
+      p.bottom = Math.round((p.bottom != null ? p.bottom : window.innerHeight - r.bottom) + dy);
+      savePref(p);
+      place();
+    });
+  }
+
+  function resetBar() {
+    var p = loadPref();
+    p.free = false; delete p.left; delete p.bottom;
+    savePref(p);
+    place();
+  }
+  function hideBar() {
+    var p = loadPref();
+    p.closed = true;
+    savePref(p);
+    if (mini.open) closeMini();
+    place();
+  }
+  function showBar() {
+    var p = loadPref();
+    p.closed = false;
+    savePref(p);
+    place();
+  }
+
+  function ensureLauncher() {
+    var l = document.getElementById(LAUNCH_ID);
+    if (l) return l;
+    l = document.createElement('button');
+    l.id = LAUNCH_ID;
+    l.type = 'button';
+    l.title = 'Show the chat bar';
+    l.setAttribute('aria-label', 'Show the chat bar');
+    l.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20.5l1.4-4.9A8 8 0 1 1 21 12z"/></svg><span class="dot" style="display:none"></span>';
+    l.addEventListener('click', showBar);
+    document.body.appendChild(l);
+    return l;
+  }
+  function hideLauncher() {
+    var l = document.getElementById(LAUNCH_ID);
+    if (l && l.style.display !== 'none') l.style.display = 'none';
   }
 
   function paintBar(bar) {
@@ -298,7 +417,9 @@
     var bar = document.getElementById(ID);
     var sb = visibleSidebar();
     var show = !!sb;
-    var mode = sb ? sb.mode : '';
+    var pref = sb ? loadPref() : {};
+    var mode = sb ? (pref.closed ? 'closed' : (pref.free ? 'free' : sb.mode)) : '';
+    if (!show) hideLauncher();
     // Only write what changed: this runs from a MutationObserver.
     [['hrms-chat-dock-on', mode === 'wide'], ['hrms-chat-dock-rail', mode === 'rail']].forEach(function (c) {
       if (document.body.classList.contains(c[0]) !== c[1]) document.body.classList.toggle(c[0], c[1]);
@@ -311,6 +432,47 @@
     ensureStyle();
     if (!bar) bar = buildBar();
     if (!fetched) { fetched = true; refreshUnread(); }
+    if (mode === 'closed') {
+      // Folded into the chat bubble, where the bar was (or bottom-left).
+      if (bar.style.display !== 'none') bar.style.display = 'none';
+      if (mini.open) closeMini();
+      var l = ensureLauncher(), n = (unread.direct || 0) + (unread.channels || 0);
+      var lx = pref.free && pref.left != null ? pref.left : Math.round(sb.r.left) + 12;
+      var lb = pref.free && pref.bottom != null ? pref.bottom : 12;
+      setStyles(l, { display: 'flex', zIndex: String(Math.max((isNaN(sb.z) ? 100 : sb.z) + 1, 900)),
+                     left: clamp(lx, 4, window.innerWidth - 50) + 'px', bottom: clamp(lb, 4, window.innerHeight - 50) + 'px' });
+      var dot = l.querySelector('.dot'), txt = n > 99 ? '99+' : String(n);
+      dot.style.display = n ? '' : 'none';
+      if (dot.textContent !== txt) dot.textContent = txt;
+      l.title = 'Show the chat bar' + (n ? ' — ' + n + ' unread' : '');
+      return;
+    }
+    hideLauncher();
+    if (mode === 'free') {
+      // Wherever the user dragged it, kept on screen when the window changes.
+      var fw = Math.min(FREE_BAR_W, window.innerWidth), fh = bar.offsetHeight || 56;
+      var fl = clamp(pref.left || 0, 0, Math.max(0, window.innerWidth - fw));
+      var fb = clamp(pref.bottom || 0, 0, Math.max(0, window.innerHeight - fh));
+      ['wide', 'rail', 'float'].forEach(function (m) { if (bar.classList.contains(m)) bar.classList.remove(m); });
+      if (!bar.classList.contains('free')) bar.classList.add('free');
+      var fz = String(Math.max((isNaN(sb.z) ? 100 : sb.z) + 1, 900));
+      setStyles(bar, { zIndex: fz, display: 'flex', left: fl + 'px', width: fw + 'px', bottom: fb + 'px' });
+      paintBar(bar);
+      var fp = document.getElementById(MINI);
+      if (fp && mini.open) {
+        var top = window.innerHeight - fb - fh;
+        var pw = Math.min(350, window.innerWidth - 16), pl = clamp(fl, 8, Math.max(8, window.innerWidth - pw - 8));
+        if (top - 12 >= 320) {          // room above the bar: open upwards
+          setStyles(fp, { zIndex: fz, left: pl + 'px', top: 'auto', bottom: (fb + fh) + 'px',
+                          height: Math.min(680, top - 12) + 'px', borderRadius: '12px 12px 0 0' });
+        } else {                        // bar near the top: open downwards
+          setStyles(fp, { zIndex: fz, left: pl + 'px', bottom: 'auto', top: (top + fh) + 'px',
+                          height: Math.max(260, Math.min(680, window.innerHeight - top - fh - 12)) + 'px', borderRadius: '0 0 12px 12px' });
+        }
+      }
+      return;
+    }
+    if (bar.classList.contains('free')) bar.classList.remove('free');
     ['wide', 'rail', 'float'].forEach(function (m) {
       if (bar.classList.contains(m) !== (m === mode)) bar.classList.toggle(m, m === mode);
     });
@@ -326,7 +488,7 @@
       var barH = bar.offsetHeight || 56;
       var pb = bottom + barH;
       var h = Math.max(320, Math.min(680, window.innerHeight - pb - 12));
-      setStyles(panel, { zIndex: z, left: Math.round(sb.r.left) + 'px', bottom: pb + 'px', height: h + 'px' });
+      setStyles(panel, { zIndex: z, left: Math.round(sb.r.left) + 'px', top: 'auto', bottom: pb + 'px', height: h + 'px', borderRadius: '12px 12px 0 0' });
     }
   }
 
@@ -345,6 +507,8 @@
 
   // ── mini panel ─────────────────────────────────────────────────────────
   function openMini(tab) {
+    var pr = loadPref();
+    if (pr.closed) { pr.closed = false; savePref(pr); }
     mini.open = true;
     mini.tab = tab || mini.tab || 'direct';
     mini.room = null;
@@ -743,7 +907,7 @@
       // Ignore changes inside our own bar / panel (they re-render often).
       for (var i = 0; i < list.length; i++) {
         var t = list[i].target;
-        if (t && t.closest && (t.closest('#' + ID) || t.closest('#' + MINI))) continue;
+        if (t && t.closest && (t.closest('#' + ID) || t.closest('#' + MINI) || t.closest('#' + LAUNCH_ID))) continue;
         schedule();
         return;
       }
