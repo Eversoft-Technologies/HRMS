@@ -2268,8 +2268,117 @@
       : state.tab === 'fences' ? fencesHtml()
       : state.tab === 'shifts' ? shiftsHtml()
       : state.tab === 'arrangements' ? arrangementsHtml()
+      : state.tab === 'recalc' ? recalcHtml()
       : (homesHtml() + reviewsHtml());
     wire(body);
+    if (state.tab === 'recalc') wireRecalc(body);
+  }
+
+
+  /* ── Recalculate Hours ─────────────────────────────────────────────────
+     Days saved before multi-session days added up kept only their last
+     session. Preview what recalculating would change (old → new hours per
+     day), then apply. Defaults to this month: earlier months may already be
+     paid, so including them needs an explicit tick. The server refuses an
+     apply if the records moved since the preview. */
+  function ymdLocal(d) { return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2); }
+  function rcState() {
+    if (!state.recalc) {
+      var now = new Date();
+      state.recalc = { from: ymdLocal(new Date(now.getFullYear(), now.getMonth(), 1)), to: ymdLocal(now),
+                       email: '', data: null, loading: false, applying: false, allowClosed: false, msg: '', bad: false };
+    }
+    return state.recalc;
+  }
+  function hmTxt(m) { m = Math.max(0, Math.round(m || 0)); var h = Math.floor(m / 60); return (h ? h + 'h ' : '') + (m % 60) + 'm'; }
+  function recalcHtml() {
+    var s = rcState(), d = s.data;
+    var monthStart = d ? d.monthStart : null;
+    var closed = monthStart ? s.from < monthStart : (s.from < rcState().from && false);
+    var html =
+      '<div style="font-size:13px;color:var(--haa-sub,#64748b);line-height:1.6;margin-bottom:14px">' +
+        'Days where someone checked in and out more than once were saved with only their <b>last</b> session. ' +
+        'This rebuilds each closed day from its check-in / check-out records (each session minus its own breaks) and ' +
+        'shows what would change. <b>Nothing changes until you click Apply.</b> Every change is noted on that day’s timeline.</div>' +
+      '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:14px">' +
+        '<label style="font-size:12px">From<br><input class="haa-in" type="date" id="rc-from" value="' + esc(s.from) + '"></label>' +
+        '<label style="font-size:12px">To<br><input class="haa-in" type="date" id="rc-to" value="' + esc(s.to) + '"></label>' +
+        '<label style="font-size:12px;flex:1;min-width:200px">Employee email (optional)<br><input class="haa-in" type="email" id="rc-email" placeholder="Everyone" value="' + esc(s.email) + '" style="width:100%"></label>' +
+        '<button class="haa-btn" id="rc-preview"' + (s.loading ? ' disabled' : '') + '>' + (s.loading ? 'Checking…' : 'Preview') + '</button>' +
+      '</div>';
+    if (s.msg) html += '<div style="margin-bottom:12px;padding:10px 12px;border-radius:8px;font-size:13px;background:' + (s.bad ? 'rgba(220,38,38,.12);color:#dc2626' : 'rgba(15,157,88,.12);color:#0f9d58') + '">' + esc(s.msg) + '</div>';
+    if (!d) return html + '<div class="haa-empty">Pick a range and click Preview. The default is this month, which has not been paid yet.</div>';
+    if (d.includesClosedMonths) {
+      html += '<div style="margin-bottom:12px;padding:10px 12px;border-radius:8px;font-size:13px;background:rgba(245,158,11,.14);color:#b45309">' +
+        'This range starts before ' + esc(d.monthStart) + '. Those months may already be paid — changing them changes historical figures.</div>';
+    }
+    if (!d.changes.length) {
+      html += '<div class="haa-empty">Nothing to change between ' + esc(d.from) + ' and ' + esc(d.to) + ' — every closed day already adds up.</div>';
+    } else {
+      html += '<div style="font-size:13px;margin-bottom:8px"><b>' + d.changes.length + '</b> day' + (d.changes.length === 1 ? '' : 's') + ' would change:</div>' +
+        '<div style="max-height:340px;overflow:auto;border-radius:8px"><table class="haa-tbl"><thead><tr><th>Date</th><th>Employee</th><th>Worked now</th><th>Worked after</th><th>Overtime now</th><th>Overtime after</th></tr></thead><tbody>' +
+        d.changes.map(function (r) {
+          var up = r.newWorkedMinutes > r.oldWorkedMinutes;
+          return '<tr><td>' + esc(r.date) + '</td><td>' + esc(r.employee) + '<div style="font-size:11px;opacity:.65">' + esc(r.email) + '</div></td>' +
+            '<td>' + hmTxt(r.oldWorkedMinutes) + '</td><td style="font-weight:700;color:' + (up ? '#0f9d58' : '#dc2626') + '">' + hmTxt(r.newWorkedMinutes) + '</td>' +
+            '<td>' + hmTxt(r.oldOvertimeMinutes) + '</td><td style="font-weight:600">' + hmTxt(r.newOvertimeMinutes) + '</td></tr>';
+        }).join('') + '</tbody></table></div>' +
+        '<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:14px">' +
+          (d.includesClosedMonths ? '<label style="font-size:12.5px;display:flex;gap:6px;align-items:center"><input type="checkbox" id="rc-closed"' + (s.allowClosed ? ' checked' : '') + '> I understand earlier months may already be paid</label>' : '') +
+          '<button class="haa-btn" id="rc-apply"' + (s.applying || (d.includesClosedMonths && !s.allowClosed) ? ' disabled' : '') + '>' + (s.applying ? 'Applying…' : 'Apply ' + d.changes.length + ' change' + (d.changes.length === 1 ? '' : 's')) + '</button>' +
+          '<button class="haa-btn sec" id="rc-csv">Download CSV</button>' +
+        '</div>';
+    }
+    if (d.skipped && d.skipped.length) {
+      html += '<div style="margin-top:14px;font-size:12.5px;color:var(--haa-sub,#64748b)"><b>' + d.skipped.length + '</b> day' + (d.skipped.length === 1 ? ' is' : 's are') +
+        ' left as they are — their check-in / check-out records do not pair up (e.g. a check-out was never recorded): ' +
+        d.skipped.slice(0, 15).map(function (r) { return esc(r.employee + ' ' + r.date); }).join(', ') + (d.skipped.length > 15 ? ' …' : '') + '</div>';
+    }
+    return html;
+  }
+  function recalcQuery() {
+    var s = rcState();
+    return 'from=' + encodeURIComponent(s.from) + '&to=' + encodeURIComponent(s.to) + (s.email ? '&email=' + encodeURIComponent(s.email) : '');
+  }
+  function wireRecalc(body) {
+    var s = rcState();
+    var f = body.querySelector('#rc-from'), t = body.querySelector('#rc-to'), e = body.querySelector('#rc-email');
+    if (!f) return;
+    function sync() { s.from = f.value; s.to = t.value; s.email = e.value.trim(); }
+    [f, t, e].forEach(function (x) { x.onchange = function () { sync(); s.data = null; s.msg = ''; render(); }; });
+    body.querySelector('#rc-preview').onclick = function () {
+      sync(); s.loading = true; s.msg = ''; s.allowClosed = false; render();
+      api('/api/attendance/recalculate?' + recalcQuery())
+        .then(function (d) { s.data = d; })
+        .catch(function (er) { s.data = null; s.msg = er.message; s.bad = true; })
+        .then(function () { s.loading = false; render(); });
+    };
+    var cl = body.querySelector('#rc-closed');
+    if (cl) cl.onchange = function () { s.allowClosed = cl.checked; render(); };
+    var csv = body.querySelector('#rc-csv');
+    if (csv) csv.onclick = function () {
+      var lines = [['date', 'employee', 'email', 'worked_now_min', 'worked_after_min', 'overtime_now_min', 'overtime_after_min']]
+        .concat(s.data.changes.map(function (r) { return [r.date, r.employee, r.email, r.oldWorkedMinutes, r.newWorkedMinutes, r.oldOvertimeMinutes, r.newOvertimeMinutes]; }));
+      var text = lines.map(function (row) { return row.map(function (v) { return '"' + String(v).replace(/"/g, '""') + '"'; }).join(','); }).join('\n');
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([text], { type: 'text/csv' }));
+      a.download = 'attendance-recalculation-' + s.data.from + '-to-' + s.data.to + '.csv';
+      a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+    };
+    var ap = body.querySelector('#rc-apply');
+    if (ap) ap.onclick = function () {
+      var n = s.data.changes.length;
+      if (!window.confirm('Update worked time and overtime on ' + n + ' day' + (n === 1 ? '' : 's') + '? Each change is noted on that day’s timeline.')) return;
+      s.applying = true; render();
+      api('/api/attendance/recalculate', { method: 'POST', body: JSON.stringify({
+        from: s.data.from, to: s.data.to, email: s.email, expect: n, allowClosedMonths: s.allowClosed }) })
+        .then(function (r) {
+          s.msg = r.applied + ' day' + (r.applied === 1 ? '' : 's') + ' updated.'; s.bad = false; s.data = null;
+          toast(s.msg);
+        })
+        .catch(function (er) { s.msg = er.message; s.bad = true; })
+        .then(function () { s.applying = false; render(); });
+    };
   }
 
   function val(id) { var e = document.getElementById(id); return e ? e.value.trim() : ''; }
@@ -2756,6 +2865,7 @@
       '<button class="haa-tab" data-tab="shifts">Shifts</button>' +
       '<button class="haa-tab" data-tab="reviews">Off-site Approvals</button>' +
       '<button class="haa-tab" data-tab="arrangements">Work Arrangements</button>' +
+      '<button class="haa-tab" data-tab="recalc">Recalculate Hours</button>' +
       '</div><div class="haa-body"></div></div>';
     document.body.appendChild(back);
 
