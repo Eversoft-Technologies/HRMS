@@ -1723,8 +1723,8 @@
       '<div class="haa-grid" style="margin-bottom:12px">' +
       '<div><label class="haa-lbl">Name</label><input class="haa-in" id="haa-f-name" placeholder="Head Office"></div>' +
       '<div><label class="haa-lbl">Radius (m)</label><input class="haa-in" id="haa-f-rad" value="200" type="number" min="20" step="10"></div>' +
-      '<div><label class="haa-lbl">Latitude</label><input class="haa-in" id="haa-f-lat" placeholder="click the map" readonly></div>' +
-      '<div><label class="haa-lbl">Longitude</label><input class="haa-in" id="haa-f-lng" placeholder="click the map" readonly></div>' +
+      '<div><label class="haa-lbl">Latitude</label><input class="haa-in" id="haa-f-lat" placeholder="click the map" ></div>' +
+      '<div><label class="haa-lbl">Longitude</label><input class="haa-in" id="haa-f-lng" placeholder="click the map" ></div>' +
       '</div>' +
       '<div id="haa-picker"></div>' +
       '<div style="margin-top:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' +
