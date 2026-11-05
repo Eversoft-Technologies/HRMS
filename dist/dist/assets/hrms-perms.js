@@ -552,6 +552,7 @@
             localStorage.setItem('hrms_role_name', d.role || '');
           } catch (_) {}
           window.dispatchEvent(new CustomEvent('hrmsPermsLoaded', { detail: { permissions: d.permissions, role: d.role } }));
+          syncSessionRole(d.accountRole);
         } else {
           known = false;   // reachable but no valid set → don't enforce
         }
@@ -562,6 +563,24 @@
         known = false;
         applyPerms();
       });
+  }
+
+  /* The React app builds its menu from the role saved in the browser at
+     login (admin → every section, recruitment → Recruit + Employees, hr →
+     Payroll + HR Management) and never re-reads it. When the account's role
+     changes, correct the saved session and reload ONCE so the menu follows —
+     instead of a Super Admin seeing a recruiter's menu until they sign out.
+     The sessionStorage guard stops a reload loop if anything else rewrites it. */
+  function syncSessionRole(accountRole) {
+    if (!accountRole) return;
+    var s;
+    try { s = JSON.parse(localStorage.getItem('hrms_session') || 'null'); } catch (_) { return; }
+    if (!s || !s.email || s.role === accountRole) return;
+    var guard = 'hrms_role_synced_' + s.email + '_' + accountRole;
+    try { if (sessionStorage.getItem(guard)) return; sessionStorage.setItem(guard, '1'); } catch (_) { return; }
+    s.role = accountRole;
+    try { localStorage.setItem('hrms_session', JSON.stringify(s)); } catch (_) { return; }
+    location.reload();
   }
 
   /* ── observe React renders + re-check on navigation ────────────────────── */

@@ -2126,7 +2126,10 @@ div:has(> #hrms-kpi-btn) button svg {
      left over and the title reappears by itself. */
   body .topbar > * { flex-shrink: 0; }
   body .topbar > .topbar-title { flex: 1 1 auto; }
-  .topbar .av { flex: 0 0 auto; margin-left: 2px; }
+  /* :not(.hrms-drawer-av): the profile drawer is rendered inside the top bar
+     and its 84px photo carries the same .av class — these top-bar rules
+     shrank it to 30px, leaving the status dot covering the picture. */
+  .topbar .av:not(.hrms-drawer-av) { flex: 0 0 auto; margin-left: 2px; }
 }
 @media (max-width: 560px) {
   /* Space comes off the chrome first, so the title keeps its words.
@@ -2141,12 +2144,12 @@ div:has(> #hrms-kpi-btn) button svg {
   #hrms-hamburger { width: 32px; height: 32px; margin-right: 0; }
   #hrms-hamburger svg { width: 20px; height: 20px; }
   .topbar .hrms-ci-wrap { padding: 2px 6px 2px 4px; gap: 4px; border-width: 1px; }
-  .topbar .av { width: 30px !important; height: 30px !important; font-size: 11px !important; }
+  .topbar .av:not(.hrms-drawer-av) { width: 30px !important; height: 30px !important; font-size: 11px !important; }
 }
 @media (max-width: 400px) {
   /* Last of the slack, for the narrowest phones. */
   body .topbar { gap: 4px; padding: 0 8px; }
-  .topbar .av { margin-left: 0; }
+  .topbar .av:not(.hrms-drawer-av) { margin-left: 0; }
   /* A ceiling on the one widget whose width is set elsewhere and can
      grow with its label. Without a bound, a long label there is enough
      on its own to push the account off the edge again; the icon and
