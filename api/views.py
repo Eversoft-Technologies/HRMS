@@ -3138,12 +3138,133 @@ def parse_date(value):
 
 
 # --- Attendance + Check-In / Check-Out -------------------------------------
-def _session_figures(att, check_in, check_out, shift):
-    """Worked / overtime / early-exit minutes for a session from ``check_in`` to
-    ``check_out`` — the same rules as a live check-out: breaks are not worked
-    time, overtime is past the shift's threshold (or a flexible shift's daily
-    hours), early exit is before the shift end (next day for a night shift)."""
-    worked = max(int((check_out - check_in).total_seconds() // 60) - (att.break_minutes or 0), 0)
+def _day_gross_effective(rec, now=None):
+    """(gross, effective) minutes for a work day. Gross runs from the day's
+    first check-in to its last check-out — or to now while still checked in;
+    effective is the time worked over all sessions, the running one included
+    (minus its breaks, an open break too)."""
+    if rec is None or not rec.check_in:
+        return 0, (rec.worked_minutes or 0) if rec else 0
+    now = now or local_now()
+    first = (AttendanceEvent.objects.filter(email=rec.email, date=rec.date, event='check-in')
+             .order_by('at').values_list('at', flat=True).first())
+    first = min(first, rec.check_in) if first else rec.check_in
+    running = _is_checked_in(rec)
+    end = now if running else rec.check_out
+    gross = max(int((end - first).total_seconds() // 60), 0) if end else 0
+    if not running:
+        return gross, rec.worked_minutes or 0
+    brk = _session_breaks(rec)
+    if _is_break_label(rec.presence):
+        started = (AttendanceEvent.objects.filter(email=rec.email, date=rec.date, event='break-start',
+                                                  at__gte=rec.check_in)
+                   .order_by('-at').values_list('at', flat=True).first())
+        if started:
+            brk += max(int((now - started).total_seconds() // 60), 0)
+    session = int((now - rec.check_in).total_seconds() // 60)
+    return gross, (rec.worked_minutes or 0) + max(session - brk, 0)
+
+
+#: A check-in up to this long after a night shift ended still belongs to that
+#: night (see _work_date_for).
+NIGHT_SHIFT_TAIL = timedelta(hours=4)
+#: On Time / Late is judged on the first check-in from this long before the
+#: shift starts; earlier check-ins (e.g. 02:18 on a day whose shift starts at
+#: 18:00) do not decide it.
+SHIFT_EARLY_WINDOW = timedelta(hours=4)
+CHECKOUT_EVENTS = ('check-out', 'auto-checkout-departure')
+
+
+def _break_minutes_before(att, until):
+    """Break minutes of this work day recorded (break-start → break-end) before
+    ``until`` — i.e. the breaks that belong to earlier sessions."""
+    return _break_minutes_between(att, None, until)
+
+
+def _break_minutes_between(att, start, until):
+    """Break minutes of this work day recorded (break-start → break-end) in
+    [start, until)."""
+    total, started = 0, None
+    qs = AttendanceEvent.objects.filter(email=att.email, date=att.date,
+                                        event__in=('break-start', 'break-end'), at__lt=until)
+    if start is not None:
+        qs = qs.filter(at__gte=start)
+    for event, at in qs.order_by('at', 'id').values_list('event', 'at'):
+        if event == 'break-start':
+            started = at
+        elif started is not None:
+            total += max(int((at - started).total_seconds() // 60), 0)
+            started = None
+    return total
+
+
+def _earlier_sessions(att):
+    """The day's closed sessions before the row's own (latest) one, as
+    (check_in, check_out) pairs from its event trail. None when the trail
+    does not pair up (e.g. a check-out was never recorded): then nobody can
+    say what was worked, and the stored figures are left alone."""
+    sessions, start = [], None
+    for event, at in (AttendanceEvent.objects
+                      .filter(email=att.email, date=att.date, event__in=('check-in',) + CHECKOUT_EVENTS)
+                      .order_by('at', 'id').values_list('event', 'at')):
+        if event == 'check-in':
+            if start is not None:
+                return None
+            start = at
+        elif start is not None:
+            sessions.append((start, at))
+            start = None
+    return [(i, o) for i, o in sessions if att.check_in and o <= att.check_in]
+
+
+def _recompute_worked(att):
+    """Worked minutes of a closed day from its sessions: earlier ones from the
+    event trail + the row's own check-in → check-out, each minus its own
+    breaks. None when it cannot be worked out reliably."""
+    if not (att.check_in and att.check_out) or _is_checked_in(att):
+        return None
+    earlier = _earlier_sessions(att)
+    if earlier is None:
+        return None
+    total = sum(max(int((o - i).total_seconds() // 60) - _break_minutes_between(att, i, o), 0)
+                for i, o in earlier)
+    last = max(int((att.check_out - att.check_in).total_seconds() // 60) - _session_breaks(att), 0)
+    return total + last
+
+
+def _overtime_for(worked, shift):
+    if shift.is_flexible:
+        return max(worked - int((shift.flex_hours_per_day or 8) * 60), 0)
+    return max(worked - (shift.overtime_after_minutes or 540), 0)
+
+
+def _session_breaks(att):
+    """Break minutes taken in the session that started at ``att.check_in``.
+    ``break_minutes`` is the whole day's total; earlier sessions' breaks are
+    taken off it (from their events — rows without events count it all)."""
+    total = att.break_minutes or 0
+    if not att.check_in:
+        return total
+    return max(total - _break_minutes_before(att, att.check_in), 0)
+
+
+def _prior_worked(att):
+    """Worked minutes of the day's earlier, already closed sessions. While a
+    session is open, worked_minutes holds exactly that (check-in never resets
+    it); once closed it already includes the last session."""
+    return (att.worked_minutes or 0) if _is_checked_in(att) else 0
+
+
+def _session_figures(att, check_in, check_out, shift, prior=None, breaks=None):
+    """Worked / overtime / early-exit minutes for the day once the session
+    ``check_in`` → ``check_out`` is closed — the same rules as a live
+    check-out: the day's earlier sessions (``prior``) plus this one minus the
+    breaks taken in it; overtime is past the shift's threshold (or a flexible
+    shift's daily hours) on the day's total, early exit is before the shift
+    end (next day for a night shift)."""
+    prior = _prior_worked(att) if prior is None else prior
+    breaks = _session_breaks(att) if breaks is None else breaks
+    worked = prior + max(int((check_out - check_in).total_seconds() // 60) - breaks, 0)
     if shift.is_flexible:
         req = int((shift.flex_hours_per_day or 8) * 60)
         return {'workedMinutes': worked, 'overtimeMinutes': max(worked - req, 0),
@@ -3166,9 +3287,18 @@ def _correction_preview(corr, att=None):
         return None
     shift = (Shift.objects.filter(pk=att.shift_id).first() if att.shift_id else None) \
         or _get_active_shift(corr.email, corr.attendance_date)
-    out = _session_figures(att, check_in, corr.requested_check_out, shift)
+    out = _session_figures(att, check_in, corr.requested_check_out, shift, **_correction_basis(corr, att))
     out['grossMinutes'] = int((corr.requested_check_out - check_in).total_seconds() // 60)
     return out
+
+
+def _correction_basis(corr, att):
+    """Closing the session that is still open adds to the day's earlier
+    sessions; a correction that also moves the check-in (or rewrites a closed
+    day) describes the whole day, so it starts from nothing."""
+    if not corr.requested_check_in and _is_checked_in(att):
+        return {'prior': att.worked_minutes or 0, 'breaks': _session_breaks(att)}
+    return {'prior': 0, 'breaks': att.break_minutes or 0}
 
 
 @api_view(['GET'])
@@ -3440,8 +3570,16 @@ def _work_date_for(email, now):
     today = now.date()
     yesterday = today - timedelta(days=1)
     shift = _get_active_shift(email, yesterday)
-    if _crosses_midnight(shift) and now < _shift_end_dt(shift, yesterday):
-        return yesterday
+    if _crosses_midnight(shift):
+        end = _shift_end_dt(shift, yesterday)
+        if now < end:
+            return yesterday
+        # Shortly after the night shift ended (someone who checked out at
+        # 02:00 and back in at 02:18 to finish up): still last night's work —
+        # overtime on that night, not a new day whose "On Time" it decides.
+        if now < end + NIGHT_SHIFT_TAIL and EmployeeAttendance.objects.filter(
+                email=email, date=yesterday, check_in__isnull=False).exists():
+            return yesterday
     return today
 
 
@@ -3841,13 +3979,20 @@ def attendance_check_in(request):
                 'status': 'Pending',
             }, status=202)
 
-    # Status (present/late) based on first check-in
-    if created:
-        if shift.is_flexible:
+    # Status (present/late): judged on the first check-in inside the shift's
+    # window (from SHIFT_EARLY_WINDOW before it starts). A check-in long
+    # before that — 02:18 on a day whose shift starts at 18:00 — is extra
+    # time, not the arrival for this shift, so it must not decide "On Time".
+    if shift.is_flexible:
+        if created:
             obj.late_minutes = 0
             obj.status = 'present'
-        else:
-            shift_start = datetime.combine(work_date, shift.start_time)
+    else:
+        shift_start = datetime.combine(work_date, shift.start_time)
+        window_start = shift_start - SHIFT_EARLY_WINDOW
+        judged = AttendanceEvent.objects.filter(
+            email=email, date=work_date, event='check-in', at__gte=window_start, at__lt=now).exists()
+        if now >= window_start and not judged:
             grace_start = shift_start + timedelta(minutes=shift.grace_minutes)
             if now > grace_start:
                 diff_min = int((now - shift_start).total_seconds() // 60)
@@ -3856,6 +4001,9 @@ def attendance_check_in(request):
             else:
                 obj.late_minutes = 0
                 obj.status = 'present'
+        elif created:
+            obj.late_minutes = 0          # provisional until the shift's own check-in
+            obj.status = 'present'
 
     # Start a new session
     obj.check_in = now
@@ -3974,7 +4122,10 @@ def attendance_check_out(request):
         )
 
     if _is_checked_in(obj):
-        obj.worked_minutes = max(session - (obj.break_minutes or 0), 0)
+        # Earlier sessions today + this one minus only ITS breaks. Replacing
+        # the total here lost every earlier session (in 9–12, out, in 13–18
+        # counted 13–18 only) and took all of the day's breaks off this one.
+        obj.worked_minutes = (obj.worked_minutes or 0) + max(session - _session_breaks(obj), 0)
 
     obj.check_out = now
     obj.presence = ''
@@ -4307,10 +4458,14 @@ def _live_clock_extras(email, day, obj):
             on_break, since = False, None
     if obj is not None and obj.check_out:
         on_break, since = False, None
+    open_session = obj is not None and _is_checked_in(obj)
     return {
         'overtimeAfterMinutes': threshold,
         'onBreak': on_break,
         'breakStartedAt': since.strftime('%Y-%m-%d %H:%M:%S') if since else None,
+        # The live Working tile = earlier sessions + the running one.
+        'priorWorkedMinutes': _prior_worked(obj) if open_session else 0,
+        'breaksBeforeSessionMinutes': _break_minutes_before(obj, obj.check_in) if open_session else 0,
     }
 
 
@@ -4324,11 +4479,45 @@ def attendance_detail(request, pk):
     if request.method == 'DELETE':
         obj.delete()
         return Response({'ok': True})
-    serializer = EmployeeAttendanceSerializer(obj, data=request.data, partial=True)
+    data = request.data
+    total_keys = ('worked_minutes', 'workedMinutes', 'overtime_minutes', 'overtimeMinutes')
+    if _is_checked_in(obj) and any(k in data for k in total_keys):
+        # A total typed over a running session would be treated as "earlier
+        # sessions" and the running one added on top at check-out.
+        return Response({
+            'message': f'{obj.employee_name or obj.email} is still checked in, so worked time cannot be '
+                       f'set by hand. Check them out first, or raise an attendance correction — worked '
+                       f'time is calculated from the check-in and check-out times.',
+            'code': 'SESSION_OPEN'}, status=409)
+    before = (obj.check_in, obj.check_out, obj.break_minutes, obj.worked_minutes)
+    serializer = EmployeeAttendanceSerializer(obj, data=data, partial=True)
     if not serializer.is_valid():
         return serializer_err(serializer)
+    vd = serializer.validated_data
+    cin, cout = vd.get('check_in', obj.check_in), vd.get('check_out', obj.check_out)
+    if cin and cout and cout <= cin and 'check_out' in vd:
+        return err('The check-out must be after the check-in.')
     serializer.save()
-    return Response(serializer.data)
+    obj.refresh_from_db()
+    # Times changed and no total given: the total follows the times (all of
+    # the day's sessions, each minus its own breaks), and so does overtime.
+    if (obj.check_in, obj.check_out, obj.break_minutes) != before[:3] \
+            and not any(k in data for k in total_keys) and not _is_checked_in(obj):
+        worked = _recompute_worked(obj)
+        if worked is None and obj.check_in and obj.check_out:
+            worked = max(int((obj.check_out - obj.check_in).total_seconds() // 60) - (obj.break_minutes or 0), 0)
+        if worked is not None:
+            shift = (Shift.objects.filter(pk=obj.shift_id).first() if obj.shift_id else None) \
+                or _get_active_shift(obj.email, obj.date)
+            obj.worked_minutes = worked
+            obj.overtime_minutes = _overtime_for(worked, shift)
+            obj.save(update_fields=['worked_minutes', 'overtime_minutes'])
+    actor, _name = _actor_identity(request)
+    AttendanceEvent.objects.create(
+        email=obj.email, employee_name=obj.employee_name, date=obj.date, event='hr-edit',
+        location=(f'{actor or "HR"}: worked {_fmt_dur(before[3] or 0)} → {_fmt_dur(obj.worked_minutes or 0)}')[:120],
+        at=local_now())
+    return Response(EmployeeAttendanceSerializer(obj).data)
 
 
 # --- Activity Log + Team Status (attendance_events) ------------------------
@@ -7737,17 +7926,25 @@ def my_permissions(request):
         is_super = bool(role and role.name == 'Super Admin')
     else:
         is_super = (role and role.name == 'Super Admin') or (user and (user.role or '').lower() == 'admin')
+    # The role the React app's menu is built from (it is saved in the browser
+    # at login and never re-read). Sent here so a session saved under an older
+    # role is corrected — otherwise an account promoted to admin keeps the old
+    # limited menu until it signs out.
+    account_role = ('admin' if is_super else (user.role or '')) if user else None
     if is_super:
         codes = list(Permission.objects.filter(is_active=True).values_list('code', flat=True))
         return Response({
             'email': email, 'role': (role.name if role else 'Super Admin'),
             'roleId': (role.id if role else None), 'superAdmin': True, 'permissions': codes,
+            'accountRole': account_role,
         })
     if not role:
-        return Response({'email': email, 'role': None, 'roleId': None, 'permissions': []})
+        return Response({'email': email, 'role': None, 'roleId': None, 'permissions': [],
+                         'accountRole': account_role})
     codes = list(Permission.objects.filter(
         role_permissions__role=role, is_active=True).values_list('code', flat=True))
-    return Response({'email': email, 'role': role.name, 'roleId': role.id, 'permissions': codes})
+    return Response({'email': email, 'role': role.name, 'roleId': role.id, 'permissions': codes,
+                     'accountRole': account_role})
 
 
 # --- RBAC user management (create a login and assign an RBAC role) ----------
@@ -8697,6 +8894,7 @@ def attendance_correction_detail(request, pk):
                 email=inst.email,
                 date=inst.attendance_date
             )
+            basis = _correction_basis(inst, att)      # before check_in/out change
             if inst.requested_check_in:
                 att.check_in = inst.requested_check_in
             if inst.requested_check_out:
@@ -8706,7 +8904,7 @@ def attendance_correction_detail(request, pk):
                 or _get_active_shift(inst.email, inst.attendance_date)
             att.shift_id = shift.id
             if att.check_in and att.check_out:
-                fig = _session_figures(att, att.check_in, att.check_out, shift)
+                fig = _session_figures(att, att.check_in, att.check_out, shift, **basis)
                 att.worked_minutes = fig['workedMinutes']
                 att.overtime_minutes = fig['overtimeMinutes']
                 att.early_exit_minutes = fig['earlyExitMinutes']
@@ -10340,6 +10538,10 @@ def _fmt_ampm(d):
 
 def _event_label(ev):
     ev = str(ev or '')
+    if ev == 'hr-edit':
+        return 'Edited by HR'
+    if ev == 'recalculated':
+        return 'Hours recalculated'
     if ev == 'auto-checkout-departure':
         return 'Auto check-out (left office)'
     if 'check-in' in ev:
@@ -10374,8 +10576,7 @@ def attendance_day_detail(request):
     shift = _get_active_shift(email, day)
     check_in = rec.check_in if rec else None
     check_out = rec.check_out if rec else None
-    gross = int((check_out - check_in).total_seconds() // 60) if (check_in and check_out) else 0
-    effective = (rec.worked_minutes if rec else 0) or 0
+    gross, effective = _day_gross_effective(rec)
     name = (rec.employee_name if rec and rec.employee_name else '') or email.split('@')[0]
     events = AttendanceEvent.objects.filter(email=email, date=day).order_by('at')
     ev = [{

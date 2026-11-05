@@ -502,7 +502,7 @@
     return { on: on, since: since };
   }
   // Mirrors the server's check-out maths (attendance_check_out in api/views.py):
-  // working = session minus breaks; overtime = working minus the shift's
+  // working = earlier sessions + this session minus its breaks; overtime = working minus the shift's
   // threshold, which the server sends as overtimeAfterMinutes.
   function liveMinutes() {
     var rec = todayRec || {};
@@ -513,8 +513,12 @@
     var onBreak = checkedIn && brk.on;
     var brkNow = (onBreak && !isNaN(brk.since)) ? Math.max(0, (now - brk.since) / 60000) : 0;
     var breakMin = (rec.breakMinutes || 0) + brkNow;
+    // Earlier sessions today (closed) + the running one minus only its own
+    // breaks — the same sum the server makes at check-out.
+    var prior = Number(rec.priorWorkedMinutes) || 0;
+    var sessionBreak = Math.max(0, breakMin - (Number(rec.breaksBeforeSessionMinutes) || 0));
     var worked = (checkedIn && !isNaN(inAt))
-      ? Math.max(0, (now - inAt) / 60000 - breakMin)
+      ? prior + Math.max(0, (now - inAt) / 60000 - sessionBreak)
       : (rec.workedMinutes || 0);
     var threshold = (rec.overtimeAfterMinutes != null) ? Number(rec.overtimeAfterMinutes) : 540;
     var ot = checkedIn ? Math.max(0, worked - threshold) : (rec.overtimeMinutes || 0);

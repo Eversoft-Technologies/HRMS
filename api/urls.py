@@ -1,6 +1,7 @@
 from django.urls import path
 
 from . import ai_settings
+from . import attendance_recalc
 from . import chat_extras
 from . import notification_prefs
 from . import org_views
@@ -168,6 +169,7 @@ urlpatterns = [
     path('attendance/day-detail', views.attendance_day_detail),
     path('attendance/location-punch', views.attendance_location_punch),
     path('attendance/<int:pk>', views.attendance_detail),
+    path('attendance/recalculate', attendance_recalc.attendance_recalculate),
 
     # Shifts
     path('shifts', views.shifts),
