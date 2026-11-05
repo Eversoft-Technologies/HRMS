@@ -7926,17 +7926,25 @@ def my_permissions(request):
         is_super = bool(role and role.name == 'Super Admin')
     else:
         is_super = (role and role.name == 'Super Admin') or (user and (user.role or '').lower() == 'admin')
+    # The role the React app's menu is built from (it is saved in the browser
+    # at login and never re-read). Sent here so a session saved under an older
+    # role is corrected — otherwise an account promoted to admin keeps the old
+    # limited menu until it signs out.
+    account_role = ('admin' if is_super else (user.role or '')) if user else None
     if is_super:
         codes = list(Permission.objects.filter(is_active=True).values_list('code', flat=True))
         return Response({
             'email': email, 'role': (role.name if role else 'Super Admin'),
             'roleId': (role.id if role else None), 'superAdmin': True, 'permissions': codes,
+            'accountRole': account_role,
         })
     if not role:
-        return Response({'email': email, 'role': None, 'roleId': None, 'permissions': []})
+        return Response({'email': email, 'role': None, 'roleId': None, 'permissions': [],
+                         'accountRole': account_role})
     codes = list(Permission.objects.filter(
         role_permissions__role=role, is_active=True).values_list('code', flat=True))
-    return Response({'email': email, 'role': role.name, 'roleId': role.id, 'permissions': codes})
+    return Response({'email': email, 'role': role.name, 'roleId': role.id, 'permissions': codes,
+                     'accountRole': account_role})
 
 
 # --- RBAC user management (create a login and assign an RBAC role) ----------
