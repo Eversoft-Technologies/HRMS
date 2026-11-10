@@ -1716,15 +1716,15 @@
         '<td><span class="haa-pill" style="background:' +
         ((f.isActive === false) ? 'var(--haa-err-bg);color:var(--haa-err-fg)' : 'var(--haa-ok-bg);color:var(--haa-ok-fg)') + '">' +
         ((f.isActive === false) ? 'Inactive' : 'Active') + '</span></td>' +
-        '<td style="text-align:right"><button class="haa-btn dgr" data-del-fence="' + f.id + '">Delete</button></td></tr>';
+        '<td style="text-align:right"><button class="haa-btn" style="background-color: #2b70fa; color: white; margin-right: 6px;" data-edit-fence="' + f.id + '">Edit</button><button class="haa-btn dgr" data-del-fence="' + f.id + '">Delete</button></td>'
     }).join('');
     return errorBanner('fences') +
       '<div class="haa-card"><div style="font-weight:700;margin-bottom:12px;font-size:14px;">Add an office location</div>' +
       '<div class="haa-grid" style="margin-bottom:12px">' +
       '<div><label class="haa-lbl">Name</label><input class="haa-in" id="haa-f-name" placeholder="Head Office"></div>' +
       '<div><label class="haa-lbl">Radius (m)</label><input class="haa-in" id="haa-f-rad" value="200" type="number" min="20" step="10"></div>' +
-      '<div><label class="haa-lbl">Latitude</label><input class="haa-in" id="haa-f-lat" placeholder="click the map" readonly></div>' +
-      '<div><label class="haa-lbl">Longitude</label><input class="haa-in" id="haa-f-lng" placeholder="click the map" readonly></div>' +
+      '<div><label class="haa-lbl">Latitude</label><input class="haa-in" id="haa-f-lat" placeholder="click the map" ></div>' +
+      '<div><label class="haa-lbl">Longitude</label><input class="haa-in" id="haa-f-lng" placeholder="click the map" ></div>' +
       '</div>' +
       '<div id="haa-picker"></div>' +
       '<div style="margin-top:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' +
@@ -2641,6 +2641,23 @@
           };
         })(els[i]);
       }
+      function bindEdit(attr, url, label) {
+    var els = body.querySelectorAll('[' + attr + ']');
+    for (var i = 0; i < els.length; i++) {
+        (function (el) {
+            el.onclick = function () {
+                var id = el.getAttribute(attr);
+                api(url + id, { method: 'GET' })
+                    .then(function (data) {
+                        toast(label + ' loaded for editing');
+                    })
+                    .catch(function (e) { toast(e.message, true); });
+            };
+        })(els[i]);
+    }
+}
+
+bindEdit('data-edit-fence', '/api/attendance/geofences/', 'location');
     }
     bindDelete('data-del-fence', '/api/attendance/geofences/', 'location');
     bindDelete('data-del-shift', '/api/shifts/', 'shift');
