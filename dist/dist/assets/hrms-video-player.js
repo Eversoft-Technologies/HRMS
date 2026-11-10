@@ -321,7 +321,7 @@
         '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;padding:28px;text-align:center;background:radial-gradient(circle at center, #1e293b 0%, #080d1a 100%);">',
         '  <div style="width:64px;height:64px;border-radius:50%;background:rgba(59,130,246,0.15);border:1.5px solid rgba(59,130,246,0.35);display:flex;align-items:center;justify-content:center;font-size:28px;margin-bottom:14px;">🎙️</div>',
         '  <div style="font-size:16px;font-weight:800;color:#f8fafc;margin-bottom:6px;">Audio / Transcript Assessment</div>',
-        '  <div style="font-size:12.5px;color:#94a3b8;max-width:380px;line-height:1.6;margin-bottom:16px;">This session was submitted with text/voice answers without a video binary stream. The verified AI evaluation and complete transcript are displayed alongside.</div>',
+        '  <div style="font-size:12.5px;color:#94a3b8;max-width:380px;line-height:1.6;margin-bottom:16px;">Incomplete \u2014 no video was saved for this interview (the camera was blocked, or the video upload did not finish). The interview link stays open so the candidate can take it again. The answers and AI evaluation are shown alongside.</div>',
         '  <div style="display:inline-flex;align-items:center;gap:6px;padding:5px 12px;border-radius:999px;background:rgba(34,211,165,0.1);border:1px solid rgba(34,211,165,0.25);color:#22c55e;font-size:11.5px;font-weight:700;">✓ All ' + ((meta.responses && meta.responses.length) || '5') + ' Questions Evaluated</div>',
         '</div>'
       ].join('\n');

@@ -70,6 +70,40 @@ class NightShiftTests(TestCase):
         self.assertEqual(row.early_exit_minutes, 0)                    # left after 02:30 on Tuesday
         self.assertEqual(set(AttendanceEvent.objects.filter(email=self.email).values_list('date', flat=True)), {MON})
 
+    def test_activity_log_and_break_button_after_midnight(self):
+        """The log and the Start/End Break button read /api/attendance/events.
+        After midnight it must still return last night's events, or the break
+        started before midnight shows no End Break and the log is empty."""
+        with at(datetime(2026, 11, 2, 19, 7)):
+            self.assertEqual(self.check_in().status_code, 201)
+        with at(datetime(2026, 11, 3, 0, 10)):
+            self.assertEqual(self.post('/api/attendance/events', event='break-start', location='Office').status_code, 201)
+        with at(datetime(2026, 11, 3, 0, 13)):
+            evs = self.c.get('/api/attendance/events?email=' + self.email).json()
+            self.assertEqual([e['type'] if 'type' in e else e['event'] for e in evs][-2:], ['check-in', 'break-start'])
+            self.assertTrue(self.today()['onBreak'])
+            # End Break works and the log shows it
+            self.assertEqual(self.post('/api/attendance/events', event='break-end', location='Office').status_code, 201)
+            evs = self.c.get('/api/attendance/events?email=' + self.email).json()
+            self.assertEqual(len(evs), 3)
+            self.assertFalse(self.today()['onBreak'])
+        # an explicit ?date= is still honoured
+        with at(datetime(2026, 11, 3, 0, 15)):
+            self.assertEqual(self.c.get(f'/api/attendance/events?email={self.email}&date=2026-11-03').json(), [])
+
+    def test_day_popup_after_midnight_shows_the_running_shift(self):
+        with at(datetime(2026, 11, 2, 19, 7)):
+            self.assertEqual(self.check_in().status_code, 201)
+        with at(datetime(2026, 11, 3, 0, 13)):
+            d = self.c.get('/api/attendance/day-detail?email=' + self.email).json()
+            self.assertEqual(d['date'], '2026-11-02')
+            self.assertNotEqual(d['checkIn'], '')
+            self.assertTrue(d['checkIn'])
+            self.assertIn('check-in', [e['event'] for e in d['events']])
+            # an explicit date is still honoured
+            d2 = self.c.get(f'/api/attendance/day-detail?email={self.email}&date=2026-11-03').json()
+            self.assertEqual((d2['date'], d2['events']), ('2026-11-03', []))
+
     def test_arriving_after_midnight_is_late_on_last_nights_shift(self):
         with at(datetime(2026, 11, 3, 0, 20)):
             self.assertEqual(self.check_in().status_code, 201)

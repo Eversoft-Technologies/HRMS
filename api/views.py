@@ -1446,7 +1446,10 @@ def recordings(request):
     if not serializer.is_valid():
         return serializer_err(serializer)
     serializer.save()
-    _mark_interview_taken(body.get('candidateEmail'), body.get('role'), body.get('totalScore'))
+    # Not "taken" yet: the interview counts as completed only once its video
+    # is on the server (recording_video below). An interview whose camera was
+    # blocked or whose upload failed stays incomplete, and the candidate's
+    # link stays usable so they can take it again.
     return Response(serializer.data, status=201)
 
 
@@ -1590,6 +1593,15 @@ def recording_thumbnail(request, pk):
     return HttpResponse(status=404)
 
 
+def _complete_interview(pk):
+    """The video is saved: now the interview counts as taken (link latched,
+    score carried over)."""
+    rec = (InterviewRecording.objects.filter(pk=pk)
+           .values('candidate_email', 'role', 'total_score').first())
+    if rec:
+        _mark_interview_taken(rec['candidate_email'], rec['role'], rec['total_score'])
+
+
 @csrf_exempt
 def recording_video(request, pk):
     """
@@ -1609,12 +1621,14 @@ def recording_video(request, pk):
         try:
             from . import video_processor
             result = video_processor.save_interview_video(pk, data, mime)
+            _complete_interview(pk)
             return JsonResponse(result)
         except Exception as exc:
             logger.error(f"[RecordingVideo] Disk save failed: {exc}", exc_info=True)
             # Fallback direct buffer write if disk save encounters an unexpected error
             InterviewRecording.objects.filter(pk=pk).update(
                 video_buffer=data, video_mime=mime, has_video=True)
+            _complete_interview(pk)
             return JsonResponse({'ok': True, 'fallback': 'buffer'})
 
     if request.method != 'GET':
@@ -5121,9 +5135,20 @@ def attendance_events(request):
     """GET: today's (or ?date=) activity-log events for ?email=.
     POST: append an event (break / mode switch) to the signed-in user's day with GPS."""
     if request.method == 'GET':
-        day = parse_date(request.GET.get('date')) or local_now().date()
-        qs = AttendanceEvent.objects.filter(date=day)
         email = norm_email(request.GET.get('email'))
+        day = parse_date(request.GET.get('date'))
+        if day is None:
+            now = local_now()
+            day = now.date()
+            # After midnight a night shift that started yesterday is still
+            # running: its events (check-in, break-start…) are filed under the
+            # shift's work day (see the POST below), so "today" for the log and
+            # for the Start/End Break button is that day, not the calendar one.
+            if email:
+                sess = _current_attendance(email, now)
+                if sess is not None and _is_checked_in(sess):
+                    day = sess.date
+        qs = AttendanceEvent.objects.filter(date=day)
         if email:
             qs = qs.filter(email=email)
         return Response(AttendanceEventSerializer(qs, many=True).data)
@@ -5196,7 +5221,7 @@ def attendance_events(request):
 
     now = local_now()
     if switch_ok is not None:
-        att = EmployeeAttendance.objects.filter(email=email, date=now.date()).first()
+        att = _current_attendance(email, now)
         if att is not None:
             att.is_wfh = event == 'remote-switch'
             att.geo_verified = True
@@ -6898,6 +6923,7 @@ def bench_sales_profile_upload(request, pk):
     sees them, and base64 inflates every file by a third on top. Storage is
     unchanged — the file is still kept base64-in-row."""
     import base64
+    import mimetypes
 
     obj = BenchSalesProfile.objects.only('id').filter(pk=pk).first()
     if not obj:
@@ -10569,9 +10595,15 @@ def attendance_day_detail(request):
         return err('You are not allowed to view this attendance.', 403)
     ds = request.query_params.get('date')
     try:
-        day = datetime.strptime(ds, '%Y-%m-%d').date() if ds else local_today()
+        day = datetime.strptime(ds, '%Y-%m-%d').date() if ds else None
     except ValueError:
         return err('Invalid date.')
+    if day is None:
+        # "Today" for someone on a night shift that started yesterday is that
+        # shift's day: its record, events and punches are all filed under it.
+        now = local_now()
+        sess = _current_attendance(email, now)
+        day = sess.date if (sess is not None and _is_checked_in(sess)) else local_today()
     rec = EmployeeAttendance.objects.filter(email=email, date=day).first()
     shift = _get_active_shift(email, day)
     check_in = rec.check_in if rec else None
