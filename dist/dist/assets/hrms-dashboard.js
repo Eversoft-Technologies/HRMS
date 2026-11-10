@@ -174,12 +174,13 @@
       '.hrms-dir-date { white-space: nowrap; }',
       '.hrms-dir-action { font-size: 12px; font-weight: 600; color: var(--accent); white-space: nowrap; }',
       '.hrms-dir-row:hover .hrms-dir-action { text-decoration: underline; }',
-      '.hrms-dir-pagination { display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:12px 2px 2px;color:var(--text2);font-size:12px; }',
-      '.hrms-dir-pagination-controls { display:flex;align-items:center;gap:8px; }',
-      '.hrms-dir-page-size { display:flex;align-items:center;gap:6px; }',
-      '.hrms-dir-page-size select,.hrms-dir-page-btn { color:var(--text);background:var(--bg2);border:1px solid var(--border2);border-radius:6px;padding:5px 8px;font:inherit; }',
-      '.hrms-dir-page-btn { cursor:pointer; }',
-      '.hrms-dir-page-btn:disabled { opacity:.45;cursor:not-allowed; }'
+      '.hrms-dir-pagination { display:flex;align-items:center;justify-content:flex-end;gap:12px;flex-wrap:wrap;min-height:70px;box-sizing:border-box;padding:16px 2px;color:var(--text2);font-size:12px;border-top:1px solid var(--border2);border-bottom:1px solid var(--border2); }',
+      '.hrms-dir-pagination-controls { display:flex;align-items:center;gap:10px; }',
+      '.hrms-dir-page-size select,.hrms-dir-page-btn { height:36px;color:var(--text2);background:var(--bg2);border:1px solid var(--border2);border-radius:10px;padding:0 12px;font:inherit;font-weight:600; }',
+      '.hrms-dir-page-size select { min-width:112px;cursor:pointer; }',
+      '.hrms-dir-page-btn { min-width:64px;cursor:pointer; }',
+      '.hrms-dir-page-btn:disabled { opacity:.45;cursor:not-allowed; }',
+      '.hrms-dir-page-current { display:inline-flex;align-items:center;justify-content:center;min-width:40px;height:36px;box-sizing:border-box;padding:0 12px;border-radius:10px;background:#315eea;color:#fff;font-size:13px;font-weight:700; }'
     ].join('\n');
     document.head.appendChild(style);
   }
@@ -394,15 +395,15 @@
 
   function renderPaginationHtml(pageInfo) {
     return '<div class="hrms-dir-pagination-controls">' +
-      '<label class="hrms-dir-page-size">Rows per page:' +
+      '<label class="hrms-dir-page-size">' +
         '<select id="hrms-dash-page-size" aria-label="Rows per page">' +
           [10, 25, 50].map(function (size) {
-            return '<option value="' + size + '"' + (state.pageSize === size ? ' selected' : '') + '>' + size + '</option>';
+            return '<option value="' + size + '"' + (state.pageSize === size ? ' selected' : '') + '>' + size + ' / page</option>';
           }).join('') +
         '</select>' +
       '</label>' +
-      '<span>Page ' + state.page + ' of ' + pageInfo.pageCount + '</span>' +
-      '<button type="button" class="hrms-dir-page-btn" id="hrms-dash-page-prev" aria-label="Previous page"' + (state.page <= 1 ? ' disabled' : '') + '>Previous</button>' +
+      '<button type="button" class="hrms-dir-page-btn" id="hrms-dash-page-prev" aria-label="Previous page"' + (state.page <= 1 ? ' disabled' : '') + '>Prev</button>' +
+      '<span class="hrms-dir-page-current" aria-current="page">' + state.page + '</span>' +
       '<button type="button" class="hrms-dir-page-btn" id="hrms-dash-page-next" aria-label="Next page"' + (state.page >= pageInfo.pageCount ? ' disabled' : '') + '>Next</button>' +
     '</div>';
   }
