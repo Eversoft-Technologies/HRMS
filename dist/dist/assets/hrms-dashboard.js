@@ -25,6 +25,8 @@
     searchQuery: '',
     deptFilter: 'all',
     statusFilter: 'all',
+    page: 1,
+    pageSize: 10,
     deptChartType: 'doughnut', // doughnut | pie | bar
     sortColumn: 'name',
     sortAsc: true,
@@ -171,7 +173,14 @@
       '.hrms-dir-badge.inactive { background: rgba(247, 95, 79, 0.14); color: var(--danger, #d94835); border: 1px solid rgba(247, 95, 79, 0.35); }',
       '.hrms-dir-date { white-space: nowrap; }',
       '.hrms-dir-action { font-size: 12px; font-weight: 600; color: var(--accent); white-space: nowrap; }',
-      '.hrms-dir-row:hover .hrms-dir-action { text-decoration: underline; }'
+      '.hrms-dir-row:hover .hrms-dir-action { text-decoration: underline; }',
+      '.hrms-dir-pagination { display:flex;align-items:center;justify-content:flex-end;gap:12px;flex-wrap:wrap;min-height:70px;box-sizing:border-box;padding:16px 2px;color:var(--text2);font-size:12px;border-top:1px solid var(--border2);border-bottom:1px solid var(--border2); }',
+      '.hrms-dir-pagination-controls { display:flex;align-items:center;gap:10px; }',
+      '.hrms-dir-page-size select,.hrms-dir-page-btn { height:36px;color:var(--text2);background:var(--bg2);border:1px solid var(--border2);border-radius:10px;padding:0 12px;font:inherit;font-weight:600; }',
+      '.hrms-dir-page-size select { min-width:112px;cursor:pointer; }',
+      '.hrms-dir-page-btn { min-width:64px;cursor:pointer; }',
+      '.hrms-dir-page-btn:disabled { opacity:.45;cursor:not-allowed; }',
+      '.hrms-dir-page-current { display:inline-flex;align-items:center;justify-content:center;min-width:40px;height:36px;box-sizing:border-box;padding:0 12px;border-radius:10px;background:#315eea;color:#fff;font-size:13px;font-weight:700; }'
     ].join('\n');
     document.head.appendChild(style);
   }
@@ -371,15 +380,71 @@
     }).join('');
   }
 
+  function getPageInfo(filteredCount) {
+    var pageCount = Math.max(1, Math.ceil(filteredCount / state.pageSize));
+    state.page = Math.min(Math.max(state.page, 1), pageCount);
+    var startIndex = (state.page - 1) * state.pageSize;
+    return {
+      pageCount: pageCount,
+      startIndex: startIndex,
+      endIndex: Math.min(startIndex + state.pageSize, filteredCount),
+      start: filteredCount ? startIndex + 1 : 0,
+      end: Math.min(startIndex + state.pageSize, filteredCount)
+    };
+  }
+
+  function renderPaginationHtml(pageInfo) {
+    return '<div class="hrms-dir-pagination-controls">' +
+      '<label class="hrms-dir-page-size">' +
+        '<select id="hrms-dash-page-size" aria-label="Rows per page">' +
+          [10, 25, 50].map(function (size) {
+            return '<option value="' + size + '"' + (state.pageSize === size ? ' selected' : '') + '>' + size + ' / page</option>';
+          }).join('') +
+        '</select>' +
+      '</label>' +
+      '<button type="button" class="hrms-dir-page-btn" id="hrms-dash-page-prev" aria-label="Previous page"' + (state.page <= 1 ? ' disabled' : '') + '>Prev</button>' +
+      '<span class="hrms-dir-page-current" aria-current="page">' + state.page + '</span>' +
+      '<button type="button" class="hrms-dir-page-btn" id="hrms-dash-page-next" aria-label="Next page"' + (state.page >= pageInfo.pageCount ? ' disabled' : '') + '>Next</button>' +
+    '</div>';
+  }
+
+  function bindPaginationEvents() {
+    var pageSizeSelect = document.getElementById('hrms-dash-page-size');
+    if (pageSizeSelect) {
+      pageSizeSelect.addEventListener('change', function () {
+        state.pageSize = Number(pageSizeSelect.value);
+        state.page = 1;
+        updateEmployeeTable();
+      });
+    }
+
+    var prevButton = document.getElementById('hrms-dash-page-prev');
+    if (prevButton) {
+      prevButton.addEventListener('click', function () {
+        state.page--;
+        updateEmployeeTable();
+      });
+    }
+
+    var nextButton = document.getElementById('hrms-dash-page-next');
+    if (nextButton) {
+      nextButton.addEventListener('click', function () {
+        state.page++;
+        updateEmployeeTable();
+      });
+    }
+  }
+
   function updateEmployeeTable() {
     var d = state.data;
     if (!d) return;
     var filtered = getFilteredEmployees(d);
     var total = (d.employees || []).length;
+    var pageInfo = getPageInfo(filtered.length);
 
     var tbody = document.getElementById('dash-employee-tbody');
     if (tbody) {
-      tbody.innerHTML = renderTableRowsHtml(filtered);
+      tbody.innerHTML = renderTableRowsHtml(filtered.slice(pageInfo.startIndex, pageInfo.endIndex));
       var resetInEmpty = document.getElementById('hrms-dash-empty-reset');
       if (resetInEmpty) {
         resetInEmpty.addEventListener('click', function (e) {
@@ -387,6 +452,7 @@
           state.searchQuery = '';
           state.deptFilter = 'all';
           state.statusFilter = 'all';
+          state.page = 1;
           var sInput = document.getElementById('hrms-dash-search');
           if (sInput) sInput.value = '';
           updateEmployeeTable();
@@ -396,7 +462,14 @@
 
     var countEl = document.getElementById('dash-employee-count');
     if (countEl) {
-      countEl.textContent = 'Showing ' + filtered.length + ' of ' + total + ' registered employees';
+      countEl.textContent = 'Showing ' + pageInfo.start + '-' + pageInfo.end + ' of ' + filtered.length +
+        ' matching employees (' + total + ' registered)';
+    }
+
+    var paginationEl = document.getElementById('dash-employee-pagination');
+    if (paginationEl) {
+      paginationEl.innerHTML = renderPaginationHtml(pageInfo);
+      bindPaginationEvents();
     }
 
     var hasActiveFilters = state.searchQuery || state.deptFilter !== 'all' || state.statusFilter !== 'all';
@@ -543,6 +616,7 @@
     var departments = d.departments || [];
     var totalDeptEmployees = departments.reduce(function (s, x) { return s + x.count; }, 0) || d.totalEmployees || 1;
     var filteredEmployees = getFilteredEmployees(d);
+    var pageInfo = getPageInfo(filteredEmployees.length);
     var hasActiveFilters = state.searchQuery || state.deptFilter !== 'all' || state.statusFilter !== 'all';
 
     var html = '<div id="' + DASHBOARD_MOUNT_ID + '">' +
@@ -671,7 +745,7 @@
         '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px;">' +
           '<div>' +
             '<div class="card-title" style="margin-bottom:2px;">Live Employee Directory</div>' +
-            '<div id="dash-employee-count" style="font-size:12px;color:var(--text2,#64748b);">Showing ' + filteredEmployees.length + ' of ' + (d.employees || []).length + ' registered employees</div>' +
+            '<div id="dash-employee-count" style="font-size:12px;color:var(--text2,#64748b);">Showing ' + pageInfo.start + '-' + pageInfo.end + ' of ' + filteredEmployees.length + ' matching employees (' + (d.employees || []).length + ' registered)</div>' +
           '</div>' +
           '<div style="display:flex;align-items:center;gap:10px;">' +
             '<button type="button" id="hrms-dash-reset-filters" class="btn-sm" style="font-size:11px;color:#ef4444;background:transparent;border:1px solid #fecaca;padding:5px 10px;border-radius:6px;cursor:pointer;' + (hasActiveFilters ? '' : 'display:none;') + '">✕ Reset Filters</button>' +
@@ -727,9 +801,12 @@
               '</tr>' +
             '</thead>' +
             '<tbody id="dash-employee-tbody">' +
-              renderTableRowsHtml(filteredEmployees) +
+              renderTableRowsHtml(filteredEmployees.slice(pageInfo.startIndex, pageInfo.endIndex)) +
             '</tbody>' +
           '</table>' +
+        '</div>' +
+        '<div id="dash-employee-pagination" class="hrms-dir-pagination">' +
+          renderPaginationHtml(pageInfo) +
         '</div>' +
       '</div>' +
     '</div>';
@@ -848,6 +925,7 @@
         var targetDept = el.getAttribute('data-dept');
         if (targetDept) {
           state.deptFilter = (state.deptFilter.toLowerCase() === targetDept.toLowerCase()) ? 'all' : targetDept;
+          state.page = 1;
           updateEmployeeTable();
         }
       });
@@ -860,6 +938,7 @@
     if (searchInput) {
       searchInput.addEventListener('input', function (e) {
         state.searchQuery = e.target.value;
+        state.page = 1;
         updateEmployeeTable();
       });
     }
@@ -870,6 +949,7 @@
       clearSearchBtn.addEventListener('click', function (e) {
         e.preventDefault();
         state.searchQuery = '';
+        state.page = 1;
         if (searchInput) searchInput.value = '';
         updateEmployeeTable();
       });
@@ -883,6 +963,7 @@
         state.searchQuery = '';
         state.deptFilter = 'all';
         state.statusFilter = 'all';
+        state.page = 1;
         if (searchInput) searchInput.value = '';
         updateEmployeeTable();
       });
@@ -895,6 +976,7 @@
         var targetDept = el.getAttribute('data-dept-filter');
         if (targetDept) {
           state.deptFilter = (state.deptFilter.toLowerCase() === targetDept.toLowerCase()) ? 'all' : targetDept;
+          state.page = 1;
           updateEmployeeTable();
         }
       });
@@ -909,6 +991,7 @@
         var targetStatus = el.getAttribute('data-status-filter');
         if (targetStatus) {
           state.statusFilter = targetStatus;
+          state.page = 1;
           updateEmployeeTable();
         }
       });
@@ -945,10 +1028,13 @@
             state.sortColumn = col;
             state.sortAsc = true;
           }
+          state.page = 1;
           updateEmployeeTable();
         }
       });
     });
+
+    bindPaginationEvents();
   }
 
   function initHeadcountChart(d) {
