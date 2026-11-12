@@ -10,7 +10,7 @@
   var DELETE_SELECTED_ID = 'hrms-notifications-delete-selected';
   var CLEAR_ALL_ID = 'hrms-notifications-clear-all';
   var MARK_READ_ID = 'hrms-notifications-mark-all-read';
-  var REFRESH_MS = 30000;
+  var REFRESH_MS = 15000;
 
   var state = {
     items: [],

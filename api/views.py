@@ -40,7 +40,7 @@ from rest_framework.parsers import MultiPartParser
 from rest_framework.response import Response
 
 from . import ai, mailer, social_poster
-from .permissions import require_perm, require_admin, check_perm
+from .permissions import require_perm, require_admin, check_perm, _get_caller
 from .timeutil import local_now, local_today, reset_company_tz_cache, valid_timezone
 from .models import (
     AppUser,
@@ -2424,7 +2424,19 @@ def users(request):
     serializer = AppUserSerializer(data={**body, 'name': name, 'email': email, 'employeeId': emp_id})
     if not serializer.is_valid():
         return serializer_err(serializer)
-    serializer.save(employee_id=emp_id)
+    created = serializer.save(employee_id=emp_id)
+
+    # A login created under a named access profile (e.g. "Recruiter (India)")
+    # is assigned that RBAC role, so its permissions and the login role gate
+    # follow the profile. Super Admin is never assignable from here.
+    role_name = str(body.get('roleName') or '').strip().lower()
+    if role_name and role_name != 'super admin':
+        rbac_role = next((r for r in Role.objects.filter(is_active=True)
+                          if r.name.strip().lower() == role_name), None)
+        if rbac_role:
+            created.role_ref = rbac_role
+            created.role = _legacy_from_role(rbac_role.name)
+            created.save(update_fields=['role_ref', 'role'])
 
     # Sync UserProfile
     UserProfile.objects.update_or_create(
@@ -2435,7 +2447,7 @@ def users(request):
             'last_name': ' '.join(name.split()[1:]) if len(name.split()) > 1 else '',
         }
     )
-    return Response(serializer.data, status=201)
+    return Response(AppUserSerializer(created).data, status=201)
 
 
 @api_view(['PUT', 'DELETE'])
@@ -6795,6 +6807,99 @@ def directory_search(request):
 # record, the payroll figure and the employee directory. It now needs
 # dashboard.view — the same permission the UI already uses to decide who may
 # open the Dashboard route at all.
+USA_RECRUITER_ROLE = 'Recruiter (USA)'
+INDIA_RECRUITER_ROLE = 'Recruiter (India)'
+USA_PAY_FREQUENCY = 'Monthly'   # Weekly | Biweekly | Semimonthly | Monthly
+
+
+def _usa_when(at, today):
+    """'Today at 09:02 AM' / 'Yesterday at ...' / '03/14/2026 at ...' (US date order)."""
+    if not at:
+        return 'Today'
+    clock = at.strftime('%I:%M %p')
+    if at.date() == today:
+        return f'Today at {clock}'
+    if at.date() == today - timedelta(days=1):
+        return f'Yesterday at {clock}'
+    return f"{at.strftime('%m/%d/%Y')} at {clock}"
+
+
+def _usa_dashboard_extras(email, today, now, payroll_value, on_pto_count, remote_count):
+    """Figures the USA recruiter dashboard shows beyond the shared payload.
+
+    Clocked-in / not-yet-clocked-in / absent are judged against each person's
+    own shift: someone whose shift has not ended is "not yet clocked in", never
+    "absent". Time zone is the business clock (one company zone today).
+    """
+    active = list(AppUser.objects.filter(status='active').values_list('email', flat=True))
+    rows = {r.email: r for r in EmployeeAttendance.objects.filter(date=today)}
+    pto = set(LeaveRequest.objects.filter(
+        status='Approved', from_date__lte=today, to_date__gte=today).values_list('email', flat=True))
+    shifts = {}
+    for sa in ShiftAssignment.objects.filter(effective_from__lte=today).filter(
+            Q(effective_to__isnull=True) | Q(effective_to__gte=today)).select_related('shift'):
+        shifts.setdefault(sa.email, sa.shift)
+    default_end = time(18, 0)
+
+    clocked_in = clocked_out = not_yet = absent = on_pto = 0
+    for em in active:
+        row = rows.get(em)
+        if row and row.check_in:
+            clocked_in += 1
+            if row.check_out:
+                clocked_out += 1
+        elif em in pto:
+            on_pto += 1
+        else:
+            sh = shifts.get(em)
+            end = sh.end_time if sh else default_end
+            night = bool(sh and sh.is_night_shift)
+            if not night and now.time() >= end:
+                absent += 1
+            else:
+                not_yet += 1
+
+    feed = []
+
+    def add(at, name, text, kind, loc=''):
+        name = name or 'Employee'
+        if at:
+            feed.append({'at': at, 'initial': name[:1].upper(), 'kind': kind,
+                         'title': f'{name} \u2013 {text}', 'loc': loc})
+
+    for ev in AttendanceEvent.objects.order_by('-at')[:8]:
+        low = (ev.event or '').lower()
+        text = ('Clock In' if 'check-in' in low else
+                'Clock Out' if 'check-out' in low else (ev.event or '').title().replace('-', ' '))
+        name = ev.employee_name or (ev.email.split('@')[0] if ev.email else '')
+        add(ev.at, name, text, 'in' if 'check-in' in low else 'out', ev.location or '')
+    for lr in LeaveRequest.objects.filter(status='Approved').order_by('-updated_at')[:4]:
+        add(lr.updated_at, lr.employee_name, 'PTO Approved', 'pto')
+    for u in AppUser.objects.order_by('-created_at')[:4]:
+        add(u.created_at, u.full_name, 'New Employee Joined', 'join')
+    for ws in WorkSubmission.objects.order_by('-created_at')[:4]:
+        add(ws.created_at, ws.employee_name, 'Timesheet Submitted', 'sheet')
+    for wr in WfhRequest.objects.order_by('-created_at')[:4]:
+        add(wr.created_at, wr.employee_name, 'Remote Work Request Submitted', 'remote')
+    feed.sort(key=lambda f: f['at'], reverse=True)
+    highlights = [{
+        'initial': f['initial'], 'kind': f['kind'], 'title': f['title'],
+        'sub': _usa_when(f['at'], today) + (f" ({f['loc']})" if f['loc'] else ''),
+    } for f in feed[:6]]
+
+    return {
+        'email': email,
+        'payrollValue': float(payroll_value or 0),
+        'payFrequency': USA_PAY_FREQUENCY,
+        'attendance': {
+            'total': len(active), 'clockedIn': clocked_in, 'clockedOut': clocked_out,
+            'notYetClockedIn': not_yet, 'onPto': on_pto, 'absent': absent,
+            'remote': remote_count,
+        },
+        'highlights': highlights,
+    }
+
+
 @api_view(['GET'])
 @require_perm('dashboard.view')
 def dashboard_stats(request):
@@ -6838,15 +6943,16 @@ def dashboard_stats(request):
     try:
         latest_run = PayrollRun.objects.order_by('-period_start').first()
         if latest_run and latest_run.total_gross and latest_run.total_gross > 0:
-            monthly_payroll_fmt = format_money_short(latest_run.total_gross, cur)
+            payroll_value = latest_run.total_gross
         else:
             comp_sum = EmployeeCompensation.objects.filter(status='active').aggregate(s=Sum('base_amount'))['s']
             if comp_sum and comp_sum > 0:
-                monthly_payroll_fmt = format_money_short(comp_sum, cur)
+                payroll_value = comp_sum
             else:
-                monthly_payroll_fmt = format_money_short(max(active_users, 1) * 35000, cur)
+                payroll_value = max(active_users, 1) * 35000
     except Exception:
-        monthly_payroll_fmt = format_money_short(max(active_users, 1) * 35000, cur)
+        payroll_value = max(active_users, 1) * 35000
+    monthly_payroll_fmt = format_money_short(payroll_value, cur)
 
     # 5. Pending Actions (Real database counts)
     try:
@@ -6953,7 +7059,18 @@ def dashboard_stats(request):
 
     company_obj = get_or_create_company_details()
 
-    return Response({
+    # Extra figures for the USA recruiter view only (see _usa_dashboard_extras).
+    # Every other caller gets exactly the payload they always did.
+    usa_extras = None
+    _caller_email, _caller = _get_caller(request)
+    india_view = None
+    if _caller and _caller.role_ref_id and _caller.role_ref.name == USA_RECRUITER_ROLE:
+        usa_extras = _usa_dashboard_extras(
+            _caller_email, today, now, payroll_value, on_leave_today, wfh_count)
+    elif _caller and _caller.role_ref_id and _caller.role_ref.name == INDIA_RECRUITER_ROLE:
+        india_view = {'email': _caller_email}
+
+    payload = Response({
         'company': CompanyDetailSerializer(company_obj).data,
         'totalEmployees': total_users,
         'activeEmployees': active_users,
@@ -6980,6 +7097,11 @@ def dashboard_stats(request):
         'employeesTruncated': total_users > DIRECTORY_MAX,
         'serverTime': now.strftime('%I:%M:%S %p')
     })
+    if usa_extras is not None:
+        payload.data['usa'] = usa_extras
+    if india_view is not None:
+        payload.data['india'] = india_view
+    return payload
 
 
 @api_view(['GET'])
@@ -7286,8 +7408,11 @@ def my_permissions(request):
         })
     if not role:
         return Response({'email': email, 'role': None, 'roleId': None, 'permissions': []})
-    codes = list(Permission.objects.filter(
-        role_permissions__role=role, is_active=True).values_list('code', flat=True))
+    from .permissions import withheld_perms
+    withheld = withheld_perms(user)
+    codes = [c for c in Permission.objects.filter(
+        role_permissions__role=role, is_active=True).values_list('code', flat=True)
+        if c not in withheld]
     return Response({'email': email, 'role': role.name, 'roleId': role.id, 'permissions': codes})
 
 

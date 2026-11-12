@@ -313,6 +313,10 @@
   /* ── open / close ─────────────────────────────────────────────────────── */
   function open() {
     if (document.getElementById(OVERLAY_ID)) return;
+    // Always open on Overview. `state` outlives the overlay, so without this the
+    // tab chosen last time (Pipeline, Resume Scoring, Trends ...) came back.
+    state.tab = 'overview';
+    state.lastRenderedTab = null;
     state.historyToken = String(Date.now()) + '-' + Math.random().toString(36).slice(2);
     var currentHistoryState = history.state;
     var overlayHistoryState = currentHistoryState && typeof currentHistoryState === 'object'

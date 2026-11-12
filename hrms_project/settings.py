@@ -159,7 +159,7 @@ DATABASES = {
         'ENGINE': 'django.db.backends.mysql',
         'NAME':  os.environ.get('DB_NAME', 'hrms_system'),
         'USER':  os.environ.get('DB_USER', 'root'),
-        'PASSWORD': os.environ.get('DB_PASSWORD', 'root'),
+        'PASSWORD': os.environ.get('DB_PASSWORD', '1234'),
         'HOST':  os.environ.get('DB_HOST', 'localhost'),
         'PORT': os.environ.get('DB_PORT', '3306'),
         'OPTIONS': {
@@ -167,6 +167,13 @@ DATABASES = {
         },
     }
 }
+
+# A MySQL on this same machine does not need TLS, and PyMySQL builds a TLS
+# context for every new connection (about 35 ms each on Windows), which every
+# request pays because the dev server opens a fresh connection per request.
+# A remote database keeps TLS.
+if DATABASES['default']['HOST'] in ('localhost', '127.0.0.1', '::1'):
+    DATABASES['default']['OPTIONS']['ssl_disabled'] = True
 
 if 'test' in sys.argv:
     DATABASES['default'] = {

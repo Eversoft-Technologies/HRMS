@@ -2747,9 +2747,17 @@
     return /check-?in/i.test(location.pathname + location.hash);
   }
 
+  /* The shared can() fails OPEN while permissions are still loading (or if
+     loading failed), which is right for ordinary page content but showed this
+     admin-only button to every role — Recruiters and Employees included — until
+     the real set arrived. An admin control waits for a confirmed answer. */
+  function permsConfirmed() {
+    try { return !!(window.__hrmsPerms && window.__hrmsPerms()); } catch (_) { return false; }
+  }
+
   function mount() {
     var existing = document.getElementById(BTN_ID);
-    if (!onAttendancePage() || !can('attendance.edit')) {
+    if (!onAttendancePage() || !permsConfirmed() || !can('attendance.edit')) {
       if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
       return;
     }
