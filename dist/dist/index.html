@@ -8,6 +8,49 @@
   <meta http-equiv="Expires" content="0" />
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <script>
+    (function () {
+      var P = [
+        ['/onboarding/verification', 'onboarding.verify'],
+        ['/onboarding/assets',       'onboarding.assets'],
+        ['/onboarding/payroll',      'onboarding.payroll'],
+        ['/onboarding/settings',     'onboarding.settings'],
+        ['/onboarding',              'onboarding.view'],
+        ['/employees/attendance',    'attendance.view'],
+        ['/employees/checkin',       'attendance.view'],
+        ['/employees/tasks',         'employee.view'],
+        ['/employees/submissions',   'employee.view'],
+        ['/employees/leave',         'leave.view'],
+        ['/employees/chat',          'employee.view'],
+        ['/employees/work',          'employee.view'],
+        ['/settings/users',          'settings.manage'],
+        ['/settings/email',          'settings.manage'],
+        ['/settings',                'settings.view'],
+        ['/payroll',                 'payroll.view'],
+        ['/recruit',                 'recruitment.view'],
+        ['/reports',                 'reports.view'],
+        ['/ai-analytics',            'reports.view'],
+        ['/hr',                      'employee.view'],
+        ['/',                        'dashboard.view', true]
+      ];
+      window.__hrmsCanRoute = function (path) {
+        if (!path || path === '/' || path === '/settings') return true;
+        try {
+          var s = JSON.parse(localStorage.getItem('hrms_session') || '{}');
+          if ((s.role || '').toLowerCase() === 'admin') return true;
+          var cached = JSON.parse(localStorage.getItem('hrms_permissions') || '[]');
+          if (Array.isArray(cached) && cached.length) {
+            for (var i = 0; i < P.length; i++) {
+              var p = P[i][0], exact = P[i][2];
+              var hit = exact ? (path === p) : (path === p || path.indexOf(p + '/') === 0 || path.indexOf(p) === 0);
+              if (hit) return cached.indexOf(P[i][1]) !== -1;
+            }
+          }
+        } catch (_) {}
+        return true;
+      };
+    })();
+  </script>
   <style>
     html.hrms-f2f-restoring #root .content {
       visibility: hidden !important;
@@ -341,7 +384,7 @@
   <script defer src="/assets/hrms-status.js?v=18"></script>
   <script defer src="/assets/hrms-attendance.js?v=6"></script>
   <script defer src="/assets/hrms-rbac.js?v=16"></script>
-  <script defer src="/assets/hrms-perms.js?v=22"></script>
+  <script defer src="/assets/hrms-perms.js?v=24"></script>
   <script defer src="/assets/hrms-onboarding-form-builder.js?v=2"></script>
   <script defer src="/assets/hrms-onboarding.js?v=33"></script>
   <script defer src="/assets/hrms-candidate-portal.js?v=2"></script>
