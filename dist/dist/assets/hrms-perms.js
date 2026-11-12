@@ -28,9 +28,23 @@
     catch (_) { return ''; }
   }
   function can(code) { return known ? set.has(code) : true; }
+  function canRoute(path, role) {
+    if (!path || path === '/' || path === '/settings') return true;
+    var perm = permForPath(path);
+    if (!perm) return true;
+    if (known) return set.has(perm);
+    try {
+      var cached = JSON.parse(localStorage.getItem('hrms_permissions') || '[]');
+      if (Array.isArray(cached) && cached.length) {
+        return cached.indexOf(perm) !== -1;
+      }
+    } catch (_) {}
+    return true;
+  }
 
   /* public API (parity with the other helpers) */
   window.__hrmsCan = can;
+  window.__hrmsCanRoute = canRoute;
   window.__hrmsPerms = function () { return known ? Array.from(set) : null; };
   /* Let a sidecar re-run the access guard after it changes the URL itself.
      Sidecars that own routes the React bundle does not know about (see
@@ -61,6 +75,7 @@
     ['/employees/tasks',       'employee.view'],
     ['/employees/submissions', 'employee.view'],
     ['/employees/leave',       'leave.view'],
+    ['/employees/chat',        'employee.view'],
     ['/employees/work',        'employee.view'],
     ['/settings/users',        'settings.manage'],
     ['/settings/email',        'settings.manage'],
@@ -148,21 +163,99 @@
     fileuser:svg('<path d="M4 1.8h4.6L12 5.2v9H4z"/><path d="M8.4 1.9v3.4H12"/><circle cx="8" cy="8.6" r="1.3"/><path d="M6 12.2a2.2 2.2 0 014 0"/>'),
     users:   svg('<circle cx="6.2" cy="5.4" r="2.2"/><path d="M1.9 13a4.4 4.4 0 018.6 0"/><path d="M10.6 3.6a2.2 2.2 0 010 3.7M11.8 9.2a4.4 4.4 0 012.4 3.1"/>'),
     handshake: svg('<path d="M1.6 6.4l2.6-2.2 3.8.9 3.8-.9 2.6 2.2"/><path d="M4.2 6.4l2.6 2.6 1.2-1.2 2.4 2.4M8 12.6l-2-2"/>'),
+    // Employees section icons
+    clock:   svg('<circle cx="8" cy="8" r="6.5"/><path d="M8 4.5V8l2.5 2"/>'),
+    checkin:  svg('<rect x="1" y="1" width="14" height="14" rx="2.5"/><path d="M4 8l3 3 5-5"/>'),
+    task:    svg('<rect x="2" y="2" width="12" height="12" rx="2"/><path d="M8 2v12M2 8h6"/>'),
+    chat:    svg('<path d="M4 2.5h8a1.5 1.5 0 011.5 1.5v5a1.5 1.5 0 01-1.5 1.5H7l-3 2.5v-2.5H4A1.5 1.5 0 012.5 9V4A1.5 1.5 0 014 2.5z"/><circle cx="5.75" cy="6.5" r=".7" fill="currentColor" stroke="none"/><circle cx="8" cy="6.5" r=".7" fill="currentColor" stroke="none"/><circle cx="10.25" cy="6.5" r=".7" fill="currentColor" stroke="none"/>'),
+    submit:  svg('<path d="M10 2H4a1.5 1.5 0 00-1.5 1.5v9A1.5 1.5 0 004 14h8a1.5 1.5 0 001.5-1.5V6L10 2zM10 2v4h4M6 9l1.5 1.5L11 7"/>'),
+    calendar: svg('<rect x="2" y="3" width="12" height="11" rx="1.5"/><path d="M5 3V1M11 3V1M2 7h12"/>'),
+    // Recruit section icons
+    person:  svg('<path d="M8 2a3 3 0 100 6 3 3 0 000-6zM2 14c0-3.3 2.7-6 6-6s6 2.7 6 6"/>'),
+    resume:  svg('<rect x="2" y="1" width="10" height="14" rx="1.5"/><path d="M5 5h6M5 7.5h6M5 10h4"/><circle cx="12" cy="12" r="3" fill="currentColor" opacity=".15" stroke="currentColor" stroke-width="1.1"/><path d="M11 12h2M12 11v2" stroke-width="1"/>'),
+    f2f:     svg('<circle cx="6" cy="5" r="2.5"/><path d="M1 13c0-2.8 2.2-5 5-5"/><rect x="8" y="8" width="7" height="5.5" rx="1.5"/><path d="M10.5 10h2M10.5 11.5h1" stroke-width="1"/>'),
+    list:    svg('<path d="M3 4h10M3 8h7M3 12h5"/>'),
+    // HR Management section icons
+    chart:   svg('<path d="M2 14l3-5 3 2.5 3-6.5 3 4"/>'),
+    star:    svg('<polygon points="8,2 10,6 14,6.5 11,9.5 11.8,13.5 8,11.5 4.2,13.5 5,9.5 2,6.5 6,6" stroke-width="1.1"/>'),
+    heart:   svg('<path d="M8 13s-6-3-6-7a4 4 0 018 0 4 4 0 018 0c0 4-6 7-6 7z"/>'),
+    survey:  svg('<rect x="2" y="2" width="12" height="12" rx="2"/><path d="M5 8h6M5 5h6M5 11h3"/>'),
+    comp:    svg('<path d="M2 14l2-4 4 2 2-6 2 3 2-6"/>'),
+    // Intelligence icon
+    analytics: svg('<circle cx="8" cy="8" r="6.5"/><path d="M5 8h6M8 5v6"/>'),
   };
 
   /* Nav items that the React bundle may NOT render for certain legacy roles.
      When the user holds the corresponding permission, we inject them so they
-     appear in the sidebar dynamically (fixes payroll.view for Recruiter role). */
+     appear in the sidebar dynamically. The React bundle hardcodes which sections
+     each legacy role ('hr', 'recruitment') sees, so roles with RBAC permissions
+     beyond their hardcoded set need injection here. For example, an HR Manager
+     with attendance.view or recruitment.view needs those sections injected. */
   var NAV_INJECT = [
     {
       perm: 'payroll.view',
       section: 'Payroll',
+      after: ['Overview'],
       items: [
         { href: '/payroll/run',              label: 'Payroll Run',           icon: ICON.dollar },
         { href: '/payroll/employer-record',  label: 'Employer of Record',    icon: ICON.building },
         { href: '/payroll/contractor-record',label: 'Contractor of Record',  icon: ICON.fileuser },
         { href: '/payroll/contractor-mgmt',  label: 'Contractor Mgmt',       icon: ICON.users },
         { href: '/payroll/peo',              label: 'PEO',                   icon: ICON.handshake },
+      ]
+    },
+    {
+      /* The Employees section (Attendance, Leave, Tasks, etc.) is only rendered
+         by React for 'admin' and 'recruitment' roles. HR Manager/Executive
+         roles with attendance.view or leave.view need these items injected.
+         `permAny` means inject if ANY of these permissions is held. */
+      perm: 'attendance.view',
+      permAny: ['attendance.view', 'leave.view', 'employee.view'],
+      section: 'Employees',
+      after: ['HR Management', 'Payroll', 'Overview'],
+      items: [
+        { href: '/employees/attendance',    label: 'Attendance',        icon: ICON.clock },
+        { href: '/employees/checkin',       label: 'Check In / Out',    icon: ICON.checkin },
+        { href: '/employees/tasks',         label: 'Task Tracker',      icon: ICON.task },
+        { href: '/employees/chat',          label: 'Employee Chat',     icon: ICON.chat },
+        { href: '/employees/submissions',   label: 'Work Submissions',  icon: ICON.submit },
+        { href: '/employees/leave',         label: 'Leave Management',  icon: ICON.calendar },
+      ]
+    },
+    {
+      /* The Recruit section is only rendered by React for 'admin' and
+         'recruitment' roles. An HR Manager given recruitment.view needs it. */
+      perm: 'recruitment.view',
+      section: 'Recruit',
+      after: ['Employees', 'HR Management', 'Payroll', 'Overview'],
+      items: [
+        { href: '/recruit',                 label: 'Recruit',           icon: ICON.person },
+        { href: '/recruit/job-board',       label: 'Job Board',         icon: ICON.calendar },
+        { href: '/recruit/resume-scoring',  label: 'Resume Scoring',    icon: ICON.resume },
+        { href: '/recruit/interview',       label: 'F2F Interview',     icon: ICON.f2f },
+      ]
+    },
+    {
+      /* HR Management section (HRIS, Perform, Benefits, Surveys, Compensation)
+         is only rendered by React for 'admin' and 'hr' roles. A Recruitment
+         role given employee.view needs it. */
+      perm: 'employee.view',
+      section: 'HR Management',
+      after: ['Overview'],
+      items: [
+        { href: '/hr/hris',                label: 'HRIS',              icon: ICON.chart },
+        { href: '/hr/perform',             label: 'Perform',           icon: ICON.star },
+        { href: '/hr/benefits',            label: 'Benefits',          icon: ICON.heart },
+        { href: '/hr/surveys',             label: 'Surveys',           icon: ICON.survey },
+        { href: '/hr/compensation',        label: 'Compensation',      icon: ICON.comp },
+      ]
+    },
+    {
+      perm: 'reports.view',
+      section: 'Intelligence',
+      after: ['Recruit', 'Employees', 'HR Management', 'Payroll', 'Overview'],
+      items: [
+        { href: '/ai-analytics',            label: 'AI Analytics',      icon: ICON.analytics },
       ]
     },
     {
@@ -173,7 +266,7 @@
       // and Work Authorization, never Payroll.
       perm: 'onboarding.view',
       section: 'Onboarding',
-      after: 'Employees',   // onboarding feeds the Employees module — sit under it
+      after: ['Employees', 'HR Management', 'Overview'],   // onboarding feeds the Employees module — sit under it
       items: [
         { href: '/onboarding',              label: 'Dashboard',           icon: ICON.gauge },
         { href: '/onboarding/candidates',   label: 'Candidates',          icon: ICON.user },
@@ -194,8 +287,15 @@
     for (var ni = 0; ni < NAV_INJECT.length; ni++) {
       var def = NAV_INJECT[ni];
       if (!known) continue;
-      var hasPerm = set.has(def.perm);
-      var syntheticId = 'hrms-injected-nav-' + def.perm.replace(/\./g, '-');
+      var hasPerm = false;
+      if (def.permAny) {
+        for (var pa = 0; pa < def.permAny.length; pa++) {
+          if (set.has(def.permAny[pa])) { hasPerm = true; break; }
+        }
+      } else {
+        hasPerm = set.has(def.perm);
+      }
+      var syntheticId = 'hrms-injected-nav-' + (def.id || def.section.toLowerCase().replace(/[^a-z0-9]+/g, '-'));
       var existing = document.getElementById(syntheticId);
       if (!hasPerm) {
         // Remove previously injected section if permission was revoked
@@ -244,26 +344,27 @@
         }
         a.addEventListener('click', function (ev) {
           ev.preventDefault();
-          // Use React Router's history if available, otherwise fallback
-          if (window.__reactRouterNavigate) { window.__reactRouterNavigate(this.getAttribute('href')); }
-          else { window.history.pushState({}, '', this.getAttribute('href')); window.dispatchEvent(new PopStateEvent('popstate')); }
+          navTo(this.getAttribute('href'));
         });
         sec.appendChild(a);
       }
       // Place the section where it belongs in the menu, not just at the bottom.
-      // `after` names the section it should follow (e.g. Onboarding sits under
-      // Employees, since it feeds that module); without it we fall back to the
-      // end of the sidebar, above the footer.
+      // `after` names the section(s) it should follow; without it we fall back to
+      // the end of the sidebar, above the footer.
       var placed = false;
       if (def.after) {
+        var afterList = Array.isArray(def.after) ? def.after : [def.after];
         var secs = sidebar.querySelectorAll('.nav-section');
-        for (var si = 0; si < secs.length; si++) {
-          var lbl = secs[si].querySelector('.nav-label');
-          var txt = ((lbl && lbl.textContent) || '').trim().toLowerCase();
-          if (txt === def.after.toLowerCase()) {
-            secs[si].parentNode.insertBefore(sec, secs[si].nextSibling);
-            placed = true;
-            break;
+        for (var ai = 0; ai < afterList.length && !placed; ai++) {
+          var targetAfter = afterList[ai].toLowerCase();
+          for (var si = 0; si < secs.length; si++) {
+            var lbl = secs[si].querySelector('.nav-label');
+            var txt = ((lbl && lbl.textContent) || '').trim().toLowerCase();
+            if (txt === targetAfter) {
+              secs[si].parentNode.insertBefore(sec, secs[si].nextSibling);
+              placed = true;
+              break;
+            }
           }
         }
       }
@@ -322,8 +423,6 @@
     for (var j = 0; j < secs.length; j++) {
       var sec = secs[j];
       if (sec.id === 'hrms-rbac-nav') continue;
-      // Skip injected sections — they manage their own visibility
-      if (sec.id && sec.id.indexOf('hrms-injected-nav-') === 0) continue;
       var links = sec.querySelectorAll('.nav-item');
       if (!links.length) continue;
       var anyVisible = false;
@@ -366,7 +465,7 @@
   var GUARD_ID = 'hrms-access-denied';
   function navTo(href) {
     if (window.__reactRouterNavigate) { window.__reactRouterNavigate(href); }
-    else { window.history.pushState({}, '', href); window.dispatchEvent(new PopStateEvent('popstate')); }
+    else { window.location.href = href; }
   }
   /* The first route the user IS allowed to open — used as the overlay's landing
      target so we never bounce them to a page they also can't see. Dashboard is
