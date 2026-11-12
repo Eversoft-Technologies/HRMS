@@ -5714,18 +5714,34 @@ def attendance_remind(request):
     if not emails_to_remind:
         return err('Employee email is required')
 
+    today_date = local_now().date()
     today_str = local_now().strftime('%A, %b %d')
     sent_count = 0
 
     for email, name in emails_to_remind:
         display_name = name or email.split('@')[0]
+        shift = _get_active_shift(email, today_date)
+        shift_detail = ''
+        if shift and not shift.is_flexible:
+            st = shift.start_time
+            et = shift.end_time
+            if isinstance(st, str):
+                st = datetime.strptime(st, '%H:%M:%S' if len(st) > 5 else '%H:%M').time()
+            if isinstance(et, str):
+                et = datetime.strptime(et, '%H:%M:%S' if len(et) > 5 else '%H:%M').time()
+            s_str = st.strftime('%I:%M %p').lstrip('0')
+            e_str = et.strftime('%I:%M %p').lstrip('0')
+            shift_detail = f" for your assigned shift ({shift.name}: {s_str} – {e_str})"
+        elif shift:
+            shift_detail = f" for your assigned shift ({shift.name})"
+
         # 1. In-app Notification for employee
         create_notification(
             recipient=email,
             title='⏰ Attendance Check-in Reminder',
-            message=f"Hi {display_name}, you have not logged attendance for today ({today_str}). Please check in or submit a WFH / leave request.",
+            message=f"Hi {display_name}, you have not logged attendance for today ({today_str}){shift_detail}. Please check in or submit a WFH / leave request.",
             notification_type='warning',
-            link='/employees/check-in',
+            link='/employees/checkin',
         )
         # 2. External broadcast if available
         try:
@@ -5733,9 +5749,9 @@ def attendance_remind(request):
             NotificationService.send_notification(
                 recipient_email=email,
                 title='⏰ Attendance Check-in Reminder',
-                message=f"Reminder: You have not logged attendance for today ({today_str}). Please open HRMS to check in.",
+                message=f"Reminder: You have not logged attendance for today ({today_str}){shift_detail}. Please open HRMS to check in.",
                 notification_type='warning',
-                link='/employees/check-in',
+                link='/employees/checkin',
             )
         except Exception:
             pass
@@ -6077,6 +6093,104 @@ def _fmt_dur(minutes):
     return f'{h}h {m}m' if h else f'{m}m'
 
 
+def _checkin_reminders(email, now=None):
+    """Notify employee to check in based on their assigned shift and work date.
+
+    Individual users receive:
+    - Shift Starting Soon: 15 minutes before shift start until grace period ends.
+    - Check-in Overdue Reminder: after grace period ends while shift is still active.
+    - Flexible shift reminder: gentle reminder on the work date if not yet checked in.
+
+    Excludes employees who:
+    - are inactive or deactivated
+    - have already checked in for this work date
+    - are on approved leave for this work date
+    """
+    now = now or local_now()
+    user = AppUser.objects.filter(email__iexact=email).first()
+    if not user or (user.status and user.status.lower() != 'active'):
+        return
+
+    work_date = _work_date_for(email, now)
+
+    # Already checked in for this work date?
+    if EmployeeAttendance.objects.filter(email=email, date=work_date, check_in__isnull=False).exists():
+        return
+
+    # On approved leave for this work date?
+    if LeaveRequest.objects.filter(
+        email=email, status__iexact='approved',
+        from_date__lte=work_date, to_date__gte=work_date
+    ).exists():
+        return
+
+    shift = _get_active_shift(email, work_date)
+    if not shift:
+        return
+
+    if shift.is_flexible:
+        # Flexible shift: gentle reminder on the work date if it's 11:00 AM or later
+        if now.date() == work_date and now.hour >= 11:
+            tag = f'/employees/checkin?checkin-flex={work_date.isoformat()}'
+            if not Notification.objects.filter(recipient=email, link=tag).exists():
+                flex_h = shift.flex_hours_per_day or 8
+                create_notification(
+                    email,
+                    f'🔔 Flexible Shift Reminder: {shift.name}',
+                    f'You are assigned to {shift.name} ({flex_h}h/day). Remember to log your check-in when you begin work today.',
+                    'info',
+                    tag
+                )
+        return
+
+    st = shift.start_time
+    et = shift.end_time
+    if isinstance(st, str):
+        st = datetime.strptime(st, '%H:%M:%S' if len(st) > 5 else '%H:%M').time()
+    if isinstance(et, str):
+        et = datetime.strptime(et, '%H:%M:%S' if len(et) > 5 else '%H:%M').time()
+
+    start_dt = datetime.combine(work_date, st)
+    grace_minutes = shift.grace_minutes or 0
+    grace_dt = start_dt + timedelta(minutes=grace_minutes)
+    end_dt = _shift_end_dt(shift, work_date)
+    if end_dt <= start_dt:
+        end_dt += timedelta(days=1)
+
+    # Only remind during the shift window: from 15m prior to shift end
+    upcoming_start = start_dt - timedelta(minutes=15)
+    if now < upcoming_start or now > end_dt:
+        return
+
+    starts_fmt = start_dt.strftime('%I:%M %p').lstrip('0')
+    ends_fmt = end_dt.strftime('%I:%M %p').lstrip('0')
+    if end_dt.date() != start_dt.date():
+        ends_fmt += end_dt.strftime(' (%d %b)')
+
+    if now < grace_dt:
+        upcoming_tag = f'/employees/checkin?checkin-upcoming={work_date.isoformat()}'
+        if not Notification.objects.filter(recipient=email, link=upcoming_tag).exists():
+            create_notification(
+                email,
+                f'🔔 Shift Starting Soon: {shift.name}',
+                f'Your shift ({shift.name}) is scheduled from {starts_fmt} to {ends_fmt}. Please remember to check in on time.',
+                'info',
+                upcoming_tag
+            )
+    else:
+        overdue_tag = f'/employees/checkin?checkin-overdue={work_date.isoformat()}'
+        if not Notification.objects.filter(recipient=email, link=overdue_tag).exists():
+            grace_fmt = grace_dt.strftime('%I:%M %p').lstrip('0')
+            create_notification(
+                email,
+                '⏰ Attendance Check-in Reminder',
+                f'Your assigned shift ({shift.name}) started at {starts_fmt} (grace period ended at {grace_fmt}). '
+                f'You have not checked in yet. Please log your check-in as soon as possible.',
+                'warning',
+                overdue_tag
+            )
+
+
 def _checkout_reminders(email, now=None):
     now = now or local_now()
     rows = (EmployeeAttendance.objects
@@ -6090,6 +6204,23 @@ def _checkout_reminders(email, now=None):
             or _get_active_shift(email, row.date)
         end = _expected_end(row, shift)
         due = end + CHECKOUT_REMINDER_AFTER
+
+        # 1. Shift ended reminder right after shift end (end <= now < due)
+        if current is not None and current.pk == row.pk:
+            if end <= now < due:
+                ended_tag = f'/employees/checkin?checkout-ended={row.pk}'
+                if not Notification.objects.filter(recipient=email, link=ended_tag).exists():
+                    ends = end.strftime('%I:%M %p').lstrip('0')
+                    if end.date() != now.date():
+                        ends += end.strftime(' on %d %b')
+                    create_notification(
+                        email,
+                        f'🔔 Shift Ended: {shift.name}',
+                        f'Your assigned shift ({shift.name}) ended at {ends}. If you have wrapped up your work, please remember to check out.',
+                        'info',
+                        ended_tag
+                    )
+
         if now < due:
             continue
         tag = f'/employees/checkin?checkout-reminder={row.pk}'
@@ -6125,9 +6256,10 @@ def notifications(request):
     if not email:
         return Response([])
     try:
+        _checkin_reminders(email)
         _checkout_reminders(email)
     except Exception:
-        logger.exception('check-out reminders failed for %s', email)
+        logger.exception('attendance reminders failed for %s', email)
     qs = Notification.objects.filter(recipient=email)
     unread_only = str(request.GET.get('unreadOnly') or request.GET.get('unread') or '').strip().lower()
     if unread_only in {'1', 'true', 'yes', 'on'}:
