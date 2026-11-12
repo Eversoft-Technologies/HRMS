@@ -157,10 +157,10 @@ TEMPLATES = [
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',
-        'NAME':  os.environ.get('DB_NAME', 'hrms_system'),
-        'USER':  os.environ.get('DB_USER', 'root'),
-        'PASSWORD': os.environ.get('DB_PASSWORD', '1234'),
-        'HOST':  os.environ.get('DB_HOST', 'localhost'),
+        'NAME': os.environ.get('DB_NAME', 'hrms_system'),
+        'USER': os.environ.get('DB_USER', 'root'),
+        'PASSWORD': os.environ.get('DB_PASSWORD', 'root'),
+        'HOST': os.environ.get('DB_HOST', 'localhost'),
         'PORT': os.environ.get('DB_PORT', '3306'),
         'OPTIONS': {
             'charset': 'utf8mb4',
@@ -183,6 +183,17 @@ if 'test' in sys.argv:
 
 # Match the existing INT AUTO_INCREMENT primary keys (not BIGINT).
 DEFAULT_AUTO_FIELD = 'django.db.models.AutoField'
+
+# Login passwords are hashed with Django's default (PBKDF2). The test suite
+# creates hundreds of throw-away accounts, so it uses a fast hasher instead —
+# only under `manage.py test`, never in a running server.
+if len(sys.argv) > 1 and sys.argv[1] == 'test':
+    PASSWORD_HASHERS = ['django.contrib.auth.hashers.MD5PasswordHasher']
+    # Tests decide for themselves whether an encryption key exists: never read
+    # or create the real key file in the developer's home folder.
+    import tempfile as _tempfile
+    os.environ['HRMS_SECRETS_FILE'] = os.path.join(_tempfile.mkdtemp(prefix='hrms-test-secrets-'), 'secrets.key')
+    os.environ['HRMS_SECRETS_AUTOGEN'] = '0'
 
 # ---------------------------------------------------------------------------
 # Large payloads: base64 video (recordingData) and document uploads can be big.

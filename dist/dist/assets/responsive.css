@@ -292,3 +292,30 @@
   /* Account drawer (avatar menu): full width on phones. */
   .hrms-drawer { width: 100vw; max-width: 100%; }
 }
+
+/* ------------------------------------------------------------
+   Filter / column side panels on phones (<= 768px).
+   They were sized height:100vh (KPI dashboard, Job Board,
+   Candidate Compare) or top:0 + height:100% (Recruit › Pipeline /
+   Recruiter Quick View). A phone browser measures both as if its
+   address bar were hidden, so the panel ended below the visible
+   screen and its footer — Reset / Cancel / Apply Filter — was cut
+   off. dvh is the height actually visible. Full width too (the
+   94vw cap left a strip of page showing).
+   ------------------------------------------------------------ */
+@media (max-width: 768px) {
+  .kpi-fd, .jt-dr, .cc-dr, .bss-dw, .ob-dw {
+    width: 100% !important; max-width: 100% !important;
+    height: 100% !important; height: 100dvh !important; max-height: 100dvh !important;
+    border-left: none !important;
+  }
+  div[style*="position: fixed"][style*="top: 0px"][style*="height: 100%"] {
+    height: 100dvh !important; max-height: 100dvh !important;
+  }
+  .kpi-fd-f, .jt-df, .cc-df, .bss-cd-f, [data-hrms-qv-footer] {
+    flex-shrink: 0;
+    padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px)) !important;
+  }
+  .kpi-fd-f > button, .jt-df > button, .cc-df > button, .bss-cd-f > button,
+  [data-hrms-qv-footer] > button { min-height: 44px; }
+}

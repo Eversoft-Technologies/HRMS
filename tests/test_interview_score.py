@@ -5,6 +5,7 @@ really ran still rendered as "Score: 0/100". These tests pin the hand-off from
 the saved recording to the link, and the branded shell every email now uses.
 """
 import os
+from unittest import mock
 import sys
 
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'hrms_project.settings')
@@ -38,11 +39,18 @@ class InterviewScoreTests(TestCase):
             'transcript': 'Q1: ...', 'responses': [],
         }, content_type='application/json')
 
+    def _upload_video(self, rec_id):
+        # The interview is complete only once its video is on the server.
+        with mock.patch('api.video_processor.save_interview_video', return_value={'ok': True}):
+            return self.client.post(f'/api/interview-recordings/{rec_id}/video', data=b'fake-webm-video',
+                                    content_type='video/webm')
+
     def test_saving_a_recording_copies_the_score_onto_the_link(self):
         self.assertEqual(self.link.score, 0)
 
         resp = self._post_recording(total=73)
         self.assertEqual(resp.status_code, 201)
+        self.assertEqual(self._upload_video(resp.json()['id']).status_code, 200)
 
         self.link.refresh_from_db()
         self.assertEqual(self.link.score, 73, 'follow-up list would still show 0/100')
@@ -61,6 +69,7 @@ class InterviewScoreTests(TestCase):
             'transcript': '', 'responses': [],
         }, content_type='application/json')
         self.assertEqual(resp.status_code, 201)
+        self._upload_video(resp.json()['id'])
 
         self.link.refresh_from_db()
         self.assertEqual(self.link.status, 'Completed')
@@ -73,13 +82,32 @@ class InterviewScoreTests(TestCase):
             email='candidate@example.com', status='Active',
             candidate_token='tok-other-role',
         )
-        self._post_recording(total=88, role='data analyst')
+        self._upload_video(self._post_recording(total=88, role='data analyst').json()['id'])
 
         self.link.refresh_from_db()
         other.refresh_from_db()
         self.assertEqual(self.link.score, 88)
         self.assertEqual(other.score, 0, 'a different role must not be marked')
         self.assertEqual(other.status, 'Active')
+
+
+class VideoRequiredTests(InterviewScoreTests):
+    """The video is mandatory: without it the interview is not complete and the
+    candidate's link stays usable."""
+
+    def test_answers_without_video_leave_the_interview_incomplete(self):
+        resp = self._post_recording(total=73)
+        self.assertEqual(resp.status_code, 201)
+        self.link.refresh_from_db()
+        self.assertEqual((self.link.status, self.link.completed_at, self.link.score), ('Active', None, 0))
+        rec = InterviewRecording.objects.get(pk=resp.json()['id'])
+        self.assertFalse(rec.has_video)
+
+    def test_the_video_upload_completes_it(self):
+        rec_id = self._post_recording(total=73).json()['id']
+        self._upload_video(rec_id)
+        self.link.refresh_from_db()
+        self.assertEqual((self.link.status, self.link.score), ('Completed', 73))
 
 
 class TranscriptTests(TestCase):
@@ -111,7 +139,7 @@ class TranscriptTests(TestCase):
         self.assertEqual(resp.status_code, 201)
 
         rec = InterviewRecording.objects.get(candidate_email='candidate@example.com')
-        listed = self.client.get('/api/interview-recordings',
+        listed = self.client.get('/api/interview-recordings?full=1',
                                  HTTP_X_USER_EMAIL=self.viewer.email)
         self.assertEqual(listed.status_code, 200)
         row = next(r for r in listed.json() if r['id'] == rec.id)
@@ -123,7 +151,7 @@ class TranscriptTests(TestCase):
         self.assertEqual(first['transcript'], 'I used B-tree indexes.')
         self.assertEqual(second['stageGroup'], 'HR Round')
 
-    def test_summary_list_omits_large_details_but_keeps_row_metadata(self):
+    def test_list_omits_large_details_but_keeps_row_metadata(self):
         resp = self.client.post('/api/interview-recordings', data={
             'candidateName': 'srikanth', 'candidateEmail': 'candidate@example.com',
             'role': 'data analyst', 'verdict': 'HOLD', 'totalScore': 55,
@@ -132,18 +160,58 @@ class TranscriptTests(TestCase):
         }, content_type='application/json')
         self.assertEqual(resp.status_code, 201)
 
-        listed = self.client.get(
-            '/api/interview-recordings?summary=1',
-            HTTP_X_USER_EMAIL=self.viewer.email,
-        )
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        with CaptureQueriesContext(connection) as queries:
+            listed = self.client.get(
+                '/api/interview-recordings',
+                HTTP_X_USER_EMAIL=self.viewer.email,
+            )
         self.assertEqual(listed.status_code, 200)
         row = listed.json()[0]
 
         self.assertEqual(row['candidateName'], 'srikanth')
         self.assertEqual(row['totalScore'], 55)
+        self.assertFalse(row['hasVideo'])
         for field in ('transcript', 'responses', 'aiEvaluation',
                       'executiveSummary', 'round2Questions'):
             self.assertNotIn(field, row)
+
+        # The whole point of the light list: it must never read a blob column,
+        # which is what made the Recordings tab crawl on the live database.
+        sql = ' '.join(q['sql'] for q in queries.captured_queries
+                       if 'interview_recordings' in q['sql'])
+        self.assertNotIn('video_buffer', sql)
+        self.assertNotIn('recording_data', sql)
+
+        full = self.client.get('/api/interview-recordings?full=1',
+                               HTTP_X_USER_EMAIL=self.viewer.email)
+        self.assertEqual(full.json()[0]['transcript'], 'A long interview transcript.')
+
+    def test_has_video_flag_tracks_uploaded_video_without_blob_reads(self):
+        resp = self.client.post('/api/interview-recordings', data={
+            'candidateName': 'srikanth', 'candidateEmail': 'video@example.com',
+            'role': 'data analyst', 'verdict': 'HOLD', 'responses': [],
+        }, content_type='application/json')
+        rec_id = resp.json()['id']
+        # Legacy path: a base64 recording stored in the row.
+        self.client.put(f'/api/interview-recordings/{rec_id}',
+                        data={'recordingData': 'AAAA'}, content_type='application/json',
+                        HTTP_X_USER_EMAIL=self.viewer.email)
+        listed = self.client.get('/api/interview-recordings',
+                                 HTTP_X_USER_EMAIL=self.viewer.email)
+        row = next(r for r in listed.json() if r['id'] == rec_id)
+        self.assertTrue(row['hasVideo'])
+        self.assertTrue(row['hasRecording'])
+        self.assertEqual(row['videoUrl'], f'/api/interview-recordings/{rec_id}/video')
+        # The detail view no longer ships the base64 copy unless asked.
+        detail = self.client.get(f'/api/interview-recordings/{rec_id}',
+                                 HTTP_X_USER_EMAIL=self.viewer.email)
+        self.assertNotIn('recordingData', detail.json())
+        full = self.client.get(f'/api/interview-recordings/{rec_id}?full=1',
+                               HTTP_X_USER_EMAIL=self.viewer.email)
+        self.assertEqual(full.json()['recordingData'], 'AAAA')
 
     def test_saved_transcript_contains_both_voices(self):
         """The flat transcript is the export/fallback view — it must not drop

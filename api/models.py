@@ -232,10 +232,32 @@ class InterviewRecording(models.Model):
     executive_summary = models.TextField(null=True, blank=True)
     round2_questions = models.JSONField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    # Cheap flags for the list view. True when a playable video (disk file,
+    # LONGBLOB, or legacy base64) / a legacy base64 recording exists. save()
+    # and the video upload paths keep them current, so listing recordings never
+    # touches the blob columns: evaluating ``video_buffer > ''`` per row made
+    # MySQL read every stored video, which is what made the Recordings tab
+    # crawl once the table held gigabytes of legacy recordings.
+    has_video = models.BooleanField(default=False, db_index=True)
+    has_recording = models.BooleanField(default=False)
 
     class Meta:
         db_table = 'interview_recordings'
         ordering = ['id']
+
+    def save(self, *args, **kwargs):
+        deferred = self.get_deferred_fields()
+        if 'recording_data' not in deferred:
+            self.has_recording = bool(self.recording_data)
+        if 'video_buffer' not in deferred:
+            has_buffer = bool(self.video_buffer)
+        else:
+            has_buffer = self.has_video          # blob not loaded: trust the stored flag
+        self.has_video = bool(self.video_file) or self.has_recording or has_buffer
+        update_fields = kwargs.get('update_fields')
+        if update_fields is not None:
+            kwargs['update_fields'] = list(update_fields) + ['has_video', 'has_recording']
+        super().save(*args, **kwargs)
 
 
 class QuestionSet(models.Model):
@@ -289,9 +311,12 @@ class CompanyDetail(models.Model):
 
 class AppUser(models.Model):
     """Login accounts created in Settings -> User Access (and via Sign-up).
-    Maps onto the existing `app_users` table so every login persists in MySQL
-    instead of only the browser's localStorage. `password` is plain text to
-    match the admin UI's "SHOW" reveal button (see hrms_system_schema.sql)."""
+    Maps onto the existing `app_users` table so every login persists in MySQL.
+
+    ``password`` only ever holds a Django password hash (or '' for Google/SSO
+    accounts): ``save()`` hashes any raw value that reaches it, whichever code
+    path set it, so a plain-text password can never be written through the ORM.
+    Hashes cannot be shown; a forgotten password is reset, not revealed."""
     employee_id = models.CharField(max_length=64, default='', blank=True, db_index=True)
     full_name = models.CharField(max_length=255)
     email = models.CharField(max_length=255, unique=True)
@@ -315,6 +340,11 @@ class AppUser(models.Model):
     profile_pic = models.TextField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    def save(self, *args, **kwargs):
+        from .secret_box import hash_password
+        self.password = hash_password(self.password or '')
+        super().save(*args, **kwargs)
 
     class Meta:
         db_table = 'app_users'
@@ -353,7 +383,10 @@ class UserEmailConfig(models.Model):
     smtp_host = models.CharField(max_length=255, default='', blank=True)
     smtp_port = models.CharField(max_length=10, default='', blank=True)
     smtp_user = models.CharField(max_length=255, default='', blank=True)
-    smtp_password = models.CharField(max_length=255, default='', blank=True)
+    # Encrypted (``enc1:`` + Fernet token, see api/secret_box.py) — it must be
+    # re-used to log in to the mail server, so it cannot be hashed. Never
+    # returned to the browser.
+    smtp_password = models.CharField(max_length=512, default='', blank=True)
     smtp_secure = models.BooleanField(default=False)
     from_name = models.CharField(max_length=255, default='', blank=True)
     from_email = models.CharField(max_length=255, default='', blank=True)
@@ -717,6 +750,8 @@ class BenchSalesProfile(models.Model):
     experience = models.CharField(max_length=60, default='', blank=True)
     email = models.CharField(max_length=255, default='', blank=True)
     contact_no = models.CharField(max_length=60, default='', blank=True)
+    date_of_birth = models.DateField(null=True, blank=True)
+    passport_no = models.CharField(max_length=40, default='', blank=True)
     work_authorization = models.CharField(max_length=40, default='', blank=True)
 
     resume_file_name = models.CharField(max_length=255, default='', blank=True)
@@ -746,6 +781,9 @@ class BenchSalesCertificate(models.Model):
     base64-in-row storage as BenchSalesProfile's resume/DL/I-94 fields.
     """
     profile = models.ForeignKey(BenchSalesProfile, related_name='certificate_files', on_delete=models.CASCADE)
+    # 'certificate' = the Certificates upload, 'certification' = the files attached
+    # to the Certifications field. Each kind has its own per-profile limit.
+    kind = models.CharField(max_length=20, default='certificate', db_index=True)
     file_name = models.CharField(max_length=255, default='', blank=True)
     file_mime = models.CharField(max_length=100, default='', blank=True)
     file_data = models.TextField(default='', blank=True)  # base64
@@ -2038,3 +2076,18 @@ class AISettingsAudit(models.Model):
     class Meta:
         db_table = 'ai_settings_audit'
         ordering = ['-created_at', '-id']
+
+
+class ChatReaction(models.Model):
+    """One person's emoji reaction to one chat message (toggle on/off).
+    ``message_id`` / ``room_id`` are plain ids: the chat tables are unmanaged."""
+    message_id = models.IntegerField(db_index=True)
+    room_id = models.IntegerField(db_index=True)
+    email = models.CharField(max_length=255)
+    emoji = models.CharField(max_length=16)
+    created_at = models.DateTimeField()
+
+    class Meta:
+        db_table = 'chat_reactions'
+        unique_together = (('message_id', 'email', 'emoji'),)
+        ordering = ['created_at', 'id']

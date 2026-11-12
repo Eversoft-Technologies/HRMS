@@ -506,7 +506,7 @@
     return { on: on, since: since };
   }
   // Mirrors the server's check-out maths (attendance_check_out in api/views.py):
-  // working = session minus breaks; overtime = working minus the shift's
+  // working = earlier sessions + this session minus its breaks; overtime = working minus the shift's
   // threshold, which the server sends as overtimeAfterMinutes.
   function liveMinutes() {
     var rec = todayRec || {};
@@ -517,8 +517,12 @@
     var onBreak = checkedIn && brk.on;
     var brkNow = (onBreak && !isNaN(brk.since)) ? Math.max(0, (now - brk.since) / 60000) : 0;
     var breakMin = (rec.breakMinutes || 0) + brkNow;
+    // Earlier sessions today (closed) + the running one minus only its own
+    // breaks — the same sum the server makes at check-out.
+    var prior = Number(rec.priorWorkedMinutes) || 0;
+    var sessionBreak = Math.max(0, breakMin - (Number(rec.breaksBeforeSessionMinutes) || 0));
     var worked = (checkedIn && !isNaN(inAt))
-      ? Math.max(0, (now - inAt) / 60000 - breakMin)
+      ? prior + Math.max(0, (now - inAt) / 60000 - sessionBreak)
       : (rec.workedMinutes || 0);
     var threshold = (rec.overtimeAfterMinutes != null) ? Number(rec.overtimeAfterMinutes) : 540;
     var ot = checkedIn ? Math.max(0, worked - threshold) : (rec.overtimeMinutes || 0);
@@ -1046,7 +1050,8 @@
     }).join('') || '<div class="hat-empty2">No clock events for this day.</div>';
     var punches = (d.punches || []).map(function (p) {
       return '<div class="hat-punch"><span class="hat-pt">' + esc(p.time || '') + '</span>' +
-        '<span class="hat-pl">' + esc(p.label || 'Location recorded') + '</span>' +
+        '<span class="hat-pl"' + (p.approximate ? ' title="The device reported this position only to about ' + esc(Math.round((p.accuracy || 0) / 100) / 10) + ' km, so it may not be where you were."' : '') + '>' + esc(p.label || 'Location recorded') +
+          (p.approximate && !/^Approximate/.test(p.label || '') ? ' <span style="font-size:10px;font-weight:700;padding:1px 6px;border-radius:99px;background:rgba(245,158,11,.16);color:#b45309">approximate</span>' : '') + '</span>' +
         '<button class="hat-pin" data-lat="' + esc(p.latitude) + '" data-lng="' + esc(p.longitude) + '" data-label="' + esc(p.label || '') + '" data-time="' + esc(p.time || '') + '" title="View location">' + PIN_SVG + '</button></div>';
     }).join('') || '<div class="hat-empty2">No location punches recorded' + (d.isSelf ? ' yet. They are captured hourly while you are checked in.' : ' for this day.') + '</div>';
 
@@ -1135,27 +1140,68 @@
   function getLastTs() { try { return parseInt(localStorage.getItem(lastTsKey()) || '0', 10) || 0; } catch (_) { return 0; } }
   function setLastTs(t) { try { localStorage.setItem(lastTsKey(), String(t)); } catch (_) {} }
 
+  /* The precise reading, not the first one. getCurrentPosition with
+     enableHighAccuracy:false (and a 10-minute cache) answered with a WiFi/IP
+     estimate kilometres out, and the reverse-geocoder then named whichever
+     town that estimate landed in — someone at the same desk all evening was
+     logged in two different towns. Watch for up to 12 s, keep the tightest
+     fix, stop early once it is good (<= 50 m). */
+  var PRECISE_M = 500;
+  function bestFix(budget) {
+    return new Promise(function (resolve) {
+      var best = null, id = null, done = false;
+      function finish() { if (done) return; done = true; try { if (id !== null) navigator.geolocation.clearWatch(id); } catch (_) {} resolve(best); }
+      setTimeout(finish, budget + 1000);
+      try {
+        id = navigator.geolocation.watchPosition(function (p) {
+          var acc = p.coords.accuracy;
+          if (best && !(acc < best.accuracy)) return;
+          best = { lat: p.coords.latitude, lng: p.coords.longitude, accuracy: acc };
+          if (acc <= 50) finish();
+        }, function () { if (!best) finish(); }, { enableHighAccuracy: true, maximumAge: 0, timeout: budget });
+      } catch (_) { finish(); }
+    });
+  }
+
   function captureLocation() {
     var em = actorEmail();
     if (!em || !navigator.geolocation) { geoBusy = false; return; }
-    navigator.geolocation.getCurrentPosition(function (pos) {
-      var lat = pos.coords.latitude, lng = pos.coords.longitude, acc = pos.coords.accuracy;
+    bestFix(12000).then(function (pos) {
+      if (!pos) { geoBusy = false; geoRetryAt = Date.now() + 10 * 60 * 1000; return; }
+      var lat = pos.lat, lng = pos.lng, acc = pos.accuracy;
       var send = function (label) {
         api('/api/attendance/location-punch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: em, latitude: lat, longitude: lng, accuracy: acc, label: label || '' }) })
           .then(function (r) {
             if (r && r.stored) setLastTs(Date.now());
             else if (r && r.reason === 'not_checked_in') geoRetryAt = Date.now() + 30 * 60 * 1000;
+            if (r && r.state === 'away' && r.message) locationAlert('You appear to be elsewhere', r.message);
           })
           .catch(function () {})
           .then(function () { geoBusy = false; });
       };
+      // Only a precise reading gets a place name; the server labels the rest
+      // "Approximate location".
+      if (!(acc <= PRECISE_M)) { send(''); return; }
       try {
-        fetch('https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=' + lat + '&lon=' + lng, { headers: { 'Accept': 'application/json' } })
+        fetch('https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=14&lat=' + lat + '&lon=' + lng, { headers: { 'Accept': 'application/json' } })
           .then(function (r) { return r.json(); })
           .then(function (j) { var a = (j && j.address) || {}; var city = a.city || a.town || a.village || a.suburb || a.county || ''; send([city, a.state || ''].filter(Boolean).join(', ')); })
           .catch(function () { send(''); });
       } catch (_) { send(''); }
-    }, function () { geoBusy = false; geoRetryAt = Date.now() + 10 * 60 * 1000; }, { enableHighAccuracy: false, maximumAge: 600000, timeout: 15000 });
+    });
+  }
+
+  /* A banner that stays until dismissed (the bell gets the same message). */
+  function locationAlert(title, body) {
+    var el = document.createElement('div');
+    el.className = 'haa-loc-alert';
+    el.setAttribute('role', 'alert');
+    el.setAttribute('style', 'position:fixed;bottom:24px;right:24px;z-index:100003;background:#7c2d12;color:#fff;padding:13px 16px;border-radius:10px;max-width:380px;' +
+      "font-family:'Segoe UI',Arial,sans-serif;box-shadow:0 10px 34px rgba(0,0,0,.35);font-size:12.5px;line-height:1.5;");
+    el.innerHTML = '<div style="display:flex;gap:10px;align-items:flex-start"><div style="flex:1"><div style="font-weight:700;font-size:13px;margin-bottom:3px">' + esc(title) + '</div>' + esc(body) + '</div>' +
+      '<button type="button" aria-label="Dismiss" style="background:none;border:none;color:#fff;font-size:16px;cursor:pointer;line-height:1">&times;</button></div>';
+    el.querySelector('button').addEventListener('click', function () { el.remove(); });
+    document.body.appendChild(el);
   }
 
   function maybeCapture() {

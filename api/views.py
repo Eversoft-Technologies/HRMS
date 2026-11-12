@@ -25,6 +25,7 @@ from pathlib import Path
 from urllib.parse import urlencode
 
 from django.conf import settings
+from django.contrib.auth.hashers import make_password
 from django.db import transaction
 from django.db.models import (
     BinaryField, BooleanField, Case, CharField, Count, ExpressionWrapper, F, Func,
@@ -316,7 +317,8 @@ def notify_approvers(perm_code, title, message, link='', category=None):
 def app_user_dict(o):
     return {
         'id': o.id, 'name': o.full_name, 'email': o.email,
-        'password': o.password, 'initials': o.initials,
+        'password': '',   # never expose the stored hash to the client
+        'initials': o.initials,
         'role': o.role, 'status': o.status,
         'authProvider': o.auth_provider,
         'profilePic': o.profile_pic or '',
@@ -1371,19 +1373,10 @@ def resume_score_file(request, pk):
 # Interview Recordings
 # ---------------------------------------------------------------------------
 def _recording_list_qs():
-    return InterviewRecording.objects.annotate(
-        # ``_has_video`` is True when disk file, binary blob, or legacy base64 has data
-        _has_video=Case(
-            When(video_file__isnull=False, video_file__gt='', then=Value(True)),
-            When(video_buffer__isnull=False, video_buffer__gt=b'', then=Value(True)),
-            When(recording_data__isnull=False, recording_data__gt='', then=Value(True)),
-            default=Value(False), output_field=BooleanField(),
-        ),
-        _has_recording=Case(
-            When(recording_data__isnull=False, recording_data__gt='', then=Value(True)),
-            default=Value(False), output_field=BooleanField(),
-        ),
-    ).defer('video_buffer', 'recording_data')
+    """Recordings without their blob columns. ``hasVideo`` comes from the stored
+    ``has_video`` flag (see the model) rather than a per-row test of the
+    LONGBLOB / LONGTEXT columns, so this query never reads a video."""
+    return InterviewRecording.objects.defer('video_buffer', 'recording_data')
 
 
 RECORDING_FIELD_MAP = {
@@ -1433,15 +1426,18 @@ def _mark_interview_taken(email, role, total_score=None):
               anonymous_methods=('POST',))
 def recordings(request):
     if request.method == 'GET':
-        if request.query_params.get('summary') == '1':
-            qs = _recording_list_qs().defer(
-                'transcript', 'responses', 'ai_evaluation',
-                'executive_summary', 'round2_questions',
-            )
-            return Response(InterviewRecordingSerializer(
-                qs, many=True, context={'summary': True},
-            ).data)
-        return Response(InterviewRecordingSerializer(_recording_list_qs(), many=True).data)
+        # The list is row metadata only; the panel loads a recording's
+        # transcript and evaluation from the detail endpoint when it is opened.
+        # ``?full=1`` keeps the old heavy shape for any caller that wants it.
+        if request.query_params.get('full') == '1':
+            return Response(InterviewRecordingSerializer(_recording_list_qs(), many=True).data)
+        qs = _recording_list_qs().defer(
+            'transcript', 'responses', 'ai_evaluation',
+            'executive_summary', 'round2_questions',
+        )
+        return Response(InterviewRecordingSerializer(
+            qs, many=True, context={'summary': True},
+        ).data)
 
     body = request.data
     if not body.get('candidateName'):
@@ -1450,20 +1446,26 @@ def recordings(request):
     if not serializer.is_valid():
         return serializer_err(serializer)
     serializer.save()
-    _mark_interview_taken(body.get('candidateEmail'), body.get('role'), body.get('totalScore'))
+    # Not "taken" yet: the interview counts as completed only once its video
+    # is on the server (recording_video below). An interview whose camera was
+    # blocked or whose upload failed stays incomplete, and the candidate's
+    # link stays usable so they can take it again.
     return Response(serializer.data, status=201)
 
 
 @api_view(['GET', 'PUT', 'DELETE'])
 @require_perm({'GET': 'recruitment.view', 'PUT': 'recruitment.edit', 'DELETE': 'recruitment.delete'})
 def recording_detail(request, pk):
-    obj = InterviewRecording.objects.filter(pk=pk).first()
+    # Blob columns stay deferred: the player streams video from the /video
+    # endpoint, so the legacy base64 copy is only sent back on ``?full=1``.
+    obj = InterviewRecording.objects.defer('video_buffer', 'recording_data').filter(pk=pk).first()
     if not obj:
         return err('Recording not found', 404)
 
     if request.method == 'GET':
         data = InterviewRecordingSerializer(obj).data
-        data['recordingData'] = obj.recording_data
+        if request.query_params.get('full') == '1':
+            data['recordingData'] = obj.recording_data
         return Response(data)
 
     if request.method == 'PUT':
@@ -1591,6 +1593,15 @@ def recording_thumbnail(request, pk):
     return HttpResponse(status=404)
 
 
+def _complete_interview(pk):
+    """The video is saved: now the interview counts as taken (link latched,
+    score carried over)."""
+    rec = (InterviewRecording.objects.filter(pk=pk)
+           .values('candidate_email', 'role', 'total_score').first())
+    if rec:
+        _mark_interview_taken(rec['candidate_email'], rec['role'], rec['total_score'])
+
+
 @csrf_exempt
 def recording_video(request, pk):
     """
@@ -1610,11 +1621,14 @@ def recording_video(request, pk):
         try:
             from . import video_processor
             result = video_processor.save_interview_video(pk, data, mime)
+            _complete_interview(pk)
             return JsonResponse(result)
         except Exception as exc:
             logger.error(f"[RecordingVideo] Disk save failed: {exc}", exc_info=True)
             # Fallback direct buffer write if disk save encounters an unexpected error
-            InterviewRecording.objects.filter(pk=pk).update(video_buffer=data, video_mime=mime)
+            InterviewRecording.objects.filter(pk=pk).update(
+                video_buffer=data, video_mime=mime, has_video=True)
+            _complete_interview(pk)
             return JsonResponse({'ok': True, 'fallback': 'buffer'})
 
     if request.method != 'GET':
@@ -1969,13 +1983,30 @@ def user_email_config(request, email):
         return err('email is required')
     body = request.data
     social = _merge_social(email, body.get('social', {}))
+    # The SMTP password is stored encrypted and never sent back to the browser,
+    # so the form submits it blank unless the user typed a new one: blank keeps
+    # the saved password, ``clearSmtpPassword: true`` removes it.
+    from .secret_box import SecretsNotConfigured, encrypt
+    existing = UserEmailConfig.objects.filter(user_email=email).first()
+    new_pw = str(body.get('smtpPassword') or '')
+    if body.get('clearSmtpPassword'):
+        stored_pw = ''
+    elif new_pw:
+        try:
+            stored_pw = encrypt(new_pw)
+        except SecretsNotConfigured:
+            return err('The SMTP password cannot be stored securely because the server has no usable '
+                       'encryption key. Ask an administrator to set HRMS_SECRETS_KEY or allow the key '
+                       'file (see README_DJANGO.md).', 503)
+    else:
+        stored_pw = existing.smtp_password if existing else ''
     obj, _ = UserEmailConfig.objects.update_or_create(
         user_email=email,
         defaults={
             'smtp_host': body.get('smtpHost', ''),
             'smtp_port': str(body.get('smtpPort', '') or ''),
             'smtp_user': body.get('smtpUser', ''),
-            'smtp_password': body.get('smtpPassword', ''),
+            'smtp_password': stored_pw,
             'smtp_secure': bool(body.get('smtpSecure', False)),
             'from_name': body.get('fromName', ''),
             'from_email': body.get('fromEmail', ''),
@@ -2472,7 +2503,7 @@ def user_detail(request, email):
             obj.full_name = str(body['name']).strip()
             obj.initials = make_initials(obj.full_name)
         if body.get('password'):
-            obj.password = body['password']
+            obj.password = make_password(body['password'])
         if body.get('role'):
             obj.role = body['role']
         if body.get('status'):
@@ -3089,6 +3120,38 @@ DEFAULT_LEAVE_ALLOWANCE = [
     ('Earned Leave', 15),
 ]
 
+#: The admin's leave policy (Settings › General › Leave Policy), stored as a
+#: master-data set: {"types": [{"name", "days" (None = no limit)}],
+#: "enforceBalance": bool}. Allowances are per calendar year.
+LEAVE_POLICY_KEY = 'leave_policy'
+LEAVE_TYPE_MAX_LEN = 60          # LeaveRequest.type max_length
+LEAVE_DAYS_MAX = 366
+
+
+def _default_leave_policy():
+    return {'types': [{'name': n, 'days': d} for n, d in DEFAULT_LEAVE_ALLOWANCE],
+            'enforceBalance': True}
+
+
+def _leave_policy():
+    obj = MasterDataSet.objects.filter(key=LEAVE_POLICY_KEY).first()
+    opts = obj.options if obj else None
+    if not isinstance(opts, dict) or not isinstance(opts.get('types'), list) or not opts['types']:
+        return _default_leave_policy()
+    return {'types': [{'name': t['name'], 'days': t.get('days')} for t in opts['types']
+                      if isinstance(t, dict) and t.get('name')],
+            'enforceBalance': bool(opts.get('enforceBalance', True))}
+
+
+def _leave_usage(email, year):
+    """(approved, pending) days per type for leave starting in ``year``."""
+    approved, pending = {}, {}
+    for lr in LeaveRequest.objects.filter(email=email, from_date__year=year,
+                                          status__in=('Approved', 'Pending')):
+        bucket = approved if lr.status == 'Approved' else pending
+        bucket[lr.type] = bucket.get(lr.type, 0) + (lr.days or 0)
+    return approved, pending
+
 
 def parse_date(value):
     """Parse a 'YYYY-MM-DD' string into a date (None if blank/invalid)."""
@@ -3101,10 +3164,175 @@ def parse_date(value):
 
 
 # --- Attendance + Check-In / Check-Out -------------------------------------
+def _day_gross_effective(rec, now=None):
+    """(gross, effective) minutes for a work day. Gross runs from the day's
+    first check-in to its last check-out — or to now while still checked in;
+    effective is the time worked over all sessions, the running one included
+    (minus its breaks, an open break too)."""
+    if rec is None or not rec.check_in:
+        return 0, (rec.worked_minutes or 0) if rec else 0
+    now = now or local_now()
+    first = (AttendanceEvent.objects.filter(email=rec.email, date=rec.date, event='check-in')
+             .order_by('at').values_list('at', flat=True).first())
+    first = min(first, rec.check_in) if first else rec.check_in
+    running = _is_checked_in(rec)
+    end = now if running else rec.check_out
+    gross = max(int((end - first).total_seconds() // 60), 0) if end else 0
+    if not running:
+        return gross, rec.worked_minutes or 0
+    brk = _session_breaks(rec)
+    if _is_break_label(rec.presence):
+        started = (AttendanceEvent.objects.filter(email=rec.email, date=rec.date, event='break-start',
+                                                  at__gte=rec.check_in)
+                   .order_by('-at').values_list('at', flat=True).first())
+        if started:
+            brk += max(int((now - started).total_seconds() // 60), 0)
+    session = int((now - rec.check_in).total_seconds() // 60)
+    return gross, (rec.worked_minutes or 0) + max(session - brk, 0)
+
+
+#: A check-in up to this long after a night shift ended still belongs to that
+#: night (see _work_date_for).
+NIGHT_SHIFT_TAIL = timedelta(hours=4)
+#: On Time / Late is judged on the first check-in from this long before the
+#: shift starts; earlier check-ins (e.g. 02:18 on a day whose shift starts at
+#: 18:00) do not decide it.
+SHIFT_EARLY_WINDOW = timedelta(hours=4)
+CHECKOUT_EVENTS = ('check-out', 'auto-checkout-departure')
+
+
+def _break_minutes_before(att, until):
+    """Break minutes of this work day recorded (break-start → break-end) before
+    ``until`` — i.e. the breaks that belong to earlier sessions."""
+    return _break_minutes_between(att, None, until)
+
+
+def _break_minutes_between(att, start, until):
+    """Break minutes of this work day recorded (break-start → break-end) in
+    [start, until)."""
+    total, started = 0, None
+    qs = AttendanceEvent.objects.filter(email=att.email, date=att.date,
+                                        event__in=('break-start', 'break-end'), at__lt=until)
+    if start is not None:
+        qs = qs.filter(at__gte=start)
+    for event, at in qs.order_by('at', 'id').values_list('event', 'at'):
+        if event == 'break-start':
+            started = at
+        elif started is not None:
+            total += max(int((at - started).total_seconds() // 60), 0)
+            started = None
+    return total
+
+
+def _earlier_sessions(att):
+    """The day's closed sessions before the row's own (latest) one, as
+    (check_in, check_out) pairs from its event trail. None when the trail
+    does not pair up (e.g. a check-out was never recorded): then nobody can
+    say what was worked, and the stored figures are left alone."""
+    sessions, start = [], None
+    for event, at in (AttendanceEvent.objects
+                      .filter(email=att.email, date=att.date, event__in=('check-in',) + CHECKOUT_EVENTS)
+                      .order_by('at', 'id').values_list('event', 'at')):
+        if event == 'check-in':
+            if start is not None:
+                return None
+            start = at
+        elif start is not None:
+            sessions.append((start, at))
+            start = None
+    return [(i, o) for i, o in sessions if att.check_in and o <= att.check_in]
+
+
+def _recompute_worked(att):
+    """Worked minutes of a closed day from its sessions: earlier ones from the
+    event trail + the row's own check-in → check-out, each minus its own
+    breaks. None when it cannot be worked out reliably."""
+    if not (att.check_in and att.check_out) or _is_checked_in(att):
+        return None
+    earlier = _earlier_sessions(att)
+    if earlier is None:
+        return None
+    total = sum(max(int((o - i).total_seconds() // 60) - _break_minutes_between(att, i, o), 0)
+                for i, o in earlier)
+    last = max(int((att.check_out - att.check_in).total_seconds() // 60) - _session_breaks(att), 0)
+    return total + last
+
+
+def _overtime_for(worked, shift):
+    if shift.is_flexible:
+        return max(worked - int((shift.flex_hours_per_day or 8) * 60), 0)
+    return max(worked - (shift.overtime_after_minutes or 540), 0)
+
+
+def _session_breaks(att):
+    """Break minutes taken in the session that started at ``att.check_in``.
+    ``break_minutes`` is the whole day's total; earlier sessions' breaks are
+    taken off it (from their events — rows without events count it all)."""
+    total = att.break_minutes or 0
+    if not att.check_in:
+        return total
+    return max(total - _break_minutes_before(att, att.check_in), 0)
+
+
+def _prior_worked(att):
+    """Worked minutes of the day's earlier, already closed sessions. While a
+    session is open, worked_minutes holds exactly that (check-in never resets
+    it); once closed it already includes the last session."""
+    return (att.worked_minutes or 0) if _is_checked_in(att) else 0
+
+
+def _session_figures(att, check_in, check_out, shift, prior=None, breaks=None):
+    """Worked / overtime / early-exit minutes for the day once the session
+    ``check_in`` → ``check_out`` is closed — the same rules as a live
+    check-out: the day's earlier sessions (``prior``) plus this one minus the
+    breaks taken in it; overtime is past the shift's threshold (or a flexible
+    shift's daily hours) on the day's total, early exit is before the shift
+    end (next day for a night shift)."""
+    prior = _prior_worked(att) if prior is None else prior
+    breaks = _session_breaks(att) if breaks is None else breaks
+    worked = prior + max(int((check_out - check_in).total_seconds() // 60) - breaks, 0)
+    if shift.is_flexible:
+        req = int((shift.flex_hours_per_day or 8) * 60)
+        return {'workedMinutes': worked, 'overtimeMinutes': max(worked - req, 0),
+                'earlyExitMinutes': max(req - worked, 0)}
+    end = _shift_end_dt(shift, att.date)
+    return {
+        'workedMinutes': worked,
+        'overtimeMinutes': max(worked - (shift.overtime_after_minutes or 540), 0),
+        'earlyExitMinutes': max(int((end - check_out).total_seconds() // 60), 0) if check_out < end else 0,
+    }
+
+
+def _correction_preview(corr, att=None):
+    """What a check-out correction would make the day look like, or None."""
+    if not corr.requested_check_out:
+        return None
+    att = att or EmployeeAttendance.objects.filter(email=corr.email, date=corr.attendance_date).first()
+    check_in = corr.requested_check_in or (att.check_in if att else None)
+    if att is None or not check_in or corr.requested_check_out <= check_in:
+        return None
+    shift = (Shift.objects.filter(pk=att.shift_id).first() if att.shift_id else None) \
+        or _get_active_shift(corr.email, corr.attendance_date)
+    out = _session_figures(att, check_in, corr.requested_check_out, shift, **_correction_basis(corr, att))
+    out['grossMinutes'] = int((corr.requested_check_out - check_in).total_seconds() // 60)
+    return out
+
+
+def _correction_basis(corr, att):
+    """Closing the session that is still open adds to the day's earlier
+    sessions; a correction that also moves the check-in (or rewrites a closed
+    day) describes the whole day, so it starts from nothing."""
+    if not corr.requested_check_in and _is_checked_in(att):
+        return {'prior': att.worked_minutes or 0, 'breaks': _session_breaks(att)}
+    return {'prior': 0, 'breaks': att.break_minutes or 0}
+
+
 @api_view(['GET'])
 @require_perm('attendance.view', or_self=True)
 def attendance(request):
-    """List attendance rows, filterable by ?email=, ?date=, ?from=, ?to=."""
+    """List attendance rows, filterable by ?email=, ?date=, ?from=, ?to=.
+    Rows with a pending check-out correction carry ``pendingCorrection`` — the
+    requested clock-out and the hours it would give — for the history table."""
     qs = EmployeeAttendance.objects.all()
     email = norm_email(request.GET.get('email'))
     if email:
@@ -3118,7 +3346,26 @@ def attendance(request):
     to = parse_date(request.GET.get('to'))
     if to:
         qs = qs.filter(date__lte=to)
-    return Response(EmployeeAttendanceSerializer(qs, many=True).data)
+    rows = list(qs)
+    data = EmployeeAttendanceSerializer(rows, many=True).data
+    if rows:
+        pending = {}
+        for c in (AttendanceCorrection.objects
+                  .filter(status='Pending', requested_check_out__isnull=False,
+                          email__in={r.email for r in rows}, attendance_date__in={r.date for r in rows})
+                  .order_by('id')):
+            pending[(c.email, c.attendance_date)] = c        # latest wins
+        for i, r in enumerate(rows):
+            c = pending.get((r.email, r.date))
+            fig = _correction_preview(c, r) if c else None
+            if fig:
+                data[i]['pendingCorrection'] = {
+                    'id': c.id, 'status': c.status,
+                    'requestedCheckOut': c.requested_check_out.strftime('%Y-%m-%d %H:%M:%S'),
+                    'requestedCheckOutTime': c.requested_check_out.strftime('%H:%M'),
+                    **fig,
+                }
+    return Response(data)
 
 
 def _haversine_distance(lat1, lon1, lat2, lon2):
@@ -3329,6 +3576,112 @@ def _is_checked_in(obj):
     return bool(obj.check_in and (obj.check_out is None or obj.check_in > obj.check_out))
 
 
+def _crosses_midnight(shift):
+    return bool(shift and shift.is_night_shift and shift.end_time <= shift.start_time)
+
+
+def _shift_end_dt(shift, work_date):
+    """When ``shift`` ends for the work day ``work_date`` (next day for a night shift)."""
+    end = datetime.combine(work_date, shift.end_time)
+    if _crosses_midnight(shift):
+        end += timedelta(days=1)
+    return end
+
+
+def _work_date_for(email, now):
+    """The work day a check-in at ``now`` belongs to. Normally today; but in the
+    small hours, before yesterday's night shift has ended, it is yesterday —
+    so someone arriving at 00:20 for an 18:00–02:30 shift is late on *that*
+    shift, not on time for tomorrow's."""
+    today = now.date()
+    yesterday = today - timedelta(days=1)
+    shift = _get_active_shift(email, yesterday)
+    if _crosses_midnight(shift):
+        end = _shift_end_dt(shift, yesterday)
+        if now < end:
+            return yesterday
+        # Shortly after the night shift ended (someone who checked out at
+        # 02:00 and back in at 02:18 to finish up): still last night's work —
+        # overtime on that night, not a new day whose "On Time" it decides.
+        if now < end + NIGHT_SHIFT_TAIL and EmployeeAttendance.objects.filter(
+                email=email, date=yesterday, check_in__isnull=False).exists():
+            return yesterday
+    return today
+
+
+#: A reading less precise than this cannot place someone in a village or a
+#: building — a laptop on WiFi/IP positioning reports ±2-50 km and the
+#: reverse-geocoder then names whichever town the error landed in. Such a
+#: reading is kept as "approximate" and never used to say someone moved.
+LOCATION_PRECISE_M = 500
+#: Moving this far from where an off-site / home-without-fence session
+#: started counts as "somewhere else".
+LOCATION_DRIFT_RADIUS_M = 300
+LOCATION_AWAY_TITLE = 'Location check: you appear to be elsewhere'
+
+
+def _fmt_dist(m):
+    return f'{m / 1000:.1f} km' if m >= 1000 else f'{round(m)} m'
+
+
+def _session_is_offsite(att):
+    """True when this session did not start inside an office fence — an
+    approved off-site check-in, or work from home. Such a session is measured
+    against where it started, never against the office."""
+    return bool(att.is_wfh or att.location_status or not att.geo_verified
+                or not _geofencing_enabled())
+
+
+def _where_vs_session(att, lat, lng, accuracy):
+    """Compare a reading with where this session is supposed to be.
+
+    Returns ``{'state': 'ok'|'away'|'uncertain', 'distance': m|None,
+    'place': str}``. 'away' only when the reading is precise AND the gap is
+    larger than its own error — a wobble never alerts anyone."""
+    out = {'state': 'uncertain', 'distance': None, 'place': ''}
+    if lat is None or lng is None or accuracy is None or accuracy > LOCATION_PRECISE_M:
+        return out
+    if att.is_wfh and home_fence_for(att.email):
+        fences = [home_fence_for(att.email)]
+    elif not _session_is_offsite(att):
+        fences = None                                   # the office fences
+    else:
+        fences = []
+    if fences is None or fences:
+        inside, fence, nearest, dist = _locate_against_fences(lat, lng, accuracy, fences=fences)
+        out['place'] = (fence or nearest).name if (fence or nearest) else ''
+        out['distance'] = round(dist) if dist is not None else None
+        if inside:
+            out['state'] = 'ok'
+        elif nearest is not None and dist - (nearest.radius_meters or 0) > accuracy:
+            out['state'] = 'away'
+        return out
+    if att.location_lat is None or att.location_lng is None:
+        return out
+    dist = _haversine_distance(lat, lng, att.location_lat, att.location_lng)
+    out['place'] = 'where you checked in'
+    out['distance'] = round(dist)
+    out['state'] = 'away' if dist > LOCATION_DRIFT_RADIUS_M + accuracy else 'ok'
+    return out
+
+
+def _punch_json(p):
+    approx = p.accuracy is not None and p.accuracy > LOCATION_PRECISE_M
+    return {
+        'id': p.id, 'time': _fmt_ampm(p.captured_at), 'capturedAt': dt(p.captured_at),
+        'latitude': p.latitude, 'longitude': p.longitude,
+        'accuracy': p.accuracy, 'label': p.label or '', 'approximate': approx,
+    }
+
+
+def _current_attendance(email, now):
+    """The record the check-in widget, status picker and breaks act on: an open
+    session (today's, or last night's night-shift one still running), else
+    today's row (closed or missing)."""
+    return (_open_attendance_session(email, now.date())
+            or EmployeeAttendance.objects.filter(email=email, date=now.date()).first())
+
+
 def _open_attendance_session(email, today):
     """Find today's session or an overnight session opened yesterday."""
     current = EmployeeAttendance.objects.filter(email=email, date=today).first()
@@ -3353,7 +3706,19 @@ def attendance_check_in(request):
     if not email:
         return err('email is required')
     now = local_now()
-    obj, created = EmployeeAttendance.objects.get_or_create(email=email, date=now.date())
+    # Last night's night-shift session still running: never open a second one
+    # on the new date (that split one shift into two half-recorded days).
+    running = _open_attendance_session(email, now.date())
+    if running is not None and running.date != now.date():
+        return Response({
+            'message': (f'You are still checked in from {running.check_in:%d %b, %I:%M %p} '
+                        f'(night shift). Check out to end that session.'),
+            'code': 'ALREADY_CHECKED_IN',
+            'checkedIn': True,
+            'date': running.date.strftime('%Y-%m-%d'),
+        }, status=409)
+    work_date = _work_date_for(email, now)
+    obj, created = EmployeeAttendance.objects.get_or_create(email=email, date=work_date)
     name = body.get('employee') or body.get('name') or ''
     if name:
         obj.employee_name = name
@@ -3361,7 +3726,7 @@ def attendance_check_in(request):
         obj.device = body.get('device')
 
     # Get active shift
-    shift = _get_active_shift(email, now.date())
+    shift = _get_active_shift(email, work_date)
     obj.shift_id = shift.id
 
     # WFH verification
@@ -3640,13 +4005,20 @@ def attendance_check_in(request):
                 'status': 'Pending',
             }, status=202)
 
-    # Status (present/late) based on first check-in
-    if created:
-        if shift.is_flexible:
+    # Status (present/late): judged on the first check-in inside the shift's
+    # window (from SHIFT_EARLY_WINDOW before it starts). A check-in long
+    # before that — 02:18 on a day whose shift starts at 18:00 — is extra
+    # time, not the arrival for this shift, so it must not decide "On Time".
+    if shift.is_flexible:
+        if created:
             obj.late_minutes = 0
             obj.status = 'present'
-        else:
-            shift_start = datetime.combine(now.date(), shift.start_time)
+    else:
+        shift_start = datetime.combine(work_date, shift.start_time)
+        window_start = shift_start - SHIFT_EARLY_WINDOW
+        judged = AttendanceEvent.objects.filter(
+            email=email, date=work_date, event='check-in', at__gte=window_start, at__lt=now).exists()
+        if now >= window_start and not judged:
             grace_start = shift_start + timedelta(minutes=shift.grace_minutes)
             if now > grace_start:
                 diff_min = int((now - shift_start).total_seconds() // 60)
@@ -3655,14 +4027,17 @@ def attendance_check_in(request):
             else:
                 obj.late_minutes = 0
                 obj.status = 'present'
+        elif created:
+            obj.late_minutes = 0          # provisional until the shift's own check-in
+            obj.status = 'present'
 
     # Start a new session
     obj.check_in = now
     obj.save()
 
-    # Create event
+    # Create event (filed under the work day, so a night shift's timeline stays together)
     AttendanceEvent.objects.create(
-        email=email, employee_name=obj.employee_name, date=now.date(),
+        email=email, employee_name=obj.employee_name, date=obj.date,
         event='check-in', location=loc_desc,
         latitude=lat, longitude=lng,
         geo_fence_id=fence_obj.id if fence_obj else None,
@@ -3727,6 +4102,14 @@ def attendance_check_out(request):
             'checkedIn': False,
         }, status=409)
 
+    # Automatic close on leaving the office: only for a session that started
+    # at the office. An approved off-site / WFH day has no office to leave.
+    is_auto = str(body.get('auto') or '').lower() in ('1', 'true', 'yes', 'geofence', 'geofence_departure')
+    if is_auto and _session_is_offsite(obj):
+        return Response({'message': 'This session did not start at the office, so it is not '
+                                    'closed automatically when you are away from it.',
+                         'code': 'NOT_AN_OFFICE_SESSION', 'checkedIn': True}, status=409)
+
     # GPS check for event
     lat = body.get('latitude')
     lng = body.get('longitude')
@@ -3765,7 +4148,10 @@ def attendance_check_out(request):
         )
 
     if _is_checked_in(obj):
-        obj.worked_minutes = max(session - (obj.break_minutes or 0), 0)
+        # Earlier sessions today + this one minus only ITS breaks. Replacing
+        # the total here lost every earlier session (in 9–12, out, in 13–18
+        # counted 13–18 only) and took all of the day's breaks off this one.
+        obj.worked_minutes = (obj.worked_minutes or 0) + max(session - _session_breaks(obj), 0)
 
     obj.check_out = now
     obj.presence = ''
@@ -3773,11 +4159,19 @@ def attendance_check_out(request):
     # The browser can close a session when the employee leaves the geofence.
     # Stamping it keeps an auto-closed day distinguishable from one the person
     # ended themselves, which matters if they dispute the hours.
-    if str(body.get('auto') or '').lower() in ('1', 'true', 'yes', 'geofence', 'geofence_departure'):
+    if is_auto:
         obj.auto_checkout_at = now
         mins = body.get('outside_minutes') or 15
+        try:
+            away_m = float(body.get('distance')) if body.get('distance') is not None else None
+        except (TypeError, ValueError):
+            away_m = None
+        office = str(body.get('fence') or '')[:120]
+        where_txt = ((f' about {_fmt_dist(away_m)} from {office or "the office"}') if away_m is not None
+                     else (f' away from {office}' if office else ''))
         if not obj.note:
-            obj.note = f'Auto checked out — outside office geofence for >{mins} minutes'
+            obj.note = (f'Auto checked out — outside office geofence for >{mins} minutes'
+                        + (f' ({where_txt.strip()})' if where_txt else ''))
 
     # Calculations based on active shift
     shift = Shift.objects.filter(pk=obj.shift_id).first() or _get_active_shift(email, obj.date)
@@ -3816,11 +4210,17 @@ def attendance_check_out(request):
 
     create_notification(
         email,
-        'Checked out',
-        'Your work session has been closed for today.',
+        'Checked out automatically' if is_auto else 'Checked out',
+        (f'You were outside the office for more than {body.get("outside_minutes") or 15} minutes'
+         f'{" (" + where_txt.strip() + ")" if where_txt else ""}, '
+         f'so your session was closed at {_fmt_ampm(now)}. If you were still at work, check in '
+         f'again or raise an attendance correction.') if is_auto
+        else 'Your work session has been closed for today.',
         'info',
         '/employees/attendance',
     )
+    if is_auto:
+        _tell_hr_auto_checkout(obj, now, body.get('outside_minutes') or 15, where_txt)
     _maybe_send_long_day_alert(obj, shift)
     return Response(EmployeeAttendanceSerializer(obj).data)
 
@@ -3900,12 +4300,22 @@ def attendance_geofence_check(request):
     if not _geofencing_enabled():
         return Response({'enforced': False, 'inside': True, 'uncertain': False})
 
-    today = local_today()
+    now = local_now()
+    today = now.date()
+    att = _current_attendance(email, now) if email else None
+    if att is not None and not _is_checked_in(att):
+        att = None
     wfh = bool(email) and (
         WfhRequest.objects.filter(email=email, status='Approved',
                                   from_date__lte=today, to_date__gte=today).exists()
-        or EmployeeAttendance.objects.filter(email=email, date=today, is_wfh=True).exists()
+        or bool(att and att.is_wfh)
     )
+    # A session that started outside the office (approved off-site day) was
+    # never "at the office", so it cannot "leave" it: measuring it against the
+    # office fence auto-checked people out 15 minutes into an approved day.
+    if att is not None and not wfh and _session_is_offsite(att):
+        return Response({'enforced': True, 'offsite': True, 'wfh': False,
+                         'inside': True, 'uncertain': False})
 
     inside, fence, nearest, distance = _locate_against_fences(lat, lng, accuracy)
     # A reading whose error bar is wider than how far outside they appear tells
@@ -3915,10 +4325,28 @@ def attendance_geofence_check(request):
     uncertain = bool(
         not inside and (
             not _fix_is_usable(lat, lng, accuracy)
+            # A WiFi/IP reading cannot tell the office from the next street:
+            # it must never count towards an automatic check-out.
+            or accuracy is None or accuracy > LOCATION_PRECISE_M
             or (accuracy and nearest and distance is not None
                 and (distance - (nearest.radius_meters or 0)) < accuracy)
         )
     )
+    if att is not None and not wfh and not inside and not uncertain:
+        # Tell the employee through the bell (sound / desktop pop-up too), not
+        # only a banner they may never see — at most once per 30 minutes.
+        slot = now.strftime('%Y%m%d%H') + ('30' if now.minute >= 30 else '00')
+        tag = f'/employees/checkin?outside-office={att.pk}&at={slot}'
+        if not Notification.objects.filter(recipient=email, link=tag).exists():
+            pol = _departure_policy_values()
+            auto = (f' If you do not return you will be checked out automatically after '
+                    f'{pol["timeout_minutes"]} minutes outside.') if pol.get('enabled', True) else ''
+            create_notification(
+                email, 'You are outside the office',
+                f'Your device places you about {_fmt_dist(max(distance - (nearest.radius_meters or 0), 0))} '
+                f'outside {nearest.name}.{auto} If you are still at the office, turn on precise '
+                f'location for this site.',
+                'warning', tag)
     return Response({
         'enforced': True,
         'wfh': wfh,
@@ -4006,8 +4434,10 @@ def attendance_today(request):
     email = norm_email(request.GET.get('email'))
     if not email:
         return err('email is required')
-    today = local_now().date()
-    obj = EmployeeAttendance.objects.filter(email=email, date=today).first()
+    now = local_now()
+    today = now.date()
+    # After midnight a running night shift is still "today" for the widget.
+    obj = _current_attendance(email, now)
     if not obj:
         data = {
             'email': email, 'date': today.strftime('%Y-%m-%d'),
@@ -4018,7 +4448,9 @@ def attendance_today(request):
         }
     else:
         data = dict(EmployeeAttendanceSerializer(obj).data)
-    data.update(_live_clock_extras(email, today, obj))
+    data.update(_live_clock_extras(email, obj.date if obj else today, obj))
+    if obj is not None and obj.date != today:
+        data['overnight'] = True          # a night shift that started yesterday
     return Response(data)
 
 
@@ -4052,10 +4484,14 @@ def _live_clock_extras(email, day, obj):
             on_break, since = False, None
     if obj is not None and obj.check_out:
         on_break, since = False, None
+    open_session = obj is not None and _is_checked_in(obj)
     return {
         'overtimeAfterMinutes': threshold,
         'onBreak': on_break,
         'breakStartedAt': since.strftime('%Y-%m-%d %H:%M:%S') if since else None,
+        # The live Working tile = earlier sessions + the running one.
+        'priorWorkedMinutes': _prior_worked(obj) if open_session else 0,
+        'breaksBeforeSessionMinutes': _break_minutes_before(obj, obj.check_in) if open_session else 0,
     }
 
 
@@ -4069,11 +4505,45 @@ def attendance_detail(request, pk):
     if request.method == 'DELETE':
         obj.delete()
         return Response({'ok': True})
-    serializer = EmployeeAttendanceSerializer(obj, data=request.data, partial=True)
+    data = request.data
+    total_keys = ('worked_minutes', 'workedMinutes', 'overtime_minutes', 'overtimeMinutes')
+    if _is_checked_in(obj) and any(k in data for k in total_keys):
+        # A total typed over a running session would be treated as "earlier
+        # sessions" and the running one added on top at check-out.
+        return Response({
+            'message': f'{obj.employee_name or obj.email} is still checked in, so worked time cannot be '
+                       f'set by hand. Check them out first, or raise an attendance correction — worked '
+                       f'time is calculated from the check-in and check-out times.',
+            'code': 'SESSION_OPEN'}, status=409)
+    before = (obj.check_in, obj.check_out, obj.break_minutes, obj.worked_minutes)
+    serializer = EmployeeAttendanceSerializer(obj, data=data, partial=True)
     if not serializer.is_valid():
         return serializer_err(serializer)
+    vd = serializer.validated_data
+    cin, cout = vd.get('check_in', obj.check_in), vd.get('check_out', obj.check_out)
+    if cin and cout and cout <= cin and 'check_out' in vd:
+        return err('The check-out must be after the check-in.')
     serializer.save()
-    return Response(serializer.data)
+    obj.refresh_from_db()
+    # Times changed and no total given: the total follows the times (all of
+    # the day's sessions, each minus its own breaks), and so does overtime.
+    if (obj.check_in, obj.check_out, obj.break_minutes) != before[:3] \
+            and not any(k in data for k in total_keys) and not _is_checked_in(obj):
+        worked = _recompute_worked(obj)
+        if worked is None and obj.check_in and obj.check_out:
+            worked = max(int((obj.check_out - obj.check_in).total_seconds() // 60) - (obj.break_minutes or 0), 0)
+        if worked is not None:
+            shift = (Shift.objects.filter(pk=obj.shift_id).first() if obj.shift_id else None) \
+                or _get_active_shift(obj.email, obj.date)
+            obj.worked_minutes = worked
+            obj.overtime_minutes = _overtime_for(worked, shift)
+            obj.save(update_fields=['worked_minutes', 'overtime_minutes'])
+    actor, _name = _actor_identity(request)
+    AttendanceEvent.objects.create(
+        email=obj.email, employee_name=obj.employee_name, date=obj.date, event='hr-edit',
+        location=(f'{actor or "HR"}: worked {_fmt_dur(before[3] or 0)} → {_fmt_dur(obj.worked_minutes or 0)}')[:120],
+        at=local_now())
+    return Response(EmployeeAttendanceSerializer(obj).data)
 
 
 # --- Activity Log + Team Status (attendance_events) ------------------------
@@ -4677,9 +5147,20 @@ def attendance_events(request):
     """GET: today's (or ?date=) activity-log events for ?email=.
     POST: append an event (break / mode switch) to the signed-in user's day with GPS."""
     if request.method == 'GET':
-        day = parse_date(request.GET.get('date')) or local_now().date()
-        qs = AttendanceEvent.objects.filter(date=day)
         email = norm_email(request.GET.get('email'))
+        day = parse_date(request.GET.get('date'))
+        if day is None:
+            now = local_now()
+            day = now.date()
+            # After midnight a night shift that started yesterday is still
+            # running: its events (check-in, break-start…) are filed under the
+            # shift's work day (see the POST below), so "today" for the log and
+            # for the Start/End Break button is that day, not the calendar one.
+            if email:
+                sess = _current_attendance(email, now)
+                if sess is not None and _is_checked_in(sess):
+                    day = sess.date
+        qs = AttendanceEvent.objects.filter(date=day)
         if email:
             qs = qs.filter(email=email)
         return Response(AttendanceEventSerializer(qs, many=True).data)
@@ -4752,16 +5233,18 @@ def attendance_events(request):
 
     now = local_now()
     if switch_ok is not None:
-        att = EmployeeAttendance.objects.filter(email=email, date=now.date()).first()
+        att = _current_attendance(email, now)
         if att is not None:
             att.is_wfh = event == 'remote-switch'
             att.geo_verified = True
             att.location_lat, att.location_lng = lat, lng
             att.save(update_fields=['is_wfh', 'geo_verified', 'location_lat', 'location_lng'])
+    _sess = _current_attendance(email, now)
     obj = AttendanceEvent.objects.create(
         email=email,
         employee_name=body.get('employee') or body.get('name') or '',
-        date=now.date(),
+        # filed under the session's work day (a night shift's date), else today
+        date=_sess.date if (_sess is not None and _is_checked_in(_sess)) else now.date(),
         event=event,
         location=fence_obj.name if fence_obj else str(body.get('location') or '').strip(),
         latitude=lat,
@@ -4780,7 +5263,7 @@ def attendance_events(request):
     # also what accrues the elapsed minutes. Dropping it silently would lose
     # that time from "Break taken today".
     if event in ('remote-switch', 'office-switch'):
-        att = EmployeeAttendance.objects.filter(email=email, date=now.date()).first()
+        att = _current_attendance(email, now)
         if att and att.presence and not _is_break_label(att.presence):
             att.presence = ''
             att.presence_at = now
@@ -4788,15 +5271,15 @@ def attendance_events(request):
 
     # Manage live presence & break duration
     if event in ('break-start', 'break-end'):
-        att = EmployeeAttendance.objects.filter(email=email, date=now.date()).first()
+        att = _current_attendance(email, now)
         if att:
             if event == 'break-start':
                 att.presence = 'Away'
             else:
                 att.presence = ''
-                # Calculate break minutes since last break-start today
+                # Calculate break minutes since the last break-start of this session
                 last_start = AttendanceEvent.objects.filter(
-                    email=email, date=now.date(), event='break-start'
+                    email=email, date__in=[att.date, now.date()], event='break-start'
                 ).order_by('-at').first()
                 if last_start:
                     brk_min = int((now - last_start.at).total_seconds() // 60)
@@ -4822,7 +5305,7 @@ def attendance_presence(request):
     if not label:
         return err('label is required')
     now = local_now()
-    att = EmployeeAttendance.objects.filter(email=email, date=now.date()).first()
+    att = _current_attendance(email, now)
     if not att or not _is_checked_in(att):
         return err('Presence can only be set while checked in', 409)
     prev = att.presence or ''
@@ -4832,19 +5315,19 @@ def attendance_presence(request):
     if now_break and not was_break:
         # Starting a break (Away / Coffee break / …) → log the start on the timeline.
         AttendanceEvent.objects.create(
-            email=email, employee_name=name, date=now.date(),
+            email=email, employee_name=name, date=att.date,
             event='break-start', location='', at=now,
         )
     elif was_break and not now_break:
         # Ending a break → log the end and accrue the elapsed break time so it
         # shows on the check-in card as "Break taken today".
         AttendanceEvent.objects.create(
-            email=email, employee_name=name, date=now.date(),
+            email=email, employee_name=name, date=att.date,
             event='break-end',
             location=('Home' if att.device == 'mobile' else 'Office'), at=now,
         )
         last_start = AttendanceEvent.objects.filter(
-            email=email, date=now.date(), event='break-start'
+            email=email, date__in=[att.date, now.date()], event='break-start'
         ).order_by('-at').first()
         if last_start:
             brk_min = int((now - last_start.at).total_seconds() // 60)
@@ -4853,6 +5336,22 @@ def attendance_presence(request):
     att.presence_at = now
     att.save()
     return Response(EmployeeAttendanceSerializer(att).data)
+
+
+def _personal_status(att):
+    """What the person has said about themselves — the status chat and avatar
+    dots show. Location (In Office / Remote) is a different question, answered
+    by ``_team_status``. Invisible reads as Offline to everybody else."""
+    if att is None or not _is_checked_in(att):
+        return 'Offline'
+    p = (att.presence or '').strip()
+    if not p:
+        return 'Available'
+    if _is_break_label(p):
+        return IN_BREAK_LABEL
+    if p.lower() == 'invisible':
+        return 'Offline'
+    return p
 
 
 def _team_status(event, att):
@@ -4892,15 +5391,25 @@ def attendance_team(request):
     sensitive data), so the attendance.view permission is not required here."""
     today = local_now().date()
 
-    # Latest event per email today (queryset is ordered by ``at`` ascending, so
-    # the last write per email wins) + the best name we have seen for them.
+    today_att = {a.email: a for a in EmployeeAttendance.objects.filter(date=today)}
+    # After midnight a night shift's open session is still yesterday's row.
+    for a in EmployeeAttendance.objects.filter(date=today - timedelta(days=1), check_in__isnull=False,
+                                               check_out__isnull=True):
+        cur = today_att.get(a.email)
+        if (cur is None or not _is_checked_in(cur)) and _open_attendance_session(a.email, today) == a:
+            today_att[a.email] = a
+
+    # Latest event per email for the session shown (queryset is ordered by
+    # ``at`` ascending, so the last write wins) + the best name seen for them.
     latest_event = {}
     event_name = {}
-    for ev in AttendanceEvent.objects.filter(date=today):
-        latest_event[ev.email] = ev
+    for ev in AttendanceEvent.objects.filter(date__gte=today - timedelta(days=1)).order_by('at'):
+        att = today_att.get(ev.email)
+        if ev.date == today or (att is not None and att.date == ev.date):
+            if att is None or att.date == ev.date:
+                latest_event[ev.email] = ev
         if ev.employee_name:
             event_name[ev.email] = ev.employee_name
-    today_att = {a.email: a for a in EmployeeAttendance.objects.filter(date=today)}
 
     # Roster = all app users, plus any email that has activity but no login row.
     roster = [(u.email, u.full_name) for u in AppUser.objects.all()]
@@ -4921,6 +5430,8 @@ def attendance_team(request):
             'email': email,
             'name': display,
             'status': status,
+            # The person's own status (chat header, avatar dots).
+            'presence': _personal_status(att),
             'since': since_dt.strftime('%I:%M %p') if since_dt else '—',
         })
     rows.sort(key=lambda r: (priority.get(r['status'], 9), r['name'].lower()))
@@ -5342,7 +5853,22 @@ def leave(request):
     serializer = LeaveRequestSerializer(data=data)
     if not serializer.is_valid():
         return serializer_err(serializer)
-    inst = serializer.save(approver_email=approver_email)
+    policy = _leave_policy()
+    vd = serializer.validated_data
+    typ = vd.get('type') or 'Casual Leave'
+    rule = next((t for t in policy['types'] if t['name'].lower() == str(typ).lower()), None)
+    if rule is None:
+        return err('Choose one of the leave types set by your admin: '
+                   + ', '.join(t['name'] for t in policy['types']) + '.')
+    if rule['days'] is not None and policy['enforceBalance']:
+        approved, pending = _leave_usage(email, vd['from_date'].year)
+        left = rule['days'] - approved.get(rule['name'], 0) - pending.get(rule['name'], 0)
+        if vd.get('days', 1) > left:
+            waiting = pending.get(rule['name'], 0)
+            return err(f'You have {max(left, 0)} day{"" if left == 1 else "s"} of {rule["name"]} left in '
+                       f'{vd["from_date"].year}' + (f' ({waiting} already requested and waiting)' if waiting else '')
+                       + f', and this request is for {vd.get("days", 1)}. Shorten it or choose another leave type.')
+    inst = serializer.save(approver_email=approver_email, type=rule['name'])
     create_notification(
         email,
         'Leave request submitted',
@@ -5467,19 +5993,141 @@ def holidays(request):
 @api_view(['GET'])
 @require_perm('leave.view', or_self=True)
 def leave_balance(request):
-    """Per-type leave balance for ?email= (allowance − approved days)."""
+    """Per-type leave balance for ?email= this calendar year, for every type in
+    the admin's leave policy: allowance − approved days (pending shown apart).
+    A type with no limit has allowance/remaining None."""
     email = norm_email(request.GET.get('email'))
     if not email:
         return err('email is required')
-    used = {}
-    for lr in LeaveRequest.objects.filter(email=email, status='Approved'):
-        used[lr.type] = used.get(lr.type, 0) + (lr.days or 0)
-    balances = [
-        {'type': typ, 'allowance': allowance,
-         'used': used.get(typ, 0), 'remaining': max(allowance - used.get(typ, 0), 0)}
-        for typ, allowance in DEFAULT_LEAVE_ALLOWANCE
-    ]
-    return Response({'email': email, 'balances': balances})
+    year = local_today().year
+    approved, pending = _leave_usage(email, year)
+    policy = _leave_policy()
+    balances = []
+    for t in policy['types']:
+        typ, allowance = t['name'], t['days']
+        used = approved.get(typ, 0)
+        balances.append({
+            'type': typ, 'allowance': allowance, 'unlimited': allowance is None,
+            'used': used, 'pending': pending.get(typ, 0),
+            'remaining': None if allowance is None else max(allowance - used, 0),
+        })
+    return Response({'email': email, 'year': year, 'balances': balances,
+                     'enforceBalance': policy['enforceBalance']})
+
+
+@api_view(['GET', 'PUT'])
+@require_perm({'PUT': 'settings.manage'})
+def leave_policy(request):
+    """Leave types and days per year (Settings › General › Leave Policy).
+    Everyone may read it (the Apply Leave form lists the types); changing it
+    needs settings.manage."""
+    if request.method == 'GET':
+        return Response(_leave_policy())
+    body = request.data or {}
+    raw = body.get('types')
+    if not isinstance(raw, list) or not raw:
+        return err('Add at least one leave type.')
+    types, seen = [], set()
+    for i, t in enumerate(raw, 1):
+        if not isinstance(t, dict):
+            return err(f'Leave type {i} is not valid.')
+        name = ' '.join(str(t.get('name') or '').split())
+        if not name:
+            return err(f'Leave type {i} needs a name.')
+        if len(name) > LEAVE_TYPE_MAX_LEN:
+            return err(f'"{name[:20]}…" is too long — keep leave type names under {LEAVE_TYPE_MAX_LEN} characters.')
+        if name.lower() in seen:
+            return err(f'"{name}" is listed twice.')
+        seen.add(name.lower())
+        days = t.get('days')
+        if days in (None, ''):
+            days = None                                   # no limit
+        else:
+            try:
+                days = float(days)
+            except (TypeError, ValueError):
+                return err(f'Days for "{name}" must be a number.')
+            if days != int(days) or not 0 <= days <= LEAVE_DAYS_MAX:
+                return err(f'Days for "{name}" must be a whole number from 0 to {LEAVE_DAYS_MAX}.')
+            days = int(days)
+        types.append({'name': name, 'days': days})
+    policy = {'types': types, 'enforceBalance': bool(body.get('enforceBalance', True))}
+    MasterDataSet.objects.update_or_create(
+        key=LEAVE_POLICY_KEY, defaults={'label': 'Leave policy', 'options': policy})
+    return Response(policy)
+
+
+# --- Check-out reminders ----------------------------------------------------
+# Nothing is checked out automatically: a session stays open and its working
+# time keeps counting until the employee checks out. Instead they are reminded
+# (bell + sound + pop-up via hrms-sounds.js): 30 min after the shift ends, then
+# every 2 h, at most 4 times. A session left open on an earlier day that can no
+# longer be checked out from the toggle gets one note asking for a correction.
+# Generated lazily when the bell polls, so no scheduled job is needed.
+CHECKOUT_REMINDER_AFTER = timedelta(minutes=30)
+CHECKOUT_REMINDER_EVERY = timedelta(hours=2)
+CHECKOUT_REMINDER_MAX = 4
+CHECKOUT_REMINDER_TITLE = 'Still checked in'
+CHECKOUT_MISSING_TITLE = 'Check-out missing'
+
+
+def _expected_end(row, shift):
+    """When this session was due to end: the shift end, or — for someone who
+    checked in late or on a flexible shift — check-in plus the shift's length."""
+    if shift.is_flexible:
+        length = timedelta(minutes=int((shift.flex_hours_per_day or 8) * 60))
+        return row.check_in + length + timedelta(minutes=row.break_minutes or 0)
+    start = datetime.combine(row.date, shift.start_time)
+    end = _shift_end_dt(shift, row.date)
+    if end <= start:            # e.g. 18:00–02:30 not marked as a night shift
+        end += timedelta(days=1)
+    return max(end, row.check_in + (end - start))
+
+
+def _fmt_dur(minutes):
+    h, m = divmod(max(int(minutes), 0), 60)
+    return f'{h}h {m}m' if h else f'{m}m'
+
+
+def _checkout_reminders(email, now=None):
+    now = now or local_now()
+    rows = (EmployeeAttendance.objects
+            .filter(email=email, check_in__isnull=False, date__gte=now.date() - timedelta(days=7))
+            .order_by('date'))
+    current = _open_attendance_session(email, now.date())
+    for row in rows:
+        if not _is_checked_in(row):
+            continue
+        shift = (Shift.objects.filter(pk=row.shift_id).first() if row.shift_id else None) \
+            or _get_active_shift(email, row.date)
+        end = _expected_end(row, shift)
+        due = end + CHECKOUT_REMINDER_AFTER
+        if now < due:
+            continue
+        tag = f'/employees/checkin?checkout-reminder={row.pk}'
+        sent = Notification.objects.filter(recipient=email, link=tag).count()
+        if current is not None and current.pk == row.pk:
+            if sent >= CHECKOUT_REMINDER_MAX or now < due + CHECKOUT_REMINDER_EVERY * sent:
+                continue
+            over = int((now - end).total_seconds() // 60)
+            ends = end.strftime('%I:%M %p').lstrip('0')
+            if end.date() != now.date():
+                ends += end.strftime(' on %d %b')
+            create_notification(
+                email, CHECKOUT_REMINDER_TITLE,
+                f'Your shift ({shift.name}) ended at {ends} and you are still checked in — '
+                f'{_fmt_dur(over)} past the end so far. Working time keeps counting until you '
+                f'check out, so check out when you finish.',
+                'warning', tag)
+        else:
+            missing_tag = f'/employees/attendance?checkout-missing={row.pk}'
+            if Notification.objects.filter(recipient=email, link=missing_tag).exists():
+                continue
+            create_notification(
+                email, CHECKOUT_MISSING_TITLE,
+                f'You checked in on {row.date:%d %b} at {row.check_in:%I:%M %p} and did not check out. '
+                f'Raise an attendance correction with the time you left so the day is counted right.',
+                'warning', missing_tag)
 
 
 # --- Notifications --------------------------------------------------------
@@ -5488,6 +6136,10 @@ def notifications(request):
     email = _resolve_recipient_email(request)
     if not email:
         return Response([])
+    try:
+        _checkout_reminders(email)
+    except Exception:
+        logger.exception('check-out reminders failed for %s', email)
     qs = Notification.objects.filter(recipient=email)
     unread_only = str(request.GET.get('unreadOnly') or request.GET.get('unread') or '').strip().lower()
     if unread_only in {'1', 'true', 'yes', 'on'}:
@@ -6136,20 +6788,32 @@ def _store_bench_sales_file_data(pk, files):
         BenchSalesProfile.objects.filter(pk=pk).update(**{col: data})
 
 
-def _is_pdf(mime, file_name):
+BENCH_SALES_DOC_MIMES = {
+    'application/pdf',
+    'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+}
+BENCH_SALES_DOC_EXTS = ('.pdf', '.doc', '.docx')
+BENCH_SALES_DOC_ERROR = ' is not a PDF or Word document — only PDF, DOC and DOCX uploads are allowed.'
+
+
+def _is_document(mime, file_name):
+    """PDF or Word (DOC/DOCX) — the formats a vendor accepts for a resume,
+    DL, I-94 or certificate. The browser's MIME for .doc/.docx is unreliable,
+    so the extension is checked too."""
     mime = (mime or '').lower()
     file_name = (file_name or '').lower()
-    return mime == 'application/pdf' or file_name.endswith('.pdf')
+    return mime in BENCH_SALES_DOC_MIMES or file_name.endswith(BENCH_SALES_DOC_EXTS)
 
 
 def _validate_bench_sales_files(body):
-    """Rejects non-PDF uploads and files over MAX_BENCH_SALES_FILE_MB for
-    resume/DL/I-94/certificates. Returns an error string, or None if every
-    provided file is an acceptable PDF."""
+    """Rejects uploads that are not PDF/DOC/DOCX and files over
+    MAX_BENCH_SALES_FILE_MB for resume/DL/I-94/certificates. Returns an error
+    string, or None if every provided file is acceptable."""
     for name_key, mime_key in _BENCH_SALES_SINGLE_FILE_FIELDS.values():
         file_name = body.get(name_key)
-        if file_name and not _is_pdf(body.get(mime_key), file_name):
-            return f'{file_name} is not a PDF — only PDF uploads are allowed.'
+        if file_name and not _is_document(body.get(mime_key), file_name):
+            return file_name + BENCH_SALES_DOC_ERROR
         data_key = name_key[:-len('FileName')] + 'FileData'
         size_error = _bench_sales_file_too_large(file_name or data_key, body.get(data_key))
         if size_error:
@@ -6159,8 +6823,8 @@ def _validate_bench_sales_files(body):
         return 'certificates must be a list of files'
     for c in certs:
         file_name = (c or {}).get('fileName')
-        if file_name and not _is_pdf((c or {}).get('fileMime'), file_name):
-            return f'{file_name} is not a PDF — only PDF uploads are allowed.'
+        if file_name and not _is_document((c or {}).get('fileMime'), file_name):
+            return file_name + BENCH_SALES_DOC_ERROR
         size_error = _bench_sales_file_too_large(file_name or 'certificate', (c or {}).get('fileData'))
         if size_error:
             return size_error
@@ -6176,7 +6840,8 @@ def bench_sales_profiles(request):
         if search:
             qs = qs.filter(
                 Q(name__icontains=search) | Q(tech_stack__icontains=search) |
-                Q(email__icontains=search) | Q(contact_no__icontains=search)
+                Q(email__icontains=search) | Q(contact_no__icontains=search) |
+                Q(passport_no__icontains=search)
             )
         return Response(BenchSalesProfileSerializer(qs, many=True).data)
 
@@ -6223,7 +6888,7 @@ def bench_sales_profile_detail(request, pk):
 
     body = dict(request.data or {})
     new_certs = body.pop('certificates', None) or []
-    existing_count = obj.certificate_files.count()
+    existing_count = obj.certificate_files.filter(kind='certificate').count()
     if existing_count + len(new_certs) > MAX_CERTIFICATES_PER_PROFILE:
         return err(f'You can upload up to {MAX_CERTIFICATES_PER_PROFILE} certificates per profile.')
     file_error = _validate_bench_sales_files(dict(body, certificates=new_certs))
@@ -6270,6 +6935,7 @@ def bench_sales_profile_upload(request, pk):
     sees them, and base64 inflates every file by a third on top. Storage is
     unchanged — the file is still kept base64-in-row."""
     import base64
+    import mimetypes
 
     obj = BenchSalesProfile.objects.only('id').filter(pk=pk).first()
     if not obj:
@@ -6278,19 +6944,20 @@ def bench_sales_profile_upload(request, pk):
     upload = request.FILES.get('file')
     if not upload:
         return err('file is required')
-    if not _is_pdf(upload.content_type, upload.name):
-        return err(f'{upload.name} is not a PDF — only PDF uploads are allowed.')
+    if not _is_document(upload.content_type, upload.name):
+        return err(upload.name + BENCH_SALES_DOC_ERROR)
     if upload.size > MAX_BENCH_SALES_FILE_BYTES:
         return err(f'{upload.name} is larger than {MAX_BENCH_SALES_FILE_MB} MB — '
                    f'each file must be {MAX_BENCH_SALES_FILE_MB} MB or smaller.')
-    mime = upload.content_type or 'application/pdf'
+    mime = upload.content_type or mimetypes.guess_type(upload.name)[0] or 'application/octet-stream'
     data = base64.b64encode(upload.read()).decode('ascii')
 
-    if field == 'certificate':
-        if obj.certificate_files.count() >= MAX_CERTIFICATES_PER_PROFILE:
-            return err(f'You can upload up to {MAX_CERTIFICATES_PER_PROFILE} certificates per profile.')
+    if field in ('certificate', 'certification'):
+        noun = 'certificates' if field == 'certificate' else 'certification files'
+        if obj.certificate_files.filter(kind=field).count() >= MAX_CERTIFICATES_PER_PROFILE:
+            return err(f'You can upload up to {MAX_CERTIFICATES_PER_PROFILE} {noun} per profile.')
         BenchSalesCertificate.objects.create(
-            profile=obj, file_name=upload.name, file_mime=mime, file_data=data,
+            profile=obj, kind=field, file_name=upload.name, file_mime=mime, file_data=data,
         )
     elif field in _BENCH_SALES_UPLOAD_COLS:
         name_col, mime_col, data_col = _BENCH_SALES_UPLOAD_COLS[field]
@@ -6299,7 +6966,7 @@ def bench_sales_profile_upload(request, pk):
         BenchSalesProfile.objects.filter(pk=pk).update(**{name_col: upload.name, mime_col: mime})
         _store_bench_sales_file_data(pk, {data_col: data})
     else:
-        return err('field must be one of: resume, dl-state-id, i94, certificate')
+        return err('field must be one of: resume, dl-state-id, i94, certificate, certification')
 
     inst = _bench_sales_profile_qs().get(pk=pk)
     return Response(BenchSalesProfileSerializer(inst).data)
@@ -6323,11 +6990,13 @@ _BENCH_SALES_FILE_FIELDS = {
 }
 
 
-@api_view(['GET'])
-@require_perm('recruitment.view')
+@api_view(['GET', 'DELETE'])
+@require_perm({'GET': 'recruitment.view', 'DELETE': 'recruitment.edit'})
 def bench_sales_profile_file(request, pk, field):
     """Serve a stored Bench Sales document (resume / DL / State ID / I-94) as
     a download/inline view — same base64-in-row approach as resume_score_file.
+    DELETE clears that one document (the form's "Remove" next to a saved file),
+    leaving the rest of the profile untouched.
     """
     import base64
     from django.http import HttpResponse
@@ -6335,6 +7004,11 @@ def bench_sales_profile_file(request, pk, field):
     cols = _BENCH_SALES_FILE_FIELDS.get(field)
     if not cols:
         return HttpResponse('Unknown file field', status=404)
+    if request.method == 'DELETE':
+        if not BenchSalesProfile.objects.filter(pk=pk).exists():
+            return err('Profile not found', 404)
+        BenchSalesProfile.objects.filter(pk=pk).update(**{c: '' for c in cols})
+        return Response(BenchSalesProfileSerializer(_bench_sales_profile_qs().get(pk=pk)).data)
     # only() the requested document: never drag the other two blobs along.
     obj = BenchSalesProfile.objects.only(*cols).filter(pk=pk).first()
     if not obj:
@@ -7400,19 +8074,22 @@ def my_permissions(request):
         is_super = bool(role and role.name == 'Super Admin')
     else:
         is_super = (role and role.name == 'Super Admin') or (user and (user.role or '').lower() == 'admin')
+    # The role the React app's menu is built from (it is saved in the browser
+    # at login and never re-read). Sent here so a session saved under an older
+    # role is corrected — otherwise an account promoted to admin keeps the old
+    # limited menu until it signs out.
+    account_role = ('admin' if is_super else (user.role or '')) if user else None
     if is_super:
         codes = list(Permission.objects.filter(is_active=True).values_list('code', flat=True))
         return Response({
             'email': email, 'role': (role.name if role else 'Super Admin'),
             'roleId': (role.id if role else None), 'superAdmin': True, 'permissions': codes,
+            'accountRole': account_role,
         })
     if not role:
         return Response({'email': email, 'role': None, 'roleId': None, 'permissions': []})
-    from .permissions import withheld_perms
-    withheld = withheld_perms(user)
-    codes = [c for c in Permission.objects.filter(
-        role_permissions__role=role, is_active=True).values_list('code', flat=True)
-        if c not in withheld]
+    codes = list(Permission.objects.filter(
+        role_permissions__role=role, is_active=True).values_list('code', flat=True))
     return Response({'email': email, 'role': role.name, 'roleId': role.id, 'permissions': codes})
 
 
@@ -7463,7 +8140,7 @@ def rbac_users(request):
     u = AppUser.objects.create(
         full_name=name,
         email=email,
-        password=password,
+        password=make_password(password),
         initials=make_initials(name),
         role=_legacy_from_role(role.name),
         role_ref=role,
@@ -7494,7 +8171,7 @@ def rbac_user_detail(request, pk):
         u.full_name = str(body['name']).strip()
         u.initials = make_initials(u.full_name)
     if body.get('password'):
-        u.password = body['password']
+        u.password = make_password(body['password'])
     if body.get('status'):
         u.status = body['status']
     u.save()
@@ -8314,6 +8991,16 @@ def attendance_corrections(request):
     ser = AttendanceCorrectionSerializer(data=body)
     if not ser.is_valid():
         return serializer_err(ser)
+    vd = ser.validated_data
+    req_out, day = vd.get('requested_check_out'), vd.get('attendance_date')
+    if req_out and day:
+        att_row = EmployeeAttendance.objects.filter(email=email, date=day).first()
+        cin = vd.get('requested_check_in') or (att_row.check_in if att_row else None)
+        if cin and req_out <= cin:
+            return err(f'The clock-out must be after your clock-in ({cin:%d %b, %I:%M %p}). '
+                       f'For a night shift, choose a time after midnight on the next day.')
+        if req_out > local_now() + timedelta(minutes=5):
+            return err('The clock-out time is in the future.')
     inst = ser.save(reviewer_email=routed_to)
     if routed_to:
         org_views.notify(routed_to, 'New attendance correction to approve',
@@ -8353,20 +9040,22 @@ def attendance_correction_detail(request, pk):
                 email=inst.email,
                 date=inst.attendance_date
             )
+            basis = _correction_basis(inst, att)      # before check_in/out change
             if inst.requested_check_in:
                 att.check_in = inst.requested_check_in
             if inst.requested_check_out:
                 att.check_out = inst.requested_check_out
 
-            shift = _get_active_shift(inst.email, inst.attendance_date)
+            shift = (Shift.objects.filter(pk=att.shift_id).first() if att.shift_id else None) \
+                or _get_active_shift(inst.email, inst.attendance_date)
             att.shift_id = shift.id
             if att.check_in and att.check_out:
-                att.worked_minutes = max(int((att.check_out - att.check_in).total_seconds() // 60), 0)
+                fig = _session_figures(att, att.check_in, att.check_out, shift, **basis)
+                att.worked_minutes = fig['workedMinutes']
+                att.overtime_minutes = fig['overtimeMinutes']
+                att.early_exit_minutes = fig['earlyExitMinutes']
 
                 if shift.is_flexible:
-                    req_min = int(shift.flex_hours_per_day * 60)
-                    att.overtime_minutes = max(att.worked_minutes - req_min, 0)
-                    att.early_exit_minutes = max(req_min - att.worked_minutes, 0)
                     att.late_minutes = 0
                     att.status = 'present'
                 else:
@@ -8379,11 +9068,7 @@ def attendance_correction_detail(request, pk):
                         att.late_minutes = 0
                         att.status = 'present'
 
-                    shift_end = datetime.combine(inst.attendance_date, shift.end_time)
-                    if att.check_out < shift_end:
-                        att.early_exit_minutes = int((shift_end - att.check_out).total_seconds() // 60)
-                    else:
-                        att.early_exit_minutes = 0
+
 
                     if att.worked_minutes > shift.overtime_after_minutes:
                         att.overtime_minutes = att.worked_minutes - shift.overtime_after_minutes
@@ -8608,6 +9293,11 @@ def _parse_dt(value):
             continue
     # Last resort — let fromisoformat try.
     return datetime.fromisoformat(str(value).replace("Z", ""))
+
+
+from .chat_extras import (attachment_url as _chat_attachment_url, chat_guard,  # noqa: E402
+                          notify_mentions as _chat_notify_mentions, reactions_for as _chat_reactions_for,
+                          unread_counts as _chat_unread_counts)
 
 
 def _broadcast_message(room_id, payload):
@@ -8839,11 +9529,10 @@ def _rooms_payload(rooms, viewer):
         m.room_id: m for m in ChatMessage.objects
         .filter(id__in=[i for i in last_ids.values() if i]).only(*_LAST_MSG_FIELDS)
     }
-    unread_by_room = dict(
-        ChatMessage.objects.filter(room_id__in=ids, is_read=False)
-        .exclude(sender_email=viewer)
-        .values("room_id").annotate(n=Count("id")).values_list("room_id", "n")
-    )
+    # Per member: messages from others newer than *this viewer's* last read.
+    # (The shared ChatMessage.is_read flag cleared everyone's badge as soon as
+    # one member of a channel opened it.)
+    unread_by_room = _chat_unread_counts(viewer, ids)
 
     out = []
     for room in rooms:
@@ -8886,6 +9575,7 @@ def _rooms_payload(rooms, viewer):
 
 
 @api_view(["GET", "POST"])
+@chat_guard(membership=False)
 def chat_rooms(request):
     if request.method == "POST":
         body = request.data or {}
@@ -8942,6 +9632,7 @@ def chat_rooms(request):
 
 
 @api_view(["GET", "POST"])
+@chat_guard()
 def chat_messages(request, room_id):
     room = ChatRoom.objects.filter(id=room_id).first()
     if not room:
@@ -8992,6 +9683,15 @@ def chat_messages(request, room_id):
                 if others:
                     seen = all(r is not None and r >= msg.created_at for r in others)
             data[i]["seen"] = seen
+        ids = [msg.id for msg in msgs]
+        reactions = _chat_reactions_for(ids)
+        reply_counts = dict(
+            ChatMessage.objects.filter(room_id=room_id, reply_to_id__in=ids, is_deleted=False)
+            .values("reply_to_id").annotate(n=Count("id")).values_list("reply_to_id", "n")
+        )
+        for i, msg in enumerate(msgs):
+            data[i]["reactions"] = reactions.get(msg.id, [])
+            data[i]["reply_count"] = reply_counts.get(msg.id, 0)
         return Response(data)
 
     # POST — persist + broadcast (REST fallback for the WebSocket). Supports an
@@ -9060,15 +9760,21 @@ def chat_messages(request, room_id):
         "created_at": _fmt_dt(now),
         "attachment_name": att_name,
         "attachment_type": att_type,
-        "attachment_url": (f"/api/chat/attachment/{msg.id}" if att_path else ""),
+        "attachment_url": (_chat_attachment_url(msg.id) if att_path else ""),
         "reply_to_id": reply_to_id,
         "reply_to_sender": reply_to_sender,
         "reply_to_text": reply_to_text,
     })
+    mentions = body.get("mentions") if isinstance(body.get("mentions"), list) else []
+    try:
+        _chat_notify_mentions(room, msg, mentions)
+    except Exception:
+        logger.exception("chat mention notifications failed")
     return Response(ChatMessageSerializer(msg).data, status=201)
 
 
 @api_view(["PUT", "DELETE"])
+@chat_guard()
 def chat_message_detail(request, msg_id):
     """Edit (PUT) or soft-delete (DELETE) a single message. Sender only."""
     msg = ChatMessage.objects.filter(id=msg_id).first()
@@ -9151,6 +9857,7 @@ def chat_message_detail(request, msg_id):
 
 
 @api_view(["GET"])
+@chat_guard(allow_signed_attachment=True)
 def chat_attachment(request, msg_id):
     """Return a message's file attachment with the right content type."""
     import base64
@@ -9191,6 +9898,7 @@ def chat_attachment(request, msg_id):
 
 
 @api_view(["POST"])
+@chat_guard()
 def chat_mark_read(request, room_id):
     viewer = norm_email(
         (request.data or {}).get("email") or request.headers.get("X-Actor-Email") or ""
@@ -9199,6 +9907,7 @@ def chat_mark_read(request, room_id):
         ChatMessage.objects.filter(room_id=room_id, is_read=False).exclude(
             sender_email=viewer
         ).update(is_read=True)
+        ChatMember.objects.filter(room_id=room_id, employee_email=viewer).update(last_read_at=_chat_now())
     return Response({"ok": True})
 
 
@@ -9236,6 +9945,7 @@ def _actor_of(request):
 
 
 @api_view(["GET", "POST"])
+@chat_guard()
 def chat_room_members(request, room_id):
     room = ChatRoom.objects.filter(id=room_id).first()
     if not room:
@@ -9269,6 +9979,7 @@ def chat_room_members(request, room_id):
 
 
 @api_view(["PUT", "DELETE"])
+@chat_guard()
 def chat_room_member_detail(request, room_id, email):
     room = ChatRoom.objects.filter(id=room_id).first()
     if not room:
@@ -9312,6 +10023,7 @@ def chat_room_member_detail(request, room_id, email):
 
 
 @api_view(["GET"])
+@chat_guard(membership=False)
 def chat_contacts(request):
     """The company directory a user can start a chat with.
 
@@ -9396,6 +10108,7 @@ def chat_contacts(request):
 
 
 @api_view(["GET", "POST"])
+@chat_guard(room_param="room_id")
 def chat_meetings(request):
     if request.method == "GET":
         room_id = request.GET.get("room_id")
@@ -9485,6 +10198,7 @@ def chat_meetings(request):
 
 
 @api_view(["DELETE"])
+@chat_guard(membership=False)
 def chat_meeting_detail(request, meeting_id):
     """Cancel a scheduled meeting (organiser or channel admin)."""
     mt = ChatMeeting.objects.filter(id=meeting_id).first()
@@ -9500,7 +10214,8 @@ def chat_meeting_detail(request, meeting_id):
     return Response({"ok": True, "id": meeting_id})
 
 
-@api_view(["DELETE"])
+@api_view(["PATCH", "DELETE"])
+@chat_guard()
 def chat_room_detail(request, room_id):
     """Delete a whole conversation.
 
@@ -9512,6 +10227,27 @@ def chat_room_detail(request, room_id):
         return err("Room not found", 404)
     actor = _actor_of(request)
     is_member = ChatMember.objects.filter(room_id=room_id, employee_email=actor).exists()
+
+    if request.method == "PATCH":
+        # Channel settings: rename and public/private. Channel admins only.
+        if not room.is_group:
+            return err("Only channels have settings", 400)
+        if not _is_room_admin(room_id, actor):
+            return err("Only a channel admin can change channel settings", 403)
+        body = request.data or {}
+        fields = []
+        if "name" in body:
+            name = str(body.get("name") or "").strip()
+            if not name or len(name) > 80:
+                return err("Channel name must be 1–80 characters")
+            room.name = name
+            fields.append("name")
+        if "is_private" in body:
+            room.is_private = bool(body.get("is_private"))
+            fields.append("is_private")
+        if fields:
+            room.save(update_fields=fields)
+        return Response(_room_payload(room, actor))
 
     if room.is_group:
         if not _is_room_admin(room_id, actor):
@@ -9555,6 +10291,7 @@ def _expire_stale_pins(room_id):
 
 
 @api_view(["POST"])
+@chat_guard()
 def chat_message_pin(request, msg_id):
     """Pin or unpin a message.
 
@@ -9626,6 +10363,7 @@ CHAT_TRANSLATE_LANGS = {
 
 
 @api_view(["POST"])
+@chat_guard(membership=False)
 def chat_translate(request):
     """Translate the composer's text into the requested language.
 
@@ -9714,31 +10452,6 @@ def _ticket_is_approver(request):
     return allowed, caller
 
 
-def _auto_close_open_before_today(email=None):
-    """Close open past-day attendance (check-in set, no check-out) at 23:59 of
-    that day. Marks is_auto_checked_out and recomputes worked minutes. Scoped to
-    one employee when ``email`` is given (lazy self-heal when they open the page)."""
-    today = local_today()
-    qs = EmployeeAttendance.objects.filter(
-        date__lt=today, check_in__isnull=False, check_out__isnull=True)
-    if email:
-        qs = qs.filter(email=norm_email(email))
-    closed = 0
-    for rec in qs:
-        end = datetime.combine(rec.date, time(23, 59, 0))
-        if end <= rec.check_in:
-            end = rec.check_in + timedelta(minutes=1)
-        rec.check_out = end
-        worked = int((end - rec.check_in).total_seconds() // 60) - (rec.break_minutes or 0)
-        rec.worked_minutes = max(0, worked)
-        rec.is_auto_checked_out = True
-        rec.auto_checkout_at = local_now()
-        rec.save(update_fields=['check_out', 'worked_minutes',
-                                'is_auto_checked_out', 'auto_checkout_at'])
-        closed += 1
-    return closed
-
-
 def _ticket_dto(c, include_proof=False):
     d = {
         'id': c.id,
@@ -9764,10 +10477,6 @@ def attendance_punch_ticket(request):
         email = norm_email(request.query_params.get('email'))
         if not email:
             return err('email is required')
-        try:
-            _auto_close_open_before_today(email)
-        except Exception:
-            pass
         today = local_today()
         rec = EmployeeAttendance.objects.filter(email=email, date=today).first()
         has_in = bool(rec and rec.check_in)
@@ -9842,10 +10551,6 @@ def attendance_punch_ticket(request):
         return err('You have reached the limit of %d attendance tickets this month.' % ATT_TICKET_LIMIT, 403)
 
     today = local_today()
-    try:
-        _auto_close_open_before_today(email)
-    except Exception:
-        pass
     rec = EmployeeAttendance.objects.filter(email=email, date=today).first()
     has_in = bool(rec and rec.check_in)
     has_out = bool(rec and rec.check_out)
@@ -9979,6 +10684,12 @@ def _fmt_ampm(d):
 
 def _event_label(ev):
     ev = str(ev or '')
+    if ev == 'hr-edit':
+        return 'Edited by HR'
+    if ev == 'recalculated':
+        return 'Hours recalculated'
+    if ev == 'auto-checkout-departure':
+        return 'Auto check-out (left office)'
     if 'check-in' in ev:
         return 'Check In'
     if 'check-out' in ev:
@@ -10004,15 +10715,20 @@ def attendance_day_detail(request):
         return err('You are not allowed to view this attendance.', 403)
     ds = request.query_params.get('date')
     try:
-        day = datetime.strptime(ds, '%Y-%m-%d').date() if ds else local_today()
+        day = datetime.strptime(ds, '%Y-%m-%d').date() if ds else None
     except ValueError:
         return err('Invalid date.')
+    if day is None:
+        # "Today" for someone on a night shift that started yesterday is that
+        # shift's day: its record, events and punches are all filed under it.
+        now = local_now()
+        sess = _current_attendance(email, now)
+        day = sess.date if (sess is not None and _is_checked_in(sess)) else local_today()
     rec = EmployeeAttendance.objects.filter(email=email, date=day).first()
     shift = _get_active_shift(email, day)
     check_in = rec.check_in if rec else None
     check_out = rec.check_out if rec else None
-    gross = int((check_out - check_in).total_seconds() // 60) if (check_in and check_out) else 0
-    effective = (rec.worked_minutes if rec else 0) or 0
+    gross, effective = _day_gross_effective(rec)
     name = (rec.employee_name if rec and rec.employee_name else '') or email.split('@')[0]
     events = AttendanceEvent.objects.filter(email=email, date=day).order_by('at')
     ev = [{
@@ -10022,11 +10738,7 @@ def attendance_day_detail(request):
         'latitude': e.latitude, 'longitude': e.longitude,
     } for e in events]
     punches = AttendanceLocationPunch.objects.filter(email=email, date=day).order_by('captured_at')
-    pl = [{
-        'id': p.id, 'time': _fmt_ampm(p.captured_at), 'capturedAt': dt(p.captured_at),
-        'latitude': p.latitude, 'longitude': p.longitude,
-        'accuracy': p.accuracy, 'label': p.label or '',
-    } for p in punches]
+    pl = [_punch_json(p) for p in punches]
     late = (rec.status if rec else '') == 'late'
     return Response({
         'email': email, 'employee': name, 'date': day.isoformat(),
@@ -10045,6 +10757,39 @@ def attendance_day_detail(request):
     })
 
 
+def _tell_hr_auto_checkout(att, now, minutes, where_txt=''):
+    """HR (whoever reviews off-site check-ins) and the employee's manager hear
+    about an automatic check-out — it ends someone's paid time without them
+    pressing anything, so it must never be silent."""
+    from . import org_views
+    who = att.employee_name or att.email
+    title = 'Employee auto checked out'
+    msg = (f'{who} was checked out automatically at {_fmt_ampm(now)} on {att.date:%d %b} after '
+           f'more than {minutes} minutes outside the office'
+           + (f' ({where_txt.strip()})' if where_txt else '')
+           + f'. Worked {_fmt_dur(att.worked_minutes or 0)}. Check with them if this looks wrong.')
+    link = f'/employees/attendance?auto-checkout={att.pk}'
+    notify_approvers('attendance.approve_offsite', title, msg, link)
+    mgr = org_views.approver_for(att.email)
+    if mgr and not Notification.objects.filter(recipient=mgr, link=link).exists():
+        create_notification(mgr, title, msg, 'warning', link)
+
+
+def _departure_policy_values():
+    pol = {'enabled': True, 'timeout_minutes': 15, 'warning_minutes': 5}
+    try:
+        obj = MasterDataSet.objects.filter(key='attendance_departure_policy').first()
+        opts = obj.options if obj else None
+        if isinstance(opts, str):
+            import json
+            opts = json.loads(opts)
+        if isinstance(opts, dict):
+            pol.update(opts)
+    except Exception:
+        pass
+    return pol
+
+
 @api_view(['GET', 'POST'])
 def attendance_location_punch(request):
     if request.method == 'GET':
@@ -10060,11 +10805,7 @@ def attendance_location_punch(request):
         except ValueError:
             return err('Invalid date.')
         rows = AttendanceLocationPunch.objects.filter(email=email, date=day).order_by('captured_at')
-        return Response([{
-            'id': p.id, 'time': _fmt_ampm(p.captured_at), 'capturedAt': dt(p.captured_at),
-            'latitude': p.latitude, 'longitude': p.longitude,
-            'accuracy': p.accuracy, 'label': p.label or '',
-        } for p in rows])
+        return Response([_punch_json(p) for p in rows])
 
     # POST — store a sample (self only, only while checked in, throttled hourly)
     body = request.data
@@ -10086,16 +10827,30 @@ def attendance_location_punch(request):
         acc = None
     label = (str(body.get('label') or ''))[:255]
     now = local_now()
-    today = local_today()
-    rec = EmployeeAttendance.objects.filter(email=email, date=today).first()
-    checked_in = bool(rec and rec.check_in and (not rec.check_out or rec.check_in > rec.check_out))
-    if not checked_in:
+    # The open session — last night's one too, after midnight on a night shift.
+    rec = _current_attendance(email, now)
+    if not (rec and _is_checked_in(rec)):
         return Response({'stored': False, 'reason': 'not_checked_in'})
-    last = AttendanceLocationPunch.objects.filter(email=email, date=today).order_by('-captured_at').first()
+    last = AttendanceLocationPunch.objects.filter(email=email, date=rec.date).order_by('-captured_at').first()
     if last and (now - last.captured_at).total_seconds() < 55 * 60:
         return Response({'stored': False, 'reason': 'too_soon'})
+    if acc is None or acc > LOCATION_PRECISE_M:
+        # Never name a town from a reading that cannot tell towns apart.
+        label = ('Approximate location' + (f' (±{_fmt_dist(acc)})' if acc else '')
+                 + ' — device location is not precise')[:255]
     name = (rec.employee_name if rec and rec.employee_name else '') or email.split('@')[0]
     p = AttendanceLocationPunch.objects.create(
-        email=email, employee_name=name, date=today, captured_at=now,
+        email=email, employee_name=name, date=rec.date, captured_at=now,
         latitude=lat, longitude=lng, accuracy=acc, label=label, source='web')
-    return Response({'stored': True, 'id': p.id, 'time': _fmt_ampm(now)})
+    where = _where_vs_session(rec, lat, lng, acc)
+    out = {'stored': True, 'id': p.id, 'time': _fmt_ampm(now), 'state': where['state'],
+           'approximate': acc is None or acc > LOCATION_PRECISE_M}
+    if where['state'] == 'away':
+        msg = (f'Your {_fmt_ampm(now)} location punch was about {_fmt_dist(where["distance"])} from '
+               f'{where["place"] or "where you checked in"}'
+               + (f' ({label})' if label else '') + '. If you have not moved, turn on precise '
+               'location for this site; if you have, let your manager know or check out.')
+        create_notification(email, LOCATION_AWAY_TITLE, msg, 'warning',
+                            f'/employees/checkin?location-away={p.id}')
+        out['message'] = msg
+    return Response(out)

@@ -15,6 +15,7 @@ import json
 import os
 import re
 import unicodedata
+from datetime import date
 
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.validators import EmailValidator
@@ -576,15 +577,10 @@ class InterviewRecordingSerializer(serializers.ModelSerializer):
         }
 
     def to_representation(self, instance):
-        # ``_has_video`` / ``_has_recording`` are annotated by the list queryset
-        # (which defers the heavy columns); fall back to the columns otherwise.
-        has_video = getattr(instance, '_has_video', None)
-        if has_video is None:                       # unannotated (detail view)
-            # True when disk file, binary LONGBLOB, or legacy base64 column has data.
-            has_video = bool(instance.video_file or instance.video_buffer is not None or instance.recording_data is not None)
-        has_recording = getattr(instance, '_has_recording', None)
-        if has_recording is None:
-            has_recording = bool(instance.recording_data is not None or instance.video_file)
+        # Stored flags (kept current by the model's save() and the upload
+        # paths) so neither the list nor the detail view reads a blob column.
+        has_video = bool(instance.has_video)
+        has_recording = bool(instance.has_recording)
 
         if self.context.get('summary'):
             return {
@@ -745,12 +741,14 @@ class AppUserSerializer(serializers.ModelSerializer):
 
     def to_representation(self, instance):
         # Keys match what the React app (services/usersApi.js + AuthContext) reads.
+        # Password is never returned to the client — hashed values are meaningless
+        # to the UI and exposing any form of the credential is a security risk.
         return {
             'id': instance.id,
             'employeeId': instance.employee_id or '',
             'name': instance.full_name,
             'email': instance.email,
-            'password': instance.password,
+            'password': '',   # intentionally blank — never expose the stored hash
             'initials': instance.initials,
             'role': instance.role,
             'roleName': instance.role_ref.name if instance.role_ref_id else '',
@@ -761,8 +759,13 @@ class AppUserSerializer(serializers.ModelSerializer):
         }
 
     def create(self, validated_data):
+        from django.contrib.auth.hashers import make_password as _make_password
         if not validated_data.get('initials'):
             validated_data['initials'] = make_initials(validated_data.get('full_name'))
+        # Always store a proper hash — never save a raw password.
+        raw = validated_data.get('password') or ''
+        if raw and not raw.startswith(('pbkdf2_', 'argon2$', 'bcrypt$')):
+            validated_data['password'] = _make_password(raw)
         return super().create(validated_data)
 
 
@@ -848,7 +851,10 @@ class UserEmailConfigSerializer(serializers.ModelSerializer):
             'smtpHost': instance.smtp_host or '',
             'smtpPort': instance.smtp_port or '',
             'smtpUser': instance.smtp_user or '',
-            'smtpPassword': instance.smtp_password or '',
+            # Never sent to the browser. The form leaves the field blank and
+            # a blank value on save keeps the stored (encrypted) password.
+            'smtpPassword': '',
+            'smtpPasswordSet': bool(instance.smtp_password),
             'smtpSecure': bool(instance.smtp_secure),
             'fromName': instance.from_name or '',
             'fromEmail': instance.from_email or '',
@@ -934,6 +940,8 @@ class EmployeeAttendanceSerializer(serializers.ModelSerializer):
             'locationLat': instance.location_lat,
             'locationLng': instance.location_lng,
             'geoVerified': bool(instance.geo_verified),
+            # Closed by the leave-the-office watcher, not by the employee.
+            'autoCheckedOut': bool(getattr(instance, 'auto_checkout_at', None)),
         }
 
 
@@ -1216,6 +1224,8 @@ class BenchSalesProfileSerializer(serializers.ModelSerializer):
     experience = serializers.CharField(required=False, allow_blank=True, default='')
     email = serializers.CharField(required=False, allow_blank=True, default='')
     contactNo = serializers.CharField(source='contact_no', required=False, allow_blank=True, default='')
+    dateOfBirth = serializers.DateField(source='date_of_birth', required=False, allow_null=True, default=None)
+    passportNo = serializers.CharField(source='passport_no', required=False, allow_blank=True, default='')
     workAuthorization = serializers.CharField(source='work_authorization', required=False, allow_blank=True, default='')
 
     resumeFileName = serializers.CharField(source='resume_file_name', required=False, allow_blank=True, default='')
@@ -1235,11 +1245,16 @@ class BenchSalesProfileSerializer(serializers.ModelSerializer):
     def validate_email(self, value):
         return _validate_optional_email(value, 'Mail Id')
 
+    def validate_dateOfBirth(self, value):
+        if value and value > date.today():
+            raise serializers.ValidationError('Date of Birth cannot be in the future.')
+        return value
+
     class Meta:
         model = BenchSalesProfile
         fields = [
             'id', 'name', 'techStack', 'experience', 'email', 'contactNo',
-            'workAuthorization',
+            'dateOfBirth', 'passportNo', 'workAuthorization',
             'resumeFileName', 'resumeFileMime', 'resumeFileData',
             'dlStateIdFileName', 'dlStateIdFileMime', 'dlStateIdFileData',
             'i94FileName', 'i94FileMime', 'i94FileData',
@@ -1259,6 +1274,8 @@ class BenchSalesProfileSerializer(serializers.ModelSerializer):
         return bool(getattr(instance, col))
 
     def to_representation(self, instance):
+        # only(): never pull each file's base64 body just to list names.
+        certificate_rows = list(instance.certificate_files.only('id', 'file_name', 'kind', 'profile_id'))
         return {
             'id': instance.id,
             'name': instance.name,
@@ -1266,11 +1283,16 @@ class BenchSalesProfileSerializer(serializers.ModelSerializer):
             'experience': instance.experience or '',
             'email': instance.email or '',
             'contactNo': instance.contact_no or '',
+            'dateOfBirth': instance.date_of_birth.isoformat() if instance.date_of_birth else '',
+            'passportNo': instance.passport_no or '',
             'workAuthorization': instance.work_authorization or '',
             'certificates': [
                 {'id': c.id, 'fileName': c.file_name}
-                # only(): never pull each certificate's base64 body to list names.
-                for c in instance.certificate_files.only('id', 'file_name', 'profile_id')
+                for c in certificate_rows if c.kind != 'certification'
+            ],
+            'certificationFiles': [
+                {'id': c.id, 'fileName': c.file_name}
+                for c in certificate_rows if c.kind == 'certification'
             ],
             'resumeFileName': instance.resume_file_name or '',
             'resumeHasFile': self._has_file(instance, 'resume_file_data'),
@@ -1541,7 +1563,18 @@ class AttendanceCorrectionSerializer(serializers.ModelSerializer):
             'reviewerNote': instance.reviewer_note or '',
             'reviewedAt': instance.reviewed_at.strftime(DATETIME_FMT) if instance.reviewed_at else None,
             'createdAt': instance.created_at.strftime(DATETIME_FMT) if instance.created_at else None,
+            'preview': self._preview(instance),
         }
+
+    @staticmethod
+    def _preview(instance):
+        # Hours the requested clock-out would give (gross, worked, overtime) —
+        # shown on the request and in the history while it waits for approval.
+        try:
+            from .views import _correction_preview
+            return _correction_preview(instance)
+        except Exception:
+            return None
 
 
 class GeoFenceSerializer(serializers.ModelSerializer):
@@ -2362,8 +2395,9 @@ class ChatMessageSerializer(serializers.ModelSerializer):
         # message list. Empty when deleted or when there's no attachment.
         if getattr(obj, "is_deleted", False):
             return ""
+        from .chat_extras import attachment_url
         if getattr(obj, "attachment_path", None):
-            return f"/api/chat/attachment/{obj.id}"
+            return attachment_url(obj.id)
         # The message list defers the attachment_data blob and annotates
         # has_attachment_blob instead; touching obj.attachment_data there would
         # load the blob back, one query per message.
@@ -2371,7 +2405,7 @@ class ChatMessageSerializer(serializers.ModelSerializer):
         if has_blob is None:
             has_blob = bool(obj.attachment_data)
         if has_blob:
-            return f"/api/chat/attachment/{obj.id}"
+            return attachment_url(obj.id)
         return ""
 
 

@@ -16,6 +16,8 @@ import os
 import secrets
 from datetime import timedelta
 
+from django.contrib.auth.hashers import check_password, make_password
+
 import requests as http_requests
 from django.conf import settings
 from django.http import JsonResponse
@@ -35,6 +37,37 @@ RESET_TTL_MINUTES = 60
 
 def _hash_code(code, salt):
     return hashlib.sha256(f'{salt}:{code}'.encode('utf-8')).hexdigest()
+
+
+def _is_hashed(stored: str) -> bool:
+    """Return True when the stored value is already a Django password hash."""
+    from .secret_box import is_password_hash
+    return is_password_hash(stored)
+
+
+def _verify_password(raw: str, user) -> bool:
+    """Compare *raw* against the user's stored password.
+
+    Handles two cases:
+    * Hashed  — uses Django's ``check_password`` (constant-time).
+    * Plain-text legacy — direct string compare; on success the password is
+      silently re-hashed and saved so the account is upgraded in one login.
+    """
+    stored = user.password or ''
+    if not stored or not raw:
+        return False
+    if _is_hashed(stored):
+        return check_password(raw, stored)
+    # Legacy plain-text row (only possible if written outside the ORM, e.g. raw
+    # SQL — AppUser.save() and migration 0082 hash everything else). Compare in
+    # constant time, then replace it with a hash straight away.
+    import hmac
+    if not hmac.compare_digest(stored.encode(), str(raw).encode()):
+        return False
+    # Upgrade: replace the plain-text with a proper hash on first successful login.
+    user.password = make_password(raw)
+    user.save(update_fields=['password'])
+    return True
 
 
 def _dev_otp_enabled():
@@ -113,7 +146,7 @@ def signup(request):
     user = AppUser.objects.create(
         full_name=name,
         email=email,
-        password=password,
+        password=make_password(password),
         initials=make_initials(name),
         role=role,
         status='active',
@@ -144,7 +177,7 @@ def login(request):
 
         user = AppUser.objects.select_related('role_ref').filter(email=email).first()
         # Constant-ish messaging: don't reveal which half was wrong.
-        if not user or user.password != password:
+        if not user or not _verify_password(password, user):
             return err('Invalid email or password', 401)
         if user.status != 'active':
             return err('This account is disabled. Contact your administrator.', 403)
@@ -332,7 +365,7 @@ def reset_password(request):
     if not user:
         return err('Account not found.', 404)
 
-    user.password = password
+    user.password = make_password(password)
     user.save(update_fields=['password'])
     pr.used_at = timezone.now()
     pr.save(update_fields=['used_at'])

@@ -33,6 +33,7 @@ from django.utils import timezone
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
+from . import secret_box
 from .models import AIProviderSetting, AISettingsAudit
 from .permissions import _CACHE as _PERM_CACHE, check_perm, require_perm
 
@@ -40,33 +41,17 @@ logger = logging.getLogger(__name__)
 
 PROVIDER = 'anthropic'
 PROVIDER_LABEL = 'Anthropic'
-SECRETS_ENV = 'HRMS_SECRETS_KEY'
+SECRETS_ENV = secret_box.SECRETS_ENV
+SecretsNotConfigured = secret_box.SecretsNotConfigured
 MIN_KEY_LEN = 20
 MAX_KEY_LEN = 400
 
 
-class SecretsNotConfigured(Exception):
-    pass
-
-
 # ---------------------------------------------------------------------------
-# encryption
+# encryption (shared Fernet key, see api/secret_box.py)
 # ---------------------------------------------------------------------------
-def _fernet():
-    raw = (os.environ.get(SECRETS_ENV) or '').strip()
-    if not raw:
-        return None
-    try:
-        from cryptography.fernet import Fernet
-        return Fernet(raw.encode())
-    except Exception:
-        # Never log the value; only that it is unusable.
-        logger.error('%s is set but is not a valid Fernet key; managed secrets are disabled.', SECRETS_ENV)
-        return None
-
-
-def encryption_ready():
-    return _fernet() is not None
+_fernet = secret_box.fernet
+encryption_ready = secret_box.encryption_ready
 
 
 def _encrypt(plain):
@@ -189,6 +174,8 @@ def metadata():
         'environmentKeyPresent': bool((os.environ.get('ANTHROPIC_API_KEY') or '').strip()),
         'legacyViteKeyPresent': bool((os.environ.get('VITE_ANTHROPIC_API_KEY') or '').strip()),
         'encryptionReady': encryption_ready(),
+        # Where the encryption key comes from (never the key itself).
+        'encryptionKeySource': secret_box.key_source(),
         'fallbackPolicy': ('Removing the saved key makes AI use ANTHROPIC_API_KEY from the server '
                            'environment if it is set; otherwise AI features are switched off.'),
     }
@@ -289,9 +276,10 @@ def ai_settings_key(request):
 
     # PUT: validate first, then save (or rotate) — never activate a broken key.
     if not encryption_ready():
-        return _msg(f'Saving a key from the UI is disabled because {SECRETS_ENV} is not set on the '
-                    f'server. Set it (see README_DJANGO.md), or put the key in ANTHROPIC_API_KEY instead.',
-                    503, 'ENCRYPTION_NOT_CONFIGURED')
+        return _msg(f'Saving a key from the UI is disabled: the server has no usable encryption key '
+                    f'({SECRETS_ENV} is not set or not valid, and creating {secret_box.key_file_path()} '
+                    f'is switched off or failed). See README_DJANGO.md, or put the key in '
+                    f'ANTHROPIC_API_KEY instead.', 503, 'ENCRYPTION_NOT_CONFIGURED')
     key, problem = _proposed_key(request)
     if problem:
         return _msg(problem, 400)

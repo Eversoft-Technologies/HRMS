@@ -234,7 +234,27 @@ def _call_raw_claude(prompt, max_tokens=3000, request_key=None, system=None, dea
     raise AIUnavailable(last_error)
 
 
+#: Anthropic answers a key that is VALID but whose organization has no API
+#: credit with a 400 "credit balance is too low". It reads like a broken key,
+#: so it is reworded — the fix is billing, not a new key.
+NO_CREDIT_MESSAGE = (
+    'Anthropic accepted this key, but the Anthropic organization it belongs to has no API '
+    'credit, so it cannot be used yet. Add credit at console.anthropic.com › Settings › Billing '
+    '(signed in to the organization that created this key) and test again in a few minutes. '
+    'A Claude.ai Pro / Max / Team subscription does not include API credit.')
+
+
+def is_no_credit(response):
+    try:
+        msg = ((response.json().get('error') or {}).get('message') or '').lower()
+    except ValueError:
+        msg = (response.text or '').lower()
+    return response.status_code == 400 and 'credit balance' in msg
+
+
 def _upstream_error(response):
+    if is_no_credit(response):
+        return NO_CREDIT_MESSAGE
     try:
         err = response.json().get('error') or {}
         detail = err.get('message') or err.get('type')

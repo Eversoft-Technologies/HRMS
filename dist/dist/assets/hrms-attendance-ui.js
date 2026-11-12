@@ -75,6 +75,36 @@
   function daysAgoStr(n) { var d = new Date(); d.setDate(d.getDate() - n); return ymd(d); }
   function monthStartStr() { var d = new Date(); d.setDate(1); return ymd(d); }
   function hm(mins) { mins = Math.round(mins || 0); return Math.floor(mins / 60) + 'h ' + (mins % 60) + 'm'; }
+
+  /* Check Out / Working / Break / OT cells. While a missed clock-out request
+     is waiting for approval, show the requested clock-out and the hours it
+     gives (marked "pending") instead of an empty check-out and 0h 0m. */
+  function pendingCells(r) {
+    var fmtTime = function (x) { return x || '--'; };
+    var pc = r && r.pendingCorrection;
+    if (!pc || r.checkOutTime) {
+      var auto = r.autoCheckedOut
+        ? ' <span class="hram-pending hram-auto" title="' + esc(r.note || 'Checked out automatically after leaving the office') + '">auto</span>' : '';
+      return '<td' + (r.autoCheckedOut ? ' title="' + esc(r.note || '') + '"' : '') + '>' + esc(fmtTime(r.checkOutTime)) + auto + '</td>' +
+        '<td>' + hm(r.workedMinutes) + '</td><td>' + hm(r.breakMinutes) + '</td>' +
+        '<td>' + (r.overtimeMinutes || 0) + 'm</td>';
+    }
+    var tip = 'Missed clock-out request waiting for approval: ' + hm(pc.workedMinutes) + ' worked (' + hm(pc.grossMinutes) + ' gross)';
+    var pill = ' <span class="hram-pending" title="' + esc(tip) + '">pending</span>';
+    var nextDay = pc.requestedCheckOut && pc.requestedCheckOut.slice(0, 10) !== r.date;
+    return '<td title="' + esc(tip) + '">' + esc(fmtTime(pc.requestedCheckOutTime)) + (nextDay ? ' <small>(+1)</small>' : '') + pill + '</td>' +
+      '<td title="' + esc(tip) + '">' + hm(pc.workedMinutes) + '</td><td>' + hm(r.breakMinutes) + '</td>' +
+      '<td>' + (pc.overtimeMinutes || 0) + 'm</td>';
+  }
+  (function () {
+    if (document.getElementById('hram-pending-style')) return;
+    var st = document.createElement('style');
+    st.id = 'hram-pending-style';
+    st.textContent = '.hram-pending{display:inline-block;margin-left:4px;padding:1px 6px;border-radius:99px;font-size:10px;font-weight:700;' +
+      'background:rgba(245,158,11,.16);color:#b45309;vertical-align:middle;}' +
+      '.hram-auto{background:rgba(239,68,68,.14);color:#b91c1c;cursor:help}';
+    (document.head || document.documentElement).appendChild(st);
+  })();
   function dayShort(dateStr) {
     if (!dateStr) return '--';
     var d = new Date(dateStr + 'T00:00:00');
@@ -351,9 +381,7 @@
                   '</div>' +
                 '</div></td>' +
                 '<td>' + esc(r.date) + '</td><td>' + dayShort(r.date) + '</td>' +
-                '<td>' + esc(fmtTime(r.checkInTime)) + '</td><td>' + esc(fmtTime(r.checkOutTime)) + '</td>' +
-                '<td>' + hm(r.workedMinutes) + '</td><td>' + hm(r.breakMinutes) + '</td>' +
-                '<td>' + (r.overtimeMinutes || 0) + 'm</td>' +
+                '<td>' + esc(fmtTime(r.checkInTime)) + '</td>' + pendingCells(r) +
                 '<td><span class="hram-status-badge ' + esc((r.status || '').toLowerCase()) + '">' + esc(r.status || '--') + '</span></td>' +
                 '<td>' + (r.isWfh ? 'WFH' : 'Office') + '</td>' +
                 '</tr>';
@@ -986,9 +1014,7 @@
             list.slice(0, 200).map(function (r) {
               return '<tr>' +
                 '<td class="hram-strong">' + esc(r.date) + '</td><td>' + dayShort(r.date) + '</td>' +
-                '<td>' + esc(fmtTime(r.checkInTime)) + '</td><td>' + esc(fmtTime(r.checkOutTime)) + '</td>' +
-                '<td>' + hm(r.workedMinutes) + '</td><td>' + hm(r.breakMinutes) + '</td>' +
-                '<td>' + (r.overtimeMinutes || 0) + 'm</td>' +
+                '<td>' + esc(fmtTime(r.checkInTime)) + '</td>' + pendingCells(r) +
                 '<td><span class="hram-status-badge ' + esc((r.status || '').toLowerCase()) + '">' + esc(r.status || '--') + '</span></td>' +
                 '<td>' + (r.isWfh ? 'WFH' : 'Office') + '</td>' +
                 '</tr>';

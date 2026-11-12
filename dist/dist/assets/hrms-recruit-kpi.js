@@ -14,6 +14,7 @@
   var BTN_ID      = 'hrms-kpi-btn';
   var REFRESH_MS  = 60000;
   var HISTORY_KEY = '__hrmsRecruitKpiOverlay';
+  var OPEN_KEY    = 'hrms_recruit_kpi_open_path';
 
   var state = {
     tab:             'overview',
@@ -42,6 +43,7 @@
     loading:         false,
     timer:           null,
     historyToken:    null,
+    openPath:        null,
     charts:          [], // Keep track of active Chart.js instances
     lastRenderedTab: null // Tracks the active tab to prevent unnecessary HTML rebuilds
   };
@@ -182,9 +184,11 @@
       '.kpi-cf-btn{position:absolute;top:12px;right:12px;display:inline-flex;align-items:center;gap:5px;background:var(--bg3,#f3f4f6);border:1px solid var(--border,#e5e7eb);border-radius:8px;padding:4px 9px;font-size:11px;font-weight:600;color:var(--text2,#666);cursor:pointer;z-index:2}',
       '.kpi-cf-btn:hover{border-color:var(--accent,#6366f1);color:var(--text1,#111)}',
       '.kpi-cf-btn.on{color:var(--accent,#6366f1);border-color:var(--accent,#6366f1)}',
-      '.kpi-cf-pop{position:fixed;z-index:9950;background:var(--card,#fff);border:1px solid var(--border,#e5e7eb);border-radius:10px;box-shadow:0 14px 38px rgba(0,0,0,.35);padding:6px;min-width:170px;max-height:260px;overflow-y:auto}',
-      '.kpi-cf-pop label{display:flex;align-items:center;gap:8px;padding:6px 8px;font-size:12.5px;color:var(--text1,#111);cursor:pointer;border-radius:6px}',
-      '.kpi-cf-pop label:hover{background:var(--hover,#f3f4f6)}',
+      /* Theme tokens first: --card and --hover are not theme tokens, so the popover fell back to a
+         white panel while its labels kept the theme's light --text in dark mode (unreadable). */
+      '.kpi-cf-pop{position:fixed;z-index:9950;background:var(--bg2,var(--card,#fff));border:1px solid var(--border2,var(--border,#e5e7eb));border-radius:10px;box-shadow:0 14px 38px rgba(0,0,0,.35);padding:6px;min-width:170px;max-height:260px;overflow-y:auto}',
+      '.kpi-cf-pop label{display:flex;align-items:center;gap:8px;padding:6px 8px;font-size:12.5px;color:var(--text,var(--text1,#111));cursor:pointer;border-radius:6px}',
+      '.kpi-cf-pop label:hover{background:var(--bg3,var(--hover,#f3f4f6))}',
       '.kpi-cf-pop input{accent-color:var(--accent,#6366f1)}',
       /* Overall "Edit Filters" — Job Board–style right drawer */
       '.kpi-editfilters{display:inline-flex;align-items:center;gap:7px;background:var(--bg3,#f3f4f6);border:1px solid var(--border,#e5e7eb);border-radius:9px;padding:8px 14px;font-size:12.5px;font-weight:600;color:var(--text1,#111);cursor:pointer}',
@@ -207,6 +211,8 @@
       '.kpi-fd-btn{flex:1;text-align:center;border-radius:9px;padding:11px;font-size:13px;font-weight:700;cursor:pointer;border:1px solid var(--border,#e5e7eb);background:var(--bg2,#f8fafc);color:var(--text1,#111)}',
       '.kpi-fd-btn.primary{background:var(--accent,#6366f1);color:#fff;border-color:var(--accent,#6366f1)}',
       '.kpi-fd-btn.ghost{background:transparent;color:var(--text2,#666)}',
+      '#kpi-fd-reset{background:var(--bg3,#1e293b);border-color:var(--danger,#f75f4f);color:var(--danger,#f75f4f)}',
+      '#kpi-fd-reset:hover{background:var(--bg3,#1e293b);border-color:var(--danger,#f75f4f);color:var(--danger,#f75f4f)}',
       '@keyframes kpi-fd-fade{from{opacity:0}to{opacity:1}}',
       '@keyframes kpi-fd-slide{from{transform:translateX(100%)}to{transform:translateX(0)}}',
       /* header */
@@ -317,13 +323,23 @@
     // tab chosen last time (Pipeline, Resume Scoring, Trends ...) came back.
     state.tab = 'overview';
     state.lastRenderedTab = null;
-    state.historyToken = String(Date.now()) + '-' + Math.random().toString(36).slice(2);
+    state.openPath = window.location.pathname + window.location.hash;
     var currentHistoryState = history.state;
-    var overlayHistoryState = currentHistoryState && typeof currentHistoryState === 'object'
-      ? Object.assign({}, currentHistoryState)
-      : {};
-    overlayHistoryState[HISTORY_KEY] = state.historyToken;
-    history.pushState(overlayHistoryState, '', location.href);
+    if (currentHistoryState && typeof currentHistoryState[HISTORY_KEY] === 'string') {
+      state.historyToken = currentHistoryState[HISTORY_KEY];
+    } else {
+      state.historyToken = String(Date.now()) + '-' + Math.random().toString(36).slice(2);
+      var overlayHistoryState = currentHistoryState && typeof currentHistoryState === 'object'
+        ? Object.assign({}, currentHistoryState)
+        : {};
+      overlayHistoryState[HISTORY_KEY] = state.historyToken;
+      history.pushState(overlayHistoryState, '', location.href);
+    }
+    try {
+      sessionStorage.setItem(OPEN_KEY, state.openPath);
+    } catch (error) {
+      console.warn('[Recruit KPI] Could not save dashboard state for refresh:', error);
+    }
 
     injectStyle();
     var o = document.createElement('div');
@@ -354,6 +370,13 @@
     }
 
     clearInterval(state.timer);
+    try {
+      sessionStorage.removeItem(OPEN_KEY);
+    } catch (error) {
+      console.warn('[Recruit KPI] Could not clear saved dashboard state:', error);
+    }
+    closeKpiFilters();
+    closeChartFilter();
     if (state.charts && state.charts.length) {
       state.charts.forEach(function (c) {
         try { c.destroy(); } catch (_) {}
@@ -365,6 +388,7 @@
     document.removeEventListener('keydown', onKey);
     window.removeEventListener('popstate', onPopState);
     state.historyToken = null;
+    state.openPath = null;
     state.data = null;
     state.lastRenderedTab = null;
   }
@@ -481,8 +505,23 @@
     dr.innerHTML =
       '<div class="kpi-fd-h"><h3>Edit Filters</h3><button class="kpi-fd-x" id="kpi-fd-x">&times;</button></div>' +
       '<div class="kpi-fd-body">' + scopeSec + rangeSec + filtSec + '</div>' +
-      '<div class="kpi-fd-f"><button class="kpi-fd-btn primary" id="kpi-fd-apply">Apply</button><button class="kpi-fd-btn ghost" id="kpi-fd-cancel">Cancel</button></div>';
+      '<div class="kpi-fd-f"><button class="kpi-fd-btn" id="kpi-fd-reset">Reset</button><button class="kpi-fd-btn ghost" id="kpi-fd-cancel">Cancel</button><button class="kpi-fd-btn primary" id="kpi-fd-apply">Apply Filter</button></div>';
     ov.appendChild(dr); document.body.appendChild(ov);
+    dr.querySelector('#kpi-fd-reset').addEventListener('click', function () {
+      FILTER_KEYS.forEach(function (key) { work[key] = ''; });
+      work.scope = 'me';
+      work.range = 'all';
+      dr.querySelectorAll('input[name="kpi-fd-scope"]').forEach(function (radio) {
+        radio.checked = radio.value === work.scope;
+      });
+      dr.querySelectorAll('input[name="kpi-fd-range"]').forEach(function (radio) {
+        radio.checked = radio.value === work.range;
+      });
+      dr.querySelectorAll('.kpi-fd-date').forEach(function (input) { input.value = ''; });
+      dr.querySelectorAll('select[data-fk]').forEach(function (select) { select.value = ''; });
+      var dates = dr.querySelector('#kpi-fd-dates');
+      if (dates) dates.style.display = 'none';
+    });
     dr.querySelectorAll('input[name="kpi-fd-scope"]').forEach(function (r) { r.addEventListener('change', function () { work.scope = r.value; }); });
     dr.querySelectorAll('input[name="kpi-fd-range"]').forEach(function (r) {
       r.addEventListener('change', function () {
@@ -888,19 +927,26 @@
     if (document.getElementById('kpi-cf-pop')) { closeChartFilter(); return; }
     var labels = (chart.data && chart.data.labels) || [];
     var pop = document.createElement('div'); pop.id = 'kpi-cf-pop'; pop.className = 'kpi-cf-pop';
-    pop.innerHTML = labels.map(function (lb, i) {
-      var vis = !(chart._hidden && chart._hidden[i]);
-      return '<label><input type="checkbox" data-i="' + i + '"' + (vis ? ' checked' : '') + '> ' + esc(String(lb)) + '</label>';
-    }).join('');
+    // Single-select: one radio per label plus "All". Picking a label shows only
+    // that bar; "All" (the default) shows every bar again.
+    var selected = -1;
+    if (chart._hidden && Object.keys(chart._hidden).some(function (k) { return chart._hidden[k]; })) {
+      labels.some(function (lb, i) { if (!chart._hidden[i]) { selected = i; return true; } return false; });
+    }
+    pop.innerHTML = '<label><input type="radio" name="kpi-cf" data-i="-1"' + (selected === -1 ? ' checked' : '') + '> All</label>' +
+      labels.map(function (lb, i) {
+        return '<label><input type="radio" name="kpi-cf" data-i="' + i + '"' + (selected === i ? ' checked' : '') + '> ' + esc(String(lb)) + '</label>';
+      }).join('');
     document.body.appendChild(pop);
     var r = btn.getBoundingClientRect();
     pop.style.top = Math.min(r.bottom + 4, window.innerHeight - 270) + 'px';
     pop.style.left = Math.min(r.left, window.innerWidth - 190) + 'px';
-    pop.querySelectorAll('input').forEach(function (cb) {
-      cb.addEventListener('change', function () {
-        toggleChartLabel(chart, +cb.getAttribute('data-i'), cb.checked);
-        var anyHidden = chart._hidden && Object.keys(chart._hidden).some(function (k) { return chart._hidden[k]; });
-        btn.classList.toggle('on', !!anyHidden);
+    pop.querySelectorAll('input').forEach(function (rb) {
+      rb.addEventListener('change', function () {
+        if (!rb.checked) return;
+        var k = +rb.getAttribute('data-i');
+        labels.forEach(function (lb, i) { toggleChartLabel(chart, i, k === -1 || i === k); });
+        btn.classList.toggle('on', k !== -1);
       });
     });
     setTimeout(function () { document.addEventListener('mousedown', function h(e) { var p = document.getElementById('kpi-cf-pop'); if (p && !p.contains(e.target) && e.target !== btn) { p.remove(); document.removeEventListener('mousedown', h); } }); }, 0);
@@ -2165,6 +2211,7 @@
 
   function tryMount() {
     var path = window.location.pathname + window.location.hash;
+    if (document.getElementById(OVERLAY_ID) && state.openPath !== path) close();
     var onRecruit = /recruit|job|interview/i.test(path);
     if (onRecruit) {
       injectButton();
@@ -2176,6 +2223,14 @@
 
   function boot() {
     tryMount();
+    try {
+      var savedOpenPath = sessionStorage.getItem(OPEN_KEY);
+      var currentPath = window.location.pathname + window.location.hash;
+      if (savedOpenPath && savedOpenPath === currentPath) open();
+      else if (savedOpenPath) sessionStorage.removeItem(OPEN_KEY);
+    } catch (error) {
+      console.warn('[Recruit KPI] Could not restore dashboard state:', error);
+    }
     // __hrmsCan fails open until /api/me/permissions answers, so re-evaluate the
     // moment the real grants land — otherwise the button lingers for a user who
     // turns out to have neither KPI scope.
