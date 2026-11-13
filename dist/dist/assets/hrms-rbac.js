@@ -490,15 +490,15 @@
     });
   }
   function updateSelCount() {
-    var checked = document.querySelectorAll('#' + OVERLAY_ID + ' .rbac-perm:checked');
+    var checked = document.querySelectorAll('#' + PAGE_ID + ' .rbac-perm:checked');
     var n = checked.length;
     var el = document.getElementById('rbac-selcount');
     if (el) el.textContent = n + ' selected  ';
     // Sync each group’s “check all” checkbox to reflect its children
-    var grpBoxes = document.querySelectorAll('#' + OVERLAY_ID + ' .rbac-grpall');
+    var grpBoxes = document.querySelectorAll('#' + PAGE_ID + ' .rbac-grpall');
     for (var i = 0; i < grpBoxes.length; i++) {
       var g = grpBoxes[i].getAttribute('data-group');
-      var perms = document.querySelectorAll('#' + OVERLAY_ID + ' .rbac-perm[data-group="' + g + '"]');
+      var perms = document.querySelectorAll('#' + PAGE_ID + ' .rbac-perm[data-group="' + g + '"]');
       if (!perms.length) continue;
       var allChecked = true;
       for (var j = 0; j < perms.length; j++) { if (!perms[j].checked) { allChecked = false; break; } }

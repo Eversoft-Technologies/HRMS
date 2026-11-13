@@ -8311,10 +8311,12 @@ def my_permissions(request):
             'accountRole': account_role,
         })
     if not role:
-        return Response({'email': email, 'role': None, 'roleId': None, 'permissions': []})
+        return Response({'email': email, 'role': None, 'roleId': None, 'permissions': [],
+                         'accountRole': account_role})
     codes = list(Permission.objects.filter(
         role_permissions__role=role, is_active=True).values_list('code', flat=True))
-    return Response({'email': email, 'role': role.name, 'roleId': role.id, 'permissions': codes})
+    return Response({'email': email, 'role': role.name, 'roleId': role.id, 'permissions': codes,
+                     'accountRole': account_role})
 
 
 # --- RBAC user management (create a login and assign an RBAC role) ----------

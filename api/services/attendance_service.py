@@ -455,8 +455,30 @@ class AttendanceService:
             'total_break_minutes': attendances.aggregate(total=Sum('break_minutes'))['total'] or 0,
             'total_overtime_minutes': attendances.aggregate(total=Sum('overtime_minutes'))['total'] or 0,
         }
-
+        # Approved leave has no attendance row, so it used to vanish from the
+        # summary: a sick day left "Absent 0" and attendance at 100%. Count each
+        # leave date in the range (Mon-Fri, not past today, and not a day the
+        # person checked in anyway) so it shows as Leave and lowers the rate.
+        summary['leave'] = AttendanceService._leave_days(email, from_date, to_date, attendances)
         return summary
+
+    @staticmethod
+    def _leave_days(email, from_date, to_date, attendances):
+        from api.models import LeaveRequest
+        last = min(to_date, date.today())
+        if last < from_date:
+            return 0
+        worked = set(attendances.filter(check_in__isnull=False).values_list('date', flat=True))
+        days = set()
+        for lv in LeaveRequest.objects.filter(email__iexact=email, status__iexact='approved',
+                                              from_date__lte=last, to_date__gte=from_date):
+            d = max(lv.from_date, from_date)
+            end = min(lv.to_date, last)
+            while d <= end:
+                if d.weekday() < 5 and d not in worked:
+                    days.add(d)
+                d += timedelta(days=1)
+        return len(days)
 
     @staticmethod
     def record_device_punch(email: str, employee_name: str, punch_type: str = 'in', device_id: str = 'biometric') -> dict:
