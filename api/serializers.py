@@ -752,6 +752,7 @@ class AppUserSerializer(serializers.ModelSerializer):
             'password': '',   # intentionally blank — never expose the stored hash
             'initials': instance.initials,
             'role': instance.role,
+            'roleName': instance.role_ref.name if instance.role_ref_id else '',
             'status': instance.status,
             'authProvider': instance.auth_provider,
             'profilePic': instance.profile_pic or '',

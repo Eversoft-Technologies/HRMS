@@ -1364,7 +1364,7 @@
     window.addEventListener('hrmsNavigate', function () { loaded = false; tick(); });
     document.addEventListener('visibilitychange', function () { if (!document.hidden && onPage()) load(true); });
     window.addEventListener('hrmsNetOnline', function () { retryAt = 0; if (onPage()) load(true); });
-    setInterval(function () { if (onPage() && (document.getElementById('hrms-iv-up') || document.getElementById('hrms-iv-done'))) load(true); }, 60000);
+    setInterval(function () { if (onPage() && (document.getElementById('hrms-iv-up') || document.getElementById('hrms-iv-done'))) load(true); }, 20000);
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);

@@ -464,11 +464,14 @@
      The server caps pageSize at 200, so page through until the whole roster is
      collected (bounded by a safety cap so a huge table can't spin forever). */
   var LOAD_PS = 200, LOAD_MAX_PAGES = 100;
-  function loadCandidates() {
-    state.loading = true;
-    state.loaded = false;
-    render();
+  function loadCandidates(quiet) {
+    if (!quiet) {
+      state.loading = true;
+      state.loaded = false;
+      render();
+    }
     function finish(items) {
+      if (quiet && JSON.stringify(items) === JSON.stringify(state.rows)) return;
       state.rows = items;
       state.total = items.length;   // full loaded count (viewGrid shows the filtered count)
       state.loaded = true;
@@ -487,19 +490,23 @@
         finish(items);
       }).catch(function () { finish(items); });   // a partial roster beats none
     }).catch(function (e) {
+      if (quiet) return;   // a background refresh that fails just tries again later
       state.rows = []; state.loaded = true; state.loading = false; render();
       toast(e.message, 'error');
     });
   }
 
-  function loadDashboard() {
-    state.loading = true;
-    render();
+  function loadDashboard(quiet) {
+    if (!quiet) {
+      state.loading = true;
+      render();
+    }
     Promise.all([api('/onboarding/dashboard'), api('/onboarding/alerts')])
       .then(function (r) {
+        if (quiet && JSON.stringify(r) === JSON.stringify([state.dash, state.alerts || []])) return;
         state.dash = r[0]; state.alerts = r[1] || []; state.loading = false; render();
       })
-      .catch(function (e) { state.loading = false; render(); toast(e.message, 'error'); });
+      .catch(function (e) { if (quiet) return; state.loading = false; render(); toast(e.message, 'error'); });
   }
 
   /* ── sorting (client-side, across the whole loaded roster) ────────────── */
@@ -1115,15 +1122,19 @@
     },
   };
 
-  function loadStage() {
+  function loadStage(quiet) {
     var spec = STAGE_PAGES[state.page];
     if (!spec) return;
-    state.loading = true;
-    state.stageErr = '';
-    render();
+    if (!quiet) {
+      state.loading = true;
+      state.stageErr = '';
+      render();
+    }
     api(spec.url).then(function (rows) {
+      if (quiet && !state.stageErr && JSON.stringify(rows || []) === JSON.stringify(state.list)) return;
       state.list = rows || [];
       state.loading = false;
+      state.stageErr = '';
 
       if (state.page === '/documents') {
         var cols = [
@@ -1169,6 +1180,7 @@
 
       render();
     }).catch(function (e) {
+      if (quiet) return;
       state.list = [];
       state.loading = false;
       // A 403 here is the point of the payroll page, not a failure to hide.
@@ -4207,6 +4219,24 @@
       armed = currentPage();
       setTimeout(ensureLayout, 60);
     });
+
+    /* Live refresh. Onboarding is a hand-off between roles (a recruiter adds a
+       candidate, a manager approves, IT and Payroll follow), so the lists went
+       stale the moment someone else acted and only a reload showed it. Re-fetch
+       the page being viewed in the background; nothing on screen changes unless
+       the data did, and it waits while a drawer, a modal or a field is in use. */
+    function refreshQuiet() {
+      if (document.hidden || !document.getElementById(ID.root)) return;
+      if (document.getElementById(ID.drawer) || document.getElementById(ID.modal)) return;
+      var ae = document.activeElement;
+      if (ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName) && document.getElementById(ID.root).contains(ae)) return;
+      if (state.page === '') loadDashboard(true);
+      else if (STAGE_PAGES[state.page]) loadStage(true);
+      else if (state.page === '/candidates') loadCandidates(true);
+    }
+    setInterval(refreshQuiet, 15000);
+    document.addEventListener('visibilitychange', refreshQuiet);
+    window.addEventListener('focus', refreshQuiet);
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);

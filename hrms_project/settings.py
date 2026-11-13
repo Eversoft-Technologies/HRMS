@@ -1,3 +1,4 @@
+
 """
 Django settings for the HRMS project.
 
@@ -20,10 +21,6 @@ from dotenv import load_dotenv
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 # Load environment variables from a dotenv file next to manage.py.
-# APP_ENV (default "development") picks the environment-specific file
-# (.env.development / .env.production); a plain .env is still honoured as a
-# fallback. load_dotenv keeps override=False, so real process env vars and
-# the first file loaded win — i.e. .env.<APP_ENV> takes priority over .env.
 APP_ENV = os.environ.get('APP_ENV') or os.environ.get('DJANGO_ENV') or 'development'
 for _env_file in (f'.env.{APP_ENV}', '.env'):
     _env_path = BASE_DIR / _env_file
@@ -44,21 +41,11 @@ def env_list(name, default=''):
 
 
 def env_timezone(default):
-    """HRMS_TIME_ZONE from the environment, checked before it is trusted.
-
-    An unrecognised zone name is worse than no setting at all: business_tz()
-    returns None for it, local_now() then falls back to the *host* clock, and
-    the 5h30m drift timeutil exists to prevent is silently back. A typo in
-    .env would not present as a typo - it would present, days later, as
-    attendance stamped against the wrong day.
-
-    Warns and keeps the default rather than raising: one bad character should
-    not stop the server booting, but it must not pass unnoticed either.
-    """
+    """Validate HRMS_TIME_ZONE before using it."""
     name = (os.environ.get('HRMS_TIME_ZONE') or '').strip()
     if not name:
         return default
-    if ZoneInfo is None:              # cannot verify here; trust it
+    if ZoneInfo is None:
         return name
     try:
         ZoneInfo(name)
@@ -80,24 +67,19 @@ SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', 'dev-insecure-change-me')
 DEBUG = env_bool('DJANGO_DEBUG', True)
 ALLOWED_HOSTS = env_list('DJANGO_ALLOWED_HOSTS', 'localhost,127.0.0.1') or ['*']
 
-# The frontend and API share an origin in production, so CSRF is not an
-# issue for the API (views are csrf-exempt). Trust the configured hosts for
-# any form posts that might be added later.
 CSRF_TRUSTED_ORIGINS = [
     f'https://{h}' for h in ALLOWED_HOSTS if h not in ('localhost', '127.0.0.1', '*')
 ]
 
-# Keep the project minimal: no admin/auth/sessions tables are created in the
-# user's MySQL database — only the 8 application tables.
+# ---------------------------------------------------------------------------
+# Installed Applications
+# ---------------------------------------------------------------------------
 INSTALLED_APPS = [
     'daphne',
     'channels',
     'corsheaders',
     # 'django.contrib.auth'
-    
     'django.contrib.staticfiles',
-    
-    
     'rest_framework',
     'api',
 ]
@@ -105,32 +87,38 @@ INSTALLED_APPS = [
 # ---------------------------------------------------------------------------
 # Django REST Framework
 # ---------------------------------------------------------------------------
-# This project deliberately omits django.contrib.auth/sessions/contenttypes
-# (no auth tables are created in the user's MySQL DB — the app handles its own
-# login via the app_users table). So DRF must NOT use any auth/permission
-# classes that reference the User model, and request.user must resolve to None
-# instead of AnonymousUser (which would import django.contrib.auth).
-#
-# JSON-only in/out keeps the wire format identical to the original Node/Express
-# API the React frontend talks to.
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'api.authentication.JWTAppUserAuthentication',
     ],
-    'DEFAULT_PERMISSION_CLASSES': ['rest_framework.permissions.AllowAny'],
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.AllowAny'
+    ],
     'UNAUTHENTICATED_USER': None,
-    'DEFAULT_RENDERER_CLASSES': ['rest_framework.renderers.JSONRenderer'],
-    'DEFAULT_PARSER_CLASSES': ['rest_framework.parsers.JSONParser'],
+    'DEFAULT_RENDERER_CLASSES': [
+        'rest_framework.renderers.JSONRenderer'
+    ],
+    'DEFAULT_PARSER_CLASSES': [
+        'rest_framework.parsers.JSONParser'
+    ],
 }
 
-# Simple JWT configuration — adds JWT auth support. Tokens are short-lived
-# by default; adjust lifetimes via env vars in production.
+# ---------------------------------------------------------------------------
+# Simple JWT Configuration
+# ---------------------------------------------------------------------------
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=int(os.environ.get('JWT_ACCESS_MINUTES', '60'))),
-    'REFRESH_TOKEN_LIFETIME': timedelta(days=int(os.environ.get('JWT_REFRESH_DAYS', '7'))),
+    'ACCESS_TOKEN_LIFETIME': timedelta(
+        minutes=int(os.environ.get('JWT_ACCESS_MINUTES', '60'))
+    ),
+    'REFRESH_TOKEN_LIFETIME': timedelta(
+        days=int(os.environ.get('JWT_REFRESH_DAYS', '7'))
+    ),
     'AUTH_HEADER_TYPES': ('Bearer',),
 }
 
+# ---------------------------------------------------------------------------
+# Middleware
+# ---------------------------------------------------------------------------
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'corsheaders.middleware.CorsMiddleware',
@@ -152,14 +140,15 @@ TEMPLATES = [
 ]
 
 # ---------------------------------------------------------------------------
-# Database — MySQL (same DB the Node backend used)
+# Database — MySQL
 # ---------------------------------------------------------------------------
+# Kept the hover branch's default MySQL password (1234).
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',
         'NAME': os.environ.get('DB_NAME', 'hrms_system'),
         'USER': os.environ.get('DB_USER', 'root'),
-        'PASSWORD': os.environ.get('DB_PASSWORD', 'root'),
+        'PASSWORD': os.environ.get('DB_PASSWORD', '1234'),
         'HOST': os.environ.get('DB_HOST', 'localhost'),
         'PORT': os.environ.get('DB_PORT', '3306'),
         'OPTIONS': {
@@ -168,147 +157,161 @@ DATABASES = {
     }
 }
 
+# A MySQL on this same machine does not need TLS, and PyMySQL builds a TLS
+# context for every new connection (about 35 ms each on Windows), which every
+# request pays because the dev server opens a fresh connection per request.
+# A remote database keeps TLS.
+if DATABASES['default']['HOST'] in ('localhost', '127.0.0.1', '::1'):
+    DATABASES['default']['OPTIONS']['ssl_disabled'] = True
+
 if 'test' in sys.argv:
     DATABASES['default'] = {
         'ENGINE': 'django.db.backends.sqlite3',
         'NAME': BASE_DIR / 'test.sqlite3',
     }
 
-# Match the existing INT AUTO_INCREMENT primary keys (not BIGINT).
+# ---------------------------------------------------------------------------
+# Default Auto Field
+# ---------------------------------------------------------------------------
 DEFAULT_AUTO_FIELD = 'django.db.models.AutoField'
 
-# Login passwords are hashed with Django's default (PBKDF2). The test suite
-# creates hundreds of throw-away accounts, so it uses a fast hasher instead —
-# only under `manage.py test`, never in a running server.
+# ---------------------------------------------------------------------------
+# Password Hashers and Test Configuration
+# ---------------------------------------------------------------------------
 if len(sys.argv) > 1 and sys.argv[1] == 'test':
-    PASSWORD_HASHERS = ['django.contrib.auth.hashers.MD5PasswordHasher']
-    # Tests decide for themselves whether an encryption key exists: never read
-    # or create the real key file in the developer's home folder.
+    PASSWORD_HASHERS = [
+        'django.contrib.auth.hashers.MD5PasswordHasher'
+    ]
+
     import tempfile as _tempfile
-    os.environ['HRMS_SECRETS_FILE'] = os.path.join(_tempfile.mkdtemp(prefix='hrms-test-secrets-'), 'secrets.key')
+    os.environ['HRMS_SECRETS_FILE'] = os.path.join(
+        _tempfile.mkdtemp(prefix='hrms-test-secrets-'),
+        'secrets.key'
+    )
     os.environ['HRMS_SECRETS_AUTOGEN'] = '0'
 
 # ---------------------------------------------------------------------------
-# Large payloads: base64 video (recordingData) and document uploads can be big.
-# Mirror the Node server's generous body limits.
+# Large Payloads
 # ---------------------------------------------------------------------------
-DATA_UPLOAD_MAX_MEMORY_SIZE = None          # disable the size guard
+DATA_UPLOAD_MAX_MEMORY_SIZE = None
 FILE_UPLOAD_MAX_MEMORY_SIZE = 500 * 1024 * 1024
 DATA_UPLOAD_MAX_NUMBER_FIELDS = None
-APPEND_SLASH = False                         # API paths have no trailing slash
-
-# Public-facing base URL used to build candidate portal links in emails.
-# Set this in .env to your real domain (e.g. https://hrms.eversoftit.com) so
-# that candidates receive a clickable link even when the server runs locally.
-# If left blank the link falls back to the request's own host (works locally
-# only if the candidate is on the same machine).
-HRMS_PUBLIC_URL = os.environ.get('HRMS_PUBLIC_URL', '').rstrip('/')
-
+APPEND_SLASH = False
 
 # ---------------------------------------------------------------------------
-# LinkedIn OAuth — lets each recruiter link their OWN LinkedIn account so new
-# jobs are auto-posted to their profile (see api/linkedin_oauth.py).
-#
-# Create an app at https://www.linkedin.com/developers/apps and request both
-# the "Sign In with LinkedIn using OpenID Connect" and "Share on LinkedIn"
-# products, then add the redirect URL below under the app's Auth tab.
-# When these are blank the feature stays dormant and the UI says so.
+# Public URL
+# ---------------------------------------------------------------------------
+HRMS_PUBLIC_URL = os.environ.get('HRMS_PUBLIC_URL', '').rstrip('/')
+
+# ---------------------------------------------------------------------------
+# LinkedIn OAuth
 # ---------------------------------------------------------------------------
 LINKEDIN_CLIENT_ID = os.environ.get('LINKEDIN_CLIENT_ID', '')
 LINKEDIN_CLIENT_SECRET = os.environ.get('LINKEDIN_CLIENT_SECRET', '')
 LINKEDIN_REDIRECT_URI = os.environ.get('LINKEDIN_REDIRECT_URI', '') or (
-    HRMS_PUBLIC_URL + '/api/auth/linkedin/callback' if HRMS_PUBLIC_URL else ''
+    HRMS_PUBLIC_URL + '/api/auth/linkedin/callback'
+    if HRMS_PUBLIC_URL else ''
 )
 
 # ---------------------------------------------------------------------------
-# Map & Basemap Tile Configuration
+# Map and Basemap Tile Configuration
 # ---------------------------------------------------------------------------
-# Shared secret a biometric / RFID punch device sends as X-Device-Token.
-# Empty disables /api/attendance/device-punch/ entirely.
 HRMS_DEVICE_PUNCH_TOKEN = os.environ.get('HRMS_DEVICE_PUNCH_TOKEN', '')
 
 HRMS_BASEMAP_TILE_URL = os.environ.get(
     'HRMS_BASEMAP_TILE_URL',
     'https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png'
 )
+
 HRMS_BASEMAP_ATTRIBUTION = os.environ.get(
     'HRMS_BASEMAP_ATTRIBUTION',
     '© OpenStreetMap contributors, © CARTO'
 )
 
-
 # ---------------------------------------------------------------------------
-# Static files + React build
+# Static Files and React Build
 # ---------------------------------------------------------------------------
 STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 
-# Uploaded media (interview recordings, chat attachments) live under
-# <BASE_DIR>/media. The deploy workflow symlinks this directory to the shared,
-# release-independent folder, so anything written here survives a deploy.
-# Django's default MEDIA_ROOT is '' (= the process working directory), which
-# scattered recordings next to the code and lost them on the next release.
+# Uploaded Media
 MEDIA_URL = '/media/'
-MEDIA_ROOT = Path(os.environ.get('MEDIA_ROOT') or (BASE_DIR / 'media'))
+MEDIA_ROOT = Path(
+    os.environ.get('MEDIA_ROOT') or (BASE_DIR / 'media')
+)
 
-# Built React app (Vite output). Default: dist/dist relative to this project.
+# Built React App (Vite)
 REACT_BUILD_DIR = Path(
     os.environ.get('REACT_BUILD_DIR', BASE_DIR / 'dist' / 'dist')
 ).resolve()
 
-# WhiteNoise serves the dist/ folder at the site root so that the absolute
-# asset paths Vite emits (e.g. /assets/index-xxx.js, /favicon.svg) resolve.
 WHITENOISE_ROOT = str(REACT_BUILD_DIR)
 WHITENOISE_INDEX_FILE = True
 
 STORAGES = {
-    'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
-    'staticfiles': {'BACKEND': 'whitenoise.storage.CompressedStaticFilesStorage'},
+    'default': {
+        'BACKEND': 'django.core.files.storage.FileSystemStorage'
+    },
+    'staticfiles': {
+        'BACKEND': 'whitenoise.storage.CompressedStaticFilesStorage'
+    },
 }
 
 # ---------------------------------------------------------------------------
-# CORS — only needed when running the React dev server (localhost:3000)
-# against this API on a different port. Same-origin in production.
+# CORS Configuration
 # ---------------------------------------------------------------------------
 CORS_ALLOW_ALL_ORIGINS = DEBUG
-from corsheaders.defaults import default_headers  # noqa: E402
-CORS_ALLOW_HEADERS = list(default_headers) + ['x-api-key', 'x-user-email', 'x-actor-email']
 
+from corsheaders.defaults import default_headers  # noqa: E402
+
+CORS_ALLOW_HEADERS = list(default_headers) + [
+    'x-api-key',
+    'x-user-email',
+    'x-actor-email'
+]
+
+# ---------------------------------------------------------------------------
+# Language and Time Zone
+# ---------------------------------------------------------------------------
 LANGUAGE_CODE = 'en-us'
-# Attendance timestamps are stored as naive business-clock values because the
-# legacy database uses dateStrings. Keep the production clock configurable so
-# local development and the server use the same wall-clock timezone.
-#
-# Validated on the way in - see env_timezone: an unknown name would otherwise
-# hand every stamp back to the host clock without saying so.
+
 TIME_ZONE = env_timezone('Asia/Kolkata')
 USE_I18N = True
-USE_TZ = False  # the Node app stored naive datetimes (dateStrings)
+USE_TZ = False
 
+# ---------------------------------------------------------------------------
+# Logging Configuration
+# ---------------------------------------------------------------------------
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,
-    'handlers': {'console': {'class': 'logging.StreamHandler'}},
-    'root': {'handlers': ['console'], 'level': 'INFO'},
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler'
+        }
+    },
+    'root': {
+        'handlers': ['console'],
+        'level': 'INFO'
+    },
 }
 
-# The test suite drives error paths on purpose: a 403 proving a permission is
-# enforced, a mocked SMTP RuntimeError proving check-out survives a dead mailer.
-# Django logs every 4xx/5xx it returns and the app logs its own handled errors,
-# so a fully green run scrolled past pages of tracebacks and read as broken.
-# Quieten the console for "manage.py test" only - dev and production logging are
-# untouched, and unittest still reports real failures (it does not use logging).
-# Set HRMS_TEST_LOGS=1 to get the chatter back when debugging a test.
+# Quieten logs during tests unless explicitly enabled.
 if sys.argv[1:2] == ['test'] and os.environ.get('HRMS_TEST_LOGS') != '1':
     LOGGING['root']['level'] = 'CRITICAL'
     LOGGING['loggers'] = {
         'django.request': {
-            'handlers': ['console'], 'level': 'CRITICAL', 'propagate': False,
+            'handlers': ['console'],
+            'level': 'CRITICAL',
+            'propagate': False,
         },
     }
 
-
-# Channels (WebSocket) layer for Employee Chat realtime.
+# ---------------------------------------------------------------------------
+# Channels — WebSocket Layer for Employee Chat
+# ---------------------------------------------------------------------------
 CHANNEL_LAYERS = {
-    "default": {"BACKEND": "channels.layers.InMemoryChannelLayer"},
+    "default": {
+        "BACKEND": "channels.layers.InMemoryChannelLayer",
+    },
 }
