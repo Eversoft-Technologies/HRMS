@@ -7498,14 +7498,38 @@ def _usa_when(at, today):
     return f"{at.strftime('%m/%d/%Y')} at {clock}"
 
 
-def _usa_dashboard_extras(email, today, now, payroll_value, on_pto_count, remote_count):
+def _region_scope_emails(role_name):
+    """People a regional recruiter's dashboard counts (Recruiter (USA) or (India)).
+
+    The shared tables (attendance, leave, submissions, payroll ...) have no
+    region column, so each regional dashboard counts only the recruiter accounts
+    of its own role that have actually done something. India and USA never see
+    each other's data, and a fresh team starts at zero everywhere.
+    """
+    usa = list(AppUser.objects.filter(role_ref__name=role_name).values_list('email', flat=True))
+    if not usa:
+        return []
+    seen = set()
+    for model in (EmployeeAttendance, LeaveRequest, WfhRequest, WorkSubmission,
+                  AttendanceCorrection, EmployeeCompensation, AttendanceEvent):
+        try:
+            seen.update(model.objects.filter(email__in=usa).values_list('email', flat=True).distinct())
+        except Exception:
+            pass
+    return [e for e in usa if e in seen]
+
+
+def _usa_dashboard_extras(email, today, now, payroll_value, on_pto_count, remote_count, scope=None):
     """Figures the USA recruiter dashboard shows beyond the shared payload.
 
     Clocked-in / not-yet-clocked-in / absent are judged against each person's
     own shift: someone whose shift has not ended is "not yet clocked in", never
     "absent". Time zone is the business clock (one company zone today).
     """
-    active = list(AppUser.objects.filter(status='active').values_list('email', flat=True))
+    active_qs = AppUser.objects.filter(status='active')
+    if scope is not None:
+        active_qs = active_qs.filter(email__in=scope)
+    active = list(active_qs.values_list('email', flat=True))
     rows = {r.email: r for r in EmployeeAttendance.objects.filter(date=today)}
     pto = set(LeaveRequest.objects.filter(
         status='Approved', from_date__lte=today, to_date__gte=today).values_list('email', flat=True))
@@ -7541,19 +7565,22 @@ def _usa_dashboard_extras(email, today, now, payroll_value, on_pto_count, remote
             feed.append({'at': at, 'initial': name[:1].upper(), 'kind': kind,
                          'title': f'{name} \u2013 {text}', 'loc': loc})
 
-    for ev in AttendanceEvent.objects.order_by('-at')[:8]:
+    def _sc(qs):
+        return qs if scope is None else qs.filter(email__in=scope)
+
+    for ev in _sc(AttendanceEvent.objects).order_by('-at')[:8]:
         low = (ev.event or '').lower()
         text = ('Clock In' if 'check-in' in low else
                 'Clock Out' if 'check-out' in low else (ev.event or '').title().replace('-', ' '))
         name = ev.employee_name or (ev.email.split('@')[0] if ev.email else '')
         add(ev.at, name, text, 'in' if 'check-in' in low else 'out', ev.location or '')
-    for lr in LeaveRequest.objects.filter(status='Approved').order_by('-updated_at')[:4]:
+    for lr in _sc(LeaveRequest.objects).filter(status='Approved').order_by('-updated_at')[:4]:
         add(lr.updated_at, lr.employee_name, 'PTO Approved', 'pto')
-    for u in AppUser.objects.order_by('-created_at')[:4]:
+    for u in _sc(AppUser.objects).order_by('-created_at')[:4]:
         add(u.created_at, u.full_name, 'New Employee Joined', 'join')
-    for ws in WorkSubmission.objects.order_by('-created_at')[:4]:
+    for ws in _sc(WorkSubmission.objects).order_by('-created_at')[:4]:
         add(ws.created_at, ws.employee_name, 'Timesheet Submitted', 'sheet')
-    for wr in WfhRequest.objects.order_by('-created_at')[:4]:
+    for wr in _sc(WfhRequest.objects).order_by('-created_at')[:4]:
         add(wr.created_at, wr.employee_name, 'Remote Work Request Submitted', 'remote')
     feed.sort(key=lambda f: f['at'], reverse=True)
     highlights = [{
@@ -7731,6 +7758,71 @@ def dashboard_stats(request):
     employee_directory = _directory_rows(
         AppUser.objects.select_related('role_ref').order_by('id')[:DIRECTORY_MAX])
 
+    # Recruiter (USA) / (India): count only that region's own records (see _region_scope_emails).
+    _pre_email, _pre_caller = _get_caller(request)
+    usa_scope = None
+    _region_role = (_pre_caller.role_ref.name if _pre_caller and _pre_caller.role_ref_id
+                    and _pre_caller.role_ref.name in (USA_RECRUITER_ROLE, INDIA_RECRUITER_ROLE) else None)
+    if _region_role:
+        S = _region_scope_emails(_region_role)
+        usa_scope = S
+        total_users = len(S)
+        active_users = AppUser.objects.filter(email__in=S, status='active').count()
+        new_this_month = AppUser.objects.filter(email__in=S, created_at__gte=first_of_month).count()
+        _att = EmployeeAttendance.objects.filter(date=today, email__in=S)
+        present_count = _att.filter(check_in__isnull=False).count()
+        wfh_count = _att.filter(is_wfh=True).count()
+        late_count = _att.filter(status='late').count()
+        on_leave_today = LeaveRequest.objects.filter(
+            email__in=S, status='Approved', from_date__lte=today, to_date__gte=today).count()
+        base_headcount = active_users
+        att_rate = round((present_count / base_headcount) * 100, 1) if base_headcount else 0.0
+        active_jobs_count = 0      # job posts carry no owner or region
+        total_openings = 0
+        payroll_value = EmployeeCompensation.objects.filter(
+            email__in=S, status='active').aggregate(s=Sum('base_amount'))['s'] or 0
+        monthly_payroll_fmt = format_money_short(payroll_value, cur)
+        pending_leaves = LeaveRequest.objects.filter(email__in=S, status='Pending').count()
+        pending_wfh = WfhRequest.objects.filter(email__in=S, status='Pending').count()
+        pending_corrections = AttendanceCorrection.objects.filter(email__in=S, status='Pending').count()
+        pending_submissions = WorkSubmission.objects.filter(email__in=S, status='Pending').count()
+        _pl = lambda n, w: f"{n} {w}{'s' if n != 1 else ''}"
+        pending_actions = [
+            {'label': _pl(pending_leaves, 'leave request'), 'color': 'blue', 'path': '/employees/leave', 'count': pending_leaves},
+            {'label': _pl(pending_wfh, 'WFH request'), 'color': 'purple', 'path': '/employees/attendance', 'count': pending_wfh},
+            {'label': _pl(pending_corrections, 'attendance correction'), 'color': 'orange', 'path': '/employees/attendance', 'count': pending_corrections},
+            {'label': _pl(pending_submissions, 'work deliverable'), 'color': 'green', 'path': '/employees/submissions', 'count': pending_submissions},
+            {'label': _pl(0, 'active job post'), 'color': 'cyan', 'path': '/recruit/job-board', 'count': 0},
+        ]
+        months_trend = []
+        for i in range(5, -1, -1):
+            m_date = today - timedelta(days=i * 30)
+            m_start = m_date.replace(day=1)
+            m_end = (m_date.replace(year=m_date.year + 1, month=1, day=1) if m_date.month == 12
+                     else m_date.replace(month=m_date.month + 1, day=1))
+            months_trend.append({
+                'month': m_date.strftime('%b'),
+                'hires': AppUser.objects.filter(email__in=S, created_at__gte=m_start, created_at__lt=m_end).count(),
+                'headcount': AppUser.objects.filter(email__in=S, created_at__lt=m_end).count(),
+            })
+        _dc = {}
+        for pr in UserProfile.objects.filter(email__in=S).exclude(department='').values('department').annotate(c=Count('email')):
+            _dc[pr['department'].strip()] = _dc.get(pr['department'].strip(), 0) + pr['c']
+        dept_list = [{'department': k, 'count': v} for k, v in sorted(_dc.items(), key=lambda x: -x[1]) if k]
+        highlights = []
+        for ev in AttendanceEvent.objects.filter(email__in=S).order_by('-at')[:6]:
+            _nm = ev.employee_name or (ev.email.split('@')[0] if ev.email else '')
+            _ci = 'check-in' in (ev.event or '').lower()
+            _t = 'Check In' if _ci else ('Check Out' if 'check-out' in (ev.event or '').lower() else (ev.event or '').title().replace('-', ' '))
+            highlights.append({
+                'initial': (_nm[:1] or 'U').upper(), 'isCheckIn': _ci,
+                'color': '#10b981' if _ci else '#f97316', 'dot': '#10b981',
+                'title': f"{_nm} — {_t}",
+                'sub': f"At {ev.at.strftime('%I:%M %p') if ev.at else 'Today'} {('(' + ev.location + ')') if ev.location else ''}".strip(),
+            })
+        employee_directory = _directory_rows(
+            AppUser.objects.filter(email__in=S).select_related('role_ref').order_by('id')[:DIRECTORY_MAX])
+
     company_obj = get_or_create_company_details()
 
     # Extra figures for the USA recruiter view only (see _usa_dashboard_extras).
@@ -7740,7 +7832,7 @@ def dashboard_stats(request):
     india_view = None
     if _caller and _caller.role_ref_id and _caller.role_ref.name == USA_RECRUITER_ROLE:
         usa_extras = _usa_dashboard_extras(
-            _caller_email, today, now, payroll_value, on_leave_today, wfh_count)
+            _caller_email, today, now, payroll_value, on_leave_today, wfh_count, scope=usa_scope)
     elif _caller and _caller.role_ref_id and _caller.role_ref.name == INDIA_RECRUITER_ROLE:
         india_view = {'email': _caller_email}
 

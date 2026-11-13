@@ -1357,7 +1357,7 @@
     document.addEventListener('click', function (e) {
       if (!onCheckinPage()) return;
       var btn = e.target && e.target.closest ? e.target.closest('button') : null;
-      if (btn && /break|remote|office|check/i.test(btn.textContent || '')) {
+      if (btn && /break|remote|office|check|clock/i.test(btn.textContent || '')) {
         setTimeout(function () { loadOvertime(); loadActivity(); }, 1200);
       }
     }, true);

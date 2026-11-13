@@ -48,6 +48,7 @@
   /* USA view. The server sends d.usa to the Recruiter (USA) role only (and only
      for that signed-in user), so every other role renders exactly as before. */
   var USA = false;
+  var REGION = false;   // USA or India recruiter: a region-only view that starts empty
   var HIDE_DEAD = false; // USA or India recruiter: no links to pages the role cannot open
   function usaOn(d) {
     return !!(d && d.usa && String(d.usa.email || '').toLowerCase() === String(getEmail() || '').toLowerCase());
@@ -684,6 +685,10 @@
   }
 
   function renderHighlightsHtml(highlights) {
+    // A region view starts empty: an empty feed shows a message, never the sample rows.
+    if (REGION && !(highlights && highlights.length)) {
+      return '<div style="padding:22px 6px;text-align:center;font-size:12px;color:var(--text2);">No activity yet</div>';
+    }
     var list = (highlights && highlights.length) ? highlights : [
       { initial: 'S', isCheckIn: true, color: '#10b981', dot: '#10b981', title: 'sri — Check In', sub: 'At 02:49 PM (Nellore)' },
       { initial: 'S', isCheckIn: true, color: '#10b981', dot: '#10b981', title: 'sree — Check In', sub: 'At 02:47 PM (Nellore)' },
@@ -726,11 +731,12 @@
 
     USA = usaOn(d);
     HIDE_DEAD = USA || indiaOn(d);
+    REGION = HIDE_DEAD;
     injectDashboardStyles();
 
     var att = d.attendance || { present: 0, total: 1, rate: 100, wfh: 0, late: 0, onLeave: 0 };
     var departments = d.departments || [];
-    var totalDeptEmployees = departments.reduce(function (s, x) { return s + x.count; }, 0) || d.totalEmployees || 1;
+    var totalDeptEmployees = departments.reduce(function (s, x) { return s + x.count; }, 0) || d.totalEmployees || (REGION ? 0 : 1);
     var filteredEmployees = getFilteredEmployees(d);
     var pageInfo = getPageInfo(filteredEmployees.length);
     var hasActiveFilters = state.searchQuery || state.deptFilter !== 'all' || state.statusFilter !== 'all';
@@ -938,6 +944,7 @@
   function updateLiveDashboard(d) {
     USA = usaOn(d);
     HIDE_DEAD = USA || indiaOn(d);
+    REGION = HIDE_DEAD;
     var wrap = document.getElementById(DASHBOARD_MOUNT_ID);
     if (!wrap || !document.contains(wrap)) {
       renderFullDashboard(d);
@@ -966,7 +973,7 @@
 
     // 2. Department Breakdown
     var departments = d.departments || [];
-    var totalDeptEmployees = departments.reduce(function (s, x) { return s + x.count; }, 0) || d.totalEmployees || 1;
+    var totalDeptEmployees = departments.reduce(function (s, x) { return s + x.count; }, 0) || d.totalEmployees || (REGION ? 0 : 1);
     setEl('dash-dept-subtitle', departments.length + ' Departments • ' + totalDeptEmployees + ' Total Staff');
 
     var deptListEl = document.getElementById('dash-dept-list');

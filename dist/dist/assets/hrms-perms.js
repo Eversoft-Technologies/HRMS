@@ -114,7 +114,8 @@
     // Approve/Reject already carry data-perm in the bundle and stay gated.
     // Attendance
     { route: null, perm: 'attendance.checkinout', labels: [
-        'check in', 'check out', 'check in out'] },
+        'check in', 'check out', 'check in out',
+        'clock in', 'clock out', 'clock in clock out'] },
     // Reports
     { route: '/reports', perm: 'reports.export', labels: ['export csv', 'export pdf'] },
   ];

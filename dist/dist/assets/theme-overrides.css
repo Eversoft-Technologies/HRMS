@@ -3255,3 +3255,38 @@ body:is(:has(.sidebar a.nav-item.active[href^="/payroll"]), :has(.sidebar a.nav-
   text-transform: none !important;
   letter-spacing: 0 !important;
 }
+
+/* --- Every module: a hover you can see, without shouting ------------------
+   The first hover (2px lift, a faint dark shadow) disappeared on the dark
+   theme. This one is deliberately quiet: a soft accent border and tint plus a
+   shadow that shows on both themes. Small cards (stats, candidates, status
+   tiles) also rise 2px; big panels (tables, charts, forms) stay put so the
+   page does not wobble under the pointer. Check In / Out and Chat keep their
+   own look. */
+body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"])):not(:has(#hrms-chat-page)) :is(.content, .main > :not(.topbar):not(.content)) :is(.kanban-card, .stat-card, .kpi-card, .card, .hram-card, .hrms-iv-status-card, .ob-card, .ob-panel) {
+  transition: transform .2s cubic-bezier(.22, 1, .36, 1), box-shadow .2s ease,
+              border-color .2s ease, background-color .2s ease;
+}
+body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"])):not(:has(#hrms-chat-page)) :is(.content, .main > :not(.topbar):not(.content)) :is(.kanban-card, .stat-card, .kpi-card, .hram-card, .hrms-iv-status-card, .ob-card):hover {
+  transform: translateY(-2px);
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border2));
+  background-color: color-mix(in srgb, var(--accent) 5%, var(--bg2));
+  box-shadow: 0 10px 24px rgba(15, 23, 42, .16), 0 2px 6px rgba(15, 23, 42, .08);
+}
+body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"])):not(:has(#hrms-chat-page)) :is(.content, .main > :not(.topbar):not(.content)) :is(.card, .ob-panel):hover {
+  transform: none;
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--border2));
+  box-shadow: 0 8px 22px rgba(15, 23, 42, .12), 0 1px 4px rgba(15, 23, 42, .06);
+}
+:root[data-theme="dark"] body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"])):not(:has(#hrms-chat-page)) :is(.content, .main > :not(.topbar):not(.content)) :is(.kanban-card, .stat-card, .kpi-card, .hram-card, .hrms-iv-status-card, .ob-card):hover { box-shadow: 0 10px 24px rgba(0, 0, 0, .38); }
+:root[data-theme="dark"] body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"])):not(:has(#hrms-chat-page)) :is(.content, .main > :not(.topbar):not(.content)) :is(.card, .ob-panel):hover { box-shadow: 0 8px 22px rgba(0, 0, 0, .30); }
+body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"])):not(:has(#hrms-chat-page)) :is(.content, .main > :not(.topbar):not(.content)) .stat-card:hover { background-image: none; }
+body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"])):not(:has(#hrms-chat-page)) :is(.content, .main > :not(.topbar):not(.content)) tbody tr:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"])):not(:has(#hrms-chat-page)) :is(.content, .main > :not(.topbar):not(.content)) tbody tr:hover td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"])):not(:has(#hrms-chat-page)) :is(.content, .main > :not(.topbar):not(.content)) :is(.hrms-iv-row, .hrms-iv-fu-row, .jt-mrow, .bss-row2):hover {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+@media (hover: none), (prefers-reduced-motion: reduce) {
+  body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"])):not(:has(#hrms-chat-page)) :is(.content, .main > :not(.topbar):not(.content)) :is(.kanban-card, .stat-card, .kpi-card, .card, .hram-card, .hrms-iv-status-card, .ob-card, .ob-panel):hover { transform: none; }
+}
