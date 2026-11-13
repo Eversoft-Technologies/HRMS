@@ -45,6 +45,119 @@
     { color: '#14b8a6', hover: '#0d9488' }  // Teal
   ];
 
+  /* USA view. The server sends d.usa to the Recruiter (USA) role only (and only
+     for that signed-in user), so every other role renders exactly as before. */
+  var USA = false;
+  var REGION = false;   // USA or India recruiter: a region-only view that starts empty
+  var HIDE_DEAD = false; // USA or India recruiter: no links to pages the role cannot open
+  function usaOn(d) {
+    return !!(d && d.usa && String(d.usa.email || '').toLowerCase() === String(getEmail() || '').toLowerCase());
+  }
+  function indiaOn(d) {
+    return !!(d && d.india && String(d.india.email || '').toLowerCase() === String(getEmail() || '').toLowerCase());
+  }
+  function usd(v) {
+    v = Number(v) || 0;
+    if (v >= 1e6) return '$' + (v / 1e6).toFixed(2) + 'M';
+    if (v >= 1e3) return '$' + (v / 1e3).toFixed(1) + 'K';
+    return '$' + v.toLocaleString('en-US', { maximumFractionDigits: 0 });
+  }
+  function pct(n, total) { return total ? Math.round((n / total) * 100) : 0; }
+
+  /* The four KPI cards: [{id,label,val,sub,trend,color}]. */
+  function kpiCards(d) {
+    var att = d.attendance || { present: 0, total: 1, rate: 100, wfh: 0, late: 0, onLeave: 0 };
+    if (USA) {
+      var u = d.usa.attendance || {};
+      return [
+        { id: 'dash-kpi-emp', label: 'Total Employees', val: d.totalEmployees || '0',
+          sub: (d.activeEmployees || '0') + ' active employees',
+          trend: '\u2191 +' + (d.newJoinersThisMonth || 0) + ' this month', color: 'blue' },
+        { id: 'dash-kpi-pay', label: 'Payroll This Pay Period', val: usd(d.usa.payrollValue),
+          sub: 'Estimated Gross Payroll', trend: (d.usa.payFrequency || 'Monthly') + ' pay schedule', color: 'purple' },
+        { id: 'dash-kpi-pos', label: 'Open Positions', val: d.openPositions || '0',
+          sub: 'Active Job Openings', trend: (d.totalOpenings || '0') + ' total openings', color: 'green' },
+        { id: 'dash-kpi-att', label: 'Today\'s Time & Attendance', val: pct(u.clockedIn || 0, u.total || 0) + '%',
+          sub: (u.clockedIn || 0) + ' Clocked In \u2022 ' + (u.notYetClockedIn || 0) + ' Not Yet Clocked In',
+          trend: (u.onPto || 0) + ' on PTO \u2022 ' + (u.absent || 0) + ' Absent', color: 'orange' }
+      ];
+    }
+    return [
+      { id: 'dash-kpi-emp', label: 'Total Employees', val: d.totalEmployees || '0',
+        sub: d.activeEmployees + ' active in directory', trend: '\u2191 +' + (d.newJoinersThisMonth || 0) + ' this month', color: 'blue' },
+      { id: 'dash-kpi-pay', label: 'Monthly Payroll', val: d.monthlyPayroll || '\u20b90',
+        sub: 'Estimated Gross', trend: 'Live Calculation', color: 'purple' },
+      { id: 'dash-kpi-pos', label: 'Open Positions', val: d.openPositions || '0',
+        sub: d.totalOpenings + ' total openings', trend: 'Active Job Posts', color: 'green' },
+      { id: 'dash-kpi-att', label: 'Attendance Today', val: att.rate + '%',
+        sub: att.present + ' / ' + att.total + ' present',
+        trend: (att.wfh ? att.wfh + ' WFH \u2022 ' : '') + (att.late ? att.late + ' Late' : 'On track'), color: 'orange' }
+    ];
+  }
+
+  /* Bars of the Today's Attendance chart. */
+  function attSeries(d) {
+    var att = d.attendance || {};
+    if (USA) {
+      var u = d.usa.attendance || {};
+      return {
+        labels: ['Clocked In', 'Clocked Out', 'On PTO', 'Absent', 'Remote'],
+        data: [u.clockedIn || 0, u.clockedOut || 0, u.onPto || 0, u.absent || 0, u.remote || 0],
+        colors: ['#10b981', '#64748b', '#ef4444', '#f59e0b', '#2563eb'],
+        total: u.total || 0
+      };
+    }
+    var presentOffice = Math.max(0, (att.present || 0) - (att.wfh || 0));
+    return {
+      labels: ['Present in Office', 'Work From Home', 'Late Check-in', 'On Leave Today'],
+      data: [presentOffice, att.wfh || 0, att.late || 0, att.onLeave || 0],
+      colors: ['#10b981', '#2563eb', '#f59e0b', '#ef4444'],
+      total: 0
+    };
+  }
+
+  /* A Review button must not lead to an Access denied page: hide it when the
+     signed-in role lacks the permission that page needs. */
+  var USA_PATH_PERMS = {
+    '/employees/leave': 'leave.view',
+    '/employees/attendance': 'attendance.view',
+    '/employees/submissions': 'employee.view',
+    '/recruit/job-board': 'recruitment.view',
+    '/hr/hris': 'employee.view'
+  };
+  function usaCanOpen(path) {
+    var need = USA_PATH_PERMS[path];
+    if (!need || typeof window.__hrmsCan !== 'function') return true;
+    try { return !!window.__hrmsCan(need); } catch (_) { return true; }
+  }
+
+  function usaPendingLabel(label) {
+    return String(label)
+      .replace(/leave request/, 'PTO request')
+      .replace(/WFH request/, 'remote work request')
+      .replace(/attendance correction/, 'timecard correction')
+      .replace(/work deliverable/, 'timesheet submission')
+      .replace(/active job post/, 'active job opening');
+  }
+
+  /* Five columns under the attendance chart (the markup ships with four). */
+  function usaAttAxis(d) {
+    if (!USA) return;
+    var axis = document.querySelector('.hrms-att-bottom-axis');
+    if (!axis) return;
+    var cols = axis.querySelectorAll('.hrms-att-bottom-col');
+    while (cols.length && cols.length < 5) {
+      axis.appendChild(cols[cols.length - 1].cloneNode(true));
+      cols = axis.querySelectorAll('.hrms-att-bottom-col');
+    }
+    axis.style.gridTemplateColumns = 'repeat(5, 1fr)';
+    var labels = attSeries(d).labels;
+    for (var i = 0; i < cols.length; i++) {
+      var l = cols[i].querySelector('.hrms-att-col-label');
+      if (l && l.textContent !== labels[i]) l.textContent = labels[i];
+    }
+  }
+
   function getCachedStats() {
     try {
       var raw = localStorage.getItem(CACHE_KEY);
@@ -556,8 +669,9 @@
 
     return list.map(function (act) {
       var aType = act.type || (act.label.indexOf('leave') !== -1 ? 'leave' : act.label.indexOf('WFH') !== -1 ? 'wfh' : act.label.indexOf('correction') !== -1 ? 'correction' : act.label.indexOf('job') !== -1 ? 'job' : 'submission');
-      var match = String(act.label).match(/^(\d+)\s+(.*)$/);
-      var formattedLabel = match ? '<b>' + match[1] + '</b> ' + esc(match[2]) : esc(act.label);
+      var shown = USA ? usaPendingLabel(act.label) : act.label;
+      var match = String(shown).match(/^(\d+)\s+(.*)$/);
+      var formattedLabel = match ? '<b>' + match[1] + '</b> ' + esc(match[2]) : esc(shown);
       var bgCol = actionColors[aType] || '#2563eb';
       var iconSvg = actionIcons[aType] || actionIcons.leave;
       return '<div class="hrms-action-row">' +
@@ -565,12 +679,16 @@
           '<div class="hrms-action-icon-box" style="background:' + bgCol + ';">' + iconSvg + '</div>' +
           '<div class="hrms-action-text">' + formattedLabel + '</div>' +
         '</div>' +
-        '<a href="' + esc(act.path || '#') + '" class="hrms-pro-pill-btn">Review →</a>' +
+        (HIDE_DEAD && !usaCanOpen(act.path) ? '' : '<a href="' + esc(act.path || '#') + '" class="hrms-pro-pill-btn">Review →</a>') +
       '</div>';
     }).join('');
   }
 
   function renderHighlightsHtml(highlights) {
+    // A region view starts empty: an empty feed shows a message, never the sample rows.
+    if (REGION && !(highlights && highlights.length)) {
+      return '<div style="padding:22px 6px;text-align:center;font-size:12px;color:var(--text2);">No activity yet</div>';
+    }
     var list = (highlights && highlights.length) ? highlights : [
       { initial: 'S', isCheckIn: true, color: '#10b981', dot: '#10b981', title: 'sri — Check In', sub: 'At 02:49 PM (Nellore)' },
       { initial: 'S', isCheckIn: true, color: '#10b981', dot: '#10b981', title: 'sree — Check In', sub: 'At 02:47 PM (Nellore)' },
@@ -581,6 +699,7 @@
     return list.slice(0, 4).map(function (h) {
       var isCheckIn = h.isCheckIn !== false && (!h.title || h.title.indexOf('Check Out') === -1);
       var avatarBg = isCheckIn ? '#10b981' : '#f97316';
+      if (h.kind) avatarBg = { 'in': '#10b981', out: '#f97316', pto: '#2563eb', join: '#8b5cf6', sheet: '#0891b2', remote: '#9333ea' }[h.kind] || avatarBg;
       var initial = h.initial || (h.title ? h.title.charAt(0).toUpperCase() : 'S');
       return '<div class="hrms-event-row">' +
         '<div class="hrms-event-left">' +
@@ -599,7 +718,7 @@
     var isDown = trend && (trend.indexOf('↓') !== -1 || trend.toLowerCase().indexOf('drop') !== -1);
     var trendClass = isDown ? 'stat-trend down' : 'stat-trend';
     return '<div class="stat-card ' + esc(color) + '">' +
-      '<div class="stat-label">' + esc(label) + '</div>' +
+      '<div class="stat-label" id="' + idPrefix + '-label">' + esc(label) + '</div>' +
       '<div class="stat-value" id="' + idPrefix + '-val">' + esc(val) + '</div>' +
       '<div class="stat-sub" id="' + idPrefix + '-sub">' + esc(sub || '') + '</div>' +
       '<div class="' + trendClass + '" id="' + idPrefix + '-trend">' + esc(trend || '') + '</div>' +
@@ -610,11 +729,14 @@
     var container = document.querySelector('.hrms-dash');
     if (!container) return;
 
+    USA = usaOn(d);
+    HIDE_DEAD = USA || indiaOn(d);
+    REGION = HIDE_DEAD;
     injectDashboardStyles();
 
     var att = d.attendance || { present: 0, total: 1, rate: 100, wfh: 0, late: 0, onLeave: 0 };
     var departments = d.departments || [];
-    var totalDeptEmployees = departments.reduce(function (s, x) { return s + x.count; }, 0) || d.totalEmployees || 1;
+    var totalDeptEmployees = departments.reduce(function (s, x) { return s + x.count; }, 0) || d.totalEmployees || (REGION ? 0 : 1);
     var filteredEmployees = getFilteredEmployees(d);
     var pageInfo = getPageInfo(filteredEmployees.length);
     var hasActiveFilters = state.searchQuery || state.deptFilter !== 'all' || state.statusFilter !== 'all';
@@ -622,10 +744,7 @@
     var html = '<div id="' + DASHBOARD_MOUNT_ID + '">' +
       // Top Stat Cards
       '<div class="stat-grid" style="margin-bottom:24px;">' +
-        renderStatCard('dash-kpi-emp', 'Total Employees', d.totalEmployees, d.activeEmployees + ' active in directory', '↑ +' + (d.newJoinersThisMonth || 0) + ' this month', 'blue') +
-        renderStatCard('dash-kpi-pay', 'Monthly Payroll', d.monthlyPayroll, 'Estimated Gross', 'Live Calculation', 'purple') +
-        renderStatCard('dash-kpi-pos', 'Open Positions', d.openPositions, d.totalOpenings + ' total openings', 'Active Job Posts', 'green') +
-        renderStatCard('dash-kpi-att', 'Attendance Today', att.rate + '%', att.present + ' / ' + att.total + ' present', (att.wfh ? att.wfh + ' WFH • ' : '') + (att.late ? att.late + ' Late' : 'On track'), 'orange') +
+        kpiCards(d).map(function (c) { return renderStatCard(c.id, c.label, c.val, c.sub, c.trend, c.color); }).join('') +
       '</div>' +
 
       // Grid 2: Charts
@@ -678,7 +797,7 @@
               '<span>Today\'s Attendance &amp; Workforce Status</span>' +
             '</div>' +
             '<div style="display:flex;align-items:center;gap:6px;">' +
-              '<span id="dash-att-rate-badge" style="font-size:11.5px;color:#10b981;font-weight:700;">' + att.rate + '% Attendance</span>' +
+              '<span id="dash-att-rate-badge" style="font-size:11.5px;color:#10b981;font-weight:700;">' + (USA ? pct((d.usa.attendance || {}).clockedIn || 0, (d.usa.attendance || {}).total || 0) + '% Clocked In' : att.rate + '% Attendance') + '</span>' +
               '<span style="font-size:14px;color:var(--text3,#94a3b8);cursor:pointer;padding:0 2px;" title="Options">⋮</span>' +
             '</div>' +
           '</div>' +
@@ -731,10 +850,10 @@
               '<span class="hrms-pro-card-accent-bar"></span>' +
               '<span>Live Highlights &amp; Events</span>' +
             '</div>' +
-            '<a href="/employees/attendance" class="hrms-pro-pill-btn">View All</a>' +
+            (HIDE_DEAD && !usaCanOpen('/employees/attendance') ? '' : '<a href="/employees/attendance" class="hrms-pro-pill-btn">View All</a>') +
           '</div>' +
           '<div id="dash-live-highlights-list" style="display:flex;flex-direction:column;">' +
-            renderHighlightsHtml(d.highlights) +
+            renderHighlightsHtml(USA ? d.usa.highlights : d.highlights) +
           '</div>' +
         '</div>' +
       '</div>' +
@@ -749,7 +868,7 @@
           '</div>' +
           '<div style="display:flex;align-items:center;gap:10px;">' +
             '<button type="button" id="hrms-dash-reset-filters" class="btn-sm" style="font-size:11px;color:#ef4444;background:transparent;border:1px solid #fecaca;padding:5px 10px;border-radius:6px;cursor:pointer;' + (hasActiveFilters ? '' : 'display:none;') + '">✕ Reset Filters</button>' +
-            '<a href="/hr/hris" class="btn-sm" style="text-decoration:none;font-size:12px;padding:6px 14px;border-radius:8px;">View Full HRIS →</a>' +
+            (HIDE_DEAD && !usaCanOpen('/hr/hris') ? '' : '<a href="/hr/hris" class="btn-sm" style="text-decoration:none;font-size:12px;padding:6px 14px;border-radius:8px;">View Full HRIS →</a>') +
           '</div>' +
         '</div>' +
 
@@ -813,6 +932,7 @@
 
     container.innerHTML = html;
     state.mounted = true;
+    usaAttAxis(d);
 
     wireDashboardEvents();
 
@@ -822,6 +942,9 @@
   }
 
   function updateLiveDashboard(d) {
+    USA = usaOn(d);
+    HIDE_DEAD = USA || indiaOn(d);
+    REGION = HIDE_DEAD;
     var wrap = document.getElementById(DASHBOARD_MOUNT_ID);
     if (!wrap || !document.contains(wrap)) {
       renderFullDashboard(d);
@@ -836,23 +959,21 @@
       if (el && txt !== undefined && el.textContent !== String(txt)) el.textContent = String(txt);
     };
 
-    setEl('dash-kpi-emp-val', d.totalEmployees || '0');
-    setEl('dash-kpi-emp-sub', (d.activeEmployees || '0') + ' active in directory');
-    setEl('dash-kpi-emp-trend', '↑ +' + (d.newJoinersThisMonth || 0) + ' this month');
+    kpiCards(d).forEach(function (c) {
+      setEl(c.id + '-label', c.label);
+      setEl(c.id + '-val', c.val);
+      setEl(c.id + '-sub', c.sub);
+      setEl(c.id + '-trend', c.trend);
+    });
 
-    setEl('dash-kpi-pay-val', d.monthlyPayroll || '₹0');
-    setEl('dash-kpi-pos-val', d.openPositions || '0');
-    setEl('dash-kpi-pos-sub', (d.totalOpenings || '0') + ' total openings');
-
-    setEl('dash-kpi-att-val', att.rate + '%');
-    setEl('dash-kpi-att-sub', att.present + ' / ' + att.total + ' present');
-    setEl('dash-kpi-att-trend', (att.wfh ? att.wfh + ' WFH • ' : '') + (att.late ? att.late + ' Late' : 'On track'));
-
-    setEl('dash-att-rate-badge', att.rate + '% Attendance');
+    setEl('dash-att-rate-badge', USA
+      ? pct((d.usa.attendance || {}).clockedIn || 0, (d.usa.attendance || {}).total || 0) + '% Clocked In'
+      : att.rate + '% Attendance');
+    usaAttAxis(d);
 
     // 2. Department Breakdown
     var departments = d.departments || [];
-    var totalDeptEmployees = departments.reduce(function (s, x) { return s + x.count; }, 0) || d.totalEmployees || 1;
+    var totalDeptEmployees = departments.reduce(function (s, x) { return s + x.count; }, 0) || d.totalEmployees || (REGION ? 0 : 1);
     setEl('dash-dept-subtitle', departments.length + ' Departments • ' + totalDeptEmployees + ' Total Staff');
 
     var deptListEl = document.getElementById('dash-dept-list');
@@ -866,7 +987,7 @@
     if (pendingEl) pendingEl.innerHTML = renderPendingActionsHtml(d.pendingActions);
 
     var highEl = document.getElementById('dash-live-highlights-list');
-    if (highEl) highEl.innerHTML = renderHighlightsHtml(d.highlights);
+    if (highEl) highEl.innerHTML = renderHighlightsHtml(USA ? d.usa.highlights : d.highlights);
 
     // 4. Update Charts in-place without destroying canvases
     updateChartsInPlace(d);
@@ -909,9 +1030,10 @@
     // Attendance Chart
     var chart3 = state.charts['attendance'];
     if (chart3 && d.attendance) {
-      var att = d.attendance;
-      var presentOffice = Math.max(0, (att.present || 0) - (att.wfh || 0));
-      chart3.data.datasets[0].data = [presentOffice, att.wfh || 0, att.late || 0, att.onLeave || 0];
+      var ser = attSeries(d);
+      chart3.data.labels = ser.labels;
+      chart3.data.datasets[0].data = ser.data;
+      chart3.data.datasets[0].backgroundColor = ser.colors;
       chart3.update('none');
     } else if (document.getElementById('dash-chart-attendance')) {
       initAttendanceChart(d);
@@ -1251,29 +1373,19 @@
     var textColor = isDark ? '#e2e8f0' : '#1e293b';
     var gridColor = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)';
 
-    var att = d.attendance;
-    var presentOffice = Math.max(0, (att.present || 0) - (att.wfh || 0));
-    var wfhCount = att.wfh || 0;
-    var lateCount = att.late || 0;
-    var onLeaveCount = att.onLeave || 0;
-
-    var maxVal = Math.max(presentOffice, wfhCount, lateCount, onLeaveCount, 2.0);
+    var series = attSeries(d);
+    var maxVal = Math.max.apply(null, series.data.concat([2.0]));
     var yStep = maxVal > 10 ? Math.ceil(maxVal / 5) : 0.5;
     var yMax = Math.max(2.5, Math.ceil((maxVal * 1.15) / yStep) * yStep);
 
     state.charts['attendance'] = new Chart(ctxAtt, {
       type: 'bar',
       data: {
-        labels: ['Present in Office', 'Work From Home', 'Late Check-in', 'On Leave Today'],
+        labels: series.labels,
         datasets: [{
           label: 'Employees',
-          data: [presentOffice, wfhCount, lateCount, onLeaveCount],
-          backgroundColor: [
-            '#10b981', // Vibrant Green for Present in Office
-            '#2563eb', // Blue for Work From Home
-            '#f59e0b', // Orange for Late Check-in
-            '#ef4444'  // Red for On Leave Today
-          ],
+          data: series.data,
+          backgroundColor: series.colors,
           borderRadius: { topLeft: 6, topRight: 6, bottomLeft: 0, bottomRight: 0 },
           borderSkipped: false,
           barThickness: 22,
@@ -1298,7 +1410,7 @@
             cornerRadius: 8,
             callbacks: {
               label: function (ctx) {
-                return ' ' + ctx.label + ': ' + ctx.raw + ' employees';
+                return ' ' + ctx.label + ': ' + ctx.raw + ' employees' + (series.total ? ' (' + pct(ctx.raw, series.total) + '%)' : '');
               }
             }
           }

@@ -1053,7 +1053,7 @@
   }
 
   function enhanceEmployeeHistory() {
-    var card = cardContaining(/My Recent Attendance|^Attendance History/i);
+    var card = cardContaining(/My Recent (?:Time & )?Attendance|^(?:Time & )?Attendance History/i);
     if (!card) return;
     // Never touch this on the admin page — our own "Attendance History" card
     // there already has this exact same heading; only replace the personal

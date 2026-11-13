@@ -157,6 +157,13 @@ DATABASES = {
     }
 }
 
+# A MySQL on this same machine does not need TLS, and PyMySQL builds a TLS
+# context for every new connection (about 35 ms each on Windows), which every
+# request pays because the dev server opens a fresh connection per request.
+# A remote database keeps TLS.
+if DATABASES['default']['HOST'] in ('localhost', '127.0.0.1', '::1'):
+    DATABASES['default']['OPTIONS']['ssl_disabled'] = True
+
 if 'test' in sys.argv:
     DATABASES['default'] = {
         'ENGINE': 'django.db.backends.sqlite3',
