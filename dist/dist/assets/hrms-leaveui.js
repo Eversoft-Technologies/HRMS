@@ -44,12 +44,12 @@
     var U = window.__hrmsUI;
     var g = U.g, n = U.n, B = U.B, Us = U.Us, Gn = U.Gn, Hs = U.Hs, le = U.le,
         cn = U.cn, Qe = U.Qe, Bt = U.Bt, Vs = U.Vs, Dr = U.Dr, Et = U.Et;
-    const[L,sL]=g.useState([]),[ld,sld]=g.useState(!0),[er,ser]=g.useState(""),[wr,swr]=g.useState(""),[op,so]=g.useState(!1),[bz,sb]=g.useState(!1),[fm,sf]=g.useState({type:"Casual Leave",fromDate:"",toDate:"",reason:""}),[fe,sfe]=g.useState(""),[q,sq]=g.useState(""),[flt,sflt]=g.useState("All"),[srt,ssrt]=g.useState("newest"),[bal,sbal]=g.useState([]),[exp,sexp]=g.useState(null),[cf,scf]=g.useState(null),[more,smore]=g.useState({}),[hd,shd]=g.useState(null),[per,sper]=g.useState("today"),[cm,scm]=g.useState((new Date).getMonth());
+    const[L,sL]=g.useState([]),[ld,sld]=g.useState(!0),[er,ser]=g.useState(""),[wr,swr]=g.useState(""),[op,so]=g.useState(!1),[bz,sb]=g.useState(!1),[fm,sf]=g.useState({type:"Casual Leave",fromDate:"",toDate:"",reason:""}),[fe,sfe]=g.useState(""),[q,sq]=g.useState(""),[flt,sflt]=g.useState("All"),[srt,ssrt]=g.useState("newest"),[bal,sbal]=g.useState([]),[exp,sexp]=g.useState(null),[cf,scf]=g.useState(null),[more,smore]=g.useState({}),[hd,shd]=g.useState(null),[per,sper]=g.useState("today"),[cm,scm]=g.useState((new Date).getMonth()),[hol,shol]=g.useState([]),[holEr,sholEr]=g.useState(!1);
     /* Missed Clock-Out — cor holds the correction requests: MY own normally,
        everyone's once appr resolves true. The mop/mfm/mfe/mbz quartet mirrors
        op/fm/fe/bz on the Apply Leave form; crj/crn/cre mirror cf on its
        decline modal. */
-    const[cor,scor]=g.useState([]),[cop,scop]=g.useState(!1),[mop,smo]=g.useState(!1),[mfm,smf]=g.useState({date:"",time:"",reason:""}),[mfe,smfe]=g.useState(""),[mbz,smb]=g.useState(!1),[mAtt,smAtt]=g.useState(null),[mLd,smLd]=g.useState(!1);
+    const[cor,scor]=g.useState([]),[cop,scop]=g.useState(!1),[mop,smo]=g.useState(!1),[mfm,smf]=g.useState({date:"",time:"",reason:""}),[mfe,smfe]=g.useState(""),[mbz,smb]=g.useState(!1),[mAtt,smAtt]=g.useState(null),[mLd,smLd]=g.useState(!1),[hEd,shEd]=g.useState({k:"",v:""});
     /* isAp, not `appr` — that name is already taken further down by the
        approved-leave array (var appr=byStatus("Approved")). */
     /* cexp is deliberately separate from the leave table's `exp`: both hold a
@@ -63,6 +63,10 @@
      signed-in email and Who's Out becomes My Upcoming Leave. Fails CLOSED —
      a fetch error is treated as a plain employee, never as an admin. */
   const[pm,spm]=g.useState(null);
+  /* The approver is the employee's linked manager (Employee profile > Manager),
+     never a choice on this form. Shown read-only so they know who gets it. */
+  const[apr,sapr]=g.useState(null);
+  g.useEffect(function(){fetch("/api/org/approver").then(function(x){return x.ok?x.json():null}).then(function(d){sapr(d||{manager:null})}).catch(function(){sapr({manager:null})})},[]);
 
   /* ---- session + fetch helpers ---- */
   var sess=function(){try{return JSON.parse(localStorage.getItem("hrms_session")||"{}")}catch(_){return{}}};
@@ -73,8 +77,9 @@
      same scoping for any caller without leave.action, so the param only keeps
      the request honest — it is not the security boundary. loadAppr calls this
      once permissions resolve, so the list is never fetched at the wrong scope. */
-  var loadList=function(all){var e=sess().email||"";sld(!0);return fetch(all||!e?"/api/leave":"/api/leave?email="+encodeURIComponent(e)).then(readJson).then(function(r){if(!r.ok||!Array.isArray(r.j))throw 0;sL(r.j);ser("");sld(!1)}).catch(function(){ser("Couldn't load leave requests.");sld(!1)})};
-  var loadBal=function(){var e=sess().email||"";if(!e){sbal([]);return}fetch("/api/leave/balance?email="+encodeURIComponent(e)).then(readJson).then(function(r){sbal(r.ok&&r.j&&Array.isArray(r.j.balances)?r.j.balances:[])}).catch(function(){sbal([])})};
+  var loadList=function(all){var e=sess().email||"";sld(!0);return fetch("/api/leave").then(readJson).then(function(r){if(!r.ok||!Array.isArray(r.j))throw 0;sL(r.j);ser("");sld(!1)}).catch(function(){ser("Couldn't load leave requests.");sld(!1)})};
+  var loadBal=function(){var e=sess().email||"";if(!e){sbal([]);return}fetch("/api/leave/balance?email="+encodeURIComponent(e)).then(readJson).then(function(r){var b=r.ok&&r.j&&Array.isArray(r.j.balances)?r.j.balances:[];b.enforce=!(r.j&&r.j.enforceBalance===!1);sbal(b);
+        if(b.length)sf(function(p){for(var i=0;i<b.length;i++){if(b[i].type===p.type)return p}var o={...p};o.type=b[0].type;return o})}).catch(function(){sbal([])})};
   /* Signed-in-user scoped, so it no-ops when logged out. Dropping ?email=
      returns EVERY employee's requests, which the API only serves to a caller
      holding attendance.view (a super admin bypasses it) — with ?email= the
@@ -102,7 +107,8 @@
   var dmy=function(s){var d=dObj(s);return isNaN(d.getTime())?s||"—":pad(d.getDate())+"-"+pad(d.getMonth()+1)+"-"+d.getFullYear()};
   var initials=function(s){var p=(s||"?").trim().split(/\s+/).map(function(w){return w.charAt(0)}).join("");return(p||"?").toUpperCase().slice(0,2)};
   var WDL=["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
-  var isWknd=function(s){var d=dObj(s).getDay();return d===0||d===6};
+  /* Weekend = not a working day in Settings > General; Sat/Sun until it loads. */
+  var isWknd=function(s){var d=dObj(s);if(window.HRMSCompany)return !window.HRMSCompany.isWorkDay(d);var w=d.getDay();return w===0||w===6};
   /* "5–7 Aug" / "31 Jul – 2 Aug" / "5 Aug" — compact range for the Who's Out list. */
   var shortR=function(a,b){var x=dObj(a),y=dObj(b);if(isNaN(x.getTime())||isNaN(y.getTime()))return"";
     if(a===b)return x.getDate()+" "+MN[x.getMonth()];
@@ -110,35 +116,35 @@
     return x.getDate()+" "+MN[x.getMonth()]+" – "+y.getDate()+" "+MN[y.getMonth()]};
 
   /* ---- holidays ----
-     There is no /api/holidays endpoint yet (api/urls.py only exposes leave,
-     leave/balance and leave/<id>), so the calendar lives here. Keep the
-     {date,name,type} shape and swap this constant for a fetch when HR
-     publishes one. Only fixed-date holidays are listed: festival dates move
-     every year, so take those from HR's official calendar rather than
-     guessing them. Weekends are derived from the date, never listed here. */
-  var HOLIDAYS=[
-        {date:"2026-01-01",name:"New Year's Day",type:"Company holiday"},
-        {date:"2026-01-26",name:"Republic Day",type:"National holiday"},
-        {date:"2026-05-01",name:"Labour Day",type:"National holiday"},
-        {date:"2026-08-15",name:"Independence Day",type:"National holiday"},
-        {date:"2026-10-02",name:"Gandhi Jayanti",type:"National holiday"},
-        {date:"2026-12-25",name:"Christmas Day",type:"National holiday"}];
-  var HMAP={};HOLIDAYS.forEach(function(h){HMAP[h.date]=h});
-  window.__hrmsHolidays=HOLIDAYS;
+     India + US national holidays come from GET /api/holidays?year=, which
+     computes them from fixed rules (api/holiday_calendar.py) — so a new year
+     needs no edit here. Several holidays can share a date, so HMAP holds a
+     list per day. Weekends are derived from the date, never fetched. */
+  var CN={IN:"India",US:"USA"};
+  var HMAP=g.useMemo(function(){var m={};hol.forEach(function(h){(m[h.date]=m[h.date]||[]).push(h)});return m},[hol]);
+  window.__hrmsHolidays=hol;
   /* Only holiday and weekend cells are hoverable, so the "(Weekend)" tail is
      always correct for anything that can actually reach this. The c.w guard
      keeps it that way if a future change ever makes plain days hoverable. */
-  var holWhy=function(c){return c.h?prettyD(c.d)+" — "+c.h.name+" ("+c.h.type+")":prettyD(c.d)+" — "+WDL[dObj(c.d).getDay()]+(c.w?" (Weekend)":"")};
+  var holWhy=function(c){return c.h?prettyD(c.d)+" — "+c.h.map(function(x){return x.name+" ("+(CN[x.country]||x.country)+")"}).join(", "):prettyD(c.d)+" — "+WDL[dObj(c.d).getDay()]+(c.w?" (Weekend)":"")};
 
   /* ---- leave types + colour map ---- */
-  var TYPES=["Casual Leave","Sick Leave","Earned Leave"];
+  /* Leave types come from the admin's leave policy (Settings › General), via
+     /api/leave/balance; the three defaults only until it has loaded. */
+  var TYPES=bal.length?bal.map(function(b){return b.type}):["Casual Leave","Sick Leave","Earned Leave"];
   var TMETA={"Casual Leave":{b:"blue",v:"var(--accent)"},"Sick Leave":{b:"orange",v:"var(--accent4)"},"Earned Leave":{b:"purple",v:"var(--accent2)"}};
-  var tmeta=function(t){return TMETA[t]||{b:"blue",v:"var(--accent)"}};
+  var TCYCLE=[{b:"green",v:"var(--success)"},{b:"teal",v:"#14b8a6"},{b:"pink",v:"#ec4899"},{b:"amber",v:"var(--warn)"},{b:"indigo",v:"#6366f1"}];
+  var tmeta=function(t){if(TMETA[t])return TMETA[t];var i=TYPES.indexOf(t);if(i<0){i=0;for(var k=0;k<String(t).length;k++)i+=String(t).charCodeAt(k)}return TCYCLE[i%TCYCLE.length]};
+  var balTxt=function(b){return!b?"—":b.unlimited||b.allowance==null?"No limit":b.remaining+" of "+b.allowance+" left"};
   
   /* ---- form state, validation, submit, approve/decline ---- */
   var setF=function(k,v){sfe("");sf(function(p){var o={...p};o[k]=v;return o})};
   var dayCount=function(a,b){if(!a||!b||b<a)return 0;var x=dObj(a),y=dObj(b);if(isNaN(x.getTime())||isNaN(y.getTime()))return 0;return Math.round((y-x)/864e5)+1};
-  var vErr=function(){if(!fm.fromDate||!fm.toDate)return"Select both a from and a to date.";if(fm.toDate<fm.fromDate)return"To date cannot be earlier than from date.";return""};
+  var vErr=function(){if(!fm.fromDate||!fm.toDate)return"Select both a from and a to date.";if(fm.toDate<fm.fromDate)return"To date cannot be earlier than from date.";
+        var sb0=null;for(var i=0;i<bal.length;i++){if(bal[i].type===fm.type){sb0=bal[i];break}}
+        if(bal.length&&!sb0)return"Choose a leave type.";
+        if(sb0&&!sb0.unlimited&&sb0.allowance!=null&&bal.enforce!==!1){var left=sb0.remaining-(sb0.pending||0),want=dayCount(fm.fromDate,fm.toDate);if(want>left)return"You have "+Math.max(left,0)+" day"+(left===1?"":"s")+" of "+fm.type+" left"+(sb0.pending?" ("+sb0.pending+" already requested)":"")+" — this request is for "+want+"."}
+        return""};
   var submit=function(){var v=vErr();if(v){sfe(v);return}sb(!0);sfe("");var s=sess();var bd={email:s.email||"",employee:s.name||s.email||"",type:fm.type,fromDate:fm.fromDate,toDate:fm.toDate,reason:fm.reason};fetch("/api/leave",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(bd)}).then(readJson).then(function(r){if(!r.ok||!r.j||!r.j.id){sb(!1);sfe(apiErr(r.j,"Couldn't submit the request. Please try again."));return}sL(function(p){return[r.j].concat(p)});sb(!1);so(!1);sfe("");swr("");sf({type:"Casual Leave",fromDate:"",toDate:"",reason:""});loadBal()}).catch(function(){sb(!1);sfe("Couldn't reach the server. Please try again.")})};
   var setSt=function(id,st){var s=sess(),row=null;for(var i=0;i<L.length;i++){if(L[i].id===id){row=L[i];break}}var prev=row?row.status:"Pending";var revert=function(){sL(function(p){return p.map(function(z){return z.id===id?{...z,status:prev}:z})})};swr("");sL(function(p){return p.map(function(z){return z.id===id?{...z,status:st}:z})});fetch("/api/leave/"+id,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({status:st,approver:s.name||s.email||""})}).then(readJson).then(function(r){if(!r.ok){revert();swr(apiErr(r.j,"Couldn't update that request — the change was rolled back."));return}if(r.j&&r.j.id)sL(function(p){return p.map(function(z){return z.id===id?r.j:z})});loadBal()}).catch(function(){revert();swr("Couldn't reach the server — the change was rolled back.")})};
 
@@ -186,11 +192,12 @@
             },300);
         return function(){alive=!1;clearTimeout(t)}
       },[mfm.date]);
-  var openM=function(){smfe("");smf({date:"",time:"",reason:""});smo(!0)};
+  var openM=function(){smfe("");shEd({k:"",v:""});smf({date:"",time:"",reason:""});smo(!0)};
   var mErr=function(){
         if(!mfm.date)return"Pick the date you missed clocking out.";
         if(mfm.date>TODAY)return"That date is in the future.";
-        if(!mfm.time)return"Enter the time you actually left.";
+        if(!mfm.time)return"Enter the time you actually left, or the hours you worked.";
+        if(mIn&&!mMin)return"The clock-out must be after your clock-in.";
         if(!(mfm.reason||"").trim())return"Add a short reason for your admin.";
         return""};
   /* Approve / reject, optimistic with rollback — the same shape as setSt on the
@@ -200,7 +207,7 @@
      attendance record and recomputes worked/overtime minutes server-side, and
      the employee is notified there too — nothing to send from here. */
   var setCSt=function(id,st,note){var row=null;for(var i=0;i<cor.length;i++){if(cor[i].id===id){row=cor[i];break}}var prev=row?row.status:"Pending";var revert=function(){scor(function(p){return p.map(function(z){return z.id===id?{...z,status:prev}:z})})};var s=sess();swr("");scor(function(p){return p.map(function(z){return z.id===id?{...z,status:st}:z})});fetch("/api/attendance/corrections/"+id,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({status:st,reviewer:s.name||s.email||"",reviewerNote:note||""})}).then(readJson).then(function(r){if(!r.ok){revert();swr(apiErr(r.j,"Couldn't update that request — the change was rolled back."));return}if(r.j&&r.j.id)scor(function(p){return p.map(function(z){return z.id===id?r.j:z})})}).catch(function(){revert();swr("Couldn't reach the server — the change was rolled back.")})};
-  var msubmit=function(){var v=mErr();if(v){smfe(v);return}smb(!0);smfe("");var s=sess();var bd={email:s.email||"",employee:s.name||s.email||"",attendanceDate:mfm.date,requestedCheckOut:mfm.date+" "+mfm.time+":00",reason:mfm.reason};fetch("/api/attendance/corrections",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(bd)}).then(readJson).then(function(r){if(!r.ok||!r.j||!r.j.id){smb(!1);smfe(apiErr(r.j,"Couldn't submit the request. Please try again."));return}scor(function(p){return[r.j].concat(p)});smb(!1);smo(!1);smfe("");smf({date:"",time:"",reason:""});scop(!0)}).catch(function(){smb(!1);smfe("Couldn't reach the server. Please try again.")})};
+  var msubmit=function(){var v=mErr();if(v){smfe(v);return}smb(!0);smfe("");var s=sess();var bd={email:s.email||"",employee:s.name||s.email||"",attendanceDate:mfm.date,requestedCheckOut:(mNext?nextDay(mfm.date):mfm.date)+" "+mfm.time+":00",reason:mfm.reason};fetch("/api/attendance/corrections",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(bd)}).then(readJson).then(function(r){if(!r.ok||!r.j||!r.j.id){smb(!1);smfe(apiErr(r.j,"Couldn't submit the request. Please try again."));return}scor(function(p){return[r.j].concat(p)});smb(!1);smo(!1);smfe("");smf({date:"",time:"",reason:""});scop(!0)}).catch(function(){smb(!1);smfe("Couldn't reach the server. Please try again.")})};
 
   /* ---- derived data: counts, absences, period windows ---- */
   /* Role-scoped view flags, both off pm (null until permissions load):
@@ -243,7 +250,7 @@
   var curTypes=[];
   curList.forEach(function(z){var t=z.type||"Other",f=null;for(var i=0;i<curTypes.length;i++){if(curTypes[i].type===t){f=curTypes[i];break}}if(!f){f={type:t,n:0};curTypes.push(f)}f.n++});
   curTypes.sort(function(a,b){return b.n-a.n});
-  var totRem=bal.reduce(function(a,b){return a+(b.remaining||0)},0),totAll=bal.reduce(function(a,b){return a+(b.allowance||0)},0);
+  var totRem=bal.reduce(function(a,b){return a+(b.unlimited?0:(b.remaining||0))},0),totAll=bal.reduce(function(a,b){return a+(b.unlimited?0:(b.allowance||0))},0);
   var qq=q.trim().toLowerCase();
   var rows=g.useMemo(function(){return L.filter(function(z){if(flt!=="All"&&z.status!==flt)return!1;if(!qq)return!0;return((z.employee||"")+" "+(z.email||"")+" "+(z.type||"")).toLowerCase().indexOf(qq)!==-1}).slice().sort(function(a,b){if(srt==="longest")return(b.days||0)-(a.days||0);var x=a.fromDate||"",y=b.fromDate||"";if(x===y)return(b.id||0)-(a.id||0);if(srt==="oldest")return x<y?-1:1;return x<y?1:-1})},[L,flt,qq,srt]);
   var balColor=function(b){var r=b.allowance?b.remaining/b.allowance:0;return r>=.5?"var(--success)":r>=.25?"var(--warn)":"var(--danger)"};
@@ -255,12 +262,16 @@
      (starts on the current month) and the ‹ › arrows step it, disabled at the
      ends of the year. Weekday-aligned by padding the first week. */
   var CAL_Y=dObj(TODAY).getFullYear();
+  /* One fetch per year shown; `alive` drops a response for a stale year. */
+  g.useEffect(function(){var alive=!0;sholEr(!1);fetch("/api/holidays?year="+CAL_Y).then(readJson).then(function(r){if(!alive)return;if(r.ok&&Array.isArray(r.j))shol(r.j);else{shol([]);sholEr(!0)}}).catch(function(){if(alive){shol([]);sholEr(!0)}});return function(){alive=!1}},[CAL_Y]);
   var MNF=["January","February","March","April","May","June","July","August","September","October","November","December"];
   /* Memoised so a keystroke elsewhere on the page doesn't rebuild the month. */
-  var cal=g.useMemo(function(){var a=[],nd=new Date(CAL_Y,cm+1,0).getDate();for(var hi=1;hi<=nd;hi++){var hdt=CAL_Y+"-"+pad(cm+1)+"-"+pad(hi),hh=HMAP[hdt]||null;a.push({d:hdt,h:hh,w:!hh&&isWknd(hdt)})}return a},[CAL_Y,cm]);
+  var cal=g.useMemo(function(){var a=[],nd=new Date(CAL_Y,cm+1,0).getDate();for(var hi=1;hi<=nd;hi++){var hdt=CAL_Y+"-"+pad(cm+1)+"-"+pad(hi),hh=HMAP[hdt]||null;a.push({d:hdt,h:hh,w:!hh&&isWknd(hdt)})}return a},[CAL_Y,cm,HMAP]);
   var calLead=g.useMemo(function(){return new Date(CAL_Y,cm,1).getDay()},[CAL_Y,cm]);
   var calSpan=MNF[cm]+" "+CAL_Y;
-  var calHols=cal.filter(function(c){return c.h}).length;
+  /* This month's holidays, listed under the calendar so they can be read
+     without hovering each cell. */
+  var calHols=[];cal.forEach(function(c){(c.h||[]).forEach(function(x){calHols.push({d:c.d,h:x})})});
   var calNav=function(dir,lbl){var dis=dir<0?cm<=0:cm>=11;return n.jsx("button",{type:"button","aria-label":lbl,title:lbl,disabled:dis,onClick:function(){shd(null);scm(function(m){return Math.max(0,Math.min(11,m+dir))})},style:{width:28,height:28,display:"inline-flex",alignItems:"center",justifyContent:"center",borderRadius:7,border:"1px solid var(--border2)",background:"var(--bg3)",color:"var(--text)",fontFamily:"inherit",fontSize:16,lineHeight:1,cursor:dis?"not-allowed":"pointer",opacity:dis?.4:1},children:dir<0?"‹":"›"})};
 
   /* ---- small render helpers ---- */
@@ -369,7 +380,10 @@
            data-keepcol tells hrms-perms' gateActionColumns the Action column
            still holds a usable control, so it must not hide the column even
            when the role lacks leave.action. */
-        var own=(e.email||"").toLowerCase()===myEmail,showDel=empV&&own&&e.status==="Pending";body.push(
+        var own=(e.email||"").toLowerCase()===myEmail,showDel=empV&&own&&e.status==="Pending";
+        /* Routed to me as the manager: Approve / Decline without leave.action (the
+           API allows the assigned approver; never on your own request). */
+        var routed=!own&&(e.approverEmail||"").toLowerCase()===myEmail&&!!myEmail,dp=function(code){return routed?{"data-keepcol":"1"}:{"data-perm":code}};body.push(
             n.jsxs("tr",{onClick:function(){sexp(exp===e.id?null:e.id)},style:{cursor:"pointer"},title:"Show reason, approver and applied date",children:[
                   n.jsx("td",{children:
                       n.jsxs("div",{style:{display:"flex",alignItems:"center",gap:9},children:[
@@ -393,8 +407,8 @@
                       n.jsx(Gn,{status:e.status})}),
                   n.jsx("td",{children:e.status==="Pending"?
                       n.jsxs("div",{style:{display:"flex",gap:6,flexWrap:"wrap"},children:[e.status==="Pending"?
-                            n.jsx("button",{className:"btn-sm","data-perm":"leave.approve",style:{fontSize:11,padding:"2px 8px",color:"var(--success)"},onClick:function(ev){ev.stopPropagation();setSt(e.id,"Approved")},children:"Approve"}):null,e.status==="Pending"?
-                            n.jsx("button",{className:"btn-sm","data-perm":"leave.reject",style:{fontSize:11,padding:"2px 8px",color:"var(--danger)"},onClick:function(ev){ev.stopPropagation();scf(e)},children:"Decline"}):null,showDel?
+                            n.jsx("button",{className:"btn-sm",...dp("leave.approve"),style:{fontSize:11,padding:"2px 8px",color:"var(--success)"},onClick:function(ev){ev.stopPropagation();setSt(e.id,"Approved")},children:"Approve"}):null,e.status==="Pending"?
+                            n.jsx("button",{className:"btn-sm",...dp("leave.reject"),style:{fontSize:11,padding:"2px 8px",color:"var(--danger)"},onClick:function(ev){ev.stopPropagation();scf(e)},children:"Decline"}):null,showDel?
                             n.jsx("button",{className:"btn-sm","data-keepcol":"1",style:{fontSize:11,padding:"2px 8px",color:"var(--danger)"},onClick:function(ev){ev.stopPropagation();delRq(e)},children:"Delete"}):null]}):
                       n.jsx("span",{style:{fontSize:12,color:"var(--text3)"},children:"—"})})]},e.id));if(exp===e.id){var dot=function(on,col){return n.jsx("span",{style:{width:9,height:9,borderRadius:"50%",background:on?col:"var(--border2)",display:"inline-block",flex:"0 0 auto"}})};var decided=e.status==="Approved"||e.status==="Rejected";body.push(
               n.jsx("tr",{children:
@@ -413,8 +427,29 @@
      Both stay "—" until there is a real clock-in AND an entered time, so the
      tiles never show a number derived from half the data. */
   var mIn=mAtt&&mAtt.checkIn?hm(mAtt.checkIn):"";
-  var mMin=(function(){if(!mIn||!mfm.time)return 0;var a=parseInt(mIn.slice(0,2),10)*60+parseInt(mIn.slice(3,5),10),b=parseInt(mfm.time.slice(0,2),10)*60+parseInt(mfm.time.slice(3,5),10);if(isNaN(a)||isNaN(b)||b<=a)return 0;return b-a})();
-  var mEff=Math.max(0,mMin-((mAtt&&mAtt.breakMinutes)||0));
+  /* A clock-out earlier than the clock-in is the next morning (night shift):
+     18:46 → 03:00 is 8h 14m, not 0. */
+  var toMin=function(t){var h=parseInt(String(t).slice(0,2),10),m=parseInt(String(t).slice(3,5),10);return isNaN(h)||isNaN(m)?NaN:h*60+m};
+  var mInMin=mIn?toMin(mIn):NaN;
+  var mNext=!!(mIn&&mfm.time&&toMin(mfm.time)<=mInMin);
+  var mMin=(function(){if(!mIn||!mfm.time)return 0;var a=mInMin,b=toMin(mfm.time);if(isNaN(a)||isNaN(b)||b===a)return 0;if(b<a)b+=1440;return b-a})();
+  var mBrk=(mAtt&&mAtt.breakMinutes)||0;
+  var mEff=Math.max(0,mMin-mBrk);
+  /* Typing hours: "8:30", "8.5", "8h 30m", "8h", "45m" or "8" → minutes. */
+  var parseDur=function(s){s=String(s||"").trim().toLowerCase();if(!s)return null;var m;
+        if((m=/^(\d{1,2}):(\d{1,2})$/.exec(s)))return +m[1]*60+ +m[2];
+        if((m=/^(\d{1,2})\s*h(?:\s*(\d{1,2})\s*m?)?$/.exec(s)))return +m[1]*60+(m[2]?+m[2]:0);
+        if((m=/^(\d{1,3})\s*m$/.exec(s)))return +m[1];
+        if((m=/^\d{1,2}(?:\.\d+)?$/.exec(s)))return Math.round(parseFloat(s)*60);
+        return null};
+  var durTxt=function(m){return Math.floor(m/60)+":"+pad(m%60)};
+  /* Gross / Effective hours drive the clock-out time (and the other way round). */
+  var setHours=function(k,txt){shEd({k:k,v:txt});var d=parseDur(txt);if(d===null)return;
+        if(!mIn){smfe("There is no clock-in on this day to count hours from — enter the clock-out time instead.");return}
+        var gross=k==="eff"?d+mBrk:d;
+        if(gross<=0||gross>=1440){smfe("Hours must be more than 0 and less than 24.");return}
+        var t=(mInMin+gross)%1440;setMF("time",pad(Math.floor(t/60))+":"+pad(t%60))};
+  var nextDay=function(d){var x=new Date(d+"T00:00:00");x.setDate(x.getDate()+1);return iso(x)};
   var mSrc=!mAtt?"Clock In":mAtt.isWfh?"Remote Clock In":"Office Clock In";
   var mOut=mAtt&&mAtt.checkOut?hm(mAtt.checkOut):"";
   /* Status defaults to Pending when absent so a row can never fall out of every
@@ -488,8 +523,13 @@
                                     n.jsx("div",{"aria-live":"polite",style:{fontSize:12.5,fontWeight:600,color:LBL,minWidth:112,textAlign:"center"},children:calSpan}),calNav(1,"Next month")]})]}),
                         n.jsx("div",{style:{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:4,marginTop:14},children:["S","M","T","W","T","F","S"].map(function(w,i){return n.jsx("div",{style:{fontSize:10,fontWeight:700,letterSpacing:.6,textAlign:"center",color:LBL,paddingBottom:2},children:w},"wd"+i)})}),
                         n.jsxs("div",{style:{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:4},children:[Array.from({length:calLead},function(_,i){return n.jsx("div",{},"pad"+i)}),cal.map(function(c,i){return holCell(c,(calLead+i)%7)})]}),
-                        n.jsxs("div",{style:{display:"flex",gap:14,fontSize:11,color:LBL,marginTop:10,flexWrap:"wrap"},children:[legend("var(--cal-holiday-dot)","Holiday"),legend("var(--cal-weekend-dot)","Weekend"),
-                              n.jsx("span",{style:{marginLeft:"auto"},children:calHols?calHols+(calHols===1?" holiday":" holidays")+" this month":"No holidays this month"})]})]})]}),
+                        n.jsxs("div",{style:{display:"flex",gap:14,fontSize:11,color:LBL,marginTop:10,flexWrap:"wrap"},children:[legend("var(--cal-holiday-dot)","Holiday"),legend("var(--cal-weekend-dot)","Weekend")]}),
+                        n.jsx("div",{style:{marginTop:10,display:"grid",gap:6,fontSize:11.5,color:LBL},children:holEr?
+                              n.jsx("div",{style:{color:"var(--danger)"},children:"Couldn't load holidays."}):calHols.length?calHols.map(function(x){return n.jsxs("div",{style:{display:"flex",alignItems:"center",gap:8,minWidth:0},children:[
+                                    n.jsx("span",{style:{fontWeight:700,color:"var(--text)",minWidth:42},children:dObj(x.d).getDate()+" "+MN[dObj(x.d).getMonth()]}),
+                                    n.jsx("span",{style:{flex:"1 1 auto",minWidth:0,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"},children:x.h.name}),
+                                    n.jsx("span",{className:"badge "+(x.h.country==="IN"?"orange":"blue"),style:{fontSize:10,padding:"1px 6px",flex:"0 0 auto"},children:CN[x.h.country]||x.h.country})]},x.d+x.h.country+x.h.name)}):
+                              n.jsx("div",{children:"No holidays this month."})})]})]}),
             n.jsxs("div",{className:"grid-2 mb-16",children:[
                   n.jsxs("div",{className:"card",children:[
                         n.jsxs("div",{style:{display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:10},children:[
@@ -497,7 +537,7 @@
                               n.jsxs("div",{style:{textAlign:"right",lineHeight:1.15},children:[
                                     n.jsx("div",{style:{fontFamily:"var(--font-d)",fontSize:20,fontWeight:700,color:"var(--success)"},children:totRem}),
                                     n.jsxs("div",{style:{fontSize:11,color:"var(--text3)"},children:["of ",totAll," days left"]})]}):null]}),
-                        n.jsx("div",{style:{color:"var(--text)"},children:bal.length?bal.map(function(b){return n.jsx(Dr,{label:b.type,value:b.remaining+" of "+b.allowance+" left",pct:Math.min(100,Math.round(b.used/(b.allowance||1)*100)),color:balColor(b)},b.type)}):
+                        n.jsx("div",{style:{color:"var(--text)"},children:bal.length?bal.map(function(b){return n.jsx(Dr,{label:b.type,value:b.unlimited?b.used+" used · no limit":balTxt(b),pct:b.unlimited?0:Math.min(100,Math.round(b.used/(b.allowance||1)*100)),color:b.unlimited?"var(--text3)":balColor(b)},b.type)}):
                             n.jsx("div",{style:{fontSize:12,color:"var(--text3)",padding:"4px 0"},children:"Sign in to see your leave balance."})}),bal.length?
                         n.jsx("div",{style:{fontSize:12,color:"var(--text3)",marginTop:12},children:"Bars show days already used against your annual allowance."}):null]}),
                   n.jsxs("div",{className:"card",children:[
@@ -547,7 +587,8 @@
                                                       n.jsx("div",{style:{fontSize:12,fontWeight:600,color:"var(--text)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"},children:c.employee||c.email||"—"}),
                                                       n.jsx("div",{style:{fontSize:11.5,color:"var(--text3)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"},children:c.email||""})]})]}),
                                           n.jsx("div",{style:{color:"var(--text)",fontWeight:600},children:prettyD(c.attendanceDate)}),
-                                          n.jsx("div",{children:c.requestedCheckOut?pt(hm(c.requestedCheckOut)):"—"}),
+                                          n.jsxs("div",{children:[c.requestedCheckOut?pt(hm(c.requestedCheckOut))+(c.requestedCheckOut.slice(0,10)!==c.attendanceDate?" (+1)":""):"—",
+                                                c.preview?n.jsx("div",{style:{fontSize:11.5,color:"var(--text3)"},title:"Hours if approved",children:hrm(c.preview.workedMinutes)+" worked"+(c.preview.overtimeMinutes?" · "+hrm(c.preview.overtimeMinutes)+" OT":"")}):null]}),
                                           n.jsx("div",{title:c.reason||"",style:{whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"},children:c.reason||"— none given —"}),
                                           n.jsx("div",{children:
                                               n.jsx("span",{className:"badge "+cm.b,style:{fontSize:10,padding:"1px 6px"},children:cst(c)})}),
@@ -563,7 +604,7 @@
                                                       n.jsx("strong",{children:c.createdAt||"—"})]}),
                                                 n.jsx("span",{style:{flex:"0 0 26px",height:1,background:"var(--border2)"}}),cdot(cdec,cm.v),
                                                 n.jsx("span",{style:{fontSize:12,color:"var(--text2)"},children:cdec?cst(c)+(c.reviewer?" by "+c.reviewer:""):"Awaiting a decision"})]}),
-                                          n.jsxs("div",{style:{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(170px,1fr))",gap:14},children:[kv("Reason",c.reason||"— none given —"),kv("Requested clock-out",c.requestedCheckOut?pt(hm(c.requestedCheckOut)):"—"),kv("Reviewer",c.reviewer||"— not actioned yet —"),kv("Submitted on",c.createdAt||"—")]}),c.reviewerNote?
+                                          n.jsxs("div",{style:{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(170px,1fr))",gap:14},children:[kv("Reason",c.reason||"— none given —"),kv("Requested clock-out",c.requestedCheckOut?pt(hm(c.requestedCheckOut))+(c.requestedCheckOut.slice(0,10)!==c.attendanceDate?" (next day)":""):"—"),kv("Hours if approved",c.preview?hrm(c.preview.workedMinutes)+" worked · "+hrm(c.preview.grossMinutes)+" gross"+(c.preview.overtimeMinutes?" · "+hrm(c.preview.overtimeMinutes)+" OT":""):"—"),kv("Reviewer",c.reviewer||"— not actioned yet —"),kv("Submitted on",c.createdAt||"—")]}),c.reviewerNote?
                                           n.jsxs("div",{style:{marginTop:12,padding:"10px 12px",borderRadius:8,background:"var(--bg2)",borderLeft:"3px solid "+cm.v},children:[
                                                 n.jsx("div",{style:{fontSize:11,fontWeight:600,letterSpacing:.5,textTransform:"uppercase",color:"var(--text2)",marginBottom:3},children:cst(c)==="Rejected"?"Reason for rejection":"Admin's note"}),
                                                 n.jsx("div",{style:{fontSize:12,color:"var(--text2)",lineHeight:1.5,wordBreak:"break-word"},children:c.reviewerNote})]}):null]}):null]},c.id||i)})]}):null]}):null,
@@ -572,7 +613,7 @@
                                 n.jsxs("div",{style:{display:"flex",alignItems:"center",gap:6},children:[
                                       n.jsx("span",{style:{width:8,height:8,borderRadius:"50%",background:m.v,display:"inline-block"}}),
                                       n.jsx("span",{style:{fontSize:12,fontWeight:600,color:on?"var(--text)":"var(--text2)"},children:t.replace(" Leave","")})]}),
-                                n.jsx("div",{style:{fontSize:11,color:"var(--text3)",marginTop:4},children:b?b.remaining+" of "+b.allowance+" left":"—"})]},t)})}),
+                                n.jsx("div",{style:{fontSize:11,color:"var(--text3)",marginTop:4},children:balTxt(b)})]},t)})}),
                   n.jsxs(Bt,{children:[
                         n.jsx(le,{label:"From",required:!0,children:
                             n.jsx(Qe,{type:"date",value:fm.fromDate,onChange:function(d){setF("fromDate",d.target.value)}})}),
@@ -582,20 +623,27 @@
                         n.jsxs("span",{children:[
                               n.jsxs("strong",{children:[dc," ",dc===1?"day":"days"]})," · ",prettyD(fm.fromDate)," → ",prettyD(fm.toDate),selBal&&dc>selBal.remaining?
                               n.jsxs("span",{style:{color:"var(--danger)"},children:[" — more than your remaining ",selBal.type," balance"]}):null]}):"Pick both dates to see the duration.")}),
+                  n.jsx(le,{label:"Approver",children:
+                      n.jsx("div",{style:{fontSize:13,color:"var(--text)",padding:"8px 11px",background:"var(--bg3)",border:"1px solid var(--border2)",borderRadius:8},children:apr===null?"Loading…":(apr.manager?apr.manager.name+(apr.manager.designation?" · "+apr.manager.designation:""):"HR (no manager is linked on your profile)")})}),
                   n.jsx(le,{label:"Reason",children:
                       n.jsx("textarea",{className:"input-field",rows:3,style:{resize:"vertical"},value:fm.reason,onChange:function(d){setF("reason",d.target.value)},placeholder:"Optional — a short note for your approver"})}),fe?
                   n.jsx("div",{style:{fontSize:12,color:"var(--danger)",marginTop:-8},children:fe}):null,
                   n.jsx(Vs,{onCancel:function(){so(!1);sfe("")},onConfirm:submit,confirmLabel:"Apply",loading:bz})]}),
             n.jsxs(Hs,{open:mop,onClose:function(){smo(!1);smfe("")},title:"Missed Clock-Out",width:520,children:[
                   n.jsx("div",{style:{background:"var(--bg3)",border:"1px solid var(--warn)",borderRadius:8,padding:"9px 12px",fontSize:12,color:"var(--warn)",marginBottom:14},children:"You can only adjust a missing clock-out."}),
-                  n.jsx("div",{style:{display:"flex",gap:10,marginBottom:16,flexWrap:"wrap"},children:[["Gross hours",mMin],["Effective hours",mEff]].map(function(t){return n.jsxs("div",{style:{flex:"1 1 140px",borderRadius:10,padding:"12px 14px",border:"1px solid var(--border2)"},children:[
-                                n.jsx("div",{style:{fontFamily:"var(--font-d)",fontSize:20,fontWeight:700,color:"var(--text)",lineHeight:1.1},children:mMin?hrm(t[1]):"—"}),
-                                n.jsx("div",{style:{fontSize:12,color:"var(--text3)",marginTop:4},children:t[0]})]},t[0])})}),
+                  n.jsx("div",{style:{display:"flex",gap:10,marginBottom:6,flexWrap:"wrap"},children:[["gross","Gross hours",mMin,"Clock-in to clock-out"],["eff","Effective hours",mEff,mBrk?"Gross minus "+hrm(mBrk)+" break":"Gross minus breaks"]].map(function(t){return n.jsxs("label",{style:{flex:"1 1 140px",borderRadius:10,padding:"10px 14px",border:"1px solid var(--border2)",cursor:"text",display:"block"},children:[
+                                n.jsx("input",{type:"text",inputMode:"decimal",value:hEd.k===t[0]?hEd.v:(mMin?durTxt(t[2]):""),placeholder:"h:mm",disabled:!mIn,
+                                  "aria-label":t[1]+" (hours:minutes)",
+                                  onChange:function(d){setHours(t[0],d.target.value)},onBlur:function(){shEd({k:"",v:""})},
+                                  style:{width:"100%",border:"none",outline:"none",background:"transparent",fontFamily:"var(--font-d)",fontSize:20,fontWeight:700,color:"var(--text)",lineHeight:1.1,padding:0}}),
+                                n.jsx("div",{style:{fontSize:12,color:"var(--text3)",marginTop:4},children:t[1]}),
+                                n.jsx("div",{style:{fontSize:10.5,color:"var(--text3)",marginTop:1},children:t[3]})]},t[0])})}),
+                  n.jsx("div",{style:{fontSize:11.5,color:"var(--text3)",marginBottom:14},children:mIn?"Type the hours (e.g. 8:30 or 8.5) or the clock-out time — the other updates."+(mNext?" Clock-out is on the next day (night shift).":""):"Pick the date first; hours can be typed once your clock-in is found."}),
                   n.jsxs(Bt,{children:[
                         n.jsx(le,{label:"Date",required:!0,children:
-                            n.jsx(Qe,{type:"date",max:TODAY,value:mfm.date,onChange:function(d){setMF("date",d.target.value)}})}),
+                            n.jsx(Qe,{type:"date",max:TODAY,value:mfm.date,onChange:function(d){shEd({k:"",v:""});setMF("date",d.target.value)}})}),
                         n.jsx(le,{label:"Clock-out time",required:!0,children:
-                            n.jsx(Qe,{type:"time",value:mfm.time,onChange:function(d){setMF("time",d.target.value)}})})]}),
+                            n.jsx(Qe,{type:"time",value:mfm.time,onChange:function(d){shEd({k:"",v:""});setMF("time",d.target.value)}})})]}),
                   n.jsx("div",{style:{fontSize:13,fontWeight:600,color:"var(--text)",marginTop:2},children:"Attendance Adjustment"}),
                   n.jsx("div",{style:{fontSize:12,color:"var(--text3)",marginTop:4,marginBottom:10},children:"Your recorded clock-in for this day, and the time you actually left."}),
                   n.jsxs("div",{style:{border:"1px solid var(--border2)",borderRadius:10,overflow:"hidden"},children:[

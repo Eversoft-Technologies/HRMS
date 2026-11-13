@@ -16,6 +16,8 @@ __pycache__/
 
 # Django
 *.log
+# Uploaded media (interview recordings, chat attachments) — see MEDIA_ROOT
+media/
 db.sqlite3
 db.sqlite3-journal
 *.sqlite3

@@ -40,9 +40,11 @@ class PresenceSyncTests(TestCase):
             check_in=local_now() - timedelta(hours=2),
         )
 
-    def _event(self, event, location=''):
+    def _event(self, event, location='', **extra):
+        data = {'email': self.EMAIL, 'event': event, 'location': location}
+        data.update(extra)
         return self.client.post('/api/attendance/events',
-                                data={'email': self.EMAIL, 'event': event, 'location': location},
+                                data=data,
                                 content_type='application/json',
                                 HTTP_X_USER_EMAIL=self.EMAIL)
 
@@ -92,16 +94,28 @@ class PresenceSyncTests(TestCase):
 
     # ── switching location ─────────────────────────────────────────────────
     def test_switching_to_remote_replaces_a_stale_status(self):
+        self._allow_switches()
         self._presence('Available')
-        self._event('remote-switch', 'Home')
+        self._event('remote-switch', 'Home', latitude=17.42, longitude=78.45)
         self.att.refresh_from_db()
         self.assertEqual(self.att.presence, '')
         self.assertEqual(self._team_row()['status'], 'Remote')
 
+    def _allow_switches(self):
+        """Mode switches are location-verified: an office fence, an approved
+        home and an approved WFH day for the switch to remote."""
+        from api.models import GeoFence, WfhRequest
+        GeoFence.objects.create(name='HQ', latitude=17.385, longitude=78.4867, radius_meters=200)
+        GeoFence.objects.create(name='Home', latitude=17.42, longitude=78.45, radius_meters=150,
+                                owner_email=self.EMAIL, status=GeoFence.APPROVED)
+        WfhRequest.objects.create(email=self.EMAIL, from_date=self.att.date, to_date=self.att.date,
+                                  days=1, status='Approved')
+
     def test_switching_back_to_the_office_shows_the_office(self):
-        self._event('remote-switch', 'Home')
+        self._allow_switches()
+        self._event('remote-switch', 'Home', latitude=17.42, longitude=78.45)
         self._presence('Busy')
-        self._event('office-switch', 'Office')
+        self._event('office-switch', 'Office', latitude=17.385, longitude=78.4867)
         self.assertEqual(self._team_row()['status'], 'In Office')
 
     def test_a_location_switch_does_not_cancel_a_break(self):

@@ -152,8 +152,11 @@ html[data-theme="light"] #root .content div[style*="background: var(--bg3)"][sty
   padding: 20px;
 }
 
-/* Keep the score column on a shared vertical track across candidate rows.
-   Action groups vary between reviewed and unreviewed candidates. */
+/* Candidate Follow-up Status rows (F2F Interview -> Follow-up Emails).
+   The React markup is a flex row; here every row is put on the same grid so
+   the score, outcome buttons, Send and note columns line up whether or not
+   the candidate has a score yet. (Rows without a score used to keep the
+   flex layout and sat 60-70px to the right of scored rows.) */
 #root .content div[style*="width: 110px"]:has(> .badge[style*="font-size: 10px"]) {
   justify-content: flex-start;
 }
@@ -163,41 +166,55 @@ html[data-theme="light"] #root .content div[style*="background: var(--bg3)"][sty
   justify-content: center;
   white-space: nowrap;
 }
-#root .content div[style*="padding: 13px 0px"]:has(> div[style*="width: 110px"] > .badge[style*="font-size: 10px"]) {
+#root .content div[style*="padding: 13px 0px"]:has(> div[style*="width: 110px"]):has(> div:nth-child(4) > button) {
   display: grid !important;
-  grid-template-columns: 34px minmax(0, 1fr) 110px 261px 150px 28px;
+  grid-template-columns: 34px minmax(0, 1fr) 110px 261px 158px 28px;
+  align-items: center;
   gap: 8px !important;
 }
-#root .content div[style*="padding: 13px 0px"]:has(> div[style*="width: 110px"] > .badge[style*="font-size: 10px"]) > div:nth-child(4) {
+/* Outcome buttons: one fixed slot per button so the three never drift. */
+#root .content div[style*="padding: 13px 0px"]:has(> div[style*="width: 110px"]):has(> div:nth-child(4) > button) > div:nth-child(4) {
   display: grid !important;
   grid-template-columns: 80px 89px 82px;
   gap: 5px !important;
 }
-#root .content div[style*="padding: 13px 0px"]:has(> div[style*="width: 110px"] > .badge[style*="font-size: 10px"]) > div:nth-child(4) > button {
+#root .content div[style*="padding: 13px 0px"]:has(> div[style*="width: 110px"]):has(> div:nth-child(4) > button) > div:nth-child(4) > button {
   width: 100%;
   box-sizing: border-box;
   white-space: nowrap;
 }
-#root .content div[style*="padding: 13px 0px"]:has(> div[style*="width: 110px"] > .badge[style*="font-size: 10px"]) > div:nth-child(5) {
+/* Send column: Send always sits directly after the outcome buttons, and the
+   Preview button (only present once an outcome is picked) follows it, so no
+   row carries an empty slot before Send. */
+#root .content div[style*="padding: 13px 0px"]:has(> div[style*="width: 110px"]):has(> div:nth-child(4) > button) > div:nth-child(5) {
   display: grid !important;
-  grid-template-columns: 71px 71px;
+  grid-template-columns: 71px auto;
+  justify-content: start;
   gap: 7px !important;
 }
-#root .content div[style*="padding: 13px 0px"]:has(> div[style*="width: 110px"] > .badge[style*="font-size: 10px"]) > div:nth-child(5) > button:not(.btn-primary) {
+#root .content div[style*="padding: 13px 0px"]:has(> div[style*="width: 110px"]):has(> div:nth-child(4) > button) > div:nth-child(5) > button.btn-primary {
   grid-column: 1;
-}
-#root .content div[style*="padding: 13px 0px"]:has(> div[style*="width: 110px"] > .badge[style*="font-size: 10px"]) > div:nth-child(5) > button.btn-primary {
-  grid-column: 2;
+  grid-row: 1;
   width: 71px;
   box-sizing: border-box;
   white-space: nowrap;
 }
-#root .content div[style*="padding: 13px 0px"]:has(> div[style*="width: 110px"] > .badge[style*="font-size: 10px"]) > .hrms-iv-fu-note {
+#root .content div[style*="padding: 13px 0px"]:has(> div[style*="width: 110px"]):has(> div:nth-child(4) > button) > div:nth-child(5) > span {
+  grid-column: 1;
+  grid-row: 1;
+  white-space: nowrap;
+}
+#root .content div[style*="padding: 13px 0px"]:has(> div[style*="width: 110px"]):has(> div:nth-child(4) > button) > div:nth-child(5) > button:not(.btn-primary) {
+  grid-column: 2;
+  grid-row: 1;
+  white-space: nowrap;
+}
+#root .content div[style*="padding: 13px 0px"]:has(> div[style*="width: 110px"]):has(> div:nth-child(4) > button) > .hrms-iv-fu-note {
   margin-left: 0;
 }
 
 @media (max-width: 768px) {
-  #root .content div[style*="padding: 13px 0px"]:has(> div[style*="width: 110px"] > .badge[style*="font-size: 10px"]) {
+  #root .content div[style*="padding: 13px 0px"]:has(> div[style*="width: 110px"]):has(> div:nth-child(4) > button) {
     display: flex !important;
     flex-wrap: wrap !important;
   }
@@ -2109,7 +2126,10 @@ div:has(> #hrms-kpi-btn) button svg {
      left over and the title reappears by itself. */
   body .topbar > * { flex-shrink: 0; }
   body .topbar > .topbar-title { flex: 1 1 auto; }
-  .topbar .av { flex: 0 0 auto; margin-left: 2px; }
+  /* :not(.hrms-drawer-av): the profile drawer is rendered inside the top bar
+     and its 84px photo carries the same .av class — these top-bar rules
+     shrank it to 30px, leaving the status dot covering the picture. */
+  .topbar .av:not(.hrms-drawer-av) { flex: 0 0 auto; margin-left: 2px; }
 }
 @media (max-width: 560px) {
   /* Space comes off the chrome first, so the title keeps its words.
@@ -2124,12 +2144,12 @@ div:has(> #hrms-kpi-btn) button svg {
   #hrms-hamburger { width: 32px; height: 32px; margin-right: 0; }
   #hrms-hamburger svg { width: 20px; height: 20px; }
   .topbar .hrms-ci-wrap { padding: 2px 6px 2px 4px; gap: 4px; border-width: 1px; }
-  .topbar .av { width: 30px !important; height: 30px !important; font-size: 11px !important; }
+  .topbar .av:not(.hrms-drawer-av) { width: 30px !important; height: 30px !important; font-size: 11px !important; }
 }
 @media (max-width: 400px) {
   /* Last of the slack, for the narrowest phones. */
   body .topbar { gap: 4px; padding: 0 8px; }
-  .topbar .av { margin-left: 0; }
+  .topbar .av:not(.hrms-drawer-av) { margin-left: 0; }
   /* A ceiling on the one widget whose width is set elsewhere and can
      grow with its label. Without a bound, a long label there is enough
      on its own to push the account off the edge again; the icon and

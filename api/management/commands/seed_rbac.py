@@ -110,6 +110,9 @@ class Command(BaseCommand):
                 # Settings
                 {'name': 'View Settings', 'code': 'settings.view', 'group': 'Settings Group'},
                 {'name': 'Manage Settings', 'code': 'settings.manage', 'group': 'Settings Group'},
+                # AI provider key: separate from general settings on purpose.
+                {'name': 'View AI Settings (status, provider, model)', 'code': 'ai.settings.view', 'group': 'Settings Group'},
+                {'name': 'Manage AI Settings (save / rotate / remove the API key)', 'code': 'ai.settings.manage', 'group': 'Settings Group'},
                 # RBAC
                 {'name': 'View Access Control', 'code': 'rbac.view', 'group': 'RBAC Group'},
                 {'name': 'Manage Access Control', 'code': 'rbac.manage', 'group': 'RBAC Group'},
@@ -172,9 +175,12 @@ class Command(BaseCommand):
                 # documents and a Manager approves them, so an HR Manager
                 # holding both could clear their own verification. Mirrors the
                 # grants in migration 0027, which withholds .approve here too.
+                # AI settings stay with Super Admin: managing the organisation's
+                # AI provider key is not an HR duty (see migration 0081).
                 'HR Manager': [
                     code for code in permissions.keys()
-                    if code not in ('rbac.manage', 'onboarding.approve')
+                    if code not in ('rbac.manage', 'onboarding.approve',
+                                    'ai.settings.view', 'ai.settings.manage')
                 ],
                 'HR Executive': [
                     'recruitment.view', 'recruitment.create', 'recruitment.edit',

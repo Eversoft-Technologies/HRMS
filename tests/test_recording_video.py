@@ -89,11 +89,8 @@ class RecordingVideoRangeTests(TestCase):
             media_root = Path(temp_dir)
             interviews_dir = media_root / 'interviews'
             with override_settings(MEDIA_ROOT=media_root), \
-                    patch.object(video_processor, 'MEDIA_ROOT', media_root), \
-                    patch.object(video_processor, 'INTERVIEWS_DIR', interviews_dir), \
-                    patch.object(video_processor, 'RAW_DIR', interviews_dir / 'raw'), \
-                    patch.object(video_processor, 'THUMBS_DIR', interviews_dir / 'thumbs'), \
                     patch.object(video_processor, 'transcode_to_mp4', return_value=(False, 'test')):
+                self.assertEqual(video_processor.interviews_dir(), interviews_dir)
                 uploaded = self.client.post(
                     self.url, data=BODY, content_type='video/webm',
                 )

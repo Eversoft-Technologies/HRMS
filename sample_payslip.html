@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Pay Slip - ADIPI REDDY SRIKANTH (June-2026)</title>
+<style>
+    @page {
+        margin: 12mm 15mm 12mm 15mm;
+        size: A4 portrait;
+    }
+    * {
+        box-sizing: border-box;
+    }
+    body {
+        font-family: Arial, Helvetica, sans-serif;
+        margin: 0;
+        padding: 20px 25px;
+        color: #000;
+        font-size: 11.5px;
+        background-color: #fff;
+        -webkit-print-color-adjust: exact;
+    }
+    .payslip-wrapper {
+        max-width: 780px;
+        margin: 0 auto;
+    }
+    .header-table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-bottom: 20px;
+    }
+    .header-table td {
+        vertical-align: middle;
+    }
+    .company-title {
+        font-size: 14px;
+        font-weight: bold;
+        color: #000;
+        margin-bottom: 2px;
+        letter-spacing: 0.3px;
+    }
+    .company-sub {
+        font-size: 11px;
+        font-weight: bold;
+        color: #000;
+        margin-bottom: 2px;
+        line-height: 1.35;
+    }
+    .period-title {
+        font-size: 14px;
+        font-weight: bold;
+        color: #000;
+        margin-top: 5px;
+        margin-bottom: 2px;
+    }
+    .period-range {
+        font-size: 13.5px;
+        font-weight: bold;
+        color: #000;
+    }
+    
+    /* Boxed Tables */
+    .boxed-table {
+        width: 100%;
+        border: 1.5px solid #000;
+        border-collapse: collapse;
+        margin-bottom: 16px;
+        font-size: 11.5px;
+        background-color: #fff;
+    }
+    .boxed-table td, .boxed-table th {
+        color: #000;
+    }
+</style>
+</head>
+<body>
+<div class="payslip-wrapper">
+
+    <!-- ═══ HEADER (Unbordered) ═══ -->
+    <table class="header-table">
+        <tr>
+            <td style="width: 130px; text-align: left; vertical-align: middle;">
+                <div style="display: inline-block; text-align: center;">
+                    <img src="data:image/jpeg;base64,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" style="width: 72px; height: auto; display: block; margin: 0 auto 3px auto;" />
+                    <div style="font-size: 11px; font-weight: bold; color: #0d6368; letter-spacing: 0.5px; font-family: Arial, sans-serif;">EVERSOFT</div>
+                    <div style="font-size: 6px; font-weight: bold; color: #111; letter-spacing: 0.2px; font-family: Arial, sans-serif; white-space: nowrap;">TECHNOLOGIES PRIVATE LIMITED</div>
+                </div>
+            </td>
+            <td style="text-align: center; vertical-align: middle;">
+                <div class="company-title">EVERSOFT TECHNOLOGIES PRIVATE LIMITED</div>
+                <div class="company-sub">UNIT NO:1012, 10th FLOOR, MANJEERA TRINITY CORPORATE<br>BESIDE LULU HYPER MARKET, KPHB, PHASE-III, HYDERABAD-500072</div>
+                <div class="period-title">Pay Slip For the Month of June-2026</div>
+                <div class="period-range">(From 01/06/2026 To 30/06/2026)</div>
+            </td>
+            <td style="width: 130px;"></td>
+        </tr>
+    </table>
+
+    <!-- ═══ TABLE 1: EMPLOYEE DETAILS & DAYS ═══ -->
+    <table class="boxed-table">
+        <tr>
+            <td style="width: 125px; padding: 3px 6px;">Employee Name</td>
+            <td style="width: 10px; padding: 3px 0; text-align: center;">:</td>
+            <td style="padding: 3px 6px; font-weight: bold;">ADIPI REDDY SRIKANTH</td>
+            <td style="width: 125px; padding: 3px 6px;">Employee Code</td>
+            <td style="width: 10px; padding: 3px 0; text-align: center;">:</td>
+            <td style="padding: 3px 6px; font-weight: bold;">ET099</td>
+        </tr>
+        <tr>
+            <td style="padding: 3px 6px;">DOJ</td>
+            <td style="padding: 3px 0; text-align: center;">:</td>
+            <td style="padding: 3px 6px; font-weight: bold;">26-05-2026</td>
+            <td style="padding: 3px 6px;">PAN</td>
+            <td style="padding: 3px 0; text-align: center;">:</td>
+            <td style="padding: 3px 6px; font-weight: bold;">OLJPS2742M</td>
+        </tr>
+        <tr>
+            <td style="padding: 3px 6px;">Bank A/c No.</td>
+            <td style="padding: 3px 0; text-align: center;">:</td>
+            <td style="padding: 3px 6px; font-weight: bold;">50100867418243</td>
+            <td style="padding: 3px 6px;">PF A/c No.</td>
+            <td style="padding: 3px 0; text-align: center;">:</td>
+            <td style="padding: 3px 6px; font-weight: bold;">APPTC2402614000010084</td>
+        </tr>
+        <tr>
+            <td style="padding: 3px 6px;">Designation</td>
+            <td style="padding: 3px 0; text-align: center;">:</td>
+            <td style="padding: 3px 6px; font-weight: bold;">BACKEND DEVELOPER</td>
+            <td style="padding: 3px 6px;">Bank Name</td>
+            <td style="padding: 3px 0; text-align: center;">:</td>
+            <td style="padding: 3px 6px; font-weight: bold;">HDFC</td>
+        </tr>
+        <tr>
+            <td style="padding: 3px 6px;">UAN</td>
+            <td style="padding: 3px 0; text-align: center;">:</td>
+            <td style="padding: 3px 6px; font-weight: bold;">102341569566</td>
+            <td colspan="3"></td>
+        </tr>
+        <!-- Horizontal Divider -->
+        <tr>
+            <td colspan="6" style="border-top: 1.5px solid #000; padding: 0;"></td>
+        </tr>
+        <!-- Days Section -->
+        <tr>
+            <td style="padding: 3px 6px;">Month Days</td>
+            <td style="padding: 3px 0; text-align: center;">:</td>
+            <td style="padding: 3px 30px; font-weight: bold;">30</td>
+            <td style="padding: 3px 6px; border-left: 1.5px solid #000;">LWP</td>
+            <td style="padding: 3px 0; text-align: center;">:</td>
+            <td style="padding: 3px 30px; font-weight: bold;">0</td>
+        </tr>
+        <tr>
+            <td style="padding: 3px 6px;">Net Paid Days</td>
+            <td style="padding: 3px 0; text-align: center;">:</td>
+            <td style="padding: 3px 30px; font-weight: bold;">30</td>
+            <td colspan="3" style="border-left: 1.5px solid #000;"></td>
+        </tr>
+    </table>
+
+    <!-- ═══ TABLE 2: EARNINGS & DEDUCTIONS ═══ -->
+    <table class="boxed-table">
+        <tr>
+            <th style="width: 35%; padding: 4px 7px; border: 1px solid #000; text-align: left; font-weight: bold; background-color: #fff;">Earnings</th>
+            <th style="width: 15%; padding: 4px 7px; border: 1px solid #000; text-align: right; font-weight: bold; background-color: #fff;">Amount Rs.</th>
+            <th style="width: 35%; padding: 4px 7px; border: 1px solid #000; text-align: left; font-weight: bold; background-color: #fff;">Deductions</th>
+            <th style="width: 15%; padding: 4px 7px; border: 1px solid #000; text-align: right; font-weight: bold; background-color: #fff;">Amount Rs.</th>
+        </tr>
+        
+            <tr>
+                <td style="padding: 2.5px 7px; border-right: 1px solid #000; font-size: 11.5px; height: 18px;">BASIC SALARY</td>
+                <td style="padding: 2.5px 7px; text-align: right; border-right: 1.5px solid #000; font-size: 11.5px;">10,900.00</td>
+                <td style="padding: 2.5px 7px; border-right: 1px solid #000; font-size: 11.5px;">PF</td>
+                <td style="padding: 2.5px 7px; text-align: right; font-size: 11.5px;">1,800.00</td>
+            </tr>
+            <tr>
+                <td style="padding: 2.5px 7px; border-right: 1px solid #000; font-size: 11.5px; height: 18px;">HRA</td>
+                <td style="padding: 2.5px 7px; text-align: right; border-right: 1.5px solid #000; font-size: 11.5px;">5,450.00</td>
+                <td style="padding: 2.5px 7px; border-right: 1px solid #000; font-size: 11.5px;">PROFESSIONAL TAX</td>
+                <td style="padding: 2.5px 7px; text-align: right; font-size: 11.5px;">150.00</td>
+            </tr>
+            <tr>
+                <td style="padding: 2.5px 7px; border-right: 1px solid #000; font-size: 11.5px; height: 18px;">TRANSPORT ALLOWANCE</td>
+                <td style="padding: 2.5px 7px; text-align: right; border-right: 1.5px solid #000; font-size: 11.5px;">1,600.00</td>
+                <td style="padding: 2.5px 7px; border-right: 1px solid #000; font-size: 11.5px;">ESI</td>
+                <td style="padding: 2.5px 7px; text-align: right; font-size: 11.5px;">400.00</td>
+            </tr>
+            <tr>
+                <td style="padding: 2.5px 7px; border-right: 1px solid #000; font-size: 11.5px; height: 18px;">CHILDREN EDUCATION ALLOWANCE</td>
+                <td style="padding: 2.5px 7px; text-align: right; border-right: 1.5px solid #000; font-size: 11.5px;">200.00</td>
+                <td style="padding: 2.5px 7px; border-right: 1px solid #000; font-size: 11.5px;">TDS</td>
+                <td style="padding: 2.5px 7px; text-align: right; font-size: 11.5px;">-</td>
+            </tr>
+            <tr>
+                <td style="padding: 2.5px 7px; border-right: 1px solid #000; font-size: 11.5px; height: 18px;">LTA</td>
+                <td style="padding: 2.5px 7px; text-align: right; border-right: 1.5px solid #000; font-size: 11.5px;">1,090.00</td>
+                <td style="padding: 2.5px 7px; border-right: 1px solid #000; font-size: 11.5px;"></td>
+                <td style="padding: 2.5px 7px; text-align: right; font-size: 11.5px;"></td>
+            </tr>
+            <tr>
+                <td style="padding: 2.5px 7px; border-right: 1px solid #000; font-size: 11.5px; height: 18px;">SPECIAL ALLOWANCE</td>
+                <td style="padding: 2.5px 7px; text-align: right; border-right: 1.5px solid #000; font-size: 11.5px;">760.00</td>
+                <td style="padding: 2.5px 7px; border-right: 1px solid #000; font-size: 11.5px;"></td>
+                <td style="padding: 2.5px 7px; text-align: right; font-size: 11.5px;"></td>
+            </tr>
+            <tr>
+                <td style="padding: 2.5px 7px; border-right: 1px solid #000; font-size: 11.5px; height: 18px;">INCENTIVES</td>
+                <td style="padding: 2.5px 7px; text-align: right; border-right: 1.5px solid #000; font-size: 11.5px;">-</td>
+                <td style="padding: 2.5px 7px; border-right: 1px solid #000; font-size: 11.5px;"></td>
+                <td style="padding: 2.5px 7px; text-align: right; font-size: 11.5px;"></td>
+            </tr>
+        <tr style="border-top: 1.5px solid #000; border-bottom: 1.5px solid #000;">
+            <td style="padding: 4px 7px; font-weight: bold; border-right: 1px solid #000;">Total Earnings</td>
+            <td style="padding: 4px 7px; font-weight: bold; text-align: right; border-right: 1.5px solid #000;">20,000.00</td>
+            <td style="padding: 4px 7px; font-weight: bold; border-right: 1px solid #000;">Total Deductions</td>
+            <td style="padding: 4px 7px; font-weight: bold; text-align: right;">2,350.00</td>
+        </tr>
+        <tr>
+            <td colspan="4" style="padding: 4px 7px 2px 7px; font-weight: bold;">
+                <span style="display: inline-block; width: 95px;">Net Pay</span>
+                <span style="display: inline-block; width: 12px; text-align: center;">:</span>
+                <span>Rs. 17650</span>
+            </td>
+        </tr>
+        <tr>
+            <td colspan="4" style="padding: 2px 7px 5px 7px; font-weight: bold;">
+                <span style="display: inline-block; width: 95px;">In Words</span>
+                <span style="display: inline-block; width: 12px; text-align: center;">:</span>
+                <span>Rs. Seventeen Thousand Six Hundred Fifty Rupees Only</span>
+            </td>
+        </tr>
+    </table>
+
+    <!-- ═══ TABLE 3: EMPLOYER'S CONTRIBUTION (CTC) ═══ -->
+    <table class="boxed-table">
+        <tr>
+            <th colspan="3" style="text-align: left; font-weight: bold; border-bottom: 1.5px solid #000; padding: 4px 7px; background-color: #fff;">
+                Employer's Contribution(CTC)
+            </th>
+        </tr>
+        <tr>
+            <td colspan="2" style="width: 85%; padding: 3px 7px;">GROSS EARNING</td>
+            <td style="width: 15%; padding: 3px 7px; text-align: right; border-left: 1.5px solid #000;">20,000.00</td>
+        </tr>
+        <tr>
+            <td colspan="2" style="padding: 3px 7px;">EMPLOYER'S PROVIDENT FUND</td>
+            <td style="padding: 3px 7px; text-align: right; border-left: 1.5px solid #000;">1,800.00</td>
+        </tr>
+        <tr>
+            <td colspan="2" style="padding: 3px 7px 3px 35px;">PENSION FUND</td>
+            <td style="padding: 3px 7px; text-align: right; border-left: 1.5px solid #000;">-</td>
+        </tr>
+        <tr>
+            <td style="padding: 3px 7px 3px 35px; width: 65%;">PROVIDENT FUND</td>
+            <td style="padding: 3px 7px; text-align: right; width: 20%;">1,800.00</td>
+            <td style="border-left: 1.5px solid #000;">&nbsp;</td>
+        </tr>
+        <tr>
+            <td colspan="2" style="padding: 3px 7px;">EMPLOYER'S STATE INSURANCE</td>
+            <td style="padding: 3px 7px; text-align: right; border-left: 1.5px solid #000;">Nil</td>
+        </tr>
+        <tr style="border-top: 1.5px solid #000; border-bottom: 1.5px solid #000;">
+            <td colspan="2" style="padding: 4px 7px; text-align: right; font-weight: bold; padding-right: 12px;">Total :</td>
+            <td style="padding: 4px 7px; text-align: right; font-weight: bold; border-left: 1.5px solid #000;">21,800.00</td>
+        </tr>
+        <tr>
+            <td colspan="3" style="padding: 4px 7px 2px 7px; font-weight: bold;">
+                <span style="display: inline-block; width: 95px;">Total CTC</span>
+                <span style="display: inline-block; width: 12px; text-align: center;">:</span>
+                <span>Rs. 21800</span>
+            </td>
+        </tr>
+        <tr>
+            <td colspan="3" style="padding: 2px 7px 5px 7px; font-weight: bold;">
+                <span style="display: inline-block; width: 95px;">In Words</span>
+                <span style="display: inline-block; width: 12px; text-align: center;">:</span>
+                <span>Rs. Twenty-One Thousand Eight Hundred Rupees Only</span>
+            </td>
+        </tr>
+        <tr>
+            <td colspan="3" style="border-top: 1.5px solid #000; text-align: center; font-weight: bold; padding: 5px 7px;">
+                This is Computer Generated Sheet, does not require Signature.
+            </td>
+        </tr>
+    </table>
+
+</div>
+</body>
+</html>

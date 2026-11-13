@@ -82,7 +82,83 @@ project-root `.env.local`.
 | `DJANGO_ALLOWED_HOSTS` | Comma list, e.g. `hrms.eversoftit.com`. |
 | `DB_HOST/PORT/USER/PASSWORD/NAME` | MySQL connection (same as the old Node `.env.local`). |
 | `REACT_BUILD_DIR` | Optional. Absolute path to the Vite `dist/`. Defaults to `../dist`. |
-| `VITE_ANTHROPIC_API_KEY` | Optional. If unset, AI questions use the built-in local generator. |
+| `ANTHROPIC_API_KEY` | AI provider key, server-side only. Used when no key is saved in Settings › AI Settings. |
+| `HRMS_SECRETS_KEY` | Fernet key that encrypts secrets saved from the UI (the AI key, SMTP passwords). **Optional:** when it is not set, the server uses the key file below and creates it the first time something is saved. Set it only if you want to manage the key yourself (it always wins over the file). |
+| `HRMS_SECRETS_FILE` | Optional. Where the automatic key file lives. Default `~/.hrms/secrets.key` (the server account's home: outside the code, the deploy release folders and the database). Created with owner-only permissions. **Back it up** — without it, saved secrets must be entered again. |
+| `HRMS_SECRETS_AUTOGEN` | Optional. `0` stops the server from creating the key file (then saving secrets needs `HRMS_SECRETS_KEY` or an existing file). |
+| `VITE_ANTHROPIC_API_KEY` | **Deprecated — do not use.** Still read as a last-resort fallback so old deployments keep working, but `VITE_` values can be compiled into browser code. Move the value to `ANTHROPIC_API_KEY` and delete this variable. |
+
+## Passwords and stored credentials
+
+* **Login passwords are hashed** (Django `make_password`, PBKDF2). `AppUser.save()`
+  hashes any raw value, so plain text cannot be written through the app, and
+  migration `0082` hashed every existing plain-text password (users keep the
+  same password). Hashes cannot be shown — User Access says *hashed · not
+  viewable*; a forgotten password is reset with *Forgot password*.
+* **SMTP passwords are encrypted, not hashed** — the server needs the real value
+  to log in to the mail server. They are stored encrypted with `HRMS_SECRETS_KEY`
+  and never sent to the browser (the form stays blank; blank = keep the saved one).
+* **Deploy:** set `HRMS_SECRETS_KEY` *before* `python manage.py migrate` so the
+  migration can encrypt existing SMTP passwords. If it was set later, run
+  `python manage.py hash_existing_passwords` once (safe to re-run; also hashes
+  any plain-text login written outside the app, e.g. by raw SQL).
+* The browser no longer stores logins or passwords (the old `hrms_users` cache
+  and its built-in default admin account were removed).
+
+## AI provider key (Settings › AI Settings)
+
+The AI key lives on the server only. Browsers never see it, never store it, and
+can no longer send their own (`x-api-key` request headers are ignored).
+
+**Where the key comes from, in order**
+
+1. The key saved in **Settings › AI Settings** — stored encrypted (Fernet) in
+   `ai_provider_settings`, using `HRMS_SECRETS_KEY` from the environment.
+2. `ANTHROPIC_API_KEY` in the server environment / host secret manager.
+3. `VITE_ANTHROPIC_API_KEY` (deprecated fallback; the page shows a warning).
+
+The page always shows which source is active, the provider, the model and a
+short key *fingerprint* (a SHA-256 prefix, not the key).
+
+**Who can use it**
+
+| Permission | Allows |
+|-----------|--------|
+| `ai.settings.view` | See status, source, provider, model and the change history. |
+| `ai.settings.manage` | Test, save, rotate and remove the key. Also requires a valid sign-in token for the same user, so a stale session must sign in again. |
+
+Both permissions are granted to **Super Admin** only (migration 0081). They are
+deliberately separate from `settings.view` / `settings.manage`; grant them to
+another role explicitly from Settings › Access Control if needed. Recommended:
+keep two named Super Admin accounts and use narrower roles for routine HR work.
+
+**Rotate the key**
+
+1. Create the new key in the Anthropic console.
+2. Settings › AI Settings → paste it → **Test key** → **Rotate key**. It is
+   checked with a 1-token request first; a rejected key is never activated.
+3. Revoke the old key in the Anthropic console.
+
+If you manage the key in the environment instead, change `ANTHROPIC_API_KEY`
+and restart the app (cPanel: *Restart* on the Python app).
+
+**Remove the key** — *Remove saved key* deletes the encrypted copy. AI then
+falls back to `ANTHROPIC_API_KEY` if it is set; otherwise AI features switch
+off. Every save, rotation, test and removal is recorded in `ai_settings_audit`
+(who, when, action, fingerprint). The key itself is never stored there or logged.
+
+**Recovery**
+
+* *No administrator available:* set `ANTHROPIC_API_KEY` on the server and
+  restart; it is used whenever no saved key exists. To discard the saved key
+  without the UI: `python manage.py shell -c "from api.models import
+  AIProviderSetting; AIProviderSetting.objects.update(encrypted_key='', key_fingerprint='')"`.
+* *`HRMS_SECRETS_KEY` lost or changed:* the saved key can no longer be
+  decrypted. AI falls back to the environment key and the page says so. Set a
+  new `HRMS_SECRETS_KEY` and save the AI key again.
+* *Moving to another server:* copy `~/.hrms/secrets.key` (or the `HRMS_SECRETS_KEY` value) with the database, or the saved secrets cannot be read there.
+* *Generate `HRMS_SECRETS_KEY` (only if you want to set it yourself):*
+  `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`
 
 ## Production deployment
 

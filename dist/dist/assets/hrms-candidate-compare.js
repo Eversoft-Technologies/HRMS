@@ -686,7 +686,8 @@
       D + '-overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:500;display:flex;justify-content:flex-end;animation:cc-fade .15s ease;}',
       D + '{width:380px;max-width:94vw;height:100vh;background:var(--bg2,#1e293b);border-left:1px solid var(--border2,#334155);box-shadow:-24px 0 70px rgba(0,0,0,.5);display:flex;flex-direction:column;animation:cc-slide .28s cubic-bezier(.2,.9,.3,1);}',
       D + ' .cc-dh{display:flex;align-items:center;justify-content:space-between;padding:18px 22px;border-bottom:1px solid var(--border2,#334155);}',
-      D + ' .cc-dh h3{margin:0;font-family:var(--font-d,inherit);font-size:17px;font-weight:700;color:var(--text,#f8fafc);}',
+      D + ' .cc-dh h3{display:flex;align-items:center;gap:9px;margin:0;font-family:var(--font-d,inherit);font-size:17px;font-weight:700;color:var(--text,#f8fafc);}',
+      D + ' .cc-dh h3 svg{color:var(--accent,#38bdf8);}',
       D + ' .cc-dsub{padding:14px 22px 6px;font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--text2,#cbd5e1);}',
       D + ' .cc-dlist{flex:1;overflow-y:auto;padding:4px 16px 16px;}',
       D + ' .cc-ci{display:flex;align-items:center;gap:10px;background:var(--bg3,#1e293b);border:1px solid var(--border2,#334155);border-radius:9px;padding:10px 12px;margin-bottom:7px;cursor:grab;}',
@@ -696,13 +697,16 @@
       D + ' .cc-ci input{accent-color:var(--accent,#38bdf8);width:16px;height:16px;}',
       D + ' .cc-df{display:flex;gap:10px;padding:16px 22px;border-top:1px solid var(--border2,#334155);}',
       D + ' .cc-df .cc-btn{flex:1;justify-content:center;padding:11px;font-size:13px;font-weight:700;}',
-      D + ' .cc-fsec{font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--text2,#cbd5e1);margin:14px 0 8px;}',
+      D + ' #cc-freset{background:var(--bg3,#1e293b);border-color:var(--danger,#f75f4f);color:var(--danger,#f75f4f);}',
+      D + ' #cc-freset:hover{background:var(--bg3,#1e293b);border-color:var(--danger,#f75f4f);color:var(--danger,#f75f4f);}',
+      D + ' .cc-fsec{display:flex;align-items:center;gap:7px;font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--text2,#cbd5e1);margin:14px 0 8px;}',
+      D + ' .cc-ficon{display:inline-flex;align-items:center;color:var(--accent,#38bdf8);}',
       D + ' .cc-fbody{flex:1;overflow-y:auto;padding:14px 22px 16px;}',
       D + ' .cc-bu{background:var(--bg3,#1e293b);border:1px solid var(--border2,#334155);border-radius:9px;padding:6px 10px;max-height:170px;overflow-y:auto;}',
-      D + ' .cc-bu label{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text,#f8fafc);padding:5px 2px;cursor:pointer;}',
+      D + ' .cc-bu label{display:flex;align-items:center;gap:8px;min-height:30px;box-sizing:border-box;font-size:13px;color:var(--text,#f8fafc);padding:5px 2px;cursor:pointer;}',
       D + ' .cc-bu input,' + D + ' .cc-pd input{accent-color:var(--accent,#38bdf8);width:15px;height:15px;}',
       D + ' .cc-pd{display:grid;gap:8px;}',
-      D + ' .cc-pd label{display:flex;align-items:center;gap:10px;background:var(--bg3,#1e293b);border:1px solid var(--border2,#334155);border-radius:8px;padding:9px 12px;font-size:13px;color:var(--text,#f8fafc);cursor:pointer;}',
+      D + ' .cc-pd label{display:flex;align-items:center;gap:10px;width:100%;box-sizing:border-box;background:var(--bg3,#1e293b);border:1px solid var(--border2,#334155);border-radius:8px;padding:9px 12px;font-size:13px;color:var(--text,#f8fafc);text-align:left;cursor:pointer;}',
       D + ' .cc-pd label:hover{border-color:var(--accent,#38bdf8);}',
       D + ' #cc-cflist{margin-top:10px;display:flex;flex-direction:column;gap:4px;}',
       D + ' .cc-filter-row{display:flex;align-items:center;gap:8px;margin-bottom:10px;width:100%;box-sizing:border-box;}',
@@ -872,6 +876,9 @@
   /* ── render ───────────────────────────────────────────────────────────── */
   var ICON_SLIDERS = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="4" y1="7" x2="20" y2="7"/><circle cx="9" cy="7" r="2.4" fill="var(--bg3)"/><line x1="4" y1="17" x2="20" y2="17"/><circle cx="15" cy="17" r="2.4" fill="var(--bg3)"/></svg>';
   var ICON_COLUMNS = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="5.5" height="16" rx="1"/><rect x="9.5" y="4" width="5.5" height="16" rx="1"/><rect x="16" y="4" width="5" height="16" rx="1"/></svg>';
+  var ICON_JOB = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="7" width="18" height="14" rx="2"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M3 12h18M10 12v2h4v-2"/></svg>';
+  var ICON_PRESET = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5h16M4 12h16M4 19h16"/><circle cx="8" cy="5" r="2" fill="var(--bg2)"/><circle cx="15" cy="12" r="2" fill="var(--bg2)"/><circle cx="10" cy="19" r="2" fill="var(--bg2)"/></svg>';
+  var ICON_CUSTOM = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="7" cy="6" r="2" fill="var(--bg2)"/><circle cx="16" cy="12" r="2" fill="var(--bg2)"/><circle cx="10" cy="18" r="2" fill="var(--bg2)"/></svg>';
   function buildRoot() {
     var root = document.createElement('div'); root.id = ID.root;
     root.innerHTML =
@@ -1148,21 +1155,21 @@
     var sel = state.jobFilter ? state.jobFilter.slice() : codes.slice();
     var predef = state.predef;
     var customs = state.customFilters.map(function (c) { return { key: c.key, val: c.val }; });
+    var resetAll = false;
     var ov = document.createElement('div'); ov.id = ID.drawer; ov.className = 'cc-dr-overlay';
     var dr = document.createElement('div'); dr.className = 'cc-dr';
     dr.innerHTML =
-      '<div class="cc-dh"><h3>Edit Filters</h3><button class="cc-x" id="cc-fx">×</button></div>' +
+      '<div class="cc-dh"><h3>' + ICON_SLIDERS + 'Edit Filters</h3><button class="cc-x" id="cc-fx">×</button></div>' +
       '<div class="cc-fbody">' +
-        '<div class="cc-fsec" style="margin-top:0">Job Post</div>' +
+        '<div class="cc-fsec" style="margin-top:0"><span class="cc-ficon">' + ICON_JOB + '</span>Job Post</div>' +
         '<div class="cc-bu" id="cc-bu"></div>' +
-        '<div class="cc-fsec">Pre-Defined Filters</div>' +
+        '<div class="cc-fsec"><span class="cc-ficon">' + ICON_PRESET + '</span>Pre-Defined Filters</div>' +
         '<div class="cc-pd">' + PREDEF.map(function (p) { return '<label><input type="radio" name="cc-predef" value="' + p[0] + '"' + (p[0] === predef ? ' checked' : '') + '>' + esc(p[1]) + '</label>'; }).join('') + '</div>' +
-        '<div class="cc-fsec">Custom Filters</div>' +
+        '<div class="cc-fsec"><span class="cc-ficon">' + ICON_CUSTOM + '</span>Custom Filters</div>' +
         '<div id="cc-cflist"></div>' +
         '<button class="cc-addf" id="cc-addf">+ Add Filter</button>' +
-        '<button class="cc-addf" id="cc-freset" style="color:var(--danger,#f75f4f)">Reset all filters</button>' +
       '</div>' +
-      '<div class="cc-df"><button class="cc-btn primary" id="cc-fapply">Apply</button><button class="cc-btn ghost" id="cc-fcancel">Cancel</button></div>';
+      '<div class="cc-df"><button class="cc-btn reset" id="cc-freset">Reset</button><button class="cc-btn ghost" id="cc-fcancel">Cancel</button><button class="cc-btn primary" id="cc-fapply">Apply Filter</button></div>';
     ov.appendChild(dr); document.body.appendChild(ov); ensureStyle();
     var buBox = dr.querySelector('#cc-bu');
     function codeLabel(c) {
@@ -1198,12 +1205,22 @@
       state.jobFilter = (sel.length === codes.length) ? null : sel;
       state.predef = predef;
       state.customFilters = customs.filter(function (c) { return c.val; });
+      if (resetAll) {
+        state.colFilters = {};
+        state.sortKey = null;
+        state.search = '';
+        var si = document.getElementById('cc-search'); if (si) si.value = '';
+      }
       state.page = 1; closeDrawer(); renderTable();
     });
     dr.querySelector('#cc-freset').addEventListener('click', function () {
-      state.jobFilter = null; state.predef = 'all'; state.customFilters = []; state.colFilters = {}; state.sortKey = null; state.search = '';
-      var si = document.getElementById('cc-search'); if (si) si.value = '';
-      state.page = 1; closeDrawer(); renderTable();
+      resetAll = true;
+      sel = codes.slice();
+      predef = 'all';
+      customs = [];
+      drawBu();
+      dr.querySelectorAll('input[name="cc-predef"]').forEach(function (r) { r.checked = r.value === predef; });
+      drawCf();
     });
   }
   function closeDrawer() { var d = document.getElementById(ID.drawer); if (d) d.remove(); }

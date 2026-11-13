@@ -39,6 +39,13 @@ def monday_of_this_week():
     return t - timedelta(days=t.weekday())
 
 
+
+def _approved_home(email, lat, lng):
+    """Location is mandatory in every mode: a WFH day is verified against the
+    employee's APPROVED home fence, so tests that work from home need one."""
+    return GeoFence.objects.create(name='Home', latitude=lat, longitude=lng, radius_meters=150,
+                                   owner_email=email, status=GeoFence.APPROVED)
+
 class ArrangementResolutionTests(TestCase):
     """arrangement_for() must answer 'as at a date', not 'the latest one'."""
 
@@ -181,12 +188,18 @@ class ArrangementCheckInTests(TestCase):
         kw.setdefault('effective_from', date(2020, 1, 1))
         return WorkArrangement.objects.create(email=self.email, **kw)
 
-    def test_a_remote_employee_checks_in_from_anywhere_without_a_request(self):
+    def test_a_remote_employee_checks_in_from_home_without_a_request(self):
+        """A remote arrangement removes the need for a WFH request, not the
+        location check: the day is verified against their approved home."""
         self._arr(arrangement='remote')
+        resp = self._check_in(isWfh=True, latitude=FAR_LAT, longitude=FAR_LNG)
+        self.assertEqual(resp.status_code, 422, 'no approved home yet: reason + HR review')
+        _approved_home(self.email, FAR_LAT, FAR_LNG)
         resp = self._check_in(isWfh=True, latitude=FAR_LAT, longitude=FAR_LNG)
         self.assertIn(resp.status_code, (200, 201))
         row = EmployeeAttendance.objects.get(email=self.email, date=local_today())
         self.assertTrue(row.is_wfh)
+        self.assertTrue(row.geo_verified)
         self.assertEqual(row.location_status, '')
 
     def test_an_onsite_employee_is_still_refused(self):

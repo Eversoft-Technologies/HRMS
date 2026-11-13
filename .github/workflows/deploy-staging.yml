@@ -73,6 +73,15 @@ jobs:
 
             mkdir -p "${SHARED_DIR}"
             mkdir -p "${SHARED_DIR}/media/chat_uploads"
+            mkdir -p "${SHARED_DIR}/media/interviews/raw" "${SHARED_DIR}/media/interviews/thumbs"
+            # 1a. Salvage interview recordings that releases before MEDIA_ROOT was
+            #     configured wrote beside the code (<release>/interviews/). Copy,
+            #     never move, and never overwrite what shared media already has.
+            PREV_RELEASE="$(readlink -f "${APP_LINK}" 2>/dev/null || true)"
+            if [ -n "${PREV_RELEASE}" ] && [ -d "${PREV_RELEASE}/interviews" ]; then
+              echo ">>> Salvaging recordings from ${PREV_RELEASE}/interviews into shared media"
+              cp -rn "${PREV_RELEASE}/interviews/." "${SHARED_DIR}/media/interviews/" || true
+            fi
             if [ ! -f "${SHARED_DIR}/.env" ]; then
               echo "!!! Missing ${SHARED_DIR}/.env - create it with staging database credentials."
               exit 1

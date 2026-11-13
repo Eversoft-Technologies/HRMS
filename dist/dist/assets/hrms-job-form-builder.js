@@ -276,7 +276,7 @@
         '.jfb-fld .jfb-ico,.jfb-sec-h .jfb-ico{display:inline-flex;align-items:center;justify-content:center;min-width:40px;min-height:40px;padding:0;font-size:17px;}' +
         '.jfb-sec-h{padding:10px 10px;}.jfb-sec-h .tt{font-size:14px;}' +
       '}',
-      '@media(max-width:390px){.jfb-main{width:100%;min-width:0;overflow-x:hidden;}.jfb-c-canvas{width:100%;min-width:0;max-width:100%;overflow-x:hidden;}.jfb-head{padding:10px 10px;gap:6px;}.jfb-head>div:first-child{flex:1 1 100%;min-width:0;max-width:100%;}.jfb-h1{font-size:13px;line-height:18px;}.jfb-h2{font-size:10px;line-height:14px;}.jfb-hbtn{flex:1 1 100%;width:100%;max-width:100%;min-width:0;box-sizing:border-box;white-space:normal;overflow:hidden;}.jfb-foot{padding:8px 10px;overflow-x:hidden;}.jfb-fcard{flex:1 1 100%;min-width:0;width:100%;}.jfb-row{flex-direction:column;width:100%;}.jfb-row>*{width:100%;max-width:100%;min-width:0;box-sizing:border-box;}.pjf-grid{grid-template-columns:1fr!important;width:100%;}.pjf-modal{width:calc(100vw - 20px);max-width:370px;margin:10px auto;box-sizing:border-box;}.pjf-head{padding:10px 12px;}.pjf-head h2{font-size:15px;}.pjf-foot{padding:10px 12px;}.pjf-foot .pjf-msg{flex:1 1 100%;width:100%;}.pjf-foot .jfb-btn{flex:1 1 100%;width:100%;min-width:0;}.pjf-sal{flex-direction:column;width:100%;}.pjf-sal .pjf-cur{width:100%;}.pjf-multi-add{flex-direction:column;width:100%;}.pjf-multi-add .pjf-msel{width:100%;max-width:100%;flex:1 1 auto;box-sizing:border-box;}}.jfb-main{display:block;width:100%;min-width:0;overflow-x:hidden;}.jfb-c-canvas{width:100%;min-width:0;border-right:0;box-sizing:border-box;}.jfb-head{flex-wrap:wrap;align-items:flex-start;padding:12px 14px;gap:8px;}.jfb-head>div:first-child{flex:1 1 100%;min-width:0;}.jfb-head .sp{display:none;}.jfb-hbtn{flex:1 1 calc(50% - 4px);min-width:0;max-width:100%;white-space:normal;box-sizing:border-box;text-align:center;}.jfb-h1{font-size:14px;}.jfb-h2{font-size:11px;}.jfb-foot{flex-wrap:wrap;overflow-x:hidden;padding:10px 12px;}.jfb-fcard{flex:1 1 100%;min-width:0;box-sizing:border-box;}.jfb-row{flex-direction:column;}.jfb-row>*{width:100%;}.pjf-grid{grid-template-columns:1fr;gap:0;}.pjf-w-full{grid-column:1;}.pjf-modal{width:calc(100vw - 24px);max-width:700px;}.pjf-head{padding:12px 14px;}.pjf-head h2{font-size:16px;}.pjf-foot{flex-wrap:wrap;padding:12px 14px;}.pjf-foot .pjf-msg{flex:1 1 100%;margin-right:0;}.pjf-foot .jfb-btn{flex:1 1 calc(50% - 5px);min-width:0;}.pjf-sal{flex-wrap:wrap;}.pjf-sal .pjf-cur{width:100%;}.pjf-multi-add{flex-direction:column;}.pjf-multi-add .pjf-msel{width:100%;flex:1 1 auto;}}'
+      '@media(max-width:390px){.jfb-main{width:100%;min-width:0;overflow-x:hidden;}.jfb-c-canvas{width:100%;min-width:0;max-width:100%;overflow-x:hidden;}.jfb-head{padding:10px 10px;gap:6px;}.jfb-head>div:first-child{flex:1 1 100%;min-width:0;max-width:100%;}.jfb-h1{font-size:13px;line-height:18px;}.jfb-h2{font-size:10px;line-height:14px;}.jfb-hbtn{flex:1 1 100%;width:100%;max-width:100%;min-width:0;box-sizing:border-box;white-space:normal;overflow:hidden;}.jfb-foot{padding:8px 10px;overflow-x:hidden;}.jfb-fcard{flex:1 1 100%;min-width:0;width:100%;}.jfb-row{flex-direction:column;width:100%;}.jfb-row>*{width:100%;max-width:100%;min-width:0;box-sizing:border-box;}.pjf-grid{grid-template-columns:1fr!important;width:100%;}.pjf-modal{width:calc(100vw - 20px);max-width:370px;margin:10px auto;box-sizing:border-box;}.pjf-head{padding:10px 12px;}.pjf-head h2{font-size:15px;}.pjf-foot{padding:10px 12px;}.pjf-foot .pjf-msg{flex:1 1 100%;width:100%;}.pjf-foot .jfb-btn{flex:1 1 100%;width:100%;min-width:0;}.pjf-sal{flex-direction:column;width:100%;}.pjf-sal .pjf-cur{width:100%;}.pjf-multi-add{flex-direction:column;width:100%;}.pjf-multi-add .pjf-msel{width:100%;max-width:100%;flex:1 1 auto;box-sizing:border-box;}}@media(max-width:600px){.jfb-main{display:block;width:100%;min-width:0;overflow-x:hidden;}.jfb-c-canvas{width:100%;min-width:0;border-right:0;box-sizing:border-box;}.jfb-head{flex-wrap:wrap;align-items:flex-start;padding:12px 14px;gap:8px;}.jfb-head>div:first-child{flex:1 1 100%;min-width:0;}.jfb-head .sp{display:none;}.jfb-hbtn{flex:1 1 calc(50% - 4px);min-width:0;max-width:100%;white-space:normal;box-sizing:border-box;text-align:center;}.jfb-h1{font-size:14px;}.jfb-h2{font-size:11px;}.jfb-foot{flex-wrap:wrap;overflow-x:hidden;padding:10px 12px;}.jfb-fcard{flex:1 1 100%;min-width:0;box-sizing:border-box;}.jfb-row{flex-direction:column;}.jfb-row>*{width:100%;}.pjf-grid{grid-template-columns:1fr;gap:0;}.pjf-w-full{grid-column:1;}.pjf-modal{width:calc(100vw - 24px);max-width:700px;}.pjf-head{padding:12px 14px;}.pjf-head h2{font-size:16px;}.pjf-foot{flex-wrap:wrap;padding:12px 14px;}.pjf-foot .pjf-msg{flex:1 1 100%;margin-right:0;}.pjf-foot .jfb-btn{flex:1 1 calc(50% - 5px);min-width:0;}.pjf-sal{flex-wrap:wrap;}.pjf-sal .pjf-cur{width:100%;}.pjf-multi-add{flex-direction:column;}.pjf-multi-add .pjf-msel{width:100%;flex:1 1 auto;}}'
     ].join('');
     var st = document.createElement('style'); st.id = 'jfb-style'; st.textContent = css; document.head.appendChild(st);
   }
@@ -359,7 +359,7 @@
           '<div id="jfb-palette"></div>' +
         '</div>' +
         '<div class="jfb-c-canvas jfb-scroll">' +
-          '<div style="display:flex;align-items:center"><div><div class="jfb-h1">Form Sections</div><div class="jfb-h2">Drag to reorder fields and sections</div></div><button class="jfb-viewlogic" id="jfb-clear" style="margin-left:auto;color:var(--danger,#f75f4f)">Clear All</button></div>' +
+          '<div style="display:flex;align-items:center"><div><div class="jfb-h1">Form Sections</div><div class="jfb-h2">Use ▲▼ or drag the grip to reorder</div></div><button class="jfb-viewlogic" id="jfb-clear" style="margin-left:auto;color:var(--danger,#f75f4f)">Clear All</button></div>' +
           '<div id="jfb-sections"></div>' +
           '<button class="jfb-addsec" id="jfb-addsec">⊕ Add Section</button>' +
         '</div>' +
@@ -413,6 +413,8 @@
         '<div class="jfb-sec-h" data-sh="' + s.id + '" draggable="true">' +
           '<span class="grip">⋮⋮</span><span class="num">' + (si + 1) + '</span>' +
           '<input class="tt" value="' + escAttr(s.title) + '" data-stitle="' + s.id + '">' +
+          '<button class="jfb-ico" data-sup="' + s.id + '" title="Move section up">▲</button>' +
+          '<button class="jfb-ico" data-sdown="' + s.id + '" title="Move section down">▼</button>' +
           '<button class="jfb-ico" data-scollapse="' + s.id + '" title="Collapse">' + (s.collapsed ? '▸' : '▾') + '</button>' +
           '<button class="jfb-ico del" data-sdel="' + s.id + '" title="Delete section">🗑</button>' +
         '</div>' + body + '</div>';
@@ -423,12 +425,34 @@
     return '<div class="jfb-fld" draggable="true" data-fid="' + f.id + '">' +
       '<span class="grip">⋮⋮</span><span class="fic">' + (TYPES[f.type] ? TYPES[f.type].icon : '?') + '</span>' +
       '<span class="lb">' + esc(f.label) + (f.required ? ' <span class="rq">*</span>' : '') + (f.conditional && f.conditional.field ? '<span class="cnd">◈ logic</span>' : '') + '</span>' +
+      '<button class="jfb-ico" data-fup="' + f.id + '" title="Move up">▲</button>' +
+      '<button class="jfb-ico" data-fdown="' + f.id + '" title="Move down">▼</button>' +
       '<button class="jfb-ico" data-fedit="' + f.id + '" title="Settings">⚙</button>' +
       '<button class="jfb-ico" data-fdup="' + f.id + '" title="Duplicate">⧉</button>' +
       '<button class="jfb-ico del" data-fdel="' + f.id + '" title="Delete">🗑</button>' +
       '</div>';
   }
+  /* Reliable ▲▼ reorder, same as the Onboarding form builder (works where
+     drag-and-drop is awkward, e.g. touch screens). */
+  function moveFieldDir(fid, dir) {
+    var r = findField(fid); if (!r) return;
+    var arr = r.section.fields, i = r.fi, j = i + dir;
+    if (j < 0 || j >= arr.length) return;
+    var tmp = arr[i]; arr[i] = arr[j]; arr[j] = tmp;
+    renderSections(); renderPreview();
+  }
+  function moveSectionDir(sid, dir) {
+    var i = state.sections.findIndex(function (s) { return s.id === sid; });
+    var j = i + dir;
+    if (i < 0 || j < 0 || j >= state.sections.length) return;
+    var tmp = state.sections[i]; state.sections[i] = state.sections[j]; state.sections[j] = tmp;
+    renderSections(); renderPreview();
+  }
   function wireSections(wrap) {
+    wrap.querySelectorAll('[data-fup]').forEach(function (b) { b.addEventListener('click', function (e) { e.stopPropagation(); moveFieldDir(b.getAttribute('data-fup'), -1); }); });
+    wrap.querySelectorAll('[data-fdown]').forEach(function (b) { b.addEventListener('click', function (e) { e.stopPropagation(); moveFieldDir(b.getAttribute('data-fdown'), 1); }); });
+    wrap.querySelectorAll('[data-sup]').forEach(function (b) { b.addEventListener('click', function (e) { e.stopPropagation(); moveSectionDir(b.getAttribute('data-sup'), -1); }); });
+    wrap.querySelectorAll('[data-sdown]').forEach(function (b) { b.addEventListener('click', function (e) { e.stopPropagation(); moveSectionDir(b.getAttribute('data-sdown'), 1); }); });
     wrap.querySelectorAll('[data-sec]').forEach(function (secEl) {
       secEl.addEventListener('click', function () { state.activeSection = secEl.getAttribute('data-sec'); wrap.querySelectorAll('.jfb-sec').forEach(function (x) { x.classList.toggle('active', x === secEl); }); });
     });

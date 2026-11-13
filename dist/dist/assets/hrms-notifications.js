@@ -381,6 +381,9 @@
     if (focus) focusOn(focus, path);
   }
 
+  // Desktop pop-ups (hrms-sounds.js) open a notification's link the same way.
+  window.__hrmsOpenNotificationLink = openTarget;
+
   /* Poll for fn() to return something truthy (pages render, then fetch). */
   function whenReady(fn, then, ms) {
     var deadline = Date.now() + (ms || 8000);
@@ -476,6 +479,8 @@
       .then(function (items) {
         var count = Array.isArray(items) ? items.length : 0;
         setBadge(count);
+        // New ones play the notification sound / desktop pop-up (hrms-sounds.js).
+        if (window.__hrmsAlerts && Array.isArray(items)) window.__hrmsAlerts.notify(items);
         if (document.getElementById(PANEL_ID) && document.getElementById(PANEL_ID).style.display !== 'none') {
           loadPanelItems();
         }
