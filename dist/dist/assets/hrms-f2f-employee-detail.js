@@ -75,7 +75,7 @@
       '.fed-ring{width:92px;height:92px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;position:relative;}',
       '.fed-ring span{font-size:22px;font-weight:800;color:var(--text,#0f172a);}',
       '.fed-ringlbl{font-size:12px;color:var(--text3,#64748b);}',
-      '.fed-break{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:6px 0 4px;}',
+      '.fed-break{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin:6px 0 4px;}',
       '.fed-bk{background:var(--bg3,#f1f5f9);border:1px solid var(--border2,#e5e7eb);border-radius:10px;padding:10px 8px;text-align:center;}',
       '.fed-bk b{display:block;font-size:18px;font-weight:800;color:var(--text,#0f172a);}',
       '.fed-bk small{font-size:10.5px;color:var(--text3,#64748b);text-transform:uppercase;letter-spacing:.3px;}',
@@ -204,7 +204,7 @@
   /* ---- summary strip ---- */
   function attendancePct(sum) {
     if (!sum) return null;
-    var denom = (sum.present || 0) + (sum.late || 0) + (sum.absent || 0) + (sum.half_day || 0);
+    var denom = (sum.present || 0) + (sum.late || 0) + (sum.absent || 0) + (sum.half_day || 0) + (sum.leave || 0);
     if (!denom) return null;
     var got = (sum.present || 0) + (sum.late || 0) + 0.5 * (sum.half_day || 0);
     return Math.round(got / denom * 100);
@@ -313,7 +313,7 @@
           '<div class="fed-ringlbl">' + esc(state.attRange === 'custom' ? ((state.attFrom || '?') + ' to ' + (state.attTo || todayIso())) : (ATT_LBL[state.attRange || '30'] || '')) + '</div></div>' +
       '</div>' +
       '<div class="fed-break">' +
-        bk(sum.present || 0, 'Present') + bk(sum.late || 0, 'Late') + bk(sum.absent || 0, 'Absent') + bk(sum.half_day || 0, 'Half-day') +
+        bk(sum.present || 0, 'Present') + bk(sum.late || 0, 'Late') + bk(sum.absent || 0, 'Absent') + bk(sum.leave || 0, 'Leave') + bk(sum.half_day || 0, 'Half-day') +
       '</div>' +
       '<div class="fed-hrs"><span>Worked <b>' + fmtMins(sum.total_worked_minutes) + '</b></span>' +
         '<span>Overtime <b>' + fmtMins(sum.total_overtime_minutes) + '</b></span></div>';
