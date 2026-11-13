@@ -457,8 +457,9 @@ class AttendanceService:
         }
         # Approved leave has no attendance row, so it used to vanish from the
         # summary: a sick day left "Absent 0" and attendance at 100%. Count each
-        # leave date in the range (Mon-Fri, not past today, and not a day the
-        # person checked in anyway) so it shows as Leave and lowers the rate.
+        # leave date in the range (Mon-Fri, not past today, and not a day that
+        # already has an attendance row -- that row's status counts it once)
+        # so it shows as Leave and lowers the rate.
         summary['leave'] = AttendanceService._leave_days(email, from_date, to_date, attendances)
         return summary
 
@@ -468,7 +469,7 @@ class AttendanceService:
         last = min(to_date, date.today())
         if last < from_date:
             return 0
-        worked = set(attendances.filter(check_in__isnull=False).values_list('date', flat=True))
+        worked = set(attendances.values_list('date', flat=True))
         days = set()
         for lv in LeaveRequest.objects.filter(email__iexact=email, status__iexact='approved',
                                               from_date__lte=last, to_date__gte=from_date):
