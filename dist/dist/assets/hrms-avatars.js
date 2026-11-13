@@ -9,7 +9,7 @@
  * the employee profile page, the work-submissions table ...) is an initials
  * circle. This sidecar overlays an <img> on those circles once it knows who
  * they stand for. Lists that show a person as bare text (the task tracker's
- * "Assigned To" / "Team Lead" lines, tables whose first column is "Employee")
+ * "Assigned To" / "Team Lead" lines, tables whose first column is "Employee" or "Contractor")
  * first get an initials circle inserted, so the picture has somewhere to go.
  *
  *   GET /api/avatars             who has a picture: [{email, name, aliases,
@@ -301,7 +301,7 @@
     var tables = document.querySelectorAll('table');
     for (var t = 0; t < tables.length; t++) {
       var th = tables[t].querySelector('thead th, tr:first-child th');
-      if (!th || !/^(employee|employee name|assignee|assigned to)$/i.test((th.textContent || '').trim())) continue;
+      if (!th || !/^(employee|employee name|assignee|assigned to|contractor|contractor name)$/i.test((th.textContent || '').trim())) continue;
       var rows = tables[t].querySelectorAll('tbody tr');
       for (var r = 0; r < rows.length; r++) {
         var cell = rows[r].querySelector('td');
