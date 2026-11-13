@@ -13,7 +13,7 @@ import logging
 from django.db.models import Q
 
 from . import mailer
-from .models import AppUser, EmployeeAttendance, Shift, ShiftAssignment, WfhRequest
+from .models import AppUser, EmployeeAttendance, LeaveRequest, Shift, ShiftAssignment, WfhRequest
 from .timeutil import local_now
 
 logger = logging.getLogger(__name__)
@@ -36,8 +36,13 @@ def _staff():
 
 
 def _on_leave_or_wfh(email, on_date):
-    return WfhRequest.objects.filter(
-        email=email, status='Approved',
+    if WfhRequest.objects.filter(
+        email=email, status__iexact='approved',
+        from_date__lte=on_date, to_date__gte=on_date,
+    ).exists():
+        return True
+    return LeaveRequest.objects.filter(
+        email=email, status__iexact='approved',
         from_date__lte=on_date, to_date__gte=on_date,
     ).exists()
 
@@ -127,7 +132,7 @@ def _send_late_mail(user, row, shift, late_by):
     create_notification(
         user.email, 'No check-in recorded',
         f'Your shift started at {shift.start_time:%H:%M}. Please check in.',
-        'warning', '/employees/attendance',
+        'warning', '/employees/checkin',
     )
 
 
