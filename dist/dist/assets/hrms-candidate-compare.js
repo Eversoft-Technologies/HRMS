@@ -813,6 +813,16 @@
       '.cc-quick-jobs-total:hover{color:var(--text);border-color:var(--accent,#4f8ef7);background:rgba(79,142,247,0.1);}',
       '.cc-job-skills-bar{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px dashed var(--border2);}',
       '.cc-job-skill-chip{font-size:10px;font-weight:600;padding:2px 7px;border-radius:5px;background:rgba(79,142,247,0.1);color:var(--accent,#4f8ef7);border:1px solid rgba(79,142,247,0.25);}',
+      /* KPI cards (Resumes Scored / Avg Match Score / JDs Parsed / Top
+         Candidate): the shared .stat-label is sized for a 4-up desktop
+         grid, but these labels are longer ("AVG MATCH SCORE") and wrap
+         (or, once shrunk, get ellipsis-clipped) once the grid narrows.
+         The card's own 18px padding is also tuned for a wide card and
+         leaves almost no room once the grid narrows to 4 tight columns,
+         so trim it here too. Together these keep the full label on one
+         line at any width down to the mobile breakpoint. */
+      '.cc-stats .stat-card{padding:12px 8px;min-width:0;}',
+      '.cc-stats .stat-label{font-size:8px!important;letter-spacing:0!important;white-space:nowrap!important;overflow:hidden;text-overflow:ellipsis;}',
       /* Mobile */
       '.cc-mobile-hint{display:none;}',
       '@media (max-width: 768px){' +
@@ -835,7 +845,7 @@
         /* KPI cards: two per row, compact */
         '.content .stat-grid.cc-stats{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-bottom:14px;}' +
         '.cc-stats .stat-card{padding:10px 12px;min-width:0;}' +
-        '.cc-stats .stat-label{font-size:9.5px;margin-bottom:4px;white-space:normal;}' +
+        '.cc-stats .stat-label{font-size:9px!important;margin-bottom:4px;white-space:nowrap!important;overflow:hidden;text-overflow:ellipsis;}' +
         '.cc-stats .stat-value{font-size:22px;}' +
         '.cc-stats .stat-sub,.cc-stats .stat-trend{font-size:10px;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}' +
         /* Edit Filters / Edit Columns: a bottom sheet sized to its content */
