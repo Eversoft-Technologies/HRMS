@@ -319,3 +319,25 @@
   .kpi-fd-f > button, .jt-df > button, .cc-df > button, .bss-cd-f > button,
   [data-hrms-qv-footer] > button { min-height: 44px; }
 }
+
+/* ------------------------------------------------------------
+   Time & Attendance: nothing gets crushed at narrower widths.
+   - The Live Team Presence / Today's Attendance pair and the attendance
+     card pairs stack from 1100px down, instead of squeezing the second
+     card (its search box, filter and log rows) into half of a small window.
+   - The Live Team Presence chart keeps all four columns, including Absent,
+     inside its card: gaps shrink with the width and the labels get smaller.
+   ------------------------------------------------------------ */
+@media (max-width: 1100px) {
+  .grid-2.hram-grid,
+  .grid-2:has(#hrms-presence-chart) { grid-template-columns: 1fr !important; }  /* the page sets 0.8fr 1.2fr inline */
+}
+#hrms-presence-chart { container-type: inline-size; max-width: 100%; }
+#hrms-presence-chart .hrms-pc-bars { gap: clamp(6px, 3cqw, 18px) !important; }
+#hrms-presence-chart .hrms-pc-chip { min-width: 0 !important; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@container (max-width: 360px) {
+  #hrms-presence-chart .hrms-pc-chip { padding: 4px 6px !important; font-size: 10px !important; gap: 4px !important; }
+  #hrms-presence-chart .hrms-pc-bars { gap: 6px !important; }
+  #hrms-presence-chart .hrms-pc-chip-dot { display: none !important; }
+  #hrms-presence-chart .hrms-pc-val { font-size: 14px !important; }
+}
