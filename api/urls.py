@@ -73,6 +73,7 @@ urlpatterns = [
     path('interview-recordings/<int:pk>', views.recording_detail),
     path('interview-recordings/<int:pk>/video', views.recording_video),
     path('interview-recordings/<int:pk>/thumbnail', views.recording_thumbnail),
+    path('interview-recordings/<int:pk>/transcribe', views.recording_transcribe),
 
     path('question-sets', views.question_sets),
     path('question-sets/<str:set_id>', views.question_set_detail),
