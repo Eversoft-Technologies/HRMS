@@ -4,6 +4,7 @@ Core attendance service for check-in/out, break tracking, and status calculation
 from datetime import datetime, timedelta, date
 from django.utils import timezone
 from django.db.models import Q, Sum
+from api.timeutil import local_now, local_today
 
 from api.models import (
     EmployeeAttendance, Shift, ShiftAssignment, Break, BreakPolicy,
@@ -279,7 +280,7 @@ class AttendanceService:
         
         Returns: {'success': bool, 'break_id': int, 'message': str}
         """
-        today = date.today()
+        today = local_today()
 
         # Check if already on break
         active_break = Break.objects.filter(
@@ -316,7 +317,7 @@ class AttendanceService:
             email=email,
             employee_name=employee_name,
             date=today,
-            break_start=timezone.now(),
+            break_start=local_now(),
             break_type=break_type,
             reason=reason,
             is_paid=break_policy.is_paid if break_policy else False,
@@ -329,7 +330,7 @@ class AttendanceService:
             employee_name=employee_name,
             date=today,
             event='break-start',
-            at=timezone.now()
+            at=local_now()
         )
 
         return {
@@ -345,8 +346,17 @@ class AttendanceService:
         
         Returns: {'success': bool, 'break_minutes': int, 'message': str}
         """
+        # Resolve the break to end. The client should send ``break_id``, but it
+        # can lose it across a refresh/remount, so fall back to the employee's
+        # own currently-active break — a break must always be endable.
         try:
-            break_record = Break.objects.get(id=break_id, email=email, status='active')
+            if break_id:
+                break_record = Break.objects.get(id=break_id, email=email, status='active')
+            else:
+                break_record = (Break.objects.filter(email=email, status='active')
+                                .order_by('-break_start').first())
+                if break_record is None:
+                    raise Break.DoesNotExist
         except Break.DoesNotExist:
             return {
                 'success': False,
@@ -354,7 +364,7 @@ class AttendanceService:
                 'message': 'Break not found'
             }
 
-        now = timezone.now()
+        now = local_now()
         break_record.break_end = now
         break_record.status = 'completed'
 
@@ -362,25 +372,21 @@ class AttendanceService:
         break_minutes = int(break_duration.total_seconds() / 60)
         break_record.break_minutes = break_minutes
 
-        # Validate against policy
+        # Validate against policy — but NEVER trap the employee in an unendable
+        # break. Reverting the record to 'active' (as this did) left the server
+        # on-break while the client had already flipped to "ended", so the
+        # "End Break" button vanished and the break could not be closed. The
+        # break is always completed here; a too-short break is flagged, a
+        # too-long one is capped at the policy maximum.
+        policy_note = ''
         break_policy = BreakPolicy.objects.filter(is_active=True).first()
         if break_policy:
             if break_minutes < break_policy.min_break_minutes:
-                break_record.status = 'active'  # Revert
-                break_record.save()
-                return {
-                    'success': False,
-                    'break_minutes': break_minutes,
-                    'message': f'Break too short. Minimum: {break_policy.min_break_minutes}m'
-                }
-            if break_minutes > break_policy.max_break_minutes:
-                break_record.status = 'active'
-                break_record.save()
-                return {
-                    'success': False,
-                    'break_minutes': break_minutes,
-                    'message': f'Break too long. Maximum: {break_policy.max_break_minutes}m'
-                }
+                policy_note = f' (shorter than the {break_policy.min_break_minutes}m minimum)'
+            elif break_minutes > break_policy.max_break_minutes:
+                break_minutes = break_policy.max_break_minutes
+                break_record.break_minutes = break_minutes
+                policy_note = f' (capped at the {break_policy.max_break_minutes}m maximum)'
 
         break_record.save()
 
@@ -410,7 +416,7 @@ class AttendanceService:
         return {
             'success': True,
             'break_minutes': break_minutes,
-            'message': f'Break ended. Duration: {break_minutes}m'
+            'message': f'Break ended. Duration: {break_minutes}m' + policy_note
         }
 
     @staticmethod

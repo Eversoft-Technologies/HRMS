@@ -146,6 +146,7 @@
       /* every break-type status renders as the amber "In Break" pill */
       '.haa-scope .haa-pill.onbreak,.haa-scope .haa-pill.inbreak,.haa-scope .haa-pill.away,.haa-scope .haa-pill.coffeebreak{background:rgba(247,201,79,.16);color:var(--warn,#f7c94f);}',
       '.haa-scope .haa-pill.remote,.haa-scope .haa-pill.wfh{background:rgba(79,142,247,.18);color:var(--accent,#4f8ef7);}',
+      '.haa-scope .haa-pill.offline{background:rgba(148,163,184,.16);color:var(--text3,#94a3b8);}',
       '.haa-scope .haa-pill.travelling{background:rgba(6,182,212,.16);color:#06b6d4;}',
       '.haa-scope .haa-pill.inameeting,.haa-scope .haa-pill.meeting{background:rgba(139,92,246,.18);color:#8b5cf6;}',
       '.haa-scope .haa-pill.invisible{background:rgba(148,163,184,.16);color:var(--text3);}',
@@ -599,6 +600,18 @@
   function dotColor(c) {
     return ({ success: 'var(--success,#22d3a5)', warn: 'var(--warn,#f7c94f)', danger: 'var(--danger,#f75f4f)', accent: 'var(--accent,#4f8ef7)' })[c] || 'var(--text3)';
   }
+  // Always a human activity label — never a raw slug and never the person's
+  // name. Keyed on the raw type first (the field that is never polluted),
+  // then any proper server label, then a humanised fallback.
+  function eventLabel(r) {
+    var raw = String(r.type || r.event || '').toLowerCase();
+    var MAP = { 'check-in': 'Check In', 'check-out': 'Check Out', 'break-start': 'Break Start',
+      'break-end': 'Break End', 'remote-switch': 'Remote Switch', 'office-switch': 'Office Switch',
+      'auto-checkout-departure': 'Auto Check Out', 'hr-edit': 'HR Edit' };
+    if (MAP[raw]) return MAP[raw];
+    if (r.event && String(r.event).toLowerCase() !== raw) return r.event;
+    return raw ? raw.replace(/[-_]/g, ' ').replace(/\b\w/g, function (c) { return c.toUpperCase(); }) : '—';
+  }
   function renderActivity() {
     var l = document.getElementById('haa-act-list'); if (!l) return;
     var f = state.actFilter;
@@ -607,7 +620,7 @@
     l.innerHTML = rows.map(function (r) {
       var loc = r.location && r.location !== '—' ? '<div class="c-loc">' + esc(r.location) + '</div>' : '';
       return '<div class="haa-tr"><span class="c-tm">' + esc(r.time || '—') + '</span>' +
-        '<span class="c-event"><span class="c-ev">' + esc(r.event || r.type || '—') + '</span>' + loc + '</span>' +
+        '<span class="c-event"><span class="c-ev">' + esc(eventLabel(r)) + '</span>' + loc + '</span>' +
         '<span class="haa-dot" style="background:' + dotColor(r.color) + '"></span></div>';
     }).join('');
   }
@@ -997,7 +1010,6 @@
       '</div>' +
       '<div class="hat-hrs"><span>Effective <b>' + fmtMins(d.effectiveMinutes || 0) + '</b></span>' +
         '<span>Gross <b>' + fmtMins(d.grossMinutes || 0) + '</b></span></div>' +
-      '<div class="haa-list-title">Time logs</div>' + logs +
       '<div class="haa-list-title">Location punch (hourly)</div><div class="hat-punchlist">' + punches + '</div>' +
       '<div class="hat-mf">' +
         (d.isSelf ? '<button class="ok" data-raise="1">Raise Request</button>' : '') +
@@ -1066,7 +1078,7 @@
    * server also throttles to hourly as a backstop. Requires the tab to be open
    * (a web page cannot capture location after the tab/app is closed). */
   var HOUR_MS = 60 * 60 * 1000;
-  var geoBusy = false, geoRetryAt = 0;
+  var geoBusy = false, geoRetryAt = 0, pendingTs = 0;
   function lastTsKey() { return 'hrms_loc_ts_' + (actorEmail() || ''); }
   function getLastTs() { try { return parseInt(localStorage.getItem(lastTsKey()) || '0', 10) || 0; } catch (_) { return 0; } }
   function setLastTs(t) { try { localStorage.setItem(lastTsKey(), String(t)); } catch (_) {} }
@@ -1103,7 +1115,7 @@
       var send = function (label) {
         api('/api/attendance/location-punch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: em, latitude: lat, longitude: lng, accuracy: acc, label: label || '' }) })
           .then(function (r) {
-            if (r && r.stored) setLastTs(Date.now());
+            if (r && r.stored) setLastTs(pendingTs || Date.now());
             else if (r && r.reason === 'not_checked_in') geoRetryAt = Date.now() + 30 * 60 * 1000;
             if (r && r.state === 'away' && r.message) locationAlert('You appear to be elsewhere', r.message);
           })
@@ -1139,8 +1151,18 @@
     var em = actorEmail(); if (!em || geoBusy) return;
     var now = Date.now();
     if (now < geoRetryAt) return;
-    if ((now - getLastTs()) < 58 * 60 * 1000) return;   // still within the hour
+    var last = getLastTs();
+    // Fixed hourly cadence anchored to the first punch: a capture is due a
+    // whole hour after the PREVIOUS SCHEDULED time, and we store that
+    // scheduled time (not the completion time), so GPS/network latency and
+    // the coarse 5-min poll cannot accumulate into drift (1h20m, etc.). Real
+    // spacing stays >= 60 min, so the server's 55-min throttle is satisfied.
+    if (last && (now - last) < HOUR_MS) return;        // not yet an hour since the last slot
     geoBusy = true;
+    // The grid slot this capture represents: the first lands now; later ones
+    // advance by whole hours from the last slot, snapping forward (never into
+    // the future) if the tab was hidden across several hours.
+    pendingTs = last ? Math.min(last + HOUR_MS * Math.floor((now - last) / HOUR_MS), now) : now;
     captureLocation();
   }
 
