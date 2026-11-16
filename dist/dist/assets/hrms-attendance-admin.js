@@ -1716,7 +1716,7 @@
         '<td><span class="haa-pill" style="background:' +
         ((f.isActive === false) ? 'var(--haa-err-bg);color:var(--haa-err-fg)' : 'var(--haa-ok-bg);color:var(--haa-ok-fg)') + '">' +
         ((f.isActive === false) ? 'Inactive' : 'Active') + '</span></td>' +
-        '<td style="text-align:right"><button class="haa-btn" style="background-color: #2b70fa; color: white; margin-right: 6px;" data-edit-fence="' + f.id + '">Edit</button><button class="haa-btn dgr" data-del-fence="' + f.id + '">Delete</button></td>'
+      '<td style="text-align:right"><button class="haa-btn" data-edit-fence="' + f.id + '" style="margin-right: 6px;">Edit</button><button class="haa-btn dgr" data-del-fence="' + f.id + '">Delete</button></td>'
     }).join('');
     return errorBanner('fences') +
       '<div class="haa-card"><div style="font-weight:700;margin-bottom:12px;font-size:14px;">Add an office location</div>' +
@@ -1819,7 +1819,7 @@
       return '<tr><td>' + esc(nameOf[a.email] || a.email) + (nameOf[a.email] ? '<div style="font-size:11px;color:var(--haa-faint)">' + esc(a.email) + '</div>' : '') + ' ' + status + '</td><td>' + esc(sh ? sh.name : (a.shiftName || '—')) + '</td>' +
         '<td>' + esc(a.effectiveFrom || a.effective_from || '') + '</td>' +
         '<td>' + esc(a.effectiveTo || a.effective_to || 'open-ended') + '</td>' +
-        '<td style="text-align:right"><button class="haa-btn dgr" data-del-asg="' + a.id + '">Remove</button></td></tr>';
+        '<td style="text-align:right"><button class="haa-btn" data-edit-asg="' + a.id + '">Edit</button> <button class="haa-btn dgr" data-del-asg="' + a.id + '">Remove</button></td>'
     }).join('');
     return errorBanner('shifts') +
       '<div class="haa-card"><div style="font-weight:700;margin-bottom:12px;font-size:14px;">Create a shift</div>' +
@@ -2268,8 +2268,117 @@
       : state.tab === 'fences' ? fencesHtml()
       : state.tab === 'shifts' ? shiftsHtml()
       : state.tab === 'arrangements' ? arrangementsHtml()
+      : state.tab === 'recalc' ? recalcHtml()
       : (homesHtml() + reviewsHtml());
     wire(body);
+    if (state.tab === 'recalc') wireRecalc(body);
+  }
+
+
+  /* ── Recalculate Hours ─────────────────────────────────────────────────
+     Days saved before multi-session days added up kept only their last
+     session. Preview what recalculating would change (old → new hours per
+     day), then apply. Defaults to this month: earlier months may already be
+     paid, so including them needs an explicit tick. The server refuses an
+     apply if the records moved since the preview. */
+  function ymdLocal(d) { return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2); }
+  function rcState() {
+    if (!state.recalc) {
+      var now = new Date();
+      state.recalc = { from: ymdLocal(new Date(now.getFullYear(), now.getMonth(), 1)), to: ymdLocal(now),
+                       email: '', data: null, loading: false, applying: false, allowClosed: false, msg: '', bad: false };
+    }
+    return state.recalc;
+  }
+  function hmTxt(m) { m = Math.max(0, Math.round(m || 0)); var h = Math.floor(m / 60); return (h ? h + 'h ' : '') + (m % 60) + 'm'; }
+  function recalcHtml() {
+    var s = rcState(), d = s.data;
+    var monthStart = d ? d.monthStart : null;
+    var closed = monthStart ? s.from < monthStart : (s.from < rcState().from && false);
+    var html =
+      '<div style="font-size:13px;color:var(--haa-sub,#64748b);line-height:1.6;margin-bottom:14px">' +
+        'Days where someone checked in and out more than once were saved with only their <b>last</b> session. ' +
+        'This rebuilds each closed day from its check-in / check-out records (each session minus its own breaks) and ' +
+        'shows what would change. <b>Nothing changes until you click Apply.</b> Every change is noted on that day’s timeline.</div>' +
+      '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:14px">' +
+        '<label style="font-size:12px">From<br><input class="haa-in" type="date" id="rc-from" value="' + esc(s.from) + '"></label>' +
+        '<label style="font-size:12px">To<br><input class="haa-in" type="date" id="rc-to" value="' + esc(s.to) + '"></label>' +
+        '<label style="font-size:12px;flex:1;min-width:200px">Employee email (optional)<br><input class="haa-in" type="email" id="rc-email" placeholder="Everyone" value="' + esc(s.email) + '" style="width:100%"></label>' +
+        '<button class="haa-btn" id="rc-preview"' + (s.loading ? ' disabled' : '') + '>' + (s.loading ? 'Checking…' : 'Preview') + '</button>' +
+      '</div>';
+    if (s.msg) html += '<div style="margin-bottom:12px;padding:10px 12px;border-radius:8px;font-size:13px;background:' + (s.bad ? 'rgba(220,38,38,.12);color:#dc2626' : 'rgba(15,157,88,.12);color:#0f9d58') + '">' + esc(s.msg) + '</div>';
+    if (!d) return html + '<div class="haa-empty">Pick a range and click Preview. The default is this month, which has not been paid yet.</div>';
+    if (d.includesClosedMonths) {
+      html += '<div style="margin-bottom:12px;padding:10px 12px;border-radius:8px;font-size:13px;background:rgba(245,158,11,.14);color:#b45309">' +
+        'This range starts before ' + esc(d.monthStart) + '. Those months may already be paid — changing them changes historical figures.</div>';
+    }
+    if (!d.changes.length) {
+      html += '<div class="haa-empty">Nothing to change between ' + esc(d.from) + ' and ' + esc(d.to) + ' — every closed day already adds up.</div>';
+    } else {
+      html += '<div style="font-size:13px;margin-bottom:8px"><b>' + d.changes.length + '</b> day' + (d.changes.length === 1 ? '' : 's') + ' would change:</div>' +
+        '<div style="max-height:340px;overflow:auto;border-radius:8px"><table class="haa-tbl"><thead><tr><th>Date</th><th>Employee</th><th>Worked now</th><th>Worked after</th><th>Overtime now</th><th>Overtime after</th></tr></thead><tbody>' +
+        d.changes.map(function (r) {
+          var up = r.newWorkedMinutes > r.oldWorkedMinutes;
+          return '<tr><td>' + esc(r.date) + '</td><td>' + esc(r.employee) + '<div style="font-size:11px;opacity:.65">' + esc(r.email) + '</div></td>' +
+            '<td>' + hmTxt(r.oldWorkedMinutes) + '</td><td style="font-weight:700;color:' + (up ? '#0f9d58' : '#dc2626') + '">' + hmTxt(r.newWorkedMinutes) + '</td>' +
+            '<td>' + hmTxt(r.oldOvertimeMinutes) + '</td><td style="font-weight:600">' + hmTxt(r.newOvertimeMinutes) + '</td></tr>';
+        }).join('') + '</tbody></table></div>' +
+        '<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:14px">' +
+          (d.includesClosedMonths ? '<label style="font-size:12.5px;display:flex;gap:6px;align-items:center"><input type="checkbox" id="rc-closed"' + (s.allowClosed ? ' checked' : '') + '> I understand earlier months may already be paid</label>' : '') +
+          '<button class="haa-btn" id="rc-apply"' + (s.applying || (d.includesClosedMonths && !s.allowClosed) ? ' disabled' : '') + '>' + (s.applying ? 'Applying…' : 'Apply ' + d.changes.length + ' change' + (d.changes.length === 1 ? '' : 's')) + '</button>' +
+          '<button class="haa-btn sec" id="rc-csv">Download CSV</button>' +
+        '</div>';
+    }
+    if (d.skipped && d.skipped.length) {
+      html += '<div style="margin-top:14px;font-size:12.5px;color:var(--haa-sub,#64748b)"><b>' + d.skipped.length + '</b> day' + (d.skipped.length === 1 ? ' is' : 's are') +
+        ' left as they are — their check-in / check-out records do not pair up (e.g. a check-out was never recorded): ' +
+        d.skipped.slice(0, 15).map(function (r) { return esc(r.employee + ' ' + r.date); }).join(', ') + (d.skipped.length > 15 ? ' …' : '') + '</div>';
+    }
+    return html;
+  }
+  function recalcQuery() {
+    var s = rcState();
+    return 'from=' + encodeURIComponent(s.from) + '&to=' + encodeURIComponent(s.to) + (s.email ? '&email=' + encodeURIComponent(s.email) : '');
+  }
+  function wireRecalc(body) {
+    var s = rcState();
+    var f = body.querySelector('#rc-from'), t = body.querySelector('#rc-to'), e = body.querySelector('#rc-email');
+    if (!f) return;
+    function sync() { s.from = f.value; s.to = t.value; s.email = e.value.trim(); }
+    [f, t, e].forEach(function (x) { x.onchange = function () { sync(); s.data = null; s.msg = ''; render(); }; });
+    body.querySelector('#rc-preview').onclick = function () {
+      sync(); s.loading = true; s.msg = ''; s.allowClosed = false; render();
+      api('/api/attendance/recalculate?' + recalcQuery())
+        .then(function (d) { s.data = d; })
+        .catch(function (er) { s.data = null; s.msg = er.message; s.bad = true; })
+        .then(function () { s.loading = false; render(); });
+    };
+    var cl = body.querySelector('#rc-closed');
+    if (cl) cl.onchange = function () { s.allowClosed = cl.checked; render(); };
+    var csv = body.querySelector('#rc-csv');
+    if (csv) csv.onclick = function () {
+      var lines = [['date', 'employee', 'email', 'worked_now_min', 'worked_after_min', 'overtime_now_min', 'overtime_after_min']]
+        .concat(s.data.changes.map(function (r) { return [r.date, r.employee, r.email, r.oldWorkedMinutes, r.newWorkedMinutes, r.oldOvertimeMinutes, r.newOvertimeMinutes]; }));
+      var text = lines.map(function (row) { return row.map(function (v) { return '"' + String(v).replace(/"/g, '""') + '"'; }).join(','); }).join('\n');
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([text], { type: 'text/csv' }));
+      a.download = 'attendance-recalculation-' + s.data.from + '-to-' + s.data.to + '.csv';
+      a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+    };
+    var ap = body.querySelector('#rc-apply');
+    if (ap) ap.onclick = function () {
+      var n = s.data.changes.length;
+      if (!window.confirm('Update worked time and overtime on ' + n + ' day' + (n === 1 ? '' : 's') + '? Each change is noted on that day’s timeline.')) return;
+      s.applying = true; render();
+      api('/api/attendance/recalculate', { method: 'POST', body: JSON.stringify({
+        from: s.data.from, to: s.data.to, email: s.email, expect: n, allowClosedMonths: s.allowClosed }) })
+        .then(function (r) {
+          s.msg = r.applied + ' day' + (r.applied === 1 ? '' : 's') + ' updated.'; s.bad = false; s.data = null;
+          toast(s.msg);
+        })
+        .catch(function (er) { s.msg = er.message; s.bad = true; })
+        .then(function () { s.applying = false; render(); });
+    };
   }
 
   function val(id) { var e = document.getElementById(id); return e ? e.value.trim() : ''; }
@@ -2532,27 +2641,75 @@
           };
         })(els[i]);
       }
-      function bindEdit(attr, url, label) {
-    var els = body.querySelectorAll('[' + attr + ']');
-    for (var i = 0; i < els.length; i++) {
-        (function (el) {
-            el.onclick = function () {
-                var id = el.getAttribute(attr);
-                api(url + id, { method: 'GET' })
-                    .then(function (data) {
-                        toast(label + ' loaded for editing');
-                    })
-                    .catch(function (e) { toast(e.message, true); });
-            };
-        })(els[i]);
-    }
-}
-
-bindEdit('data-edit-fence', '/api/attendance/geofences/', 'location');
     }
     bindDelete('data-del-fence', '/api/attendance/geofences/', 'location');
     bindDelete('data-del-shift', '/api/shifts/', 'shift');
     bindDelete('data-del-asg', '/api/shift-assignments/', 'assignment');
+    bindEdit('data-edit-asg')
+    function bindEdit(attr) {
+    body.onclick = function (e) {
+        var el = e.target.closest('[' + attr + ']');
+        if (!el) return;
+        e.stopPropagation();
+        var id = el.getAttribute(attr);
+        
+        if (attr === 'data-edit-asg') {
+            var assignment = state.assignments.find(function (a) {
+                return a.id == id || a.id == parseInt(id, 10) || String(a.id) === String(id);
+            });
+            if (assignment) {
+                document.getElementById('haa-a-email').value = assignment.email;
+                document.getElementById('haa-a-shift').value = assignment.shiftId || assignment.shift;
+                document.getElementById('haa-a-from').value = assignment.effectiveFrom || '';
+                document.getElementById('haa-a-to').value = assignment.effectiveTo || '';
+                state.editingAssignmentId = assignment.id;
+            }
+        } else {
+            var fence = state.fences && state.fences.find(function (f) {
+                return f.id == id || f.id == parseInt(id, 10) || String(f.id) === String(id);
+            });
+            if (fence) {
+                state.editingFenceId = fence.id;
+                document.getElementById('haa-f-name').value = fence.name || '';
+                document.getElementById('haa-f-rad').value = fence.radiusMeters || fence.radius || '';
+                document.getElementById('haa-f-lat').value = fence.latitude || '';
+                document.getElementById('haa-f-lng').value = fence.longitude || '';
+            }
+        }
+    };
+}
+
+bindEdit('data-edit-fence');
+bindEdit('data-edit-asg');
+    function bindEdit(attr) {
+        var els = body.querySelectorAll('[' + attr + ']');
+        for (var i = 0; i < els.length; i++) {
+            (function (el) {
+                el.onclick = function (e) {
+                    e.stopPropagation();
+                    var id = el.getAttribute(attr);
+                    var fence = state.fences && state.fences.find(function(f) { 
+                        return f.id == id || f.id == parseInt(id, 10) || String(f.id) === String(id); 
+                    });
+                    
+                    if (fence) {
+                        // Store the editing ID so the save action knows we are updating
+                        state.editingFenceId = fence.id;
+                        
+                        document.getElementById('haa-f-name').value = fence.name || '';
+                        document.getElementById('haa-f-rad').value = fence.radiusMeters || fence.radius_meters || 200;
+                        document.getElementById('haa-f-lat').value = fence.latitude || '';
+                        document.getElementById('haa-f-lng').value = fence.longitude || '';
+                        
+                        // Change button text to indicate update mode
+                        var addBtn = document.getElementById('haa-f-add');
+                        if (addBtn) addBtn.textContent = 'Update Location';
+                    }
+                };
+            })(els[i]);
+        }
+    }
+    bindEdit('data-edit-fence');
 
     function decide(attr, decision) {
       var els = body.querySelectorAll('[' + attr + ']');
@@ -2773,6 +2930,7 @@ bindEdit('data-edit-fence', '/api/attendance/geofences/', 'location');
       '<button class="haa-tab" data-tab="shifts">Shifts</button>' +
       '<button class="haa-tab" data-tab="reviews">Off-site Approvals</button>' +
       '<button class="haa-tab" data-tab="arrangements">Work Arrangements</button>' +
+      '<button class="haa-tab" data-tab="recalc">Recalculate Hours</button>' +
       '</div><div class="haa-body"></div></div>';
     document.body.appendChild(back);
 
