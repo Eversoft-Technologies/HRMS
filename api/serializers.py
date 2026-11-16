@@ -600,6 +600,7 @@ class InterviewRecordingSerializer(serializers.ModelSerializer):
                 'thumbnailUrl': f"/api/interview-recordings/{instance.id}/thumbnail" if getattr(instance, 'thumbnail_file', None) else None,
                 'videoSize': getattr(instance, 'video_size', 0) or 0,
                 'videoMime': getattr(instance, 'video_mime', None) or 'video/mp4',
+                'sttStatus': getattr(instance, 'stt_status', '') or '',
                 'createdAt': instance.created_at.strftime(DATETIME_FMT) if instance.created_at else None,
             }
 
@@ -625,6 +626,13 @@ class InterviewRecordingSerializer(serializers.ModelSerializer):
             'aiEvaluation': instance.ai_evaluation if isinstance(instance.ai_evaluation, dict) else {},
             'executiveSummary': instance.executive_summary or '',
             'round2Questions': safe_list(instance.round2_questions),
+            # Deepgram transcript of the saved video (api/transcription.py)
+            'sttStatus': instance.stt_status or '',
+            'sttError': instance.stt_error or '',
+            'sttTranscript': instance.stt_transcript or '',
+            'sttSegments': safe_list(instance.stt_segments),
+            'sttAnswers': safe_list(instance.stt_answers),
+            'sttAt': instance.stt_at.strftime(DATETIME_FMT) if instance.stt_at else None,
             'createdAt': instance.created_at.strftime(DATETIME_FMT) if instance.created_at else None,
         }
 

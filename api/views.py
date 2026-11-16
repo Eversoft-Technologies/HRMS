@@ -1441,6 +1441,7 @@ def recordings(request):
         qs = _recording_list_qs().defer(
             'transcript', 'responses', 'ai_evaluation',
             'executive_summary', 'round2_questions',
+            'stt_transcript', 'stt_segments', 'stt_answers',
         )
         return Response(InterviewRecordingSerializer(
             qs, many=True, context={'summary': True},
@@ -1609,6 +1610,35 @@ def _complete_interview(pk):
         _mark_interview_taken(rec['candidate_email'], rec['role'], rec['total_score'])
 
 
+def _start_transcription(pk):
+    """Full speech-to-text of the saved video (Deepgram), on a background
+    thread — the candidate's upload never waits for it, and a failure there
+    never fails the upload."""
+    try:
+        from . import transcription
+        transcription.transcribe_async(pk)
+    except Exception:
+        logger.exception('[STT] could not queue recording %s', pk)
+
+
+@api_view(['POST'])
+@require_perm('recruitment.edit')
+def recording_transcribe(request, pk):
+    """HR: (re)run the Deepgram transcription of one recording."""
+    from . import transcription
+    rec = InterviewRecording.objects.filter(pk=pk).values('has_video').first()
+    if rec is None:
+        return err('Recording not found', 404)
+    if not rec['has_video']:
+        return err('This interview has no video to transcribe.', 400)
+    if not transcription.is_configured():
+        return Response({'message': 'Speech-to-text is not set up: add the Deepgram key in '
+                                    'Settings › AI Settings › Speech-to-text.', 'code': 'NO_KEY'}, status=503)
+    transcription.transcribe_async(pk)
+    row = InterviewRecording.objects.filter(pk=pk).values('stt_status', 'stt_error').first()
+    return Response({'ok': True, 'sttStatus': row['stt_status'], 'sttError': row['stt_error']})
+
+
 @csrf_exempt
 def recording_video(request, pk):
     """
@@ -1629,6 +1659,7 @@ def recording_video(request, pk):
             from . import video_processor
             result = video_processor.save_interview_video(pk, data, mime)
             _complete_interview(pk)
+            _start_transcription(pk)
             return JsonResponse(result)
         except Exception as exc:
             logger.error(f"[RecordingVideo] Disk save failed: {exc}", exc_info=True)
@@ -1636,6 +1667,7 @@ def recording_video(request, pk):
             InterviewRecording.objects.filter(pk=pk).update(
                 video_buffer=data, video_mime=mime, has_video=True)
             _complete_interview(pk)
+            _start_transcription(pk)
             return JsonResponse({'ok': True, 'fallback': 'buffer'})
 
     if request.method != 'GET':
@@ -4551,6 +4583,7 @@ def _live_clock_extras(email, day, obj):
     # to let the client end the break the trail already reports as open.
     active_break = None
     if on_break:
+        from .models import Break
         active_break = (Break.objects.filter(email=email, status='active')
                         .order_by('-break_start').first())
     open_session = obj is not None and _is_checked_in(obj)
