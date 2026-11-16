@@ -2669,16 +2669,15 @@ def _profile_stats(email, include_payroll):
     leave and (when the caller may see payroll) the latest payslip."""
     today = local_today()
     since = today - timedelta(days=PROFILE_STATS_DAYS - 1)
-    counts = {'present': 0, 'late': 0, 'absent': 0, 'half-day': 0}
-    for status in EmployeeAttendance.objects.filter(
-            email=email, date__gte=since, date__lte=today).values_list('status', flat=True):
-        status = str(status or '').lower()
-        if status in counts:
-            counts[status] += 1
-    denom = sum(counts.values())
+    # Same numbers as the Attendance tab (/api/attendance/summary/ and
+    # attendancePct() in hrms-employee-tabs.js), so the header and the tab
+    # always agree: approved leave counts as a day not attended.
+    from .services.attendance_service import AttendanceService
+    sm = AttendanceService.get_attendance_summary(email, since, today)
+    denom = sm['present'] + sm['late'] + sm['absent'] + sm['half_day'] + sm.get('leave', 0)
     pct = None
     if denom:
-        got = counts['present'] + counts['late'] + 0.5 * counts['half-day']
+        got = sm['present'] + sm['late'] + 0.5 * sm['half_day']
         pct = int(round(got / denom * 100))
 
     stages = EmployeeTask.objects.filter(assignee_email=email).values_list('stage', flat=True)

@@ -60,3 +60,29 @@ class SummaryLeaveTests(TestCase):
         self.leave(date(2026, 10, 29), date(2026, 11, 3))   # Thu 29, Fri 30, Mon 2, Tue 3
         self.assertEqual(self.summary()['leave'], 2)         # range starts Nov 1
         self.assertEqual(self.summary('2026-10-01', '2026-10-31')['leave'], 2)
+
+
+class HeaderMatchesTabTests(TestCase):
+    """The profile header's "Attendance %" and the Attendance tab agree."""
+
+    def test_header_counts_approved_leave_like_the_tab(self):
+        from api.models import AppUser
+        from api.timeutil import local_today
+        from datetime import timedelta
+        admin = 'hdr.admin@example.com'
+        AppUser.objects.create(email=admin, full_name='Hdr Admin', password='x', role='admin', status='active')
+        u = AppUser.objects.create(email=EMAIL, full_name='Leave Tester', password='x', role='hr', status='active')
+        today = local_today()
+        days = [today - timedelta(days=i) for i in range(1, 15)]
+        weekdays = [d for d in days if d.weekday() < 5]
+        for d in weekdays[1:4]:
+            EmployeeAttendance.objects.create(email=EMAIL, date=d, status='present',
+                                              check_in=datetime.combine(d, time(9, 0)))
+        LeaveRequest.objects.create(email=EMAIL, type='Sick Leave', from_date=weekdays[0],
+                                    to_date=weekdays[0], status='Approved', days=1)
+        c = Client(HTTP_X_USER_EMAIL=admin)
+        body = c.get(f'/api/employees/{u.id}/profile').json()
+        self.assertEqual(body['stats']['attendancePct'], 75)          # 3 present / (3 + 1 leave)
+        frm = (today - timedelta(days=29)).isoformat()
+        s = c.get(f'/api/attendance/summary/?email={EMAIL}&fromDate={frm}&toDate={today.isoformat()}').json()
+        self.assertEqual((s['present'], s['leave']), (3, 1))
