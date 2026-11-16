@@ -3724,6 +3724,23 @@ def _open_attendance_session(email, today):
     return previous if shift else None
 
 
+def _any_open_session(email, now):
+    """The employee's most recent still-running session (check-in set, no
+    check-out), even one opened on a previous day. Used where finding the
+    live session matters more than the strict night-shift rule — notably
+    the hourly location punch, which must keep capturing past midnight for
+    anyone still checked in (working late), not only night-shift workers.
+    Bounded to the last 20h so a forgotten, days-old open row is ignored.
+    """
+    cutoff = now - timedelta(hours=20)
+    for att in (EmployeeAttendance.objects
+                .filter(email=email, check_in__isnull=False, check_in__gte=cutoff)
+                .order_by('-check_in')[:3]):
+        if _is_checked_in(att):
+            return att
+    return None
+
+
 @api_view(['POST'])
 @require_perm('attendance.create', or_self=True)
 def attendance_check_in(request):
@@ -4058,6 +4075,13 @@ def attendance_check_in(request):
             obj.late_minutes = 0          # provisional until the shift's own check-in
             obj.status = 'present'
 
+    # A successful check-in is never "absent": that status is reserved for a
+    # day with no check-in at all. Clear a stale 'absent' the late sweep may
+    # have pre-stamped (notably on a flexible shift, whose status is only set
+    # when the row is first created).
+    if obj.status == 'absent' or not obj.status:
+        obj.status = 'present'
+
     # Start a new session
     obj.check_in = now
     obj.save()
@@ -4223,6 +4247,12 @@ def attendance_check_out(request):
             obj.overtime_minutes = obj.worked_minutes - shift.overtime_after_minutes
         else:
             obj.overtime_minutes = 0
+
+    # A day the employee checked in is never 'absent' once closed: keep 'late'
+    # if they arrived late, otherwise 'present'. (Absent stays reserved for a
+    # day with no check-in at all.)
+    if obj.check_in and obj.status in ('', 'absent', None):
+        obj.status = 'late' if (obj.late_minutes or 0) > 0 else 'present'
 
     obj.save()
 
@@ -4476,6 +4506,10 @@ def attendance_today(request):
     else:
         data = dict(EmployeeAttendanceSerializer(obj).data)
     data.update(_live_clock_extras(email, obj.date if obj else today, obj))
+    # Defensive: a row that has a check-in must never read 'absent' on the
+    # widget, even if an older late-sweep left that status on it.
+    if obj is not None and obj.check_in and data.get('status') == 'absent':
+        data['status'] = 'late' if (obj.late_minutes or 0) > 0 else 'present'
     if obj is not None and obj.date != today:
         data['overnight'] = True          # a night shift that started yesterday
     return Response(data)
@@ -4511,11 +4545,20 @@ def _live_clock_extras(email, day, obj):
             on_break, since = False, None
     if obj is not None and obj.check_out:
         on_break, since = False, None
+    # Whether a break is OPEN comes from the event trail above, never from a
+    # break row: a stale/stuck 'active' Break row (left by earlier testing)
+    # must not freeze the live Working counter. The break id is surfaced only
+    # to let the client end the break the trail already reports as open.
+    active_break = None
+    if on_break:
+        active_break = (Break.objects.filter(email=email, status='active')
+                        .order_by('-break_start').first())
     open_session = obj is not None and _is_checked_in(obj)
     return {
         'overtimeAfterMinutes': threshold,
         'onBreak': on_break,
         'breakStartedAt': since.strftime('%Y-%m-%d %H:%M:%S') if since else None,
+        'breakId': active_break.id if active_break is not None else None,
         # The live Working tile = earlier sessions + the running one.
         'priorWorkedMinutes': _prior_worked(obj) if open_session else 0,
         'breaksBeforeSessionMinutes': _break_minutes_before(obj, obj.check_in) if open_session else 0,
@@ -5233,16 +5276,20 @@ def attendance_events(request):
             acc = None
         if event == 'remote-switch':
             home = home_fence_for(email)
-            if home is None:
-                return Response({'message': _home_missing_help(email).split(' For today')[0]
-                                 + ' Remote work can only start from an approved home location.',
-                                 'code': 'HOME_NOT_APPROVED', 'homeLocationStatus': _home_status_label(email)},
-                                status=403)
-            ok, fence_obj, _n, dist = _locate_against_fences(lat, lng, acc, fences=[home])
-            if not ok:
-                return Response({'message': f'You appear to be about {round(dist or 0)} m from your approved '
-                                            f'home location, so you cannot switch to remote here.',
-                                 'code': 'OUTSIDE_HOME_FENCE', 'distance': round(dist) if dist else None}, status=403)
+            if home is not None:
+                ok, fence_obj, _n, dist = _locate_against_fences(lat, lng, acc, fences=[home])
+                if not ok:
+                    return Response({'message': f'You appear to be about {round(dist or 0)} m from your approved '
+                                                f'home location, so you cannot switch to remote here.',
+                                     'code': 'OUTSIDE_HOME_FENCE', 'distance': round(dist) if dist else None}, status=403)
+                switch_ok = fence_obj
+            else:
+                # No approved home on file: still allow the switch to remote and
+                # record where the employee actually is as this remote session's
+                # basis. Punches are then measured as drift from here (see
+                # _session_is_offsite / _where_vs_session), not against the
+                # office, so remote punches work without a pre-registered home.
+                switch_ok = True
         else:
             if not _geofencing_enabled():
                 return Response({'message': 'No office location has been set up yet, so a switch to the '
@@ -5254,7 +5301,7 @@ def attendance_events(request):
                                             f'{nearest.name if nearest else "the office"}, so you cannot switch '
                                             f'to the office here.',
                                  'code': 'OUTSIDE_OFFICE_FENCE', 'distance': round(dist) if dist else None}, status=403)
-        switch_ok = fence_obj
+            switch_ok = fence_obj
     elif lat is not None and lng is not None:
         _, fence_obj = _check_geofence(lat, lng)
 
@@ -5384,10 +5431,16 @@ def _personal_status(att):
 def _team_status(event, att):
     """Live status label + 'since' datetime for the Team Status panel. An
     explicit presence choice (STATUS picker / break) wins; otherwise we fall
-    back to the location implied by the latest activity event. Checked-out or
-    no-show employees are Absent."""
-    if att is None or not _is_checked_in(att):
-        return 'Absent', None
+    back to the location implied by the latest activity event. An approved
+    WFH / remote day reads Remote whatever the check-in event said, unless the
+    person has since switched back to the office. Checked-out or no-show
+    employees are Absent."""
+    if att is None or not att.check_in:
+        return 'Offline', None          # not checked in today (live panel shows Offline, not Absent)
+    if not _is_checked_in(att):
+        # Checked in earlier and has since checked out: they worked today, so
+        # they are not 'Absent' — they are done for the day, shown as Offline.
+        return 'Offline', (att.check_out or att.presence_at or att.check_in)
     if att.presence:
         # A break-type status (Away / Coffee break / …) shows as "In Break";
         # every other choice shows its own label verbatim.
@@ -5396,15 +5449,19 @@ def _team_status(event, att):
         return att.presence, (att.presence_at or att.check_in)
     if event is not None:
         e = event.event
-        if e in ('check-in', 'office-switch', 'break-end'):
-            loc = (event.location or '').lower()
-            remote = 'home' in loc or 'remote' in loc
-            return ('Remote' if remote else 'In Office'), event.at
         if e == 'remote-switch':
             return 'Remote', event.at
+        if e == 'office-switch':
+            return 'In Office', event.at
         if e == 'break-start':
             return IN_BREAK_LABEL, event.at
-    return ('Remote' if att.device == 'mobile' else 'In Office'), att.check_in
+        if e in ('check-in', 'break-end'):
+            loc = (event.location or '').lower()
+            # An approved WFH / remote day is Remote regardless of where the
+            # check-in event happened to be logged.
+            remote = bool(att.is_wfh) or 'home' in loc or 'remote' in loc
+            return ('Remote' if remote else 'In Office'), event.at
+    return ('Remote' if (att.is_wfh or att.device == 'mobile') else 'In Office'), att.check_in
 
 
 @api_view(['GET'])
@@ -5446,7 +5503,7 @@ def attendance_team(request):
             att = today_att.get(email)
             roster.append((email, event_name.get(email) or (att.employee_name if att else '')))
 
-    priority = {'In Office': 0, 'Remote': 1, 'In Break': 2, 'Absent': 3}
+    priority = {'In Office': 0, 'Remote': 1, 'In Break': 2, 'Offline': 3, 'Absent': 4}
     rows = []
     for email, name in roster:
         att = today_att.get(email)
@@ -10977,6 +11034,11 @@ def _event_label(ev):
     return ev
 
 
+def _attendance_location_label(event, location, geo_fence_id):
+    from .serializers import attendance_location_label
+    return attendance_location_label(event, location, geo_fence_id)
+
+
 @api_view(['GET'])
 def attendance_day_detail(request):
     email = norm_email(request.query_params.get('email'))
@@ -10999,14 +11061,17 @@ def attendance_day_detail(request):
     rec = EmployeeAttendance.objects.filter(email=email, date=day).first()
     shift = _get_active_shift(email, day)
     check_in = rec.check_in if rec else None
-    check_out = rec.check_out if rec else None
+    # While the current session is still open (they checked in again after an
+    # earlier check-out), there is no check-out for it yet — show no checkout
+    # (the card reads '--') instead of the stale previous one.
+    check_out = rec.check_out if (rec and not _is_checked_in(rec)) else None
     gross, effective = _day_gross_effective(rec)
     name = (rec.employee_name if rec and rec.employee_name else '') or email.split('@')[0]
     events = AttendanceEvent.objects.filter(email=email, date=day).order_by('at')
     ev = [{
         'event': e.event, 'label': _event_label(e.event),
         'time': _fmt_ampm(e.at), 'at': dt(e.at),
-        'location': e.location or '',
+        'location': _attendance_location_label(e.event, e.location, e.geo_fence_id),
         'latitude': e.latitude, 'longitude': e.longitude,
     } for e in events]
     punches = AttendanceLocationPunch.objects.filter(email=email, date=day).order_by('captured_at')
@@ -11101,6 +11166,11 @@ def attendance_location_punch(request):
     now = local_now()
     # The open session — last night's one too, after midnight on a night shift.
     rec = _current_attendance(email, now)
+    if not (rec and _is_checked_in(rec)):
+        # A session that began before midnight and is still open (someone
+        # working late, not only night shifts) is still the live session, so
+        # keep punching under it rather than stopping capture at 00:00.
+        rec = _any_open_session(email, now)
     if not (rec and _is_checked_in(rec)):
         return Response({'stored': False, 'reason': 'not_checked_in'})
     last = AttendanceLocationPunch.objects.filter(email=email, date=rec.date).order_by('-captured_at').first()

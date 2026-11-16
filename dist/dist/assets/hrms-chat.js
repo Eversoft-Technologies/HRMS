@@ -407,7 +407,7 @@
       "#" + ROOT_ID + " .hcx-bnav .hcx-tab .ic{position:relative;display:inline-flex;}",
       "#" + ROOT_ID + " .hcx-bnav .hcx-tab .dot{position:absolute;top:-3px;right:-6px;min-width:9px;height:9px;padding:0 3px;border-radius:99px;background:#ef4444;border:2px solid var(--hcx-surface);box-sizing:content-box;color:#fff;font-size:9px;line-height:9px;font-weight:700;text-align:center;}",
       "#" + ROOT_ID + " .hcx-bnav .hcx-tab .lb{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;}",
-      "#" + ROOT_ID + " .hcx-filters{display:flex;align-items:center;gap:6px;padding:0 14px 8px;}",
+      "#" + ROOT_ID + " .hcx-filters{display:flex;align-items:center;gap:6px;padding:10px 14px 8px;}",
       "#" + ROOT_ID + " .hcx-chip{border:1px solid var(--hcx-line,#e2e8f0);background:transparent;color:var(--hcx-muted);border-radius:99px;padding:3px 10px;font:600 11.5px inherit;font-family:inherit;cursor:pointer;}",
       "#" + ROOT_ID + " .hcx-chip.on{background:var(--hcx-primary);border-color:var(--hcx-primary);color:#fff;}",
       "#" + ROOT_ID + " .hcx-chip.ghost{margin-left:auto;}",

@@ -1319,6 +1319,8 @@ ATTENDANCE_EVENT_LABELS = {
     'break-end': 'Break End',
     'remote-switch': 'Remote Switch',
     'office-switch': 'Office Switch',
+    'auto-checkout-departure': 'Auto Check Out',
+    'hr-edit': 'HR Edit',
 }
 ATTENDANCE_EVENT_COLORS = {
     'check-in': 'success',
@@ -1327,7 +1329,29 @@ ATTENDANCE_EVENT_COLORS = {
     'break-end': 'success',
     'remote-switch': 'accent',
     'office-switch': 'success',
+    'auto-checkout-departure': 'danger',
+    'hr-edit': 'gray',
 }
+
+
+def attendance_location_label(event, location, geo_fence_id):
+    """Uniform location label for the activity log and attendance popups.
+    Never surfaces a raw geofence name (which may be a person's name) — every
+    row reads the same way: Office / Home / Remote / Outside office."""
+    e = event or ''
+    low = (location or '').strip().lower()
+    if e == 'remote-switch' or 'remote' in low:
+        return 'Remote'
+    if 'outside office' in low or 'off-site' in low or 'offsite' in low:
+        return 'Outside office'
+    if 'home' in low:
+        return 'Home'
+    if (location or '').strip() or geo_fence_id or e in (
+            'check-in', 'check-out', 'office-switch', 'break-start',
+            'break-end', 'auto-checkout-departure'):
+        return 'Office'
+    return ''
+
 
 
 class AttendanceEventSerializer(serializers.ModelSerializer):
@@ -1345,8 +1369,9 @@ class AttendanceEventSerializer(serializers.ModelSerializer):
             'email': instance.email,
             'employee': instance.employee_name or '',
             'type': instance.event,
-            'event': ATTENDANCE_EVENT_LABELS.get(instance.event, instance.event),
-            'location': instance.location or '—',
+            'event': (ATTENDANCE_EVENT_LABELS.get(instance.event)
+                      or (str(instance.event or '').replace('-', ' ').replace('_', ' ').title() or '—')),
+            'location': attendance_location_label(instance.event, instance.location, instance.geo_fence_id),
             'time': instance.at.strftime('%I:%M %p') if instance.at else '',
             'color': ATTENDANCE_EVENT_COLORS.get(instance.event, 'gray'),
             'at': instance.at.strftime(DATETIME_FMT) if instance.at else None,
