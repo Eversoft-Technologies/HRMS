@@ -32,7 +32,40 @@
     selectedPeriodFilter: '',
     modalOpen: false,
     modalType: null,        // 'newRun' | 'viewRun'
+    // current page (1-based) of each tab's list, see pageOf()
+    pages: { runs: 1, payslips: 1, compensation: 1, components: 1 },
   };
+
+  /* Every tab's list shows this many rows at a time. */
+  var PAGE_SIZE = 7;
+
+  /* The slice of `list` for the current page of `key`, plus what the pager needs. */
+  function pageOf(key, list) {
+    var total = list.length;
+    var pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+    var page = Math.min(Math.max(1, state.pages[key] || 1), pages);
+    state.pages[key] = page;
+    var from = (page - 1) * PAGE_SIZE;
+    var to = Math.min(total, from + PAGE_SIZE);
+    return { items: list.slice(from, to), total: total, pages: pages, page: page, from: from, to: to };
+  }
+
+  /* Prev / page numbers / Next under a list. Nothing when it fits on one page. */
+  function pagerHtml(key, pg, noun) {
+    if (pg.total <= PAGE_SIZE) return '';
+    var nums = '';
+    for (var n = 1; n <= pg.pages; n++) {
+      nums += '<button type="button" data-pr-page="' + n + '" data-pr-list="' + key + '"' +
+        (n === pg.page ? ' class="on" aria-current="page"' : '') + '>' + n + '</button>';
+    }
+    return '<div class="pr-pager">' +
+      '<div class="pr-pager-info">Showing <b>' + (pg.from + 1) + '–' + pg.to + '</b> of <b>' + pg.total + '</b> ' + noun + '</div>' +
+      '<div class="pr-pager-nav">' +
+      '<button type="button" data-pr-page="' + (pg.page - 1) + '" data-pr-list="' + key + '"' + (pg.page <= 1 ? ' disabled' : '') + '>Prev</button>' +
+      nums +
+      '<button type="button" data-pr-page="' + (pg.page + 1) + '" data-pr-list="' + key + '"' + (pg.page >= pg.pages ? ' disabled' : '') + '>Next</button>' +
+      '</div></div>';
+  }
 
   function isPayrollRoute() {
     var p = (location.pathname || '').replace(/\/+$/, '');
@@ -85,6 +118,14 @@
       '.pr-table th { padding: 12px 16px; background: var(--bg3, rgba(255,255,255,0.02)); font-weight: 600; color: var(--text2, #8a9bb8); text-transform: uppercase; font-size: 11px; letter-spacing: 0.5px; border-bottom: 1px solid var(--border, rgba(255,255,255,0.08)); }',
       '.pr-table td { padding: 12px 16px; border-bottom: 1px solid var(--border, rgba(255,255,255,0.05)); color: var(--text, #e8edf7); vertical-align: middle; }',
       '.pr-table tr:hover td { background: var(--bg3, rgba(255,255,255,0.02)); }',
+      '.pr-pager { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; padding: 12px 16px; font-size: 12.5px; color: var(--text2, #8a9bb8); }',
+      '.pr-pager-info b { color: var(--text, #e8edf7); font-weight: 700; }',
+      '.pr-pager-nav { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }',
+      '.pr-pager button { min-width: 32px; height: 30px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--border2, rgba(255,255,255,0.1)); background: var(--bg2, transparent); color: var(--text, #e8edf7); font: inherit; font-weight: 600; cursor: pointer; }',
+      '.pr-pager button:hover:not(:disabled):not(.on) { background: var(--bg3, rgba(255,255,255,0.05)); }',
+      '.pr-pager button.on { background: var(--accent, #4f8ef7); border-color: var(--accent, #4f8ef7); color: #fff; cursor: default; }',
+      '.pr-pager button:disabled { opacity: .45; cursor: not-allowed; }',
+      '@media (max-width: 600px) { .pr-pager { justify-content: center; padding: 12px 4px 4px; } .pr-pager-info { width: 100%; text-align: center; } .pr-pager button { height: 34px; min-width: 36px; } }',
       
       /* Badges */
       '.pr-badge { display: inline-flex; align-items: center; padding: 3px 9px; border-radius: 12px; font-size: 11px; font-weight: 600; text-transform: capitalize; }',
@@ -201,9 +242,36 @@
   }
 
   /* ── Main Render Functions ── */
+  /* Phones show each table row as a stacked card (responsive.css). A card has no
+     header row above it, so every cell carries its column's name in data-label
+     and the stylesheet prints it beside the value. */
+  function labelCells() {
+    var root = document.getElementById(ID.root);
+    if (!root) return;
+    root.querySelectorAll('.pr-table').forEach(function (table) {
+      var heads = Array.prototype.map.call(table.querySelectorAll('thead th'), function (th) {
+        return (th.textContent || '').trim();
+      });
+      table.querySelectorAll('tbody tr').forEach(function (tr) {
+        Array.prototype.forEach.call(tr.children, function (td, i) {
+          if (td.hasAttribute('colspan')) return;
+          td.setAttribute('data-label', heads[i] || '');
+          // A cell with nothing in it ("-") is left out of the phone card.
+          var txt = (td.textContent || '').trim();
+          td.classList.toggle('pr-empty', txt === '' || txt === '-' || txt === '–');
+        });
+      });
+    });
+  }
+
   function render() {
     var root = document.getElementById(ID.root);
     if (!root) return;
+
+    // Redrawing replaces the tab row, which would snap a scrolled row back to
+    // its start (on a phone the selected tab then slides out of view).
+    var oldTabs = root.querySelector('.pr-tabs');
+    var tabsScroll = oldTabs ? oldTabs.scrollLeft : 0;
 
     var totalGross = state.runs.reduce(function (acc, r) { return acc + (parseFloat(r.total_gross) || 0); }, 0);
     var totalNet = state.runs.reduce(function (acc, r) { return acc + (parseFloat(r.total_net) || 0); }, 0);
@@ -272,6 +340,21 @@
 
     root.innerHTML = html.join('\n');
     attachEvents();
+    labelCells();
+
+    // Put the tab row back where it was, then make sure the selected tab is
+    // fully visible (only the row moves; the page itself does not jump).
+    var tabs = root.querySelector('.pr-tabs');
+    if (tabs) {
+      tabs.scrollLeft = tabsScroll;
+      var active = tabs.querySelector('.pr-tab.active');
+      if (active) {
+        var left = active.offsetLeft - tabs.offsetLeft;
+        var right = left + active.offsetWidth;
+        if (left < tabs.scrollLeft) tabs.scrollLeft = left;
+        else if (right > tabs.scrollLeft + tabs.clientWidth) tabs.scrollLeft = right - tabs.clientWidth;
+      }
+    }
   }
 
   function renderRunsTab() {
@@ -284,7 +367,8 @@
         '</div>';
     }
 
-    var rows = state.runs.map(function (r) {
+    var pg = pageOf('runs', state.runs);
+    var rows = pg.items.map(function (r) {
       var badgeCls = 'pr-badge-' + (r.status || 'draft').toLowerCase();
       return '<tr>' +
         '<td style="font-weight: 700; color: var(--accent, #4f8ef7);">' + r.period_label + '</td>' +
@@ -311,12 +395,25 @@
       '  <th>Pay Period</th><th>Dates</th><th>Employees</th><th>Gross Total</th><th>Deductions</th><th>Net Disbursed</th><th>Status</th><th>Actions</th>' +
       '</tr></thead>' +
       '<tbody>' + rows + '</tbody>' +
-      '</table></div></div>';
+      '</table></div>' + pagerHtml('runs', pg, 'pay runs') + '</div>';
+  }
+
+  /* The pay period a payslip belongs to. The API sends only the run's id, so
+     the label is looked up in the loaded runs. (It used to be read from fields
+     the API never sends, so the period filter and "View Payslips" matched
+     nothing and every row showed the same fixed period.) */
+  function periodOfPayslip(p) {
+    if (p.run_period) return p.run_period;
+    if (p.run && p.run.period_label) return p.run.period_label;
+    for (var i = 0; i < state.runs.length; i++) {
+      if (String(state.runs[i].id) === String(p.run)) return state.runs[i].period_label || '';
+    }
+    return '';
   }
 
   function renderPayslipsTab() {
     var filtered = state.payslips.filter(function (p) {
-      var matchPeriod = !state.selectedPeriodFilter || (p.run_period === state.selectedPeriodFilter || (p.run && p.run.period_label === state.selectedPeriodFilter));
+      var matchPeriod = !state.selectedPeriodFilter || periodOfPayslip(p) === state.selectedPeriodFilter;
       var q = state.searchQuery.toLowerCase();
       var matchSearch = !q || (p.employee_name && p.employee_name.toLowerCase().indexOf(q) !== -1) || (p.email && p.email.toLowerCase().indexOf(q) !== -1);
       return matchPeriod && matchSearch;
@@ -330,8 +427,9 @@
       return '<option value="' + p + '"' + (state.selectedPeriodFilter === p ? ' selected' : '') + '>' + p + '</option>';
     }).join('');
 
-    var rows = filtered.map(function (p) {
-      var period = p.run_period || (p.run ? p.run.period_label : '2026-06');
+    var pg = pageOf('payslips', filtered);
+    var rows = pg.items.map(function (p) {
+      var period = periodOfPayslip(p) || '-';
       var badgeCls = 'pr-badge-' + (p.status || 'draft').toLowerCase();
       return '<tr>' +
         '<td>' +
@@ -367,11 +465,12 @@
       '  <th>Employee</th><th>Period</th><th>Paid Days</th><th>Gross Earnings</th><th>Total Deductions</th><th>Net Pay</th><th>Status</th><th>Eversoft Payslip</th>' +
       '</tr></thead>' +
       '<tbody>' + rows + '</tbody>' +
-      '</table></div></div>';
+      '</table></div>' + pagerHtml('payslips', pg, 'payslips') + '</div>';
   }
 
   function renderCompensationTab() {
-    var rows = state.compensations.map(function (c) {
+    var pg = pageOf('compensation', state.compensations);
+    var rows = pg.items.map(function (c) {
       return '<tr>' +
         '<td>' +
         '  <div style="font-weight:600;">' + c.email + '</div>' +
@@ -394,11 +493,12 @@
       '  <th>Employee</th><th>Monthly Base</th><th>Annual CTC</th><th>PAN</th><th>UAN</th><th>PF Account</th><th>Bank Account</th><th>Status</th>' +
       '</tr></thead>' +
       '<tbody>' + (rows || '<tr><td colspan="8" style="text-align:center; padding:30px;">No compensation records set.</td></tr>') + '</tbody>' +
-      '</table></div></div>';
+      '</table></div>' + pagerHtml('compensation', pg, 'employees') + '</div>';
   }
 
   function renderComponentsTab() {
-    var rows = state.components.map(function (pc) {
+    var pg = pageOf('components', state.components);
+    var rows = pg.items.map(function (pc) {
       var typeColor = pc.component_type === 'earning' ? '#10b981' : (pc.component_type === 'deduction' ? '#ef4444' : '#3b82f6');
       return '<tr>' +
         '<td style="font-weight:600; color:var(--text);">' + pc.name + '</td>' +
@@ -418,7 +518,7 @@
       '  <th>Component Name</th><th>Code</th><th>Type</th><th>Calculation</th><th>Rate</th><th>Default Amount</th><th>Status</th>' +
       '</tr></thead>' +
       '<tbody>' + rows + '</tbody>' +
-      '</table></div></div>';
+      '</table></div>' + pagerHtml('components', pg, 'components') + '</div>';
   }
 
   function renderNewRunModal() {
@@ -466,6 +566,15 @@
     root.querySelectorAll('.pr-tab').forEach(function (tabEl) {
       tabEl.addEventListener('click', function () {
         state.activeTab = this.getAttribute('data-tab');
+        render();
+      });
+    });
+
+    // Pager under each tab's list
+    root.querySelectorAll('.pr-pager button[data-pr-page]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        if (this.disabled) return;
+        state.pages[this.getAttribute('data-pr-list')] = parseInt(this.getAttribute('data-pr-page'), 10) || 1;
         render();
       });
     });
@@ -532,6 +641,7 @@
     root.querySelectorAll('.btn-filter-payslips').forEach(function (btn) {
       btn.addEventListener('click', function () {
         state.selectedPeriodFilter = this.getAttribute('data-period');
+        state.pages.payslips = 1;
         state.activeTab = 'payslips';
         render();
       });
@@ -542,6 +652,7 @@
     if (searchInput) {
       searchInput.addEventListener('input', function (e) {
         state.searchQuery = e.target.value;
+        state.pages.payslips = 1;
         render();
       });
     }
@@ -550,6 +661,7 @@
     if (periodSelect) {
       periodSelect.addEventListener('change', function (e) {
         state.selectedPeriodFilter = e.target.value;
+        state.pages.payslips = 1;
         render();
       });
     }

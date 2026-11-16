@@ -29,7 +29,7 @@ from django.contrib.auth.hashers import make_password
 from django.db import transaction
 from django.db.models import (
     BinaryField, BooleanField, Case, CharField, Count, ExpressionWrapper, F, Func,
-    IntegerField, OuterRef, Q, Subquery, Sum, Value, When,
+    IntegerField, OuterRef, Prefetch, Q, Subquery, Sum, Value, When,
 )
 from django.db.models.functions import Coalesce, Substr
 from django.http import HttpResponse, JsonResponse
@@ -1223,7 +1223,13 @@ def _save_resume(serializer):
 @require_perm({'GET': 'recruitment.view', 'POST': 'recruitment.create'})
 def resume_scores(request):
     if request.method == 'GET':
-        return Response(ResumeScoreSerializer(ResumeScore.objects.all(), many=True).data)
+        # defer(): the list never shows the uploaded file, but selecting it
+        # pulled every resume's base64 body out of MySQL on each page load
+        # (Recruit, Resume Scoring), which is what made the list slow once
+        # there were real resumes. The file is still served on demand by
+        # resume_score_file().
+        return Response(ResumeScoreSerializer(
+            ResumeScore.objects.defer('file_data'), many=True).data)
 
     body = request.data
     if isinstance(body, list):
@@ -6597,6 +6603,15 @@ def submissions(request):
         status_filter = request.GET.get('status')
         if status_filter:
             qs = qs.filter(status=status_filter)
+        # The queue only needs to know WHETHER a file exists, so the two
+        # base64 attachment columns are not selected (they were being shipped
+        # from MySQL for every row on every load); the has_file /
+        # has_review_file flags answer that. The team, collaborators and
+        # comment count come with the list instead of three queries per row.
+        qs = (qs.defer('file_data', 'review_file_data')
+                .annotate(comment_count=Count('comments', distinct=True))
+                .select_related('team')
+                .prefetch_related('collaborators'))
         return Response(WorkSubmissionSerializer(qs, many=True).data)
 
     body = dict(request.data or {})
@@ -6882,19 +6897,27 @@ _BENCH_SALES_FILE_DATA_COLS = {
 }
 
 
+def _bench_sales_flag_col(data_col):
+    """'resume_file_data' -> 'resume_has_file'."""
+    return data_col[:-len('_file_data')] + '_has_file'
+
+
 def _bench_sales_profile_qs():
     """Profiles WITHOUT their base64 document columns loaded.
 
     A 34 MB PDF is ~45 MB of base64 per column, so selecting the blobs just to
     list the roster (or to re-save an unchanged row on edit) would move hundreds
     of MB per request and blow past MySQL's max_allowed_packet. The columns are
-    deferred; a LENGTH() annotation per column lets the serializer report
-    has-file flags without touching the data."""
-    from django.db.models.functions import Length
+    deferred, and the has-file flags come from the small *_has_file columns.
+    (They used to come from a LENGTH() of each blob, but MySQL has to read the
+    whole file to answer that: 40 consultants took over two seconds to list.)"""
     cols = list(_BENCH_SALES_FILE_DATA_COLS.values())
-    return BenchSalesProfile.objects.defer(*cols).annotate(
-        **{f'{col}_len': Length(col) for col in cols}
-    )
+    # prefetch: every profile's certificate names in ONE query (names only,
+    # never the file bodies) instead of one query per profile in the roster.
+    return BenchSalesProfile.objects.defer(*cols).prefetch_related(Prefetch(
+        'certificate_files',
+        queryset=BenchSalesCertificate.objects.only('id', 'file_name', 'kind', 'profile_id'),
+    ))
 
 
 def _pop_bench_sales_file_data(body):
@@ -6916,7 +6939,8 @@ def _store_bench_sales_file_data(pk, files):
     single multi-column write of two 34 MB files (~91 MB) drops the connection
     with 'MySQL server has gone away'."""
     for col, data in files.items():
-        BenchSalesProfile.objects.filter(pk=pk).update(**{col: data})
+        BenchSalesProfile.objects.filter(pk=pk).update(
+            **{col: data, _bench_sales_flag_col(col): bool(data)})
 
 
 BENCH_SALES_DOC_MIMES = {
@@ -7138,7 +7162,8 @@ def bench_sales_profile_file(request, pk, field):
     if request.method == 'DELETE':
         if not BenchSalesProfile.objects.filter(pk=pk).exists():
             return err('Profile not found', 404)
-        BenchSalesProfile.objects.filter(pk=pk).update(**{c: '' for c in cols})
+        BenchSalesProfile.objects.filter(pk=pk).update(
+            **{c: '' for c in cols}, **{_bench_sales_flag_col(cols[2]): False})
         return Response(BenchSalesProfileSerializer(_bench_sales_profile_qs().get(pk=pk)).data)
     # only() the requested document: never drag the other two blobs along.
     obj = BenchSalesProfile.objects.only(*cols).filter(pk=pk).first()

@@ -2263,6 +2263,20 @@
     for (var i = 0; i < tabs.length; i++) {
       tabs[i].className = 'haa-tab' + (tabs[i].getAttribute('data-tab') === state.tab ? ' on' : '');
     }
+    // On a phone the tab row swipes sideways: bring the chosen tab to the middle
+    // of the row so it is never left half hidden at the edge.
+    try {
+      var strip = el.querySelector('.haa-tabs');
+      var onTab = el.querySelector('.haa-tab.on');
+      if (strip && onTab && strip.scrollWidth > strip.clientWidth + 1) {
+        var sr = strip.getBoundingClientRect(), tr = onTab.getBoundingClientRect();
+        var to = strip.scrollLeft + (tr.left - sr.left) - (strip.clientWidth - tr.width) / 2;
+        to = Math.max(0, Math.min(to, strip.scrollWidth - strip.clientWidth));
+        if (Math.abs(to - strip.scrollLeft) > 2) {
+          if (strip.scrollTo && !document.hidden) strip.scrollTo({ left: to, behavior: 'smooth' }); else strip.scrollLeft = to;
+        }
+      }
+    } catch (_) {}
     if (state.busy) { body.innerHTML = '<div class="haa-empty">Loading…</div>'; return; }
     body.innerHTML = state.tab === 'live_map' ? liveMapHtml()
       : state.tab === 'fences' ? fencesHtml()
