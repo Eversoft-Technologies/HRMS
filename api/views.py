@@ -29,7 +29,7 @@ from django.contrib.auth.hashers import make_password
 from django.db import transaction
 from django.db.models import (
     BinaryField, BooleanField, Case, CharField, Count, ExpressionWrapper, F, Func,
-    IntegerField, OuterRef, Q, Subquery, Sum, Value, When,
+    IntegerField, OuterRef, Prefetch, Q, Subquery, Sum, Value, When,
 )
 from django.db.models.functions import Coalesce, Substr
 from django.http import HttpResponse, JsonResponse
@@ -49,6 +49,7 @@ from .models import (
     Company,
     CompanyDetail,
     EmployeeAttendance,
+    EmployeeDirectoryEntry,
     EmployeeTask,
     MasterDataSet,
     InterviewLink,
@@ -1223,7 +1224,13 @@ def _save_resume(serializer):
 @require_perm({'GET': 'recruitment.view', 'POST': 'recruitment.create'})
 def resume_scores(request):
     if request.method == 'GET':
-        return Response(ResumeScoreSerializer(ResumeScore.objects.all(), many=True).data)
+        # defer(): the list never shows the uploaded file, but selecting it
+        # pulled every resume's base64 body out of MySQL on each page load
+        # (Recruit, Resume Scoring), which is what made the list slow once
+        # there were real resumes. The file is still served on demand by
+        # resume_score_file().
+        return Response(ResumeScoreSerializer(
+            ResumeScore.objects.defer('file_data'), many=True).data)
 
     body = request.data
     if isinstance(body, list):
@@ -2528,7 +2535,9 @@ def user_detail(request, email):
 def employees(request):
     """List and create employee profiles used by the HR employee directory."""
     if request.method == 'GET':
-        profiles = UserProfile.objects.all().order_by('first_name', 'last_name', 'email')
+        profiles = UserProfile.objects.filter(
+            directory_entry__isnull=False,
+        ).order_by('first_name', 'last_name', 'email')
         data = UserProfileSerializer(profiles, many=True).data
         for item in data:
             comp = EmployeeCompensation.objects.filter(email__iexact=item.get('email', '')).order_by('-effective_from').first()
@@ -2549,7 +2558,7 @@ def employees(request):
     full_name = str(body.get('fullName') or body.get('name') or '').strip()
     if not email or not full_name or not body.get('department') or not body.get('jobTitle'):
         return err('fullName, email, department and jobTitle are required')
-    if UserProfile.objects.filter(email=email).exists():
+    if EmployeeDirectoryEntry.objects.filter(profile__email__iexact=email).exists():
         return err('An employee with this email already exists', 409)
 
     name_parts = full_name.split()
@@ -2567,10 +2576,13 @@ def employees(request):
         'annualCtc': body.get('annualCtc', body.get('salary')) or None,
         'startDate': body.get('startDate') or None,
     }
-    serializer = UserProfileSerializer(data=data)
+    profile = UserProfile.objects.filter(email__iexact=email).first()
+    serializer = (UserProfileSerializer(profile, data=data, partial=True)
+                  if profile else UserProfileSerializer(data=data))
     if not serializer.is_valid():
         return serializer_err(serializer)
-    serializer.save()
+    profile = serializer.save()
+    EmployeeDirectoryEntry.objects.get_or_create(profile=profile)
 
     # Automatically generate Indian Payroll Compensation record
     from api.services.payroll_service import sync_employee_compensation
@@ -3004,18 +3016,34 @@ def employee_profile(request, key):
     })
 
 
-@api_view(['GET', 'PATCH'])
+@api_view(['GET', 'PATCH', 'DELETE'])
 def employee_detail(request, key):
     """Read or partially update one employee's HRIS profile.
 
     PATCH accepts the camelCase keys of ``UserProfileSerializer``. Personal
     details may be changed by the employee themselves or anyone with
     employee.edit; employment details need employee.edit. Unlike the Settings
-    profile PUT, fields that are not sent are left untouched.
+    profile PUT, fields that are not sent are left untouched. DELETE removes
+    only the HRIS directory entry; the profile and employee account remain.
     """
     user, profile, email = _resolve_employee(key)
     if not email or (user is None and profile is None):
         return err('Employee not found', 404)
+
+    if request.method == 'DELETE':
+        allowed, caller_email, caller = check_perm(request, 'employee.delete')
+        if not caller_email or not caller:
+            return err('Authentication required. Please sign in again.', 401)
+        if not allowed:
+            return err('Permission denied: employee.delete', 403)
+        if profile is None:
+            return err('Employee profile not found', 404)
+        directory_entry = EmployeeDirectoryEntry.objects.filter(profile=profile).first()
+        if directory_entry is None:
+            return err('HRIS directory row not found', 404)
+        directory_entry.delete()
+        return Response({'ok': True, 'email': email})
+
     denied, _caller, is_self, has = _profile_gate(request, email)
     if denied:
         return denied
@@ -6654,6 +6682,15 @@ def submissions(request):
         status_filter = request.GET.get('status')
         if status_filter:
             qs = qs.filter(status=status_filter)
+        # The queue only needs to know WHETHER a file exists, so the two
+        # base64 attachment columns are not selected (they were being shipped
+        # from MySQL for every row on every load); the has_file /
+        # has_review_file flags answer that. The team, collaborators and
+        # comment count come with the list instead of three queries per row.
+        qs = (qs.defer('file_data', 'review_file_data')
+                .annotate(comment_count=Count('comments', distinct=True))
+                .select_related('team')
+                .prefetch_related('collaborators'))
         return Response(WorkSubmissionSerializer(qs, many=True).data)
 
     body = dict(request.data or {})
@@ -6939,19 +6976,27 @@ _BENCH_SALES_FILE_DATA_COLS = {
 }
 
 
+def _bench_sales_flag_col(data_col):
+    """'resume_file_data' -> 'resume_has_file'."""
+    return data_col[:-len('_file_data')] + '_has_file'
+
+
 def _bench_sales_profile_qs():
     """Profiles WITHOUT their base64 document columns loaded.
 
     A 34 MB PDF is ~45 MB of base64 per column, so selecting the blobs just to
     list the roster (or to re-save an unchanged row on edit) would move hundreds
     of MB per request and blow past MySQL's max_allowed_packet. The columns are
-    deferred; a LENGTH() annotation per column lets the serializer report
-    has-file flags without touching the data."""
-    from django.db.models.functions import Length
+    deferred, and the has-file flags come from the small *_has_file columns.
+    (They used to come from a LENGTH() of each blob, but MySQL has to read the
+    whole file to answer that: 40 consultants took over two seconds to list.)"""
     cols = list(_BENCH_SALES_FILE_DATA_COLS.values())
-    return BenchSalesProfile.objects.defer(*cols).annotate(
-        **{f'{col}_len': Length(col) for col in cols}
-    )
+    # prefetch: every profile's certificate names in ONE query (names only,
+    # never the file bodies) instead of one query per profile in the roster.
+    return BenchSalesProfile.objects.defer(*cols).prefetch_related(Prefetch(
+        'certificate_files',
+        queryset=BenchSalesCertificate.objects.only('id', 'file_name', 'kind', 'profile_id'),
+    ))
 
 
 def _pop_bench_sales_file_data(body):
@@ -6973,7 +7018,8 @@ def _store_bench_sales_file_data(pk, files):
     single multi-column write of two 34 MB files (~91 MB) drops the connection
     with 'MySQL server has gone away'."""
     for col, data in files.items():
-        BenchSalesProfile.objects.filter(pk=pk).update(**{col: data})
+        BenchSalesProfile.objects.filter(pk=pk).update(
+            **{col: data, _bench_sales_flag_col(col): bool(data)})
 
 
 BENCH_SALES_DOC_MIMES = {
@@ -7195,7 +7241,8 @@ def bench_sales_profile_file(request, pk, field):
     if request.method == 'DELETE':
         if not BenchSalesProfile.objects.filter(pk=pk).exists():
             return err('Profile not found', 404)
-        BenchSalesProfile.objects.filter(pk=pk).update(**{c: '' for c in cols})
+        BenchSalesProfile.objects.filter(pk=pk).update(
+            **{c: '' for c in cols}, **{_bench_sales_flag_col(cols[2]): False})
         return Response(BenchSalesProfileSerializer(_bench_sales_profile_qs().get(pk=pk)).data)
     # only() the requested document: never drag the other two blobs along.
     obj = BenchSalesProfile.objects.only(*cols).filter(pk=pk).first()

@@ -915,7 +915,16 @@
       })(wraps[w]);
     }
   }
-  function closeChartFilter() { var p = document.getElementById('kpi-cf-pop'); if (p) p.remove(); }
+  /* The chart filter is a small floating menu. It must go away as soon as the
+     person does anything else: it used to listen only for a mouse press, so on
+     a phone (where a swipe or tap is not a mouse press) it stayed floating over
+     the dashboard while the page scrolled underneath it. */
+  var chartFilterOff = null;   // removes the listeners of the open menu
+  function closeChartFilter() {
+    var p = document.getElementById('kpi-cf-pop');
+    if (p) p.remove();
+    if (chartFilterOff) { chartFilterOff(); chartFilterOff = null; }
+  }
   function toggleChartLabel(chart, i, show) {
     if (!chart._origData) chart._origData = chart.data.datasets.map(function (ds) { return ds.data.slice(); });
     if (!chart._hidden) chart._hidden = {};
@@ -947,9 +956,48 @@
         var k = +rb.getAttribute('data-i');
         labels.forEach(function (lb, i) { toggleChartLabel(chart, i, k === -1 || i === k); });
         btn.classList.toggle('on', k !== -1);
+        // a choice was made: put the menu away (a beat later, so the tick shows)
+        setTimeout(closeChartFilter, 160);
       });
     });
-    setTimeout(function () { document.addEventListener('mousedown', function h(e) { var p = document.getElementById('kpi-cf-pop'); if (p && !p.contains(e.target) && e.target !== btn) { p.remove(); document.removeEventListener('mousedown', h); } }); }, 0);
+    // Close on a press / tap anywhere else, on any scroll, on a resize or
+    // rotation, and on Escape. The Filter button itself is left to its own
+    // click, which toggles the menu.
+    var outside = function (e) {
+      var p = document.getElementById('kpi-cf-pop');
+      if (!p) return;
+      if (p.contains(e.target) || e.target === btn || (btn.contains && btn.contains(e.target))) return;
+      closeChartFilter();
+    };
+    var onScroll = function (e) {
+      var p = document.getElementById('kpi-cf-pop');
+      if (p && e.target && e.target.nodeType === 1 && p.contains(e.target)) return;   // scrolling inside the menu
+      closeChartFilter();
+    };
+    // Escape puts away only this menu; it must not also close the dashboard behind it.
+    var onKey = function (e) {
+      if (e.key !== 'Escape' || !document.getElementById('kpi-cf-pop')) return;
+      e.stopImmediatePropagation(); e.preventDefault();
+      closeChartFilter();
+    };
+    var armed = false;
+    var arm = setTimeout(function () {
+      armed = true;
+      document.addEventListener('mousedown', outside, true);
+      document.addEventListener('touchstart', outside, { capture: true, passive: true });
+      window.addEventListener('scroll', onScroll, true);
+      window.addEventListener('resize', closeChartFilter);
+      document.addEventListener('keydown', onKey, true);
+    }, 0);
+    chartFilterOff = function () {
+      clearTimeout(arm);
+      if (!armed) return;
+      document.removeEventListener('mousedown', outside, true);
+      document.removeEventListener('touchstart', outside, { capture: true });
+      window.removeEventListener('scroll', onScroll, true);
+      window.removeEventListener('resize', closeChartFilter);
+      document.removeEventListener('keydown', onKey, true);
+    };
   }
 
   /* ── helper: update values without destroying canvas elements ───────── */
