@@ -1716,15 +1716,15 @@
         '<td><span class="haa-pill" style="background:' +
         ((f.isActive === false) ? 'var(--haa-err-bg);color:var(--haa-err-fg)' : 'var(--haa-ok-bg);color:var(--haa-ok-fg)') + '">' +
         ((f.isActive === false) ? 'Inactive' : 'Active') + '</span></td>' +
-        '<td style="text-align:right"><button class="haa-btn dgr" data-del-fence="' + f.id + '">Delete</button></td></tr>';
+      '<td style="text-align:right"><button class="haa-btn" data-edit-fence="' + f.id + '" style="margin-right: 6px;">Edit</button><button class="haa-btn dgr" data-del-fence="' + f.id + '">Delete</button></td>'
     }).join('');
     return errorBanner('fences') +
       '<div class="haa-card"><div style="font-weight:700;margin-bottom:12px;font-size:14px;">Add an office location</div>' +
       '<div class="haa-grid" style="margin-bottom:12px">' +
       '<div><label class="haa-lbl">Name</label><input class="haa-in" id="haa-f-name" placeholder="Head Office"></div>' +
       '<div><label class="haa-lbl">Radius (m)</label><input class="haa-in" id="haa-f-rad" value="200" type="number" min="20" step="10"></div>' +
-      '<div><label class="haa-lbl">Latitude</label><input class="haa-in" id="haa-f-lat" placeholder="click the map" readonly></div>' +
-      '<div><label class="haa-lbl">Longitude</label><input class="haa-in" id="haa-f-lng" placeholder="click the map" readonly></div>' +
+      '<div><label class="haa-lbl">Latitude</label><input class="haa-in" id="haa-f-lat" placeholder="click the map" ></div>' +
+      '<div><label class="haa-lbl">Longitude</label><input class="haa-in" id="haa-f-lng" placeholder="click the map" ></div>' +
       '</div>' +
       '<div id="haa-picker"></div>' +
       '<div style="margin-top:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' +
@@ -1819,7 +1819,7 @@
       return '<tr><td>' + esc(nameOf[a.email] || a.email) + (nameOf[a.email] ? '<div style="font-size:11px;color:var(--haa-faint)">' + esc(a.email) + '</div>' : '') + ' ' + status + '</td><td>' + esc(sh ? sh.name : (a.shiftName || '—')) + '</td>' +
         '<td>' + esc(a.effectiveFrom || a.effective_from || '') + '</td>' +
         '<td>' + esc(a.effectiveTo || a.effective_to || 'open-ended') + '</td>' +
-        '<td style="text-align:right"><button class="haa-btn dgr" data-del-asg="' + a.id + '">Remove</button></td></tr>';
+        '<td style="text-align:right"><button class="haa-btn" data-edit-asg="' + a.id + '">Edit</button> <button class="haa-btn dgr" data-del-asg="' + a.id + '">Remove</button></td>'
     }).join('');
     return errorBanner('shifts') +
       '<div class="haa-card"><div style="font-weight:700;margin-bottom:12px;font-size:14px;">Create a shift</div>' +
@@ -2645,6 +2645,71 @@
     bindDelete('data-del-fence', '/api/attendance/geofences/', 'location');
     bindDelete('data-del-shift', '/api/shifts/', 'shift');
     bindDelete('data-del-asg', '/api/shift-assignments/', 'assignment');
+    bindEdit('data-edit-asg')
+    function bindEdit(attr) {
+    body.onclick = function (e) {
+        var el = e.target.closest('[' + attr + ']');
+        if (!el) return;
+        e.stopPropagation();
+        var id = el.getAttribute(attr);
+        
+        if (attr === 'data-edit-asg') {
+            var assignment = state.assignments.find(function (a) {
+                return a.id == id || a.id == parseInt(id, 10) || String(a.id) === String(id);
+            });
+            if (assignment) {
+                document.getElementById('haa-a-email').value = assignment.email;
+                document.getElementById('haa-a-shift').value = assignment.shiftId || assignment.shift;
+                document.getElementById('haa-a-from').value = assignment.effectiveFrom || '';
+                document.getElementById('haa-a-to').value = assignment.effectiveTo || '';
+                state.editingAssignmentId = assignment.id;
+            }
+        } else {
+            var fence = state.fences && state.fences.find(function (f) {
+                return f.id == id || f.id == parseInt(id, 10) || String(f.id) === String(id);
+            });
+            if (fence) {
+                state.editingFenceId = fence.id;
+                document.getElementById('haa-f-name').value = fence.name || '';
+                document.getElementById('haa-f-rad').value = fence.radiusMeters || fence.radius || '';
+                document.getElementById('haa-f-lat').value = fence.latitude || '';
+                document.getElementById('haa-f-lng').value = fence.longitude || '';
+            }
+        }
+    };
+}
+
+bindEdit('data-edit-fence');
+bindEdit('data-edit-asg');
+    function bindEdit(attr) {
+        var els = body.querySelectorAll('[' + attr + ']');
+        for (var i = 0; i < els.length; i++) {
+            (function (el) {
+                el.onclick = function (e) {
+                    e.stopPropagation();
+                    var id = el.getAttribute(attr);
+                    var fence = state.fences && state.fences.find(function(f) { 
+                        return f.id == id || f.id == parseInt(id, 10) || String(f.id) === String(id); 
+                    });
+                    
+                    if (fence) {
+                        // Store the editing ID so the save action knows we are updating
+                        state.editingFenceId = fence.id;
+                        
+                        document.getElementById('haa-f-name').value = fence.name || '';
+                        document.getElementById('haa-f-rad').value = fence.radiusMeters || fence.radius_meters || 200;
+                        document.getElementById('haa-f-lat').value = fence.latitude || '';
+                        document.getElementById('haa-f-lng').value = fence.longitude || '';
+                        
+                        // Change button text to indicate update mode
+                        var addBtn = document.getElementById('haa-f-add');
+                        if (addBtn) addBtn.textContent = 'Update Location';
+                    }
+                };
+            })(els[i]);
+        }
+    }
+    bindEdit('data-edit-fence');
 
     function decide(attr, decision) {
       var els = body.querySelectorAll('[' + attr + ']');
@@ -2890,9 +2955,17 @@
     return /check-?in/i.test(location.pathname + location.hash);
   }
 
+  /* The shared can() fails OPEN while permissions are still loading (or if
+     loading failed), which is right for ordinary page content but showed this
+     admin-only button to every role — Recruiters and Employees included — until
+     the real set arrived. An admin control waits for a confirmed answer. */
+  function permsConfirmed() {
+    try { return !!(window.__hrmsPerms && window.__hrmsPerms()); } catch (_) { return false; }
+  }
+
   function mount() {
     var existing = document.getElementById(BTN_ID);
-    if (!onAttendancePage() || !can('attendance.edit')) {
+    if (!onAttendancePage() || !permsConfirmed() || !can('attendance.edit')) {
       if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
       return;
     }

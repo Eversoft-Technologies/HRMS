@@ -5,6 +5,7 @@ really ran still rendered as "Score: 0/100". These tests pin the hand-off from
 the saved recording to the link, and the branded shell every email now uses.
 """
 import os
+from unittest import mock
 import sys
 
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'hrms_project.settings')
@@ -38,11 +39,18 @@ class InterviewScoreTests(TestCase):
             'transcript': 'Q1: ...', 'responses': [],
         }, content_type='application/json')
 
+    def _upload_video(self, rec_id):
+        # The interview is complete only once its video is on the server.
+        with mock.patch('api.video_processor.save_interview_video', return_value={'ok': True}):
+            return self.client.post(f'/api/interview-recordings/{rec_id}/video', data=b'fake-webm-video',
+                                    content_type='video/webm')
+
     def test_saving_a_recording_copies_the_score_onto_the_link(self):
         self.assertEqual(self.link.score, 0)
 
         resp = self._post_recording(total=73)
         self.assertEqual(resp.status_code, 201)
+        self.assertEqual(self._upload_video(resp.json()['id']).status_code, 200)
 
         self.link.refresh_from_db()
         self.assertEqual(self.link.score, 73, 'follow-up list would still show 0/100')
@@ -61,6 +69,7 @@ class InterviewScoreTests(TestCase):
             'transcript': '', 'responses': [],
         }, content_type='application/json')
         self.assertEqual(resp.status_code, 201)
+        self._upload_video(resp.json()['id'])
 
         self.link.refresh_from_db()
         self.assertEqual(self.link.status, 'Completed')
@@ -73,13 +82,32 @@ class InterviewScoreTests(TestCase):
             email='candidate@example.com', status='Active',
             candidate_token='tok-other-role',
         )
-        self._post_recording(total=88, role='data analyst')
+        self._upload_video(self._post_recording(total=88, role='data analyst').json()['id'])
 
         self.link.refresh_from_db()
         other.refresh_from_db()
         self.assertEqual(self.link.score, 88)
         self.assertEqual(other.score, 0, 'a different role must not be marked')
         self.assertEqual(other.status, 'Active')
+
+
+class VideoRequiredTests(InterviewScoreTests):
+    """The video is mandatory: without it the interview is not complete and the
+    candidate's link stays usable."""
+
+    def test_answers_without_video_leave_the_interview_incomplete(self):
+        resp = self._post_recording(total=73)
+        self.assertEqual(resp.status_code, 201)
+        self.link.refresh_from_db()
+        self.assertEqual((self.link.status, self.link.completed_at, self.link.score), ('Active', None, 0))
+        rec = InterviewRecording.objects.get(pk=resp.json()['id'])
+        self.assertFalse(rec.has_video)
+
+    def test_the_video_upload_completes_it(self):
+        rec_id = self._post_recording(total=73).json()['id']
+        self._upload_video(rec_id)
+        self.link.refresh_from_db()
+        self.assertEqual((self.link.status, self.link.score), ('Completed', 73))
 
 
 class TranscriptTests(TestCase):

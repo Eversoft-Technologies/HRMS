@@ -155,7 +155,8 @@ class Command(BaseCommand):
                 {'name': 'Team Lead', 'desc': 'Review work submitted by their team; view attendance and leave'},
                 {'name': 'IT Admin', 'desc': 'Allocate and track IT assets for onboarding candidates'},
                 {'name': 'Payroll Admin', 'desc': 'Complete payroll information for onboarding candidates'},
-                {'name': 'Recruiter', 'desc': 'Create and edit onboarding candidates'},
+                {'name': 'Recruiter (India)', 'desc': 'Create and edit onboarding candidates (India)'},
+                {'name': 'Recruiter (USA)', 'desc': 'Create and edit onboarding candidates (USA)'},
             ]
             roles = {}
             for r_info in roles_data:
@@ -197,7 +198,12 @@ class Command(BaseCommand):
                     'employee.view', 'task.edit', 'attendance.view', 'attendance.create',
                     'leave.view', 'leave.create', 'settings.view'
                 ],
-                'Recruiter': [
+                'Recruiter (India)': [
+                    'recruitment.view', 'recruitment.create', 'recruitment.edit',
+                    'recruitment.kpi.view_own', 'settings.view',
+                    'onboarding.view', 'onboarding.create', 'onboarding.edit',
+                ],
+                'Recruiter (USA)': [
                     'recruitment.view', 'recruitment.create', 'recruitment.edit',
                     'recruitment.kpi.view_own', 'settings.view',
                     'onboarding.view', 'onboarding.create', 'onboarding.edit',

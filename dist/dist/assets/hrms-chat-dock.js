@@ -356,9 +356,59 @@
     l.title = 'Show the chat bar';
     l.setAttribute('aria-label', 'Show the chat bar');
     l.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20.5l1.4-4.9A8 8 0 1 1 21 12z"/></svg><span class="dot" style="display:none"></span>';
-    l.addEventListener('click', showBar);
+    l.title = 'Show the chat bar (drag to move)';
+    wireLauncherDrag(l);
     document.body.appendChild(l);
     return l;
+  }
+  /* The bubble can be dragged anywhere. It shares one spot with the bar
+     (free / left / bottom), so the bar reopens where the bubble was and folds
+     back into the bubble where the bar was. A press that moves less than a
+     few pixels is a click and opens
+     the bar. */
+  function wireLauncherDrag(l) {
+    var drag = null;
+    l.style.touchAction = 'none';
+    l.addEventListener('pointerdown', function (e) {
+      if (e.button !== undefined && e.button !== 0) return;
+      var r = l.getBoundingClientRect();
+      e.preventDefault();
+      drag = { x: e.clientX, y: e.clientY, dx: e.clientX - r.left, dy: e.clientY - r.top, moved: false };
+      // Followed on the document: the bubble moves under the pointer and a
+      // fast drag can leave it, which would drop the drag halfway.
+      document.addEventListener('pointermove', move);
+      document.addEventListener('pointerup', up);
+      document.addEventListener('pointercancel', cancel);
+    });
+    function up(e) { end(e, false); }
+    function cancel(e) { end(e, true); }
+    function move(e) {
+      if (!drag) return;
+      if (!drag.moved && Math.abs(e.clientX - drag.x) + Math.abs(e.clientY - drag.y) < 5) return;
+      drag.moved = true;
+      l.style.cursor = 'grabbing';
+      var size = l.offsetWidth || 46;
+      var left = clamp(e.clientX - drag.dx, 4, window.innerWidth - size - 4);
+      var top = clamp(e.clientY - drag.dy, 4, window.innerHeight - size - 4);
+      var p = loadPref();
+      p.free = true; p.left = Math.round(left); p.bottom = Math.round(window.innerHeight - top - size);
+      delete p.lLeft; delete p.lBottom;
+      savePref(p);
+      l.style.left = p.left + 'px'; l.style.bottom = p.bottom + 'px';
+    }
+    function end(e, cancelled) {
+      document.removeEventListener('pointermove', move);
+      document.removeEventListener('pointerup', up);
+      document.removeEventListener('pointercancel', cancel);
+      if (!drag) return;
+      var wasDrag = drag.moved;
+      drag = null;
+      l.style.cursor = '';
+      if (!wasDrag && !cancelled) showBar();
+    }
+    l.addEventListener('keydown', function (e) {           // keyboard: Enter/Space opens
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); showBar(); }
+    });
   }
   function hideLauncher() {
     var l = document.getElementById(LAUNCH_ID);
@@ -437,6 +487,10 @@
       if (bar.style.display !== 'none') bar.style.display = 'none';
       if (mini.open) closeMini();
       var l = ensureLauncher(), n = (unread.direct || 0) + (unread.channels || 0);
+      if (pref.lLeft != null) {             // bubble spot saved by the previous version
+        pref.free = true; pref.left = pref.lLeft; pref.bottom = pref.lBottom;
+        delete pref.lLeft; delete pref.lBottom; savePref(pref);
+      }
       var lx = pref.free && pref.left != null ? pref.left : Math.round(sb.r.left) + 12;
       var lb = pref.free && pref.bottom != null ? pref.bottom : 12;
       setStyles(l, { display: 'flex', zIndex: String(Math.max((isNaN(sb.z) ? 100 : sb.z) + 1, 900)),

@@ -2901,3 +2901,392 @@ html[data-theme="light"] div[style*="position: fixed"]:has(span:is([style*="Pipe
 /* AI Interviewer candidate list: Active / Completed / Scheduled badges share
    one width. */
 .content .badge:has(+ .btn-primary) { min-width: 92px; justify-content: center; text-align: center; }
+
+
+/* ================================================================
+   hrms-motion-language — the Dashboard / Work Submissions / Leave motion
+   and hover effects, applied to every other module.
+
+   Scoped to .content, so the sidebar and topbar are untouched. Pages that
+   already carry their own treatment (.hrms-dash, .wsq) are excluded or reset
+   below, so nothing doubles up. Deleting this block restores the previous
+   look; no markup depends on it.
+
+   Entrance motion goes ONLY on elements that exist once per page (the page
+   container, the KPI row), never on table rows or list items: several
+   modules rebuild their rows on every keystroke or background refresh, and a
+   row animation would replay each time. Rows get a hover response instead.
+   ================================================================ */
+
+@keyframes hrms-page-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
+}
+@keyframes hrms-kpi-rise {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* --- the page settles in ------------------------------------------------ */
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) .content > *:not(.hrms-dash):not(.wsq):not(#hrms-live-dashboard-wrap):not(#hrms-chat-page):not([style*="position: fixed"]):not([style*="position:fixed"]) {
+  animation: hrms-page-in .3s cubic-bezier(.2, .7, .3, 1) both;
+}
+
+.main > :not(.topbar):not(.content):not(.hrms-dash):not(.wsq):not([style*="position: fixed"]):not([style*="position:fixed"]) {
+  animation: hrms-page-in .3s cubic-bezier(.2, .7, .3, 1) both;
+}
+
+/* --- KPI cards: tinted wash, staggered rise, lift ----------------------- */
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .stat-card {
+  transition: transform .2s cubic-bezier(.22, 1, .36, 1),
+              box-shadow .2s ease, border-color .2s ease;
+}
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .stat-card.blue   { background: linear-gradient(158deg, color-mix(in srgb, var(--accent)  9%, var(--bg2)), var(--bg2) 62%); }
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .stat-card.green  { background: linear-gradient(158deg, color-mix(in srgb, var(--accent3) 9%, var(--bg2)), var(--bg2) 62%); }
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .stat-card.orange { background: linear-gradient(158deg, color-mix(in srgb, var(--accent4) 9%, var(--bg2)), var(--bg2) 62%); }
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .stat-card.purple { background: linear-gradient(158deg, color-mix(in srgb, var(--accent2) 9%, var(--bg2)), var(--bg2) 62%); }
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .stat-card:hover,
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .kpi-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 10px 26px rgba(12, 20, 40, .12);
+  border-color: color-mix(in srgb, var(--accent) 26%, var(--border2));
+}
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .stat-grid > .stat-card { animation: hrms-kpi-rise .4s cubic-bezier(.2, .7, .3, 1) backwards; }
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .stat-grid > .stat-card:nth-child(1) { animation-delay: .02s; }
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .stat-grid > .stat-card:nth-child(2) { animation-delay: .07s; }
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .stat-grid > .stat-card:nth-child(3) { animation-delay: .12s; }
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .stat-grid > .stat-card:nth-child(n+4) { animation-delay: .17s; }
+/* the Dashboard keeps its own entrance */
+.hrms-dash .stat-grid > .stat-card { animation: none !important; }
+
+/* --- cards: quiet by default, responsive on approach -------------------- */
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .card,
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .kpi-card,
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .ob-card {
+  transition: transform .2s cubic-bezier(.22, 1, .36, 1),
+              box-shadow .2s ease, border-color .2s ease;
+}
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .card:hover,
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .ob-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 26px rgba(12, 20, 40, .10);
+  border-color: color-mix(in srgb, var(--accent) 20%, var(--border2));
+}
+
+/* --- tables: rows respond to the pointer -------------------------------- */
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) tbody tr { transition: background .16s ease; }
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) tbody tr:hover { background: color-mix(in srgb, var(--accent) 5%, transparent); }
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) tbody tr:hover td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+
+/* --- buttons: lift, press, and a visible focus ring --------------------- */
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) :is(.btn-sm, .ob-btn, .jt-btn, .kpi-fd-btn, .kpi-chart-btn, .kpi-date-btn) {
+  transition: background .16s ease, color .16s ease, border-color .16s ease,
+              transform .12s ease, box-shadow .16s ease;
+}
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) :is(.btn-sm, .ob-btn, .jt-btn, .kpi-fd-btn, .kpi-chart-btn, .kpi-date-btn):not(:disabled):hover {
+  transform: translateY(-1px);
+}
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) :is(.btn-sm, .ob-btn, .jt-btn, .kpi-fd-btn, .kpi-chart-btn, .kpi-date-btn):not(:disabled):active {
+  transform: translateY(0) scale(.96);
+}
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) :is(button, a, input, select, textarea):focus-visible:not(#hrms-chat-page *) {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* --- respect the OS setting --------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  :where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) .content > *,
+  .main > :not(.topbar):not(.content),
+  :where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .stat-grid > .stat-card { animation: none !important; }
+  :where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .stat-card,
+  :where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .card,
+  :where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) tbody tr { transition: none !important; }
+}
+
+/* --- phones: no hover, so drop the lift and keep the entrance ----------- */
+@media (hover: none) {
+  :where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .stat-card:hover,
+  :where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .kpi-card:hover,
+  :where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .card:hover,
+  :where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .ob-card:hover { transform: none; box-shadow: none; }
+}
+
+
+/* --- hrms-motion-language, part 2: the modules that carry their own class
+   names (Onboarding, Bench Sales, Interviews, Attendance, Recruit board,
+   Chat). Same effects, same values; only the selectors differ. ------------ */
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) :is(.hram-card, .hrms-iv-status-card, .kanban-card, .ob-panel) {
+  transition: transform .2s cubic-bezier(.22, 1, .36, 1),
+              box-shadow .2s ease, border-color .2s ease;
+}
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) :is(.hram-card, .hrms-iv-status-card, .kanban-card, .ob-panel):hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 26px rgba(12, 20, 40, .10);
+  border-color: color-mix(in srgb, var(--accent) 20%, var(--border2));
+}
+
+/* list rows that are not table rows */
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) :is(.hrms-iv-row, .hrms-iv-fu-row, .ob-row, .ob-rec-item, .jt-mrow, .bss-row2) {
+  transition: background .16s ease, box-shadow .16s ease;
+}
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) :is(.hrms-iv-row, .hrms-iv-fu-row, .ob-row, .ob-rec-item, .jt-mrow, .bss-row2):hover {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+/* buttons that have their own class */
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) :is(.bss-btn, .hram-period-btn, .hrms-iv-copy, .hrms-iv-save) {
+  transition: background .16s ease, color .16s ease, border-color .16s ease,
+              transform .12s ease, box-shadow .16s ease;
+}
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) :is(.bss-btn, .hram-period-btn, .hrms-iv-copy, .hrms-iv-save):not(:disabled):hover {
+  transform: translateY(-1px);
+}
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) :is(.bss-btn, .hram-period-btn, .hrms-iv-copy, .hrms-iv-save):not(:disabled):active {
+  transform: translateY(0) scale(.96);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) :is(.hram-card, .hrms-iv-status-card, .kanban-card, .ob-panel,
+    .hrms-iv-row, .hrms-iv-fu-row, .ob-row, .ob-rec-item, .jt-mrow, .bss-row2) { transition: none !important; }
+}
+@media (hover: none) {
+  :where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) :is(.hram-card, .hrms-iv-status-card, .kanban-card, .ob-panel):hover {
+    transform: none; box-shadow: none;
+  }
+}
+
+
+/* --- hrms-motion-language, part 3: the rest of the Dashboard / Work
+   Submissions look, shared with every other module: section-title tick,
+   KPI icons, banded table headers, status dots on badges, avatar response,
+   list-row and button hover. Same rules and values as the Dashboard block
+   above; only the scope differs. ------------------------------------------ */
+/* --- section titles get a gradient tick ------------------------------- */
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .card-title {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .card-title::before {
+  content: "";
+  width: 3px;
+  height: 12px;
+  border-radius: 2px;
+  flex: 0 0 auto;
+  background: linear-gradient(180deg, var(--accent), var(--accent2));
+}
+
+/* --- Today's Highlights: living timeline ------------------------------ */
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .tl-item {
+  position: relative;
+  padding-left: 4px;
+  border-radius: 8px;
+  transition: background .18s ease, padding-left .18s ease;
+}
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .tl-item:hover {
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  padding-left: 9px;
+}
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .tl-dot {
+  box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 18%, transparent);
+  transition: box-shadow .18s ease, transform .18s ease;
+}
+/* the newest entry, i.e. the first .tl-item regardless of what precedes it in
+   the card (:first-child fails here — the card title comes first) */
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .tl-item:not(.tl-item ~ .tl-item) .tl-dot {
+  animation: hrms-dash-pulse 2.2s ease-in-out infinite;
+}
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .tl-item:hover .tl-dot { transform: scale(1.25); }
+
+/* --- Pending Actions + Employee Directory rows ------------------------ */
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .av-row { transition: transform .18s ease; }
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) tbody tr { transition: background .16s ease; }
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) tbody tr:hover {
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+}
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) tbody tr:hover .av-row { transform: translateX(2px); }
+
+/* --- buttons: lift, press, and a visible focus ring ------------------- */
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .btn-sm {
+  transition: background .16s ease, color .16s ease, border-color .16s ease,
+              transform .12s ease, box-shadow .16s ease;
+}
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .btn-sm:hover {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  color: var(--accent);
+}
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .btn-sm:active { transform: translateY(0) scale(.96); }
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .btn-sm:focus-visible,
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) a:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* --- "View all →" links: the arrow leads --------------------------------- */
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .card-title + * a,
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) a[href="#"] { transition: color .16s ease; }
+
+
+/* ── Dashboard: matching the Work Submissions treatment ───────────────────
+   Icons, table styling, badge dots and avatar response. Scoped to .hrms-dash;
+   the bundle is untouched, so deleting this block reverts it. */
+
+/* --- an icon per KPI, keyed off the colour class the card already has --- */
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .stat-card::after {
+  content: "";
+  position: absolute;
+  top: 15px;
+  right: 15px;
+  width: 20px;
+  height: 20px;
+  background: currentColor;
+  opacity: .85;
+  transition: transform .2s cubic-bezier(.22, 1, .36, 1), opacity .2s ease;
+  -webkit-mask: var(--ico) center / contain no-repeat;
+          mask: var(--ico) center / contain no-repeat;
+}
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .stat-card:hover::after { transform: scale(1.12); opacity: 1; }
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .stat-card.blue   { --ico: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22black%22%20stroke-width%3D%221.9%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22M16%2020v-2a4%204%200%200%200-4-4H6a4%204%200%200%200-4%204v2%22%2F%3E%3Ccircle%20cx%3D%229%22%20cy%3D%227%22%20r%3D%224%22%2F%3E%3Cpath%20d%3D%22M22%2020v-2a4%204%200%200%200-3-3.87M16%203.13a4%204%200%200%201%200%207.75%22%2F%3E%3C%2Fsvg%3E");    color: var(--accent); }
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .stat-card.purple { --ico: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22black%22%20stroke-width%3D%221.9%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22M3%207a2%202%200%200%201%202-2h13a2%202%200%200%201%202%202v10a2%202%200%200%201-2%202H5a2%202%200%200%201-2-2z%22%2F%3E%3Cpath%20d%3D%22M16%2012h4%22%2F%3E%3Cpath%20d%3D%22M3%209h17%22%2F%3E%3C%2Fsvg%3E");    color: var(--accent2); }
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .stat-card.green  { --ico: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22black%22%20stroke-width%3D%221.9%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Crect%20x%3D%222%22%20y%3D%227%22%20width%3D%2220%22%20height%3D%2214%22%20rx%3D%222%22%2F%3E%3Cpath%20d%3D%22M8%207V5a2%202%200%200%201%202-2h4a2%202%200%200%201%202%202v2%22%2F%3E%3Cpath%20d%3D%22M2%2013h20%22%2F%3E%3C%2Fsvg%3E"); color: var(--accent3); }
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .stat-card.orange { --ico: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22black%22%20stroke-width%3D%221.9%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Crect%20x%3D%223%22%20y%3D%225%22%20width%3D%2218%22%20height%3D%2216%22%20rx%3D%222%22%2F%3E%3Cpath%20d%3D%22M3%2010h18M8%203v4M16%203v4%22%2F%3E%3Cpath%20d%3D%22M9%2015l2%202%204-4%22%2F%3E%3C%2Fsvg%3E");  color: var(--accent4); }
+/* keep a long label clear of the icon */
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .stat-label { padding-right: 26px; }
+
+/* --- tables: banded sticky header, and rows that respond ---------------- */
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .card table { border-collapse: separate; border-spacing: 0; width: 100%; }
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .card thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg3);
+  border-bottom: 1px solid var(--border2);
+  padding: 11px 12px;
+}
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .card thead th:first-child { border-radius: 8px 0 0 8px; }
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .card thead th:last-child  { border-radius: 0 8px 8px 0; }
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .card tbody td { padding: 11px 12px; border-bottom: 1px solid var(--border2); }
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .card tbody tr:last-child td { border-bottom: 0; }
+
+/* the rows are clickable, so give the pointer something to land on */
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .card tbody tr:hover td:first-child {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+/* --- status badges get a leading dot, as on the submissions queue ------- */
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .badge::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: 0 0 auto;
+}
+
+/* --- avatars respond with their row ------------------------------------ */
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .av {
+  border: 1px solid color-mix(in srgb, var(--accent) 26%, transparent);
+  transition: transform .18s ease, box-shadow .18s ease;
+}
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) tbody tr:hover .av,
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .av-row:hover .av {
+  transform: scale(1.08);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+/* --- "Pending Actions" rows read as a list, not loose text -------------- */
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .card .av-row {
+  padding: 7px 8px;
+  margin: 0 -8px;
+  border-radius: 8px;
+  transition: background .16s ease, transform .16s ease;
+}
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .card .av-row:hover {
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+
+/* --- light theme: the header band wants a touch more contrast ----------- */
+html[data-theme="light"] :where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .card thead th { background: #eef0f5; }
+
+
+/* --- KPI card labels in normal case on the Payroll and Recruit pages -----
+   The base .stat-label is ALL CAPS at 10px. On these two sections the labels
+   read as plain names ("Total pay runs", "Open roles") instead. The section is
+   told from the sidebar link the app already marks active, so no other page,
+   including the Dashboard, changes. */
+body:has(.sidebar a.nav-item.active[href^="/payroll"]) .stat-label,
+body:has(.sidebar a.nav-item.active[href^="/recruit"]) .stat-label,
+body:has(.sidebar a.nav-item.active[href^="/payroll"]) .kpi-card-lbl,
+body:has(.sidebar a.nav-item.active[href^="/recruit"]) .kpi-card-lbl,
+body:has(.sidebar a.nav-item.active[href^="/payroll"]) .pr-stat-label,
+body:has(.sidebar a.nav-item.active[href^="/recruit"]) .pr-stat-label {
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 12px;
+}
+
+/* --- Payroll and Recruit: card titles, column headers and small labels in
+   normal case too. Same scope as the KPI labels above: the sidebar link the
+   app marks active decides, so no other page changes. The inline-styled
+   labels (stage names, "Stage focus") are reached by their style attribute,
+   which is why those two selectors carry !important. ------------------------ */
+body:is(:has(.sidebar a.nav-item.active[href^="/payroll"]), :has(.sidebar a.nav-item.active[href^="/recruit"])) .main
+  :is(.card-title, thead th, .kpi-tbl th, .jt-lbl, .cc-lbl, .cc-quick-jobs-lbl, .cc-th-actions, .kpi-section-title) {
+  text-transform: none;
+  letter-spacing: 0;
+}
+body:is(:has(.sidebar a.nav-item.active[href^="/payroll"]), :has(.sidebar a.nav-item.active[href^="/recruit"])) .main
+  .card-title { font-size: 12px; }
+body:is(:has(.sidebar a.nav-item.active[href^="/payroll"]), :has(.sidebar a.nav-item.active[href^="/recruit"])) .main
+  :is([style*="text-transform: uppercase"], [style*="text-transform:uppercase"]) {
+  text-transform: none !important;
+  letter-spacing: 0 !important;
+}
+body:is(:has(.sidebar a.nav-item.active[href^="/payroll"]), :has(.sidebar a.nav-item.active[href^="/recruit"])) .main
+  :is(.kanban-col-head, .kanban-col-head *, .cc-quick-jobs-total, th.cc-th-actions) {
+  text-transform: none !important;
+  letter-spacing: 0 !important;
+}
+
+/* --- Every module: a hover you can see, without shouting ------------------
+   The first hover (2px lift, a faint dark shadow) disappeared on the dark
+   theme. This one is deliberately quiet: a soft accent border and tint plus a
+   shadow that shows on both themes. Small cards (stats, candidates, status
+   tiles) also rise 2px; big panels (tables, charts, forms) stay put so the
+   page does not wobble under the pointer. Check In / Out and Chat keep their
+   own look. */
+body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"])):not(:has(#hrms-chat-page)) :is(.content, .main > :not(.topbar):not(.content)) :is(.kanban-card, .stat-card, .kpi-card, .card, .hram-card, .hrms-iv-status-card, .ob-card, .ob-panel) {
+  transition: transform .2s cubic-bezier(.22, 1, .36, 1), box-shadow .2s ease,
+              border-color .2s ease, background-color .2s ease;
+}
+body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"])):not(:has(#hrms-chat-page)) :is(.content, .main > :not(.topbar):not(.content)) :is(.kanban-card, .stat-card, .kpi-card, .hram-card, .hrms-iv-status-card, .ob-card):hover {
+  transform: translateY(-2px);
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border2));
+  background-color: color-mix(in srgb, var(--accent) 5%, var(--bg2));
+  box-shadow: 0 10px 24px rgba(15, 23, 42, .16), 0 2px 6px rgba(15, 23, 42, .08);
+}
+body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"])):not(:has(#hrms-chat-page)) :is(.content, .main > :not(.topbar):not(.content)) :is(.card, .ob-panel):hover {
+  transform: none;
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--border2));
+  box-shadow: 0 8px 22px rgba(15, 23, 42, .12), 0 1px 4px rgba(15, 23, 42, .06);
+}
+:root[data-theme="dark"] body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"])):not(:has(#hrms-chat-page)) :is(.content, .main > :not(.topbar):not(.content)) :is(.kanban-card, .stat-card, .kpi-card, .hram-card, .hrms-iv-status-card, .ob-card):hover { box-shadow: 0 10px 24px rgba(0, 0, 0, .38); }
+:root[data-theme="dark"] body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"])):not(:has(#hrms-chat-page)) :is(.content, .main > :not(.topbar):not(.content)) :is(.card, .ob-panel):hover { box-shadow: 0 8px 22px rgba(0, 0, 0, .30); }
+body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"])):not(:has(#hrms-chat-page)) :is(.content, .main > :not(.topbar):not(.content)) .stat-card:hover { background-image: none; }
+body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"])):not(:has(#hrms-chat-page)) :is(.content, .main > :not(.topbar):not(.content)) tbody tr:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"])):not(:has(#hrms-chat-page)) :is(.content, .main > :not(.topbar):not(.content)) tbody tr:hover td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"])):not(:has(#hrms-chat-page)) :is(.content, .main > :not(.topbar):not(.content)) :is(.hrms-iv-row, .hrms-iv-fu-row, .jt-mrow, .bss-row2):hover {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+@media (hover: none), (prefers-reduced-motion: reduce) {
+  body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"])):not(:has(#hrms-chat-page)) :is(.content, .main > :not(.topbar):not(.content)) :is(.kanban-card, .stat-card, .kpi-card, .card, .hram-card, .hrms-iv-status-card, .ob-card, .ob-panel):hover { transform: none; }
+}

@@ -746,11 +746,13 @@ class AppUserSerializer(serializers.ModelSerializer):
         return {
             'id': instance.id,
             'employeeId': instance.employee_id or '',
-            'name': instance.full_name,
-            'email': instance.email,
+            # never null: the Settings › User Access list calls string methods on these
+            'name': instance.full_name or '',
+            'email': instance.email or '',
             'password': '',   # intentionally blank — never expose the stored hash
             'initials': instance.initials,
             'role': instance.role,
+            'roleName': instance.role_ref.name if instance.role_ref_id else '',
             'status': instance.status,
             'authProvider': instance.auth_provider,
             'profilePic': instance.profile_pic or '',
