@@ -247,6 +247,9 @@
       '@media(max-width:760px){.hrms-iv-fu-row{grid-template-columns:34px minmax(0,1fr) 110px 28px;column-gap:8px!important;row-gap:8px;}.hrms-iv-fu-row>.hrms-iv-fu-outcomes{grid-column:2/4;grid-row:2;width:100%;min-width:0;}.hrms-iv-fu-row>.hrms-iv-fu-actions{grid-column:2/4;grid-row:3;width:127px;min-width:127px;justify-self:end;}.hrms-iv-fu-row>.hrms-iv-fu-score{grid-column:3;grid-row:1;}.hrms-iv-fu-row>.hrms-iv-fu-note{grid-column:4;grid-row:1;}}',
       '.hrms-iv-av{flex-shrink:0;width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11.8px;font-weight:600;color:#fff;}',
       '.hrms-iv-main{flex:1;min-width:0;}',
+      '.hrms-iv-screen-candidate-card > div[data-ivs-off]{display:none !important;}',
+      '#hrms-iv-screen-pager{margin-top:12px;}',
+      '@media (max-width:600px){#hrms-iv-screen-pager button{min-height:34px;padding:4px 14px;}}',
       '.hrms-iv-screen-candidate-card .badge{display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box;width:100px;height:28px;padding:4px 8px;white-space:nowrap;flex-shrink:0;}',
       'html[data-theme="dark"] [style*="236, 245, 255"]{background:var(--bg2,#151b2e)!important;border-color:var(--border2,#334155)!important;}',
       'html[data-theme="dark"] [style*="236, 245, 255"]>div:first-child{color:var(--text,#e6edf7)!important;}',
@@ -356,9 +359,61 @@
     }
   }
 
+  /* AI Interviewer > "Select Candidate to Screen".
+   *
+   * The app draws every candidate in one long run. Show FIVE at a time with
+   * Prev / Next under the list. The rows stay the app's own (so Begin AI
+   * Screening keeps its handler); rows that are not on the current page are
+   * only marked data-ivs-off, which one CSS rule hides. When the set of
+   * candidates changes the list goes back to page 1. */
+  var SCREEN_PAGE = 5;
+  var SCREEN_PAGER_ID = 'hrms-iv-screen-pager';
+  var screenPage = 0, screenSig = '';
+
   function tagCandidateScreeningCard() {
     var card = cardByTitle('Select Candidate to Screen');
-    if (card) card.classList.add('hrms-iv-screen-candidate-card');
+    if (!card) return;
+    card.classList.add('hrms-iv-screen-candidate-card');
+
+    var rows = [];
+    for (var i = 0; i < card.children.length; i++) {
+      var el = card.children[i];
+      if (el.tagName !== 'DIV' || el.id === SCREEN_PAGER_ID) continue;
+      var btn = el.querySelector('button');
+      if (btn && /Begin AI Screening/.test(btn.textContent || '')) rows.push(el);
+    }
+    var total = rows.length;
+    var sig = total + '|' + (total ? (rows[0].textContent || '').slice(0, 50) : '') +
+              '|' + (total ? (rows[total - 1].textContent || '').slice(0, 50) : '');
+    if (sig !== screenSig) { screenSig = sig; screenPage = 0; }
+    var pages = Math.max(1, Math.ceil(total / SCREEN_PAGE));
+    if (screenPage >= pages) screenPage = pages - 1;
+    if (screenPage < 0) screenPage = 0;
+    var from = screenPage * SCREEN_PAGE, to = from + SCREEN_PAGE;
+    for (var r = 0; r < total; r++) {
+      var off = r < from || r >= to;
+      if (off) { if (!rows[r].hasAttribute('data-ivs-off')) rows[r].setAttribute('data-ivs-off', '1'); }
+      else if (rows[r].hasAttribute('data-ivs-off')) rows[r].removeAttribute('data-ivs-off');
+    }
+
+    var pager = document.getElementById(SCREEN_PAGER_ID);
+    if (total <= SCREEN_PAGE) { if (pager) pager.remove(); return; }
+    var html = '<button type="button" data-ivs="prev"' + (screenPage <= 0 ? ' disabled' : '') + '>‹ Prev</button>' +
+      '<span>Page ' + (screenPage + 1) + ' of ' + pages + ' · ' + total + ' candidates</span>' +
+      '<button type="button" data-ivs="next"' + (screenPage >= pages - 1 ? ' disabled' : '') + '>Next ›</button>';
+    if (!pager) {
+      pager = document.createElement('div');
+      pager.id = SCREEN_PAGER_ID;
+      pager.className = 'hrms-iv-pager';
+      pager.addEventListener('click', function (e) {
+        var b = e.target && e.target.closest ? e.target.closest('button[data-ivs]') : null;
+        if (!b || b.disabled) return;
+        screenPage += b.getAttribute('data-ivs') === 'prev' ? -1 : 1;
+        tagCandidateScreeningCard();
+      });
+    }
+    if (pager.parentNode !== card || card.lastElementChild !== pager) card.appendChild(pager);
+    if (pager.__html !== html) { pager.__html = html; pager.innerHTML = html; }
   }
 
   /* ── list filtering ───────────────────────────────────────────────────── */
@@ -568,6 +623,22 @@
         }
       }
     });
+
+    // Phones show the rows as one-line table rows that scroll sideways
+    // (responsive.css), so they need column headings above them. Hidden on
+    // desktop. Kept directly above the first row; removed when the list is empty.
+    var firstRow = card.querySelector('.hrms-iv-fu-row');
+    var head = card.querySelector('.hrms-iv-fu-head');
+    if (!firstRow) {
+      if (head) head.remove();
+    } else {
+      if (!head) {
+        head = document.createElement('div');
+        head.className = 'hrms-iv-fu-head';
+        head.innerHTML = '<span>Candidate</span><span>Score</span><span>Outcome</span><span>Action</span><span>Note</span>';
+      }
+      if (head.nextElementSibling !== firstRow) firstRow.parentNode.insertBefore(head, firstRow);
+    }
   }
 
   function hideAutoFollowupBanner() {

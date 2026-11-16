@@ -121,6 +121,9 @@ SIMPLE_JWT = {
 # ---------------------------------------------------------------------------
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    # Compress JSON / JS / CSS / HTML on the way out (see middleware.py). Must
+    # sit above WhiteNoise so the built app's files are compressed too.
+    'hrms_project.middleware.TextGZipMiddleware',
     'corsheaders.middleware.CorsMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -163,6 +166,15 @@ DATABASES = {
 # A remote database keeps TLS.
 if DATABASES['default']['HOST'] in ('localhost', '127.0.0.1', '::1'):
     DATABASES['default']['OPTIONS']['ssl_disabled'] = True
+
+# Keep database connections open between requests on a real server. Without
+# this every API call opens (and TLS-handshakes) a brand-new MySQL connection,
+# and one page change makes 10-20 calls. Left off for the local dev server,
+# which starts a new thread per request and would pile connections up.
+# Override with DB_CONN_MAX_AGE (seconds; 0 turns it off).
+if not DEBUG:
+    DATABASES['default']['CONN_MAX_AGE'] = int(os.environ.get('DB_CONN_MAX_AGE', '60'))
+    DATABASES['default']['CONN_HEALTH_CHECKS'] = True
 
 if 'test' in sys.argv:
     DATABASES['default'] = {

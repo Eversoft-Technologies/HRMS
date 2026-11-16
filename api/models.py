@@ -672,6 +672,10 @@ class WorkSubmission(models.Model):
     file_mime = models.CharField(max_length=100, default='', blank=True)
     file_size = models.IntegerField(default=0)           # decoded bytes
     file_data = models.TextField(null=True, blank=True)  # base64 data URL
+    # Kept in step with file_data by save(): the queue asks "is there a
+    # file?" for every row, and answering that from the file itself meant
+    # reading every attachment out of MySQL on each page load.
+    has_file = models.BooleanField(default=False)
     status = models.CharField(max_length=20, default='Pending')   # Pending | In Review | Approved | Rejected
     reviewer = models.CharField(max_length=255, default='', blank=True)
     # Routed to the team lead by default; HR may override.
@@ -689,9 +693,31 @@ class WorkSubmission(models.Model):
     review_file_mime = models.CharField(max_length=100, default='', blank=True)
     review_file_size = models.IntegerField(default=0)
     review_file_data = models.TextField(null=True, blank=True)
+    has_review_file = models.BooleanField(default=False)
     ai_score = models.IntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    # (data column, flag column)
+    _FILE_FLAGS = (('file_data', 'has_file'), ('review_file_data', 'has_review_file'))
+
+    def save(self, *args, **kwargs):
+        """Keeps has_file / has_review_file true to the stored data. A column
+        that was not loaded (deferred) or is not part of update_fields is not
+        being written, so its flag is left alone."""
+        deferred = self.get_deferred_fields()
+        update_fields = kwargs.get('update_fields')
+        extra = []
+        for data_col, flag_col in self._FILE_FLAGS:
+            if data_col in deferred:
+                continue
+            if update_fields is not None and data_col not in update_fields:
+                continue
+            setattr(self, flag_col, bool(getattr(self, data_col)))
+            extra.append(flag_col)
+        if update_fields is not None and extra:
+            kwargs['update_fields'] = list(dict.fromkeys(list(update_fields) + extra))
+        super().save(*args, **kwargs)
 
     class Meta:
         db_table = 'work_submissions'
@@ -776,14 +802,19 @@ class BenchSalesProfile(models.Model):
     resume_file_name = models.CharField(max_length=255, default='', blank=True)
     resume_file_mime = models.CharField(max_length=100, default='', blank=True)
     resume_file_data = models.TextField(default='', blank=True)  # base64
+    # *_has_file: set wherever the file is written or cleared, so lists
+    # never have to read the file itself to know whether one exists.
+    resume_has_file = models.BooleanField(default=False)
 
     dl_state_id_file_name = models.CharField(max_length=255, default='', blank=True)
     dl_state_id_file_mime = models.CharField(max_length=100, default='', blank=True)
     dl_state_id_file_data = models.TextField(default='', blank=True)  # base64
+    dl_state_id_has_file = models.BooleanField(default=False)
 
     i94_file_name = models.CharField(max_length=255, default='', blank=True)
     i94_file_mime = models.CharField(max_length=100, default='', blank=True)
     i94_file_data = models.TextField(default='', blank=True)  # base64
+    i94_has_file = models.BooleanField(default=False)
 
     created_by = models.CharField(max_length=255, default='', blank=True)
     created_at = models.DateTimeField(auto_now_add=True)

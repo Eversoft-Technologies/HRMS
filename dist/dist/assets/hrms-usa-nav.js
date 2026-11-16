@@ -100,7 +100,8 @@
   var DECOR = /^([\s▼▲▾▴↑↓✦+⚙⭳▶•·\-–—]*)(.*?)([\s▼▲▾▴↑↓⤢:]*)$/;
 
   function caseLike(src, text) {
-    if (src.length > 1 && src === src.toUpperCase() && src !== src.toLowerCase()) return text.toUpperCase();
+    // A short all-caps source is an acronym (ATS, OT), not a heading set in capitals.
+    if (src.length > 4 && src === src.toUpperCase() && src !== src.toLowerCase()) return text.toUpperCase();
     return text;
   }
 
@@ -125,6 +126,8 @@
       if (p.tagName === 'TD' && !CELL_OK[(node.nodeValue || '').trim().toLowerCase()]) return true;
       if (p.isContentEditable) return true;
       if (p.id === 'hrms-chat-page' || p.id === 'root-modal-skip') return true;
+      // The top-bar title is shown through syncTitle() below; its text is left alone.
+      if (p.classList && p.classList.contains('topbar-title')) return true;
       var tag = p.tagName;
       if (tag === 'BUTTON' || (p.getAttribute && p.getAttribute('role') === 'button')) {
         // renaming a button breaks scripts that find it by label
@@ -169,6 +172,22 @@
     seen = [];
   }
 
+  /* The top-bar page title.
+   *
+   * Several scripts own that text and keep putting their own word back (the
+   * Bench Sales script rewrites it on every check), so changing the text itself
+   * starts a tug-of-war and the title flips or sticks on the wrong name. The
+   * text is therefore never touched: the USA wording is stored in an attribute
+   * and theme-overrides.css paints it over the original. */
+  var TITLE_ATTR = 'data-usa-title';
+  function syncTitle() {
+    var el = document.querySelector('.topbar-title');
+    if (!el) return;
+    var want = usa ? translate(el.textContent || '') : null;
+    if (want) { if (el.getAttribute(TITLE_ATTR) !== want) el.setAttribute(TITLE_ATTR, want); }
+    else if (el.hasAttribute(TITLE_ATTR)) el.removeAttribute(TITLE_ATTR);
+  }
+
   var usa = false;
   var pending = [];
   var queued = false;
@@ -178,10 +197,11 @@
     queued = false;
     var now = isUsa();
     if (now !== usa) { usa = now; full = true; if (!usa) restore(); }
-    if (!usa) { pending = []; full = false; return; }
-    if (full) { full = false; pending = []; walk(document.body); return; }
+    if (!usa) { pending = []; full = false; syncTitle(); return; }
+    if (full) { full = false; pending = []; walk(document.body); syncTitle(); return; }
     var list = pending; pending = [];
     for (var i = 0; i < list.length; i++) walk(list[i]);
+    syncTitle();
   }
 
   function schedule() {

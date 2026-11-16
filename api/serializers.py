@@ -1127,14 +1127,15 @@ class WorkSubmissionSerializer(serializers.ModelSerializer):
             'fileSize': instance.file_size or 0,
             # The bytes are fetched on demand from /submissions/<id>/file;
             # the list only says whether there is anything to fetch.
-            'hasFile': bool(instance.file_data),
+            'hasFile': bool(instance.has_file),
             'status': instance.status,
             'reviewer': instance.reviewer or '',
             'reviewerEmail': instance.reviewer_email or '',
             'teamId': instance.team_id,
             'teamName': instance.team.name if instance.team_id and instance.team else '',
             'collaborators': [c.email for c in instance.collaborators.all()],
-            'commentCount': instance.comments.count(),
+            'commentCount': (instance.comment_count if hasattr(instance, 'comment_count')
+                             else instance.comments.count()),
             'reviewerNote': instance.reviewer_note or '',
             'reviewerNoteBy': instance.reviewer_note_by or '',
             'reviewerNoteAt': (instance.reviewer_note_at.strftime(DATETIME_FMT)
@@ -1143,7 +1144,7 @@ class WorkSubmissionSerializer(serializers.ModelSerializer):
             'reviewFileMime': instance.review_file_mime or '',
             'reviewFileSize': instance.review_file_size or 0,
             # Fetched on demand from /submissions/<id>/review-file.
-            'hasReviewFile': bool(instance.review_file_data),
+            'hasReviewFile': bool(instance.has_review_file),
             'aiScore': instance.ai_score or 0,
             'createdAt': instance.created_at.strftime(DATETIME_FMT) if instance.created_at else None,
         }
@@ -1265,18 +1266,19 @@ class BenchSalesProfileSerializer(serializers.ModelSerializer):
 
     @staticmethod
     def _has_file(instance, col):
-        """Instances from views._bench_sales_profile_qs() carry a
-        '<col>_len' LENGTH() annotation with the base64 column deferred; use
-        it so the has-file flag never fetches a ~45 MB blob. Falls back to the
-        column itself for a plainly-loaded instance."""
-        length = getattr(instance, f'{col}_len', None)
-        if length is not None:
-            return length > 0
-        return bool(getattr(instance, col))
+        """The small '<name>_has_file' column, kept in step wherever the file
+        is written or cleared (views._store_bench_sales_file_data and the
+        file DELETE), so the flag never reads a ~45 MB blob."""
+        return bool(getattr(instance, col[:-len('_file_data')] + '_has_file'))
 
     def to_representation(self, instance):
-        # only(): never pull each file's base64 body just to list names.
-        certificate_rows = list(instance.certificate_files.only('id', 'file_name', 'kind', 'profile_id'))
+        # only(): never pull each file's base64 body just to list names. The
+        # roster prefetches these (views._bench_sales_profile_qs) so listing N
+        # profiles is one query, not N.
+        if 'certificate_files' in getattr(instance, '_prefetched_objects_cache', {}):
+            certificate_rows = list(instance.certificate_files.all())
+        else:
+            certificate_rows = list(instance.certificate_files.only('id', 'file_name', 'kind', 'profile_id'))
         return {
             'id': instance.id,
             'name': instance.name,
