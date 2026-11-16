@@ -240,6 +240,16 @@ class InterviewRecording(models.Model):
     # crawl once the table held gigabytes of legacy recordings.
     has_video = models.BooleanField(default=False, db_index=True)
     has_recording = models.BooleanField(default=False)
+    # Server-side speech-to-text of the saved video (Deepgram, api/transcription.py).
+    # The browser's live recognizer drops words whenever it stops listening;
+    # this is the complete transcript. stt_status: '' (not tried) | queued |
+    # processing | done | failed | no_key.
+    stt_status = models.CharField(max_length=20, default='', blank=True, db_index=True)
+    stt_transcript = models.TextField(null=True, blank=True)          # full plain text
+    stt_segments = models.JSONField(null=True, blank=True)            # [{start, end, text}]
+    stt_answers = models.JSONField(null=True, blank=True)             # [text per question] (aligned by time)
+    stt_error = models.CharField(max_length=500, default='', blank=True)
+    stt_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         db_table = 'interview_recordings'

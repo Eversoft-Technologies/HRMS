@@ -960,7 +960,7 @@
                                                 : '<div class="hvp-stt warn">Deepgram found no speech in this video.' + btn('Retry') + '</div>';
       if (st === 'queued' || st === 'processing') return '<div class="hvp-stt busy">⏳ Preparing the full transcript with Deepgram… this usually takes under a minute.</div>';
       if (st === 'failed') return '<div class="hvp-stt bad">Full transcript failed: ' + escapeHtml(m.sttError || 'unknown error') + btn('Retry') + '</div>';
-      if (st === 'no_key') return '<div class="hvp-stt warn">Full speech-to-text is not set up on the server (DEEPGRAM_API_KEY). Showing the live captions, which can miss words.' + btn('Try again') + '</div>';
+      if (st === 'no_key') return '<div class="hvp-stt warn">Full speech-to-text is not set up yet (an admin adds the Deepgram key in Settings › AI Settings). Showing the live captions, which can miss words.' + btn('Try again') + '</div>';
       if (m.hasVideo) return '<div class="hvp-stt warn">Showing the live captions, which can miss words.' + btn('Transcribe now') + '</div>';
       return '';
     }
