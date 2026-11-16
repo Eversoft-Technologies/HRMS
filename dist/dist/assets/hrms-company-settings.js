@@ -290,7 +290,7 @@
               '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;">' +
                 '<div>' +
                   '<label style="display:block;font-size:11.5px;font-weight:600;color:var(--text2);margin-bottom:4px;">Legal Registered Entity</label>' +
-                  '<input type="text" id="hrms-cs-legal" class="input-field" value="' + esc(d.legalName) + '" placeholder="e.g. Eversoft Technologies Pvt Ltd" />' +
+                  '<input type="text" id="hrms-cs-legal" class="input-field" value="' + esc(d.legalName) + '" placeholder="e.g. Eversoft Technologies LLC" />' +
                 '</div>' +
                 '<div>' +
                   '<label style="display:block;font-size:11.5px;font-weight:600;color:var(--text2);margin-bottom:4px;">Official Website</label>' +
