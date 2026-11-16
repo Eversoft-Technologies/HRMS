@@ -377,6 +377,25 @@ class UserProfile(models.Model):
     class Meta:
         db_table = 'user_profiles'
 
+    def save(self, *args, **kwargs):
+        is_new = self._state.adding
+        super().save(*args, **kwargs)
+        if is_new:
+            EmployeeDirectoryEntry.objects.get_or_create(profile=self)
+
+
+class EmployeeDirectoryEntry(models.Model):
+    profile = models.OneToOneField(
+        UserProfile,
+        on_delete=models.CASCADE,
+        primary_key=True,
+        db_column='email',
+        related_name='directory_entry',
+    )
+
+    class Meta:
+        db_table = 'employee_directory_entries'
+
 
 class UserEmailConfig(models.Model):
     user_email = models.CharField(max_length=255, primary_key=True)
