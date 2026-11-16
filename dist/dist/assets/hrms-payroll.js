@@ -611,7 +611,7 @@
     var modal = btn.closest('.modal, [class*="modal"], [class*="dialog"], [role="dialog"]') || btn.closest('.card') || (btn.parentElement ? btn.parentElement.parentElement : null);
     if (!modal) return;
 
-    var nameInput = modal.querySelector('input[placeholder*="Priya"], input[name="name"]');
+    var nameInput = modal.querySelector('input[placeholder*="John Doe"], input[placeholder*="Priya"], input[name="name"]');
     var emailInput = modal.querySelector('input[type="email"], input[placeholder*="@"]');
     if (!nameInput || !emailInput) return;
 
@@ -648,12 +648,19 @@
       },
       body: JSON.stringify(payload)
     }).then(function (r) {
-      if (r.ok) {
-        showToast('✓ ' + fullName + ' saved to HRIS & Indian Payroll generated!');
-        loadPayrollData();
+      if (!r.ok) {
+        return r.json().then(function (data) {
+          throw new Error((data && (data.message || data.error)) || ('Request failed (' + r.status + ')'));
+        });
       }
+      window.dispatchEvent(new CustomEvent('hrmsEmployeeSaved', {
+        detail: { name: fullName, email: email }
+      }));
+      showToast('✓ ' + fullName + ' saved to HRIS & Indian Payroll generated!');
+      loadPayrollData();
     }).catch(function (err) {
       console.warn('Auto-save to backend failed:', err);
+      showToast('Could not save employee to HRIS: ' + err.message, true);
     });
   }, true);
 

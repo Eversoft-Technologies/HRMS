@@ -49,6 +49,7 @@ from .models import (
     Company,
     CompanyDetail,
     EmployeeAttendance,
+    EmployeeDirectoryEntry,
     EmployeeTask,
     MasterDataSet,
     InterviewLink,
@@ -2528,7 +2529,9 @@ def user_detail(request, email):
 def employees(request):
     """List and create employee profiles used by the HR employee directory."""
     if request.method == 'GET':
-        profiles = UserProfile.objects.all().order_by('first_name', 'last_name', 'email')
+        profiles = UserProfile.objects.filter(
+            directory_entry__isnull=False,
+        ).order_by('first_name', 'last_name', 'email')
         data = UserProfileSerializer(profiles, many=True).data
         for item in data:
             comp = EmployeeCompensation.objects.filter(email__iexact=item.get('email', '')).order_by('-effective_from').first()
@@ -2549,7 +2552,7 @@ def employees(request):
     full_name = str(body.get('fullName') or body.get('name') or '').strip()
     if not email or not full_name or not body.get('department') or not body.get('jobTitle'):
         return err('fullName, email, department and jobTitle are required')
-    if UserProfile.objects.filter(email=email).exists():
+    if EmployeeDirectoryEntry.objects.filter(profile__email__iexact=email).exists():
         return err('An employee with this email already exists', 409)
 
     name_parts = full_name.split()
@@ -2567,10 +2570,13 @@ def employees(request):
         'annualCtc': body.get('annualCtc', body.get('salary')) or None,
         'startDate': body.get('startDate') or None,
     }
-    serializer = UserProfileSerializer(data=data)
+    profile = UserProfile.objects.filter(email__iexact=email).first()
+    serializer = (UserProfileSerializer(profile, data=data, partial=True)
+                  if profile else UserProfileSerializer(data=data))
     if not serializer.is_valid():
         return serializer_err(serializer)
-    serializer.save()
+    profile = serializer.save()
+    EmployeeDirectoryEntry.objects.get_or_create(profile=profile)
 
     # Automatically generate Indian Payroll Compensation record
     from api.services.payroll_service import sync_employee_compensation
@@ -3005,18 +3011,34 @@ def employee_profile(request, key):
     })
 
 
-@api_view(['GET', 'PATCH'])
+@api_view(['GET', 'PATCH', 'DELETE'])
 def employee_detail(request, key):
     """Read or partially update one employee's HRIS profile.
 
     PATCH accepts the camelCase keys of ``UserProfileSerializer``. Personal
     details may be changed by the employee themselves or anyone with
     employee.edit; employment details need employee.edit. Unlike the Settings
-    profile PUT, fields that are not sent are left untouched.
+    profile PUT, fields that are not sent are left untouched. DELETE removes
+    only the HRIS directory entry; the profile and employee account remain.
     """
     user, profile, email = _resolve_employee(key)
     if not email or (user is None and profile is None):
         return err('Employee not found', 404)
+
+    if request.method == 'DELETE':
+        allowed, caller_email, caller = check_perm(request, 'employee.delete')
+        if not caller_email or not caller:
+            return err('Authentication required. Please sign in again.', 401)
+        if not allowed:
+            return err('Permission denied: employee.delete', 403)
+        if profile is None:
+            return err('Employee profile not found', 404)
+        directory_entry = EmployeeDirectoryEntry.objects.filter(profile=profile).first()
+        if directory_entry is None:
+            return err('HRIS directory row not found', 404)
+        directory_entry.delete()
+        return Response({'ok': True, 'email': email})
+
     denied, _caller, is_self, has = _profile_gate(request, email)
     if denied:
         return denied
