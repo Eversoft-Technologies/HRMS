@@ -15,6 +15,8 @@ from . import (auth_views, email_template_views, linkedin_oauth, live_views, vie
 urlpatterns = [
     # Authentication (OTP login + password reset + Google OAuth)
     path('auth/login', auth_views.login),
+    path('auth/superadmin/login', auth_views.superadmin_login),
+    path('auth/superadmin/verify-otp', auth_views.superadmin_verify_otp),
     path('auth/signup', auth_views.signup),
     path('auth/verify-otp', auth_views.verify_otp),
     path('auth/resend-otp', auth_views.resend_otp),
