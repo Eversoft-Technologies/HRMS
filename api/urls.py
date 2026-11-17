@@ -1,6 +1,9 @@
 from django.urls import path
 
 from . import ai_settings
+from . import tickets, timesheets, org_tree
+from . import stt_settings
+from . import attendance_recalc
 from . import chat_extras
 from . import notification_prefs
 from . import org_views
@@ -72,6 +75,7 @@ urlpatterns = [
     path('interview-recordings/<int:pk>', views.recording_detail),
     path('interview-recordings/<int:pk>/video', views.recording_video),
     path('interview-recordings/<int:pk>/thumbnail', views.recording_thumbnail),
+    path('interview-recordings/<int:pk>/transcribe', views.recording_transcribe),
 
     path('question-sets', views.question_sets),
     path('question-sets/<str:set_id>', views.question_set_detail),
@@ -89,6 +93,10 @@ urlpatterns = [
     path('ai/settings/validate', ai_settings.ai_settings_validate),
     path('ai/settings/key', ai_settings.ai_settings_key),
     path('ai/settings/audit', ai_settings.ai_settings_audit),
+    path('stt/settings', stt_settings.stt_settings),
+    path('stt/settings/validate', stt_settings.stt_settings_validate),
+    path('stt/settings/key', stt_settings.stt_settings_key),
+    path('stt/settings/audit', stt_settings.stt_settings_audit),
 
     path('users', views.users),
     path('users/<str:email>', views.user_detail),
@@ -99,6 +107,22 @@ urlpatterns = [
     path('teams/<int:pk>/members', org_views.team_members),
     path('teams/<int:pk>/members/<str:member>', org_views.team_member_detail),
     path('org/people', org_views.org_people),
+    # Phase 3 — interactive org tree
+    path('org/tree', org_tree.org_tree),
+    path('org/manager', org_tree.set_manager),
+    # Phase 3 — service desk tickets
+    path('tickets/meta', tickets.ticket_meta),
+    path('tickets', tickets.tickets),
+    path('tickets/<int:pk>', tickets.ticket_detail),
+    path('tickets/<int:pk>/comments', tickets.ticket_comments),
+    # Phase 3 — timesheets and attendance change history
+    path('timesheets/entries', timesheets.entries),
+    path('timesheets/entries/<int:pk>', timesheets.entry_detail),
+    path('timesheets/week', timesheets.week),
+    path('timesheets/week/submit', timesheets.submit_week),
+    path('timesheets/approvals', timesheets.approvals),
+    path('timesheets/week/<int:pk>/decide', timesheets.decide_week),
+    path('attendance/audit', timesheets.attendance_audit),
     path('org/manager-review', org_views.manager_review),
     path('org/approver', org_views.org_approver),
     path('org/reviewers', org_views.org_reviewers),
@@ -168,6 +192,7 @@ urlpatterns = [
     path('attendance/day-detail', views.attendance_day_detail),
     path('attendance/location-punch', views.attendance_location_punch),
     path('attendance/<int:pk>', views.attendance_detail),
+    path('attendance/recalculate', attendance_recalc.attendance_recalculate),
 
     # Shifts
     path('shifts', views.shifts),

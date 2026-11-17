@@ -77,7 +77,8 @@
      same scoping for any caller without leave.action, so the param only keeps
      the request honest — it is not the security boundary. loadAppr calls this
      once permissions resolve, so the list is never fetched at the wrong scope. */
-  var loadList=function(all){var e=sess().email||"";sld(!0);return fetch("/api/leave").then(readJson).then(function(r){if(!r.ok||!Array.isArray(r.j))throw 0;sL(r.j);ser("");sld(!1)}).catch(function(){ser("Couldn't load leave requests.");sld(!1)})};
+  var quiet=!1;
+  var loadList=function(all){var e=sess().email||"";var q=quiet;quiet=!1;q||sld(!0);return fetch("/api/leave").then(readJson).then(function(r){if(!r.ok||!Array.isArray(r.j))throw 0;sL(r.j);ser("");sld(!1)}).catch(function(){ser("Couldn't load leave requests.");sld(!1)})};
   var loadBal=function(){var e=sess().email||"";if(!e){sbal([]);return}fetch("/api/leave/balance?email="+encodeURIComponent(e)).then(readJson).then(function(r){var b=r.ok&&r.j&&Array.isArray(r.j.balances)?r.j.balances:[];b.enforce=!(r.j&&r.j.enforceBalance===!1);sbal(b);
         if(b.length)sf(function(p){for(var i=0;i<b.length;i++){if(b[i].type===p.type)return p}var o={...p};o.type=b[0].type;return o})}).catch(function(){sbal([])})};
   /* Signed-in-user scoped, so it no-ops when logged out. Dropping ?email=
@@ -94,6 +95,8 @@
      the caller's permissions are known, so an employee's browser never even
      requests the unscoped list. */
   g.useEffect(function(){loadBal();loadCor(!1);loadAppr()},[]);
+  /* Requests and approvals change when someone ELSE acts, so a list fetched once on mount went stale until a reload. Re-fetch while the page is visible and when the tab is shown again; `quiet` keeps the list from flashing its loading state. */
+  g.useEffect(function(){var refresh=function(){if(document.hidden)return;quiet=!0;loadBal();loadCor(!1);loadAppr()};var t=setInterval(refresh,15000);document.addEventListener("visibilitychange",refresh);window.addEventListener("focus",refresh);return function(){clearInterval(t);document.removeEventListener("visibilitychange",refresh);window.removeEventListener("focus",refresh)}},[]);
   
   /* ---- date helpers ---- */
   var pad=function(v){return String(v).length>1?String(v):"0"+v};

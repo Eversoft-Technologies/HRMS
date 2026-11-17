@@ -69,6 +69,11 @@ setTimeout(() => {
   check('YYYY-MM-DD', C.date('2026-12-31'), '2026-12-31');
   check('blank stays blank', C.date(''), '');
   check('unparseable text is returned as-is', C.date('junk'), 'junk');
+  C.set({ dateFormat: 'MM/DD/YYYY' });
+  check('dateTime adds the time', C.dateTime('2026-01-05 09:30:00'), '01/05/2026 09:30');
+  check('dateTime of a plain date has no time', C.dateTime('2026-01-05'), '01/05/2026');
+  check('dateShort this year', C.dateShort(new Date().getFullYear() + '-11-17'), 'Nov 17');
+  check('dateShort other year', C.dateShort('2020-03-04'), 'Mar 4, 2020');
   C.set({ dateFormat: 'DD/MM/YYYY' });
 
   // --- employee codes + work week ---------------------------------------

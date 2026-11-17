@@ -104,3 +104,28 @@ def local_today():
     yesterday's attendance row.
     """
     return local_now().date()
+
+
+# Company date format (Settings › General) → strftime. Same tokens as
+# HRMSCompany.date() in the browser.
+_DATE_TOKENS = (('YYYY', '%Y'), ('MMM', '%b'), ('MM', '%m'), ('DD', '%d'))
+
+
+def company_date_format():
+    """The company's date format setting ('MM/DD/YYYY' when unset)."""
+    try:
+        from .models import CompanyDetail
+        row = CompanyDetail.objects.order_by('id').values_list('date_format', flat=True).first()
+    except Exception:
+        row = None
+    return (row or 'MM/DD/YYYY').strip() or 'MM/DD/YYYY'
+
+
+def company_date(value, fmt=None):
+    """``value`` (date/datetime) in the company date format; '' for None."""
+    if not value:
+        return ''
+    pattern = fmt or company_date_format()
+    for token, code in _DATE_TOKENS:
+        pattern = pattern.replace(token, code)
+    return value.strftime(pattern)

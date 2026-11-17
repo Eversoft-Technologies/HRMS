@@ -10,7 +10,7 @@
   var DELETE_SELECTED_ID = 'hrms-notifications-delete-selected';
   var CLEAR_ALL_ID = 'hrms-notifications-clear-all';
   var MARK_READ_ID = 'hrms-notifications-mark-all-read';
-  var REFRESH_MS = 30000;
+  var REFRESH_MS = 15000;
 
   var state = {
     items: [],
@@ -253,7 +253,7 @@
       message.style.lineHeight = '1.4';
 
       var meta = document.createElement('div');
-      meta.textContent = item.createdAt ? new Date(item.createdAt).toLocaleString() : '';
+      meta.textContent = item.createdAt ? (window.HRMSCompany ? window.HRMSCompany.date(item.createdAt, { time: true }) : new Date(item.createdAt).toLocaleString('en-US')) : '';
       meta.style.fontSize = '11px';
       meta.style.marginTop = '8px';
       meta.style.color = 'var(--text3,#64748b)';
