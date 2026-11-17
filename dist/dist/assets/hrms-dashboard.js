@@ -434,9 +434,12 @@
     var statusFlt = state.statusFilter;
 
     var filtered = employees.filter(function (emp) {
-      if (deptFlt !== 'all' && (emp.department || '').toLowerCase() !== deptFlt.toLowerCase()) {
-        return false;
-      }
+    var empDept = typeof emp.department === 'object' && emp.department !== null 
+    ? (emp.department.name || emp.department.title || '') 
+    : (emp.department || '');
+if (deptFlt !== 'all' && empDept.toLowerCase() !== deptFlt.toLowerCase()) {
+    return false;
+}
       if (statusFlt !== 'all' && (emp.status || '').toLowerCase() !== statusFlt.toLowerCase()) {
         return false;
       }

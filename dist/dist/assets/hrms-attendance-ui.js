@@ -157,7 +157,7 @@
   function fmtDatePretty(dateStr) {
     if (!dateStr) return '--';
     var d = new Date(dateStr + 'T00:00:00');
-    return isNaN(d) ? dateStr : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+    return isNaN(d) ? dateStr : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
   }
   function periodLabel(fromStr, toStr) {
     if (!fromStr || !toStr) return '--';

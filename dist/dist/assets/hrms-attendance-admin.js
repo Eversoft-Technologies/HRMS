@@ -534,7 +534,7 @@
     }
     function fmtDay(iso) {
       var dd = new Date(iso + 'T00:00:00');
-      return isNaN(dd) ? iso : dd.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+      return isNaN(dd) ? iso : dd.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
     }
     var heatPanel = document.createElement('div');
     heatPanel.className = 'haa-heat-panel';

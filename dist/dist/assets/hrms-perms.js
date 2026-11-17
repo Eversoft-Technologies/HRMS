@@ -278,6 +278,21 @@
         { href: '/onboarding/payroll',      label: 'Payroll Information', icon: ICON.card },
         { href: '/onboarding/settings',     label: 'Onboarding Settings',            icon: ICON.gear },
       ]
+    },
+    {
+      // Phase 3 self-service modules, for everyone signed in. Pages live in
+      // hrms-tickets.js / hrms-timesheets.js / hrms-orgchart.js (mounted by
+      // hrms-sidecar.js); what each person may DO there is enforced by the API.
+      perm: 'employee.view',
+      permAny: ['employee.view', 'attendance.view', 'dashboard.view'],
+      id: 'workspace',
+      section: 'Workspace',
+      after: ['Onboarding', 'Employees', 'HR Management', 'Overview'],
+      items: [
+        { href: '/tickets',                 label: 'Help Desk Tickets',   icon: ICON.task },
+        { href: '/timesheets',              label: 'Timesheets',          icon: ICON.clock },
+        { href: '/org-chart',               label: 'Org Chart',           icon: ICON.users },
+      ]
     }
   ];
 

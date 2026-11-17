@@ -72,6 +72,10 @@ class LocationPunchTests(TestCase):
     def test_precise_reading_far_away_alerts_the_employee(self):
         self.session()
         r = self.punch(TOWN, 30)
+        # one reading is only a suspicion: no warning, a quick re-check is asked for
+        self.assertEqual((r['state'], r['recheckInMs']), ('away_pending', 300000))
+        self.assertEqual(self.alerts('Location check: you appear to be elsewhere'), 0)
+        r = self.punch(TOWN, 30, when=datetime(2026, 11, 2, 12, 5))
         self.assertEqual(r['state'], 'away')
         self.assertIn('from HQ', r['message'])
         self.assertEqual(self.alerts('Location check: you appear to be elsewhere'), 1)
@@ -80,9 +84,54 @@ class LocationPunchTests(TestCase):
         home = (13.3000, 78.6000)
         self.session(location_lat=home[0], location_lng=home[1], geo_verified=True, location_status='Approved')
         self.assertEqual(self.punch((home[0] + 0.0005, home[1]), 30)['state'], 'ok')       # ~55 m
-        r = self.punch(TOWN, 30, when=datetime(2026, 11, 2, 13, 0))
+        self.assertEqual(self.punch(TOWN, 30, when=datetime(2026, 11, 2, 13, 0))['state'], 'away_pending')
+        r = self.punch(TOWN, 30, when=datetime(2026, 11, 2, 13, 5))
         self.assertEqual(r['state'], 'away')
         self.assertIn('where you checked in', r['message'])
+
+    # ── consecutive-reading filter ───────────────────────────────────────
+    def test_early_recheck_only_after_a_suspicion(self):
+        self.session()
+        self.assertEqual(self.punch(NEAR, 25)['state'], 'ok')
+        r = self.punch(TOWN, 30, when=datetime(2026, 11, 2, 12, 5))     # 5 min later, nothing suspicious before
+        self.assertEqual((r['stored'], r['reason']), (False, 'too_soon'))
+        self.punch(TOWN, 30, when=datetime(2026, 11, 2, 13, 0))          # suspicion
+        r = self.punch(TOWN, 30, when=datetime(2026, 11, 2, 13, 2))      # too early to confirm
+        self.assertEqual((r['stored'], r['reason']), (False, 'too_soon'))
+        self.assertGreater(r['recheckInMs'], 0)
+
+    def test_back_in_place_between_readings_clears_the_suspicion(self):
+        self.session()
+        self.assertEqual(self.punch(TOWN, 30)['state'], 'away_pending')
+        self.assertEqual(self.punch(NEAR, 25, when=datetime(2026, 11, 2, 12, 5))['state'], 'ok')
+        self.assertEqual(self.punch(TOWN, 30, when=datetime(2026, 11, 2, 13, 5))['state'], 'away_pending')
+        self.assertEqual(self.alerts('Location check: you appear to be elsewhere'), 0)
+
+    def test_approximate_readings_neither_raise_nor_clear(self):
+        self.session()
+        self.assertEqual(self.punch(TOWN, 30)['state'], 'away_pending')
+        self.assertEqual(self.punch(NEAR, 3000, when=datetime(2026, 11, 2, 12, 5))['state'], 'uncertain')
+        self.assertEqual(self.punch(TOWN, 30, when=datetime(2026, 11, 2, 12, 10))['state'], 'away')
+
+    def test_wfh_room_to_room_drift_is_never_away(self):
+        home = (13.3000, 78.6000)
+        GeoFence.objects.create(name='Home', latitude=home[0], longitude=home[1], radius_meters=100,
+                                owner_email=self.email, status='Approved')
+        self.session(is_wfh=True, location_lat=home[0], location_lng=home[1], geo_verified=True)
+        for i, dlat in enumerate((0.0011, 0.0015, 0.0016)):             # ~120 m, ~165 m, ~180 m
+            r = self.punch((home[0] + dlat, home[1]), 20, when=datetime(2026, 11, 2, 9 + i, 30))
+            self.assertEqual(r['state'], 'ok', (dlat, r))
+        self.assertEqual(self.alerts('Location check: you appear to be elsewhere'), 0)
+
+    def test_wfh_really_leaving_home_is_confirmed(self):
+        home = (13.3000, 78.6000)
+        GeoFence.objects.create(name='Home', latitude=home[0], longitude=home[1], radius_meters=150,
+                                owner_email=self.email, status='Approved')
+        self.session(is_wfh=True, location_lat=home[0], location_lng=home[1], geo_verified=True)
+        self.assertEqual(self.punch(TOWN, 20)['state'], 'away_pending')
+        r = self.punch(TOWN, 20, when=datetime(2026, 11, 2, 12, 5))
+        self.assertEqual(r['state'], 'away')
+        self.assertIn('Home', r['message'])
 
     def test_night_shift_punch_after_midnight_goes_to_last_nights_session(self):
         night = Shift.objects.create(name='Night', start_time=time(18, 0), end_time=time(2, 30), is_night_shift=True)
@@ -122,8 +171,15 @@ class LocationPunchTests(TestCase):
         self.assertEqual((r.status_code, r.json()['code']), (409, 'NOT_AN_OFFICE_SESSION'))
         self.assertIsNone(EmployeeAttendance.objects.get().check_out)
 
+    def outside_run(self, end=datetime(2026, 11, 2, 12, 0), minutes=15):
+        """What the watcher does before an auto check-out: a precise outside
+        reading every 5 minutes for ``minutes``."""
+        for k in range(minutes, 0, -5):
+            self.geocheck(TOWN, 30, when=end - timedelta(minutes=k))
+
     def test_auto_check_out_tells_the_employee_why(self):
         self.session()
+        self.outside_run()
         with at(datetime(2026, 11, 2, 12, 0)):
             r = self.c.post('/api/attendance/check-out', {'email': self.email, 'auto': 'geofence_departure',
                                                           'outside_minutes': 15}, content_type='application/json')
@@ -138,6 +194,7 @@ class LocationPunchTests(TestCase):
         AppUser.objects.create(email='boss@example.com', full_name='Boss', status='active', role='recruitment')
         UserProfile.objects.create(email=self.email, manager_email='boss@example.com')
         self.session(employee_name='Punch Tester')
+        self.outside_run()
         with at(datetime(2026, 11, 2, 12, 0)):
             r = self.c.post('/api/attendance/check-out', {
                 'email': self.email, 'auto': 'geofence_departure', 'outside_minutes': 15,
