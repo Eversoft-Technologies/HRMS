@@ -238,8 +238,12 @@
     if (s === 'interview scheduled') return 'warn';
     return 'neutral';
   }
-  function fmtDate(s) { return s ? String(s).slice(0, 10) : '—'; }
-  function fmtDateTime(s) { return s ? String(s).replace('T', ' ').slice(0, 16) : '—'; }
+  /* Company date format (Settings › General, MM/DD/YYYY by default) via
+     hrms-company.js; the raw ISO value if that helper is not loaded. */
+  function coDate(iso) { return window.HRMSCompany ? window.HRMSCompany.date(iso, { time: false }) : iso; }
+  function coDateTime(iso) { return window.HRMSCompany ? window.HRMSCompany.date(iso, { time: true }) : iso; }
+  function fmtDate(s) { return s ? coDate(String(s).slice(0, 10)) : '—'; }
+  function fmtDateTime(s) { return s ? coDateTime(String(s).replace('T', ' ').slice(0, 16)) : '—'; }
 
   /* Downloads a Bench Sales document (resume/DL/I-94) via fetch rather than a
      plain <a href> link: this API authenticates same-origin /api/ requests by

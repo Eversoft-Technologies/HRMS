@@ -2111,7 +2111,7 @@ def get_or_create_company_details():
                 country='India',
                 timezone='Asia/Kolkata',
                 currency='INR',
-                date_format='DD/MM/YYYY',
+                date_format='MM/DD/YYYY',
                 work_week=['Mon', 'Tue', 'Wed', 'Thu', 'Fri'],
                 emp_id_prefix='EV-',
                 emp_id_min_digits=4,
@@ -2146,7 +2146,7 @@ def company_public_config():
         'companyLogo': obj.company_logo or '',
         'timezone': obj.timezone or '',
         'currency': (obj.currency or 'INR').upper(),
-        'dateFormat': obj.date_format or 'DD/MM/YYYY',
+        'dateFormat': obj.date_format or 'MM/DD/YYYY',
         'workWeek': week or ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'],
         'empIdPrefix': obj.emp_id_prefix if obj.emp_id_prefix is not None else 'EV-',
         'empIdMinDigits': int(obj.emp_id_min_digits or 4),
@@ -2348,7 +2348,7 @@ def company_settings(request):
                         'country': getattr(obj, 'country', 'India'),
                         'timezone': getattr(obj, 'timezone', 'Asia/Kolkata'),
                         'currency': getattr(obj, 'currency', 'INR'),
-                        'dateFormat': getattr(obj, 'date_format', 'DD/MM/YYYY'),
+                        'dateFormat': getattr(obj, 'date_format', 'MM/DD/YYYY'),
                         'workWeek': getattr(obj, 'work_week', ['Mon', 'Tue', 'Wed', 'Thu', 'Fri']),
                         'empIdPrefix': getattr(obj, 'emp_id_prefix', 'EV-'),
                         'empIdMinDigits': getattr(obj, 'emp_id_min_digits', 4),
@@ -2368,7 +2368,7 @@ def company_settings(request):
                     'country': 'India',
                     'timezone': 'Asia/Kolkata',
                     'currency': 'INR',
-                    'dateFormat': 'DD/MM/YYYY',
+                    'dateFormat': 'MM/DD/YYYY',
                     'workWeek': ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'],
                     'empIdPrefix': 'EV-',
                     'empIdMinDigits': 4,
@@ -3677,6 +3677,15 @@ LOCATION_PRECISE_M = 500
 #: started counts as "somewhere else".
 LOCATION_DRIFT_RADIUS_M = 300
 LOCATION_AWAY_TITLE = 'Location check: you appear to be elsewhere'
+#: Indoor GPS wanders 50-150 m between rooms of the same house. For deciding
+#: whether a WFH employee LEFT home, the home fence counts as at least this
+#: wide (check-in verification still uses the fence's own radius).
+HOME_DRIFT_TOLERANCE_M = 200
+#: One precise "away" reading is only a suspicion; a second one, taken at
+#: least this long after it, confirms it. Any reading at the expected place
+#: in between clears the suspicion.
+AWAY_CONFIRM_AFTER_S = 4 * 60
+AWAY_RECHECK_MS = 5 * 60 * 1000
 
 
 def _fmt_dist(m):
@@ -3700,9 +3709,20 @@ def _where_vs_session(att, lat, lng, accuracy):
     out = {'state': 'uncertain', 'distance': None, 'place': ''}
     if lat is None or lng is None or accuracy is None or accuracy > LOCATION_PRECISE_M:
         return out
-    if att.is_wfh and home_fence_for(att.email):
-        fences = [home_fence_for(att.email)]
-    elif not _session_is_offsite(att):
+    home = home_fence_for(att.email) if att.is_wfh else None
+    if home is not None:
+        # Home: the fence counts as at least HOME_DRIFT_TOLERANCE_M wide, so
+        # moving between rooms (or indoor GPS wobble) never reads as leaving.
+        dist = _haversine_distance(lat, lng, home.latitude, home.longitude)
+        tol = max(float(home.radius_meters or 0), HOME_DRIFT_TOLERANCE_M)
+        out['place'] = home.name or 'home'
+        out['distance'] = round(dist)
+        if dist <= tol + min(accuracy, GEO_ACCURACY_ALLOWANCE_CAP_M):
+            out['state'] = 'ok'
+        elif dist - tol > accuracy:
+            out['state'] = 'away'
+        return out
+    if not _session_is_offsite(att):
         fences = None                                   # the office fences
     else:
         fences = []
@@ -4187,11 +4207,23 @@ def attendance_check_out(request):
 
     # Automatic close on leaving the office: only for a session that started
     # at the office. An approved off-site / WFH day has no office to leave.
-    is_auto = str(body.get('auto') or '').lower() in ('1', 'true', 'yes', 'geofence', 'geofence_departure')
+    is_auto = str(body.get('auto') or '').lower() in ('geofence', 'geofence_departure')
     if is_auto and _session_is_offsite(obj):
         return Response({'message': 'This session did not start at the office, so it is not '
                                     'closed automatically when you are away from it.',
                          'code': 'NOT_AN_OFFICE_SESSION', 'checkedIn': True}, status=409)
+    outside_mins = None
+    if is_auto:
+        # The browser's word is not enough: a throttled or sleeping tab, a
+        # network reconnect or a second tab can all think time passed. Only the
+        # server's own record of an unbroken outside run counts.
+        pol = _departure_policy_values()
+        outside_mins = _outside_run_minutes(obj, now)
+        need = max(int(pol.get('timeout_minutes') or 15) - 1, 1)
+        if not pol.get('enabled', True) or outside_mins is None or outside_mins < need:
+            return Response({'message': 'Not checked out: you have not been outside the office long enough.',
+                             'code': 'AUTO_CHECKOUT_UNCONFIRMED', 'checkedIn': True,
+                             'outsideMinutes': outside_mins}, status=409)
 
     # GPS check for event
     lat = body.get('latitude')
@@ -4213,6 +4245,8 @@ def attendance_check_out(request):
         else:
             loc_desc = 'Office'
 
+    from .timesheets import audit_snapshot as _ts_snap, log_attendance_change as _ts_log
+    _ts_before = _ts_snap(obj) if is_auto else None   # audit trail (never raises)
     # Close session
     if _is_checked_in(obj):
         session = max(int((now - obj.check_in).total_seconds() // 60), 0)
@@ -4242,9 +4276,10 @@ def attendance_check_out(request):
     # The browser can close a session when the employee leaves the geofence.
     # Stamping it keeps an auto-closed day distinguishable from one the person
     # ended themselves, which matters if they dispute the hours.
+    obj.outside_since = obj.outside_last_at = None
     if is_auto:
         obj.auto_checkout_at = now
-        mins = body.get('outside_minutes') or 15
+        mins = outside_mins
         try:
             away_m = float(body.get('distance')) if body.get('distance') is not None else None
         except (TypeError, ValueError):
@@ -4287,6 +4322,8 @@ def attendance_check_out(request):
         obj.status = 'late' if (obj.late_minutes or 0) > 0 else 'present'
 
     obj.save()
+    if is_auto:
+        _ts_log(obj, _ts_before, 'auto_checkout', 'system', obj.note or 'Left the office geofence')
 
     evt_name = 'auto-checkout-departure' if str(body.get('auto') or '').lower() in ('geofence', 'geofence_departure') else 'check-out'
     AttendanceEvent.objects.create(
@@ -4309,7 +4346,7 @@ def attendance_check_out(request):
         '/employees/attendance',
     )
     if is_auto:
-        _tell_hr_auto_checkout(obj, now, body.get('outside_minutes') or 15, where_txt)
+        _tell_hr_auto_checkout(obj, now, outside_mins, where_txt)
     _maybe_send_long_day_alert(obj, shift)
     return Response(EmployeeAttendanceSerializer(obj).data)
 
@@ -4421,6 +4458,8 @@ def attendance_geofence_check(request):
                 and (distance - (nearest.radius_meters or 0)) < accuracy)
         )
     )
+    if att is not None and not wfh:
+        _note_outside(att, now, 'inside' if inside else ('uncertain' if uncertain else 'outside'))
     if att is not None and not wfh and not inside and not uncertain:
         # Tell the employee through the bell (sound / desktop pop-up too), not
         # only a banner they may never see — at most once per 30 minutes.
@@ -4619,6 +4658,8 @@ def attendance_detail(request, pk):
                        f'time is calculated from the check-in and check-out times.',
             'code': 'SESSION_OPEN'}, status=409)
     before = (obj.check_in, obj.check_out, obj.break_minutes, obj.worked_minutes)
+    from .timesheets import audit_snapshot as _ts_snap, log_attendance_change as _ts_log
+    _ts_before = _ts_snap(obj)   # audit trail (never raises)
     serializer = EmployeeAttendanceSerializer(obj, data=data, partial=True)
     if not serializer.is_valid():
         return serializer_err(serializer)
@@ -4646,6 +4687,7 @@ def attendance_detail(request, pk):
         email=obj.email, employee_name=obj.employee_name, date=obj.date, event='hr-edit',
         location=(f'{actor or "HR"}: worked {_fmt_dur(before[3] or 0)} → {_fmt_dur(obj.worked_minutes or 0)}')[:120],
         at=local_now())
+    _ts_log(obj, _ts_before, 'edit', actor or '', str(data.get('reason') or data.get('auditReason') or ''))
     return Response(EmployeeAttendanceSerializer(obj).data)
 
 
@@ -4837,7 +4879,7 @@ def remote_switch_check(email, day=None):
 
 #: A house plus an indoor GPS fix. Tighter than this and people get flagged at
 #: their own kitchen table; looser and "home" starts covering the next street.
-HOME_FENCE_DEFAULT_RADIUS_M = 150
+HOME_FENCE_DEFAULT_RADIUS_M = 200   # indoor GPS drifts between rooms
 
 #: Past this the captured fix is too vague to be worth confirming — accepting it
 #: would register a "home" the size of a district and verify nothing.
@@ -9410,6 +9452,8 @@ def attendance_correction_detail(request, pk):
                 date=inst.attendance_date
             )
             basis = _correction_basis(inst, att)      # before check_in/out change
+            from .timesheets import audit_snapshot as _ts_snap, log_attendance_change as _ts_log
+            _ts_before = None if created else _ts_snap(att)   # audit trail (never raises)
             if inst.requested_check_in:
                 att.check_in = inst.requested_check_in
             if inst.requested_check_out:
@@ -9444,6 +9488,7 @@ def attendance_correction_detail(request, pk):
                     else:
                         att.overtime_minutes = 0
             att.save()
+            _ts_log(att, _ts_before, 'correction', _who or '', inst.reason or '')
 
             create_notification(
                 obj.email,
@@ -10497,15 +10542,20 @@ def chat_meetings(request):
     # POST — schedule a meeting and announce it in the room timeline.
     body = request.data or {}
     creator = norm_email(body.get("created_by") or request.headers.get("X-Actor-Email") or "")
-    title = (body.get("title") or "").strip()
+    # "Meet now": starts immediately, no title or time to fill in.
+    instant = str(body.get("instant") or "").lower() in ("1", "true", "yes")
+    title = (body.get("title") or "").strip() or ("Instant meeting" if instant else "")
     if not title:
         return err("Meeting title is required")
-    if not body.get("scheduled_at"):
+    if instant and not body.get("scheduled_at"):
+        dt = _chat_now()
+    elif not body.get("scheduled_at"):
         return err("scheduled_at is required")
-    try:
-        dt = _parse_dt(body.get("scheduled_at"))
-    except Exception:
-        return err("Invalid scheduled_at")
+    else:
+        try:
+            dt = _parse_dt(body.get("scheduled_at"))
+        except Exception:
+            return err("Invalid scheduled_at")
 
     room = ChatRoom.objects.filter(id=body.get("room_id")).first() if body.get("room_id") else None
 
@@ -10546,7 +10596,10 @@ def chat_meetings(request):
 
     if room:
         when = dt.strftime("%b %d, %Y %I:%M %p")
-        text = f"\U0001F4C5 Meeting scheduled: “{title}” on {when}. Join: {join_url}"
+        if instant:
+            text = f"\U0001F3A5 {creator_name or creator} started a video meeting — join now: {join_url}"
+        else:
+            text = f"\U0001F4C5 Meeting scheduled: “{title}” on {when}. Join: {join_url}"
         msg = ChatMessage.objects.create(
             room=room,
             sender_email=creator,
@@ -10562,6 +10615,17 @@ def chat_meetings(request):
             "message": text,
             "created_at": _fmt_dt(now),
         })
+
+    if instant:
+        # Ring everyone else in the conversation (bell + sound + desktop pop-up).
+        link = f"/employees/chat?room={room.id}" if room else "/employees/chat"
+        for who in attendees:
+            if who and who != creator:
+                try:
+                    create_notification(who, f"{creator_name or creator} started a video meeting",
+                                        f"Join now: {join_url}", "info", link)
+                except Exception:
+                    logger.debug("instant meeting notify failed for %s", who, exc_info=True)
 
     return Response(ChatMeetingSerializer(meeting).data, status=201)
 
@@ -11006,6 +11070,8 @@ def attendance_punch_ticket_decide(request, pk):
         rec = EmployeeAttendance(email=c.email,
                                  employee_name=c.employee_name or c.email,
                                  date=c.attendance_date, status='present')
+    from .timesheets import audit_snapshot as _ts_snap, log_attendance_change as _ts_log
+    _ts_before = _ts_snap(rec)   # None for a new row; audit trail (never raises)
     if c.kind == 'forgot_checkin' or not rec.check_in:
         rec.check_in = datetime.combine(c.attendance_date, start_t)
         rec.late_minutes = 0
@@ -11020,6 +11086,7 @@ def attendance_punch_ticket_decide(request, pk):
     if not rec.shift_id and shift:
         rec.shift_id = shift.id
     rec.save()
+    _ts_log(rec, _ts_before, 'punch_ticket', caller or '', (c.reason or c.kind or '') + (f' — {note}' if note else ''))
 
     c.status = 'Approved'
     c.reviewer = caller
@@ -11152,6 +11219,38 @@ def _tell_hr_auto_checkout(att, now, minutes, where_txt=''):
         create_notification(mgr, title, msg, 'warning', link)
 
 
+#: Readings of an outside run must come at least this often (the watcher
+#: samples every 5 min). A longer gap — the laptop slept, the tab was frozen,
+#: the network dropped — starts the run again instead of adding to it.
+OUTSIDE_RUN_MAX_GAP_S = 12 * 60
+
+
+def _note_outside(att, now, state):
+    """Keep the session's outside-the-office run current.
+    ``state`` is 'inside', 'outside' (precise) or 'uncertain' (left alone)."""
+    if att is None or state == 'uncertain':
+        return
+    if state == 'inside':
+        if att.outside_since or att.outside_last_at:
+            EmployeeAttendance.objects.filter(pk=att.pk).update(outside_since=None, outside_last_at=None)
+            att.outside_since = att.outside_last_at = None
+        return
+    fresh = att.outside_last_at and (now - att.outside_last_at).total_seconds() <= OUTSIDE_RUN_MAX_GAP_S
+    since = att.outside_since if (att.outside_since and fresh) else now
+    EmployeeAttendance.objects.filter(pk=att.pk).update(outside_since=since, outside_last_at=now)
+    att.outside_since, att.outside_last_at = since, now
+
+
+def _outside_run_minutes(att, now):
+    """Minutes of the current unbroken outside run, or None if there is none
+    (or its last reading is too old to still count)."""
+    if not (att.outside_since and att.outside_last_at):
+        return None
+    if (now - att.outside_last_at).total_seconds() > OUTSIDE_RUN_MAX_GAP_S:
+        return None
+    return int((now - att.outside_since).total_seconds() // 60)
+
+
 def _departure_policy_values():
     pol = {'enabled': True, 'timeout_minutes': 15, 'warning_minutes': 5}
     try:
@@ -11214,8 +11313,22 @@ def attendance_location_punch(request):
     if not (rec and _is_checked_in(rec)):
         return Response({'stored': False, 'reason': 'not_checked_in'})
     last = AttendanceLocationPunch.objects.filter(email=email, date=rec.date).order_by('-captured_at').first()
+    # The last DECISIVE reading of this session (approximate ones are skipped:
+    # they neither raise nor clear a suspicion).
+    prev_state = None
+    for q in AttendanceLocationPunch.objects.filter(email=email, date=rec.date).order_by('-captured_at')[:6]:
+        st = _where_vs_session(rec, q.latitude, q.longitude, q.accuracy)['state']
+        if st != 'uncertain':
+            prev_state = st
+            break
     if last and (now - last.captured_at).total_seconds() < 55 * 60:
-        return Response({'stored': False, 'reason': 'too_soon'})
+        # Hourly, except one early confirmation reading after a suspicion.
+        since = (now - last.captured_at).total_seconds()
+        if not (prev_state == 'away' and since >= AWAY_CONFIRM_AFTER_S):
+            out = {'stored': False, 'reason': 'too_soon'}
+            if prev_state == 'away':
+                out['recheckInMs'] = int(max(0, AWAY_CONFIRM_AFTER_S - since) * 1000) + 1000
+            return Response(out)
     if acc is None or acc > LOCATION_PRECISE_M:
         # Never name a town from a reading that cannot tell towns apart.
         label = ('Approximate location' + (f' (±{_fmt_dist(acc)})' if acc else '')
@@ -11227,7 +11340,12 @@ def attendance_location_punch(request):
     where = _where_vs_session(rec, lat, lng, acc)
     out = {'stored': True, 'id': p.id, 'time': _fmt_ampm(now), 'state': where['state'],
            'approximate': acc is None or acc > LOCATION_PRECISE_M}
-    if where['state'] == 'away':
+    if where['state'] == 'away' and prev_state != 'away':
+        # First precise reading elsewhere: only a suspicion. No warning yet —
+        # the browser takes one more reading in a few minutes to confirm.
+        out['state'] = 'away_pending'
+        out['recheckInMs'] = AWAY_RECHECK_MS
+    if out['state'] == 'away':
         msg = (f'Your {_fmt_ampm(now)} location punch was about {_fmt_dist(where["distance"])} from '
                f'{where["place"] or "where you checked in"}'
                + (f' ({label})' if label else '') + '. If you have not moved, turn on precise '

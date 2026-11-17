@@ -62,7 +62,7 @@
     if (!iso) return '';
     var d = new Date(iso);
     if (isNaN(d)) return '';
-    return d.toLocaleString(undefined, { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+    return d.toLocaleString('en-US', { month: 'short', day: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
   }
 
   function ensureStyle() {

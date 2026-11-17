@@ -1148,6 +1148,10 @@
    * (a web page cannot capture location after the tab/app is closed). */
   var HOUR_MS = 60 * 60 * 1000;
   var geoBusy = false, geoRetryAt = 0, pendingTs = 0;
+  /* A first precise reading away from where the session should be is only a
+     suspicion: the server answers 'away_pending' and one confirmation reading
+     is taken a few minutes later, outside the hourly grid. */
+  var confirmAt = 0, confirming = false;
   function lastTsKey() { return 'hrms_loc_ts_' + (actorEmail() || ''); }
   function getLastTs() { try { return parseInt(localStorage.getItem(lastTsKey()) || '0', 10) || 0; } catch (_) { return 0; } }
   function setLastTs(t) { try { localStorage.setItem(lastTsKey(), String(t)); } catch (_) {} }
@@ -1184,9 +1188,17 @@
       var send = function (label) {
         api('/api/attendance/location-punch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: em, latitude: lat, longitude: lng, accuracy: acc, label: label || '' }) })
           .then(function (r) {
-            if (r && r.stored) setLastTs(pendingTs || Date.now());
+            var wasConfirm = confirming; confirming = false;
+            if (r && r.stored && !wasConfirm) setLastTs(pendingTs || Date.now());
             else if (r && r.reason === 'not_checked_in') geoRetryAt = Date.now() + 30 * 60 * 1000;
+            if (r && (r.state === 'away_pending' || (r.reason === 'too_soon' && r.recheckInMs))) {
+              confirmAt = Date.now() + (r.recheckInMs || 300000);
+              setTimeout(maybeCapture, (r.recheckInMs || 300000) + 500);
+            } else if (r && r.stored) {
+              confirmAt = 0;
+            }
             if (r && r.state === 'away' && r.message) locationAlert('You appear to be elsewhere', r.message);
+            if (r && r.state === 'ok') document.querySelectorAll('.haa-loc-alert').forEach(function (x) { x.remove(); });
           })
           .catch(function () {})
           .then(function () { geoBusy = false; });
@@ -1220,6 +1232,11 @@
     var em = actorEmail(); if (!em || geoBusy) return;
     var now = Date.now();
     if (now < geoRetryAt) return;
+    if (confirmAt && now >= confirmAt) {               // the confirmation reading
+      confirmAt = 0; confirming = true; geoBusy = true;
+      captureLocation();
+      return;
+    }
     var last = getLastTs();
     // Fixed hourly cadence anchored to the first punch: a capture is due a
     // whole hour after the PREVIOUS SCHEDULED time, and we store that

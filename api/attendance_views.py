@@ -557,11 +557,14 @@ class AttendanceCorrectionViewSet(viewsets.ViewSet):
             ).first()
 
             if attendance:
+                from api.timesheets import audit_snapshot as _ts_snap, log_attendance_change as _ts_log
+                _ts_before = _ts_snap(attendance)   # audit trail (never raises)
                 if correction.requested_check_in:
                     attendance.check_in = correction.requested_check_in
                 if correction.requested_check_out:
                     attendance.check_out = correction.requested_check_out
                 attendance.save()
+                _ts_log(attendance, _ts_before, 'correction', reviewer_email or '', correction.reason or '')
 
             # Send notification
             NotificationService.send_attendance_correction_notification(

@@ -845,9 +845,12 @@ class PayrollService:
 
         period_label = payslip.run.period_label
         month_name = PayrollService._get_month_name(period_label)
-        period_start = payslip.run.period_start.strftime('%d/%m/%Y')
-        period_end = payslip.run.period_end.strftime('%d/%m/%Y')
-        doj_str = payslip.doj.strftime('%d-%m-%Y') if payslip.doj else ''
+        # Dates follow the company setting (MM/DD/YYYY by default).
+        from api.timeutil import company_date, company_date_format
+        _fmt = company_date_format()
+        period_start = company_date(payslip.run.period_start, _fmt)
+        period_end = company_date(payslip.run.period_end, _fmt)
+        doj_str = company_date(payslip.doj, _fmt)
 
         month_days = int(payslip.month_days) if payslip.month_days else 30
         net_paid_days = int(float(payslip.paid_days))

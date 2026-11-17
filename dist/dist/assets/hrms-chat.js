@@ -217,7 +217,7 @@
 
   function fmtTimeOf(d) {
     if (!d) return "";
-    return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    return d.toLocaleTimeString('en-US', { hour: "2-digit", minute: "2-digit" });
   }
 
   function dayLabelOf(d) {
@@ -230,7 +230,7 @@
     }
     if (same(d, today)) return "Today";
     if (same(d, y)) return "Yesterday";
-    return d.toLocaleDateString([], { day: "numeric", month: "short", year: "numeric" });
+    return d.toLocaleDateString('en-US', { day: "numeric", month: "short", year: "numeric" });
   }
 
   function parseDate(iso) {
@@ -254,7 +254,7 @@
     }
     if (same(d, today)) return "Today";
     if (same(d, y)) return "Yesterday";
-    return d.toLocaleDateString([], { day: "numeric", month: "short", year: "numeric" });
+    return d.toLocaleDateString('en-US', { day: "numeric", month: "short", year: "numeric" });
   }
 
   function relTime(iso) {
@@ -264,11 +264,11 @@
     var diff = (now - d) / 1000;
     if (diff < 60) return "now";
     if (diff < 3600) return Math.floor(diff / 60) + "m";
-    if (same(d, now)) return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    if (same(d, now)) return d.toLocaleTimeString('en-US', { hour: "2-digit", minute: "2-digit" });
     var y = new Date();
     y.setDate(now.getDate() - 1);
     if (same(d, y)) return "Yesterday";
-    return d.toLocaleDateString([], { day: "numeric", month: "short" });
+    return d.toLocaleDateString('en-US', { day: "numeric", month: "short" });
     function same(a, b) {
       return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
     }
@@ -285,6 +285,7 @@
     search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>',
     send: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>',
     plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>',
+    video: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="14" height="12" rx="2"/><path d="M16 10l6-3v10l-6-3z"/></svg>',
     calendar: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>',
     video: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>',
     hash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="4" y1="9" x2="20" y2="9"/><line x1="4" y1="15" x2="20" y2="15"/><line x1="10" y1="3" x2="8" y2="21"/><line x1="16" y1="3" x2="14" y2="21"/></svg>',
@@ -1406,7 +1407,8 @@
       '  <div class="hcx-hinfo"><div class="hcx-hn">' + esc(name) + '</div><div class="hcx-hm">' + esc(sub) + "</div></div>" +
       '  <button class="hcx-hicon" data-act="search-toggle" title="Search in conversation">' + ICON.search + "</button>" +
       membersBtn +
-      '  <button class="hcx-hbtn primary" data-act="schedule">' + ICON.calendar + " Schedule meeting</button>" +
+      '  <button class="hcx-hbtn primary" data-act="meet-now" title="Start a video meeting now and invite everyone in this conversation">' + ICON.video + " Meet now</button>" +
+      '  <button class="hcx-hbtn" data-act="schedule">' + ICON.calendar + " Schedule meeting</button>" +
       '  <div class="hcx-menuwrap"><button class="hcx-hicon" data-act="room-menu" title="More">' + ICON.dots + "</button>" +
       '    <div class="hcx-menu" data-role="room-menu" style="display:none"></div></div>' +
       "</div>" +
@@ -2885,9 +2887,9 @@
       .map(function (m) {
         var d = parseDate(m.scheduled_at);
         var when = d
-          ? d.toLocaleDateString([], { day: "numeric", month: "short" }) +
+          ? d.toLocaleDateString('en-US', { day: "numeric", month: "short" }) +
             ", " +
-            d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+            d.toLocaleTimeString('en-US', { hour: "2-digit", minute: "2-digit" })
           : "";
         var canCancel = (m.created_by && m.created_by === state.me.email) ||
           (state.activeRoom && state.activeRoom.viewer_is_admin);
@@ -3141,6 +3143,35 @@
     });
   }
 
+  /* "Meet now": one click → a private video link posted in the conversation,
+     everyone notified, and the call opens for you. The tab is opened inside the
+     click (pop-up blockers allow that) and pointed at the link once it exists. */
+  function startInstantMeeting(btn) {
+    if (!state.activeRoomId) return;
+    var win = null;
+    try { win = window.open('', '_blank'); if (win) win.document.write('<p style="font-family:sans-serif;padding:24px">Starting your meeting…</p>'); } catch (_) { win = null; }
+    if (btn) { btn.disabled = true; }
+    apiPost("/api/chat/meetings", {
+      room_id: state.activeRoomId,
+      instant: true,
+      duration_minutes: 60,
+      created_by: state.me.email,
+      created_by_name: state.me.name || state.me.email.split("@")[0],
+    })
+      .then(function (m) {
+        var url = joinUrlWithName((m && (m.join_url || m.joinUrl)) || "");
+        if (win && url) { try { win.location.href = url; } catch (_) { window.open(url, "_blank"); } }
+        else if (url) window.open(url, "_blank");
+        loadMeetings(state.activeRoomId);
+        setTimeout(function () { loadMessages(state.activeRoomId); }, 300);
+      })
+      .catch(function (e) {
+        if (win) try { win.close(); } catch (_) {}
+        alert("Could not start the meeting: " + e.message);
+      })
+      .then(function () { if (btn) btn.disabled = false; });
+  }
+
   function scheduleMeeting(data, btn) {
     if (btn) { btn.disabled = true; btn.textContent = "Scheduling…"; }
     apiPost("/api/chat/meetings", {
@@ -3233,6 +3264,7 @@
       if (act === "pick-direct") { closeModal(); return openNewDirect(); }
       if (act === "pick-channel") { closeModal(); return openNewChannel(); }
       if (act === "schedule") return openScheduleMeeting();
+      if (act === "meet-now") return startInstantMeeting(actEl);
       if (act === "send") return sendMessage();
       if (act === "tools") { e.stopPropagation(); return toggleToolsMenu(); }
       if (act === "tool-file") {
