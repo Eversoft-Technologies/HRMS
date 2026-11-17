@@ -303,7 +303,7 @@ def ai_settings_key(request):
 @api_view(['GET'])
 @require_perm('ai.settings.view')
 def ai_settings_audit(request):
-    rows = AISettingsAudit.objects.all()[:50]
+    rows = AISettingsAudit.objects.filter(provider=PROVIDER)[:50]   # Deepgram has its own history
     return Response({'events': [{
         'actor': r.actor_email, 'action': r.action, 'keyFingerprint': r.key_fingerprint,
         'detail': r.detail, 'at': r.created_at.isoformat() if r.created_at else None,

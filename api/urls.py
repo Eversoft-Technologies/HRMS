@@ -1,6 +1,7 @@
 from django.urls import path
 
 from . import ai_settings
+from . import stt_settings
 from . import attendance_recalc
 from . import chat_extras
 from . import notification_prefs
@@ -73,6 +74,7 @@ urlpatterns = [
     path('interview-recordings/<int:pk>', views.recording_detail),
     path('interview-recordings/<int:pk>/video', views.recording_video),
     path('interview-recordings/<int:pk>/thumbnail', views.recording_thumbnail),
+    path('interview-recordings/<int:pk>/transcribe', views.recording_transcribe),
 
     path('question-sets', views.question_sets),
     path('question-sets/<str:set_id>', views.question_set_detail),
@@ -90,6 +92,10 @@ urlpatterns = [
     path('ai/settings/validate', ai_settings.ai_settings_validate),
     path('ai/settings/key', ai_settings.ai_settings_key),
     path('ai/settings/audit', ai_settings.ai_settings_audit),
+    path('stt/settings', stt_settings.stt_settings),
+    path('stt/settings/validate', stt_settings.stt_settings_validate),
+    path('stt/settings/key', stt_settings.stt_settings_key),
+    path('stt/settings/audit', stt_settings.stt_settings_audit),
 
     path('users', views.users),
     path('users/<str:email>', views.user_detail),
