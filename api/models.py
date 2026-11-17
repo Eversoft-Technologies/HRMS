@@ -859,6 +859,9 @@ class ShiftAssignment(models.Model):
     shift = models.ForeignKey(Shift, on_delete=models.CASCADE, related_name='assignments')
     effective_from = models.DateField()
     effective_to = models.DateField(null=True, blank=True)  # NULL = open-ended
+    # Shift times are authored in IST; this says which zone the employee should
+    # see them displayed in (converted on render, not stored pre-converted).
+    timezone = models.CharField(max_length=10, default='IST')
     created_by = models.CharField(max_length=255, default='', blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
