@@ -61,13 +61,16 @@ def apply(changes, actor=''):
     from . import views as v
     from .models import AttendanceEvent
     from .timeutil import local_now
+    from .timesheets import audit_snapshot as _ts_snap, log_attendance_change as _ts_log
     now = local_now()
     with transaction.atomic():
         for att, worked, ot in changes:
             note = (f'{actor + ": " if actor else ""}worked {v._fmt_dur(att.worked_minutes or 0)} → '
                     f'{v._fmt_dur(worked)} (all sessions)')
+            _ts_before = _ts_snap(att)   # audit trail (never raises)
             att.worked_minutes, att.overtime_minutes = worked, ot
             att.save(update_fields=['worked_minutes', 'overtime_minutes'])
+            _ts_log(att, _ts_before, 'recalc', actor, 'Recalculated from all sessions of the day')
             AttendanceEvent.objects.create(email=att.email, employee_name=att.employee_name, date=att.date,
                                            event='recalculated', location=note[:120], at=now)
 

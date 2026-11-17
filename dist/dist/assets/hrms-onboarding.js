@@ -79,6 +79,37 @@
   /* Sentinel for the doc-type dropdown: not a real docType, it tells the upload
      handler to send {isCustom, label} and let the server derive the type. */
   var CUSTOM_DOC_VALUE = '__custom__';
+  /* Form I-9 / E-Verify documents — mirrors I9_DOC_TYPES in api/onboarding_views.py. */
+  var I9_DOC_TYPES = [
+    ['us_passport', 'U.S. Passport', 'List A'],
+    ['passport_card', 'U.S. Passport Card', 'List A'],
+    ['permanent_resident_card', 'Permanent Resident Card (Form I-551)', 'List A'],
+    ['ead', 'Employment Authorization Document (Form I-766)', 'List A'],
+    ['foreign_passport_i94', 'Foreign Passport with Form I-94', 'List A'],
+    ['school_id', 'School ID Card with Photo', 'List B'],
+    ['voter_registration', "Voter's Registration Card", 'List B'],
+    ['military_id', 'U.S. Military Card or Draft Record', 'List B'],
+    ['military_dependent_id', "Military Dependent's ID Card", 'List B'],
+    ['coast_guard_card', 'U.S. Coast Guard Merchant Mariner Card', 'List B'],
+    ['tribal_document', 'Native American Tribal Document', 'List B'],
+    ['birth_certificate', 'Birth Certificate', 'List C'],
+    ['consular_birth_abroad', 'Certification of Report of Birth Abroad (FS-240)', 'List C'],
+    ['us_citizen_id', 'U.S. Citizen ID Card (Form I-197)', 'List C'],
+    ['i797', 'Form I-797 Notice of Action', 'Other'],
+    ['i20', 'Form I-20', 'Other'],
+    ['ds2019', 'Form DS-2019', 'Other'],
+    ['i9_form', 'Form I-9 (completed)', 'Other'],
+    ['e_verify_case', 'E-Verify Case Result', 'Other']
+  ];
+  var I9_GROUP_LABEL = { 'List A': 'I-9 List A — identity & work authorization', 'List B': 'I-9 List B — identity',
+                         'List C': 'I-9 List C — work authorization', 'Other': 'Immigration / E-Verify' };
+  /* The same slug the server derives (custom_doc_slug): lower-case, every run
+     of non-alphanumerics becomes one "_", trimmed, at most 33 characters. */
+  function customDocSlug(name) {
+    var s = String(name || '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+    s = s.slice(0, 33).replace(/_+$/g, '');
+    return s ? 'custom_' + s : '';
+  }
   var MAX_DOC_LABEL = 120;   // mirrors MAX_CUSTOM_DOC_LABEL server-side
   var EVERSOFT_ASSETS = ['Laptop', 'Monitor', 'Mouse', 'Keyboard', 'Dock', 'Bag', 'Headset','Office365','Email_ID','Software License','ID_Card','Desktop','Mobile'];
   var ASSET_STATUSES = ['Assigned', 'Returned', 'Lost', 'Damaged','pending', 'Delivered'];
@@ -150,8 +181,12 @@
     setTimeout(function () { if (el.parentNode) el.remove(); }, 3700);
   }
 
-  function fmtDate(s) { return s ? String(s).slice(0, 10) : '<span class="ob-empty-val">-</span>'; }
-  function fmtDateTime(s) { return s ? String(s).replace('T', ' ').slice(0, 16) : '<span class="ob-empty-val">-</span>'; }
+  /* Company date format (Settings › General, MM/DD/YYYY by default) via
+     hrms-company.js; the raw ISO value if that helper is not loaded. */
+  function coDate(iso) { return window.HRMSCompany ? window.HRMSCompany.date(iso, { time: false }) : iso; }
+  function coDateTime(iso) { return window.HRMSCompany ? window.HRMSCompany.date(iso, { time: true }) : iso; }
+  function fmtDate(s) { return s ? coDate(String(s).slice(0, 10)) : '<span class="ob-empty-val">-</span>'; }
+  function fmtDateTime(s) { return s ? coDateTime(String(s).replace('T', ' ').slice(0, 16)) : '<span class="ob-empty-val">-</span>'; }
   function stageLabel(k) {
     for (var i = 0; i < STAGES.length; i++) if (STAGES[i][0] === k) return STAGES[i][1];
     return k;
@@ -1751,6 +1786,17 @@
     modal.innerHTML = 
       '<h3 style="margin:0;font-size:16px;font-weight:700;font-family:var(--font-d);">Add Document Requirement</h3>' +
       '<div style="display:flex;flex-direction:column;gap:6px;">' +
+        '<label class="ob-lb" style="margin:0">Document</label>' +
+        '<select class="ob-sel" id="adm-kind" style="margin:0">' +
+          '<option value="">Custom document (type a name below)</option>' +
+          ['List A', 'List B', 'List C', 'Other'].map(function (g) {
+            return '<optgroup label="' + I9_GROUP_LABEL[g] + '">' + I9_DOC_TYPES.filter(function (d) { return d[2] === g; }).map(function (d) {
+              return '<option value="' + d[0] + '">' + d[1] + '</option>';
+            }).join('') + '</optgroup>';
+          }).join('') +
+        '</select>' +
+      '</div>' +
+      '<div style="display:flex;flex-direction:column;gap:6px;">' +
         '<label class="ob-lb" style="margin:0">Document Name / Label</label>' +
         '<input type="text" class="ob-in" id="adm-name" placeholder="e.g. NDA, Degree Certificate" autofocus>' +
       '</div>' +
@@ -1768,6 +1814,11 @@
     document.body.appendChild(ov);
     
     var nameInp = modal.querySelector('#adm-name');
+    var kindSel = modal.querySelector('#adm-kind');
+    kindSel.addEventListener('change', function () {
+      var d = I9_DOC_TYPES.filter(function (x) { return x[0] === kindSel.value; })[0];
+      if (d) nameInp.value = d[1];
+    });
     var sendChk = modal.querySelector('#adm-send');
     var reqChk = modal.querySelector('#adm-req');
     var errDiv = modal.querySelector('#adm-err');
@@ -1796,7 +1847,11 @@
         errDiv.textContent = 'Document name is required.';
         return;
       }
-      var typeKey = 'custom_' + name.toLowerCase().replace(/[^a-z0-9_]/g, '_');
+      // An I-9 / E-Verify pick keeps its own type; anything else gets the same
+      // custom_<slug> the server derives, so uploads always match this slot.
+      var picked = I9_DOC_TYPES.filter(function (x) { return x[0] === kindSel.value; })[0];
+      var typeKey = picked ? picked[0] : customDocSlug(name);
+      if (!typeKey) { errDiv.textContent = 'The name needs at least one letter or number.'; return; }
       if (requestedDocsList.some(function (item) { return item.type === typeKey || item.label.toLowerCase() === name.toLowerCase(); })) {
         errDiv.textContent = 'A document slot with this name already exists.';
         return;
@@ -2623,7 +2678,7 @@
         var d = new Date(s.slice(0, 10) + 'T00:00:00');
         if (isNaN(d.getTime())) return '';
         var days = Math.ceil((d.getTime() - Date.now()) / 86400000);
-        var nice = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+        var nice = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
         if (days < 0) return 'link expired ' + nice;
         if (days === 0) return 'link expires today';
         return 'expires in ' + days + ' day' + (days === 1 ? '' : 's') + ' · ' + nice;

@@ -302,7 +302,7 @@ class CompanyDetail(models.Model):
     # Localization Defaults
     timezone = models.CharField(max_length=100, default='Asia/Kolkata', blank=True)
     currency = models.CharField(max_length=10, default='INR', blank=True)
-    date_format = models.CharField(max_length=30, default='DD/MM/YYYY', blank=True)
+    date_format = models.CharField(max_length=30, default='MM/DD/YYYY', blank=True)   # US by default
     work_week = models.JSONField(default=list, blank=True)  # ['Mon', 'Tue', 'Wed', 'Thu', 'Fri']
     
     # Employee ID Auto-Generation Configuration
@@ -334,6 +334,10 @@ class AppUser(models.Model):
     initials = models.CharField(max_length=10, default='', blank=True)
     role = models.CharField(max_length=40, default='admin')      # admin | recruitment | hr (legacy string)
     status = models.CharField(max_length=20, default='active')   # active | disabled
+    # Column added by migration 0089. The code using it was reverted, but the
+    # column stayed (NOT NULL, no DB default): without this field every new
+    # user INSERT fails under MySQL strict mode. Not read anywhere yet.
+    is_superadmin = models.BooleanField(default=False, db_index=True)
     # RBAC links (see the roles / companies tables). Nullable + additive so the
     # legacy ``role`` string above keeps driving the current login role-gate.
     role_ref = models.ForeignKey(
@@ -564,6 +568,12 @@ class EmployeeAttendance(models.Model):
     # geofence, so the day is distinguishable from a manual check-out.
     auto_checkout_at = models.DateTimeField(null=True, blank=True)
     is_auto_checked_out = models.BooleanField(default=False)
+    # The server's own record of an unbroken run of precise "outside the
+    # office" readings (geofence-check). An automatic check-out is accepted
+    # only when this run is long enough and still fresh, so a sleeping /
+    # throttled tab or a network blip can never close a session by itself.
+    outside_since = models.DateTimeField(null=True, blank=True)
+    outside_last_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -2154,3 +2164,109 @@ class ChatReaction(models.Model):
         db_table = 'chat_reactions'
         unique_together = (('message_id', 'email', 'emoji'),)
         ordering = ['created_at', 'id']
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 — service desk tickets (api/tickets.py)
+# ---------------------------------------------------------------------------
+class Ticket(models.Model):
+    """A request to HR / IT / Payroll with an SLA clock, status workflow and
+    an assignee. ``sla_due_at`` is fixed when the ticket is raised (from its
+    priority) and only moves if the priority changes."""
+    code = models.CharField(max_length=20, default='', blank=True, db_index=True)   # TK-00042
+    category = models.CharField(max_length=30, default='HR', db_index=True)          # HR | IT | Payroll | Facilities | Other
+    subject = models.CharField(max_length=255)
+    description = models.TextField(default='', blank=True)
+    priority = models.CharField(max_length=10, default='Medium', db_index=True)      # Low | Medium | High | Urgent
+    status = models.CharField(max_length=20, default='Open', db_index=True)          # Open | In Progress | Waiting | Resolved | Closed
+    requester_email = models.CharField(max_length=255, db_index=True)
+    requester_name = models.CharField(max_length=255, default='', blank=True)
+    assignee_email = models.CharField(max_length=255, default='', blank=True, db_index=True)
+    assignee_name = models.CharField(max_length=255, default='', blank=True)
+    sla_hours = models.IntegerField(default=24)
+    sla_due_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    first_response_at = models.DateTimeField(null=True, blank=True)
+    resolved_at = models.DateTimeField(null=True, blank=True)
+    closed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(default=local_now, db_index=True)
+    updated_at = models.DateTimeField(default=local_now)
+
+    class Meta:
+        db_table = 'tickets'
+        ordering = ['-id']
+
+
+class TicketComment(models.Model):
+    """A reply on a ticket, or (kind='event') a line of its history such as
+    "Status: Open → In Progress". ``internal`` replies are agent-only."""
+    ticket = models.ForeignKey(Ticket, on_delete=models.CASCADE, related_name='comments')
+    kind = models.CharField(max_length=10, default='comment')                         # comment | event
+    author_email = models.CharField(max_length=255, default='', blank=True)
+    author_name = models.CharField(max_length=255, default='', blank=True)
+    body = models.TextField(default='', blank=True)
+    internal = models.BooleanField(default=False)
+    created_at = models.DateTimeField(default=local_now)
+
+    class Meta:
+        db_table = 'ticket_comments'
+        ordering = ['created_at', 'id']
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 — timesheets and attendance audit trail (api/timesheets.py)
+# ---------------------------------------------------------------------------
+class TimesheetEntry(models.Model):
+    """Hours one person spent on a project / task on one day."""
+    email = models.CharField(max_length=255, db_index=True)
+    date = models.DateField(db_index=True)
+    project = models.CharField(max_length=255, default='', blank=True)
+    task_id = models.IntegerField(null=True, blank=True)                 # EmployeeTask id, optional
+    task_title = models.CharField(max_length=255, default='', blank=True)
+    hours = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0'))
+    description = models.TextField(default='', blank=True)
+    billable = models.BooleanField(default=True)
+    created_at = models.DateTimeField(default=local_now)
+    updated_at = models.DateTimeField(default=local_now)
+
+    class Meta:
+        db_table = 'timesheet_entries'
+        ordering = ['date', 'id']
+
+
+class TimesheetWeek(models.Model):
+    """The weekly approval unit: Draft → Submitted → Approved / Rejected.
+    ``week_start`` is the Monday of the week."""
+    email = models.CharField(max_length=255, db_index=True)
+    employee_name = models.CharField(max_length=255, default='', blank=True)
+    week_start = models.DateField(db_index=True)
+    status = models.CharField(max_length=20, default='Draft', db_index=True)
+    total_hours = models.DecimalField(max_digits=6, decimal_places=2, default=Decimal('0'))
+    approver_email = models.CharField(max_length=255, default='', blank=True, db_index=True)
+    submitted_at = models.DateTimeField(null=True, blank=True)
+    decided_by = models.CharField(max_length=255, default='', blank=True)
+    decided_at = models.DateTimeField(null=True, blank=True)
+    decision_note = models.TextField(default='', blank=True)
+
+    class Meta:
+        db_table = 'timesheet_weeks'
+        unique_together = (('email', 'week_start'),)
+        ordering = ['-week_start']
+
+
+class AttendanceAuditLog(models.Model):
+    """Every change to an attendance day, field by field: who, when, why and
+    how (manual edit, approved correction, automatic check-out, recalculation)."""
+    attendance_id = models.IntegerField(null=True, blank=True, db_index=True)
+    email = models.CharField(max_length=255, db_index=True)
+    date = models.DateField(null=True, blank=True, db_index=True)
+    source = models.CharField(max_length=30, default='edit')     # edit | correction | auto_checkout | recalc | punch_ticket
+    field = models.CharField(max_length=60, default='', blank=True)
+    old_value = models.TextField(default='', blank=True)
+    new_value = models.TextField(default='', blank=True)
+    actor = models.CharField(max_length=255, default='', blank=True)
+    reason = models.TextField(default='', blank=True)
+    at = models.DateTimeField(default=local_now, db_index=True)
+
+    class Meta:
+        db_table = 'attendance_audit_log'
+        ordering = ['-at', '-id']

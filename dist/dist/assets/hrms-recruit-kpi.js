@@ -854,7 +854,7 @@
       var sum = document.getElementById("kpi-filter-summary");
       if (sum) sum.textContent = filterSummary();
       var lbl = document.getElementById('kpi-refresh-lbl');
-      if (lbl) lbl.textContent = 'Updated ' + new Date().toLocaleTimeString();
+      if (lbl) lbl.textContent = 'Updated ' + new Date().toLocaleTimeString('en-US');
       renderBody();
     });
   }

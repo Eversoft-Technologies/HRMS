@@ -253,7 +253,7 @@
       message.style.lineHeight = '1.4';
 
       var meta = document.createElement('div');
-      meta.textContent = item.createdAt ? new Date(item.createdAt).toLocaleString() : '';
+      meta.textContent = item.createdAt ? (window.HRMSCompany ? window.HRMSCompany.date(item.createdAt, { time: true }) : new Date(item.createdAt).toLocaleString('en-US')) : '';
       meta.style.fontSize = '11px';
       meta.style.marginTop = '8px';
       meta.style.color = 'var(--text3,#64748b)';

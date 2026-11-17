@@ -719,7 +719,7 @@ class CompanyDetailSerializer(serializers.ModelSerializer):
             'pincode': instance.pincode or '',
             'timezone': instance.timezone or 'Asia/Kolkata',
             'currency': instance.currency or 'INR',
-            'dateFormat': instance.date_format or 'DD/MM/YYYY',
+            'dateFormat': instance.date_format or 'MM/DD/YYYY',
             'workWeek': safe_list(instance.work_week) or ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'],
             'empIdPrefix': instance.emp_id_prefix if instance.emp_id_prefix is not None else 'EV-',
             'empIdMinDigits': instance.emp_id_min_digits or 4,

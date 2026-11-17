@@ -36,7 +36,7 @@
       pincode: '',
       timezone: 'Asia/Kolkata',
       currency: 'INR',
-      dateFormat: 'DD/MM/YYYY',
+      dateFormat: 'MM/DD/YYYY',
       workWeek: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'],
       empIdPrefix: 'EV-',
       empIdMinDigits: 4,

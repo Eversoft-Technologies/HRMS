@@ -20,6 +20,7 @@ file-storage backend and DRF is configured JSON-parser-only.
 """
 import base64
 import binascii
+import re
 from datetime import date, timedelta
 
 from django.conf import settings
@@ -146,6 +147,49 @@ CUSTOM_DOC_PREFIX = 'custom_'
 # that budget.
 MAX_CUSTOM_DOC_SLUG = 40 - len(CUSTOM_DOC_PREFIX)
 MAX_CUSTOM_DOC_LABEL = 120
+
+# Form I-9 (List A / B / C) and E-Verify documents. Accepted by every upload
+# path alongside the six legacy DOC_TYPES; stored as their own doc_type (so a
+# re-upload versions correctly) with is_custom=True, which puts them on the
+# HR verification checklist through custom_verified — no model change needed.
+I9_DOC_TYPES = {
+    # List A — identity and employment authorization
+    'us_passport':             ('U.S. Passport', 'List A'),
+    'passport_card':           ('U.S. Passport Card', 'List A'),
+    'permanent_resident_card': ('Permanent Resident Card (Form I-551)', 'List A'),
+    'ead':                     ('Employment Authorization Document (Form I-766)', 'List A'),
+    'foreign_passport_i94':    ('Foreign Passport with Form I-94', 'List A'),
+    # List B — identity
+    'school_id':               ('School ID Card with Photo', 'List B'),
+    'voter_registration':      ("Voter's Registration Card", 'List B'),
+    'military_id':             ('U.S. Military Card or Draft Record', 'List B'),
+    'military_dependent_id':   ("Military Dependent's ID Card", 'List B'),
+    'coast_guard_card':        ('U.S. Coast Guard Merchant Mariner Card', 'List B'),
+    'tribal_document':         ('Native American Tribal Document', 'List B'),
+    # List C — employment authorization
+    'birth_certificate':       ('Birth Certificate', 'List C'),
+    'consular_birth_abroad':   ('Certification of Report of Birth Abroad (FS-240)', 'List C'),
+    'us_citizen_id':           ('U.S. Citizen ID Card (Form I-197)', 'List C'),
+    # Other immigration / E-Verify records
+    'i797':                    ('Form I-797 Notice of Action', 'Other'),
+    'i20':                     ('Form I-20', 'Other'),
+    'ds2019':                  ('Form DS-2019', 'Other'),
+    'i9_form':                 ('Form I-9 (completed)', 'Other'),
+    'e_verify_case':           ('E-Verify Case Result', 'Other'),
+}
+LEGACY_DOC_LABELS = {
+    'ssn': 'SSN', 'driver_license': 'Driver License', 'state_id': 'State ID',
+    'visa': 'Visa (Work Authorization)', 'i94': 'I-94', 'passport': 'Passport',
+}
+ALLOWED_DOC_TYPES = list(DOC_TYPES) + list(I9_DOC_TYPES)
+_DOC_TYPE_RE = re.compile(r'^[a-z0-9_]{1,40}$')
+
+
+def doc_type_label(doc_type):
+    """Human name for a built-in / I-9 doc_type ('' for anything else)."""
+    if doc_type in LEGACY_DOC_LABELS:
+        return LEGACY_DOC_LABELS[doc_type]
+    return I9_DOC_TYPES.get(doc_type, ('', ''))[0]
 
 ALLOWED_DOC_MIMES = {
     'application/pdf': 'pdf',
@@ -1195,9 +1239,63 @@ def custom_doc_slug(label):
     doc_type = CUSTOM_DOC_PREFIX + slug
     # A custom document named "SSN" would collide with the fixed type and land
     # in its version chain, so reject rather than silently merge.
-    if doc_type in DOC_TYPES or slug in DOC_TYPES:
+    if doc_type in ALLOWED_DOC_TYPES or slug in ALLOWED_DOC_TYPES:
         return '', f'"{label}" is a built-in document type — pick another name'
     return doc_type, ''
+
+
+def _requested_item(candidate, doc_type):
+    """The candidate's requested-docs entry this doc_type belongs to, if any —
+    by its type, or by the custom slug of its label."""
+    for item in (candidate.requested_docs or []):
+        if not isinstance(item, dict):
+            continue
+        t = str(item.get('type') or '').strip().lower()
+        if t and (t == doc_type or CUSTOM_DOC_PREFIX + t == doc_type):
+            return item
+    for item in (candidate.requested_docs or []):
+        if isinstance(item, dict) and item.get('label') and custom_doc_slug(item.get('label'))[0] == doc_type:
+            return item
+    return None
+
+
+def resolve_doc_type(candidate, body, portal=False):
+    """One rule for every upload path: ``(doc_type, label, is_custom, error)``.
+
+    Accepted: the legacy types, the I-9 / E-Verify types, any document HR has
+    requested from this candidate (whatever its type key), and — for HR — any
+    custom document name. The candidate portal still only accepts what was
+    requested from that candidate.
+    """
+    is_custom = bool(body.get('isCustom'))
+    label = (body.get('label') or '').strip()
+    raw_type = (body.get('docType') or '').strip().lower()
+
+    if is_custom and not raw_type.startswith(CUSTOM_DOC_PREFIX):
+        doc_type, error = custom_doc_slug(label)
+        if error:
+            return '', '', True, error
+        if portal and not _requested_item(candidate, doc_type):
+            return '', '', True, f'"{label}" is not requested from you.'
+        return doc_type, label, True, ''
+
+    doc_type = raw_type
+    if not doc_type:
+        return '', '', False, 'docType is required'
+    if not _DOC_TYPE_RE.match(doc_type):
+        return '', '', False, 'docType may only contain letters, numbers and underscores (max 40).'
+    item = _requested_item(candidate, doc_type)
+    if portal and not item:
+        return '', '', False, f"Document type '{doc_type}' is not requested from you."
+    known = doc_type in ALLOWED_DOC_TYPES
+    if not (known or item or doc_type.startswith(CUSTOM_DOC_PREFIX)):
+        return '', '', False, ('Unknown document type. Pick an I-9 / onboarding document, a requested '
+                               'document, or choose "Custom document" and name it.')
+    label = label or (item.get('label') if item else '') or doc_type_label(doc_type) \
+        or doc_type.replace(CUSTOM_DOC_PREFIX, '').replace('_', ' ').title()
+    # Only the six legacy types have their own verification columns; anything
+    # else is verified through custom_verified, which lists is_custom docs.
+    return doc_type, label, doc_type not in DOC_TYPES, ''
 
 
 @api_view(['GET', 'POST'])
@@ -1215,19 +1313,11 @@ def candidate_documents(request, pk):
         return Response(CandidateDocumentSerializer(qs, many=True).data)
 
     body = request.data
-    # A custom document is named by the uploader; its docType is derived from
-    # that name rather than chosen from the fixed list.
-    is_custom = bool(body.get('isCustom'))
-    label = (body.get('label') or '').strip()
-    if is_custom:
-        doc_type, error = custom_doc_slug(label)
-        if error:
-            return err(error)
-    else:
-        doc_type = (body.get('docType') or '').strip().lower()
-        if doc_type not in DOC_TYPES:
-            return err(f"docType must be one of: {', '.join(DOC_TYPES)}")
-        label = ''
+    # Built-in, I-9 / E-Verify, requested (incl. custom_*) or a newly named
+    # custom document — see resolve_doc_type.
+    doc_type, label, is_custom, error = resolve_doc_type(candidate, body)
+    if error:
+        return err(error)
 
     size, cleaned, error = decode_document(body.get('fileData'), body.get('fileMime'))
     if error:
@@ -1311,8 +1401,8 @@ def candidate_document_versions(request, pk, doc_type):
     doc_type = (doc_type or '').strip().lower()
     # Custom doc_types are per-candidate, so they cannot be validated against a
     # constant — existence on this candidate is the check.
-    if doc_type not in DOC_TYPES and not doc_type.startswith(CUSTOM_DOC_PREFIX):
-        return err(f"docType must be one of: {', '.join(DOC_TYPES)}")
+    if not _DOC_TYPE_RE.match(doc_type):
+        return err('Invalid document type.')
     qs = candidate.documents.filter(doc_type=doc_type).order_by('-version')
     if not qs.exists():
         return err('Document not found', 404)
@@ -1367,7 +1457,7 @@ def custom_docs(candidate):
     constant like CHECKS — it has to be derived per candidate.
     """
     return [
-        {'docType': d.doc_type, 'label': d.label or d.doc_type}
+        {'docType': d.doc_type, 'label': d.label or doc_type_label(d.doc_type) or d.doc_type}
         for d in candidate.documents.filter(is_custom=True, is_active=True)
                                     .order_by('uploaded_at')
     ]
@@ -2437,25 +2527,10 @@ def public_upload_document(request):
         return err('Token expired', 400)
 
     body = request.data
-    is_custom = bool(body.get('isCustom'))
-    label = (body.get('label') or '').strip()
-    
-    if is_custom:
-        doc_type, error = custom_doc_slug(label)
-        if error:
-            return err(error)
-    else:
-        doc_type = (body.get('docType') or '').strip().lower()
-        # Ensure it is in the candidate's requested_docs checklist
-        requested_list = candidate.requested_docs or []
-        req_item = next((item for item in requested_list if item.get('type') == doc_type), None)
-        if not req_item:
-            # Check if there is a custom document with this docType slug
-            req_item = next((item for item in requested_list if custom_doc_slug(item.get('label'))[0] == doc_type), None)
-            if not req_item:
-                return err(f"Document type '{doc_type}' is not requested from you.")
-        if label == '':
-            label = req_item.get('label') or doc_type.upper()
+    # Only documents requested from this candidate (built-in, I-9 or custom).
+    doc_type, label, is_custom, error = resolve_doc_type(candidate, body, portal=True)
+    if error:
+        return err(error)
 
     size, cleaned, error = decode_document(body.get('fileData'), body.get('fileMime'))
     if error:

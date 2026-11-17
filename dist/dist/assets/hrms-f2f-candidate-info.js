@@ -508,7 +508,7 @@
   function fmtDateLong(iso) {
     var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || ''); if (!m) return iso || '';
     var d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
-    return d.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
+    return d.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
   }
   function reschedKey(id) { return 'f2fcd_resched_' + id; }
   function getCancelledInfo(id) {

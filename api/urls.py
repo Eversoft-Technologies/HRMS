@@ -1,6 +1,7 @@
 from django.urls import path
 
 from . import ai_settings
+from . import tickets, timesheets, org_tree
 from . import stt_settings
 from . import attendance_recalc
 from . import chat_extras
@@ -106,6 +107,22 @@ urlpatterns = [
     path('teams/<int:pk>/members', org_views.team_members),
     path('teams/<int:pk>/members/<str:member>', org_views.team_member_detail),
     path('org/people', org_views.org_people),
+    # Phase 3 — interactive org tree
+    path('org/tree', org_tree.org_tree),
+    path('org/manager', org_tree.set_manager),
+    # Phase 3 — service desk tickets
+    path('tickets/meta', tickets.ticket_meta),
+    path('tickets', tickets.tickets),
+    path('tickets/<int:pk>', tickets.ticket_detail),
+    path('tickets/<int:pk>/comments', tickets.ticket_comments),
+    # Phase 3 — timesheets and attendance change history
+    path('timesheets/entries', timesheets.entries),
+    path('timesheets/entries/<int:pk>', timesheets.entry_detail),
+    path('timesheets/week', timesheets.week),
+    path('timesheets/week/submit', timesheets.submit_week),
+    path('timesheets/approvals', timesheets.approvals),
+    path('timesheets/week/<int:pk>/decide', timesheets.decide_week),
+    path('attendance/audit', timesheets.attendance_audit),
     path('org/manager-review', org_views.manager_review),
     path('org/approver', org_views.org_approver),
     path('org/reviewers', org_views.org_reviewers),
