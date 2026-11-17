@@ -15,6 +15,8 @@
   var PAGE_ID = 'hrms-rbac-page';
   var NAV_ID = 'hrms-rbac-nav';
   var ACTIVE_CLS = 'hrms-rbac-active';   // set on .content while RBAC owns it
+  var SESSION_OPEN_KEY = '__hrmsRbacOpen';
+  var SESSION_TAB_KEY = '__hrmsRbacTab';
 
   /* ── icons ───────────────────────────────────────────────────────────── */
   var SHIELD =
@@ -175,8 +177,14 @@
     document.addEventListener('keydown', onKey);
     buildSkeleton();
     render();
+    document.documentElement.classList.remove('hrms-rbac-restoring');
   }
   function close() {
+    document.documentElement.classList.remove('hrms-rbac-restoring');
+    try {
+      sessionStorage.removeItem(SESSION_OPEN_KEY);
+      sessionStorage.removeItem(SESSION_TAB_KEY);
+    } catch (_) {}
     var page = document.getElementById(PAGE_ID);
     if (page && page.parentNode) page.parentNode.removeChild(page);
     // Clear the flag wherever it landed — .content may have been swapped out.
@@ -196,6 +204,10 @@
   function openAt(tab) {
     state.tab = tab || 'dashboard';
     state.sub = null;
+    try {
+      sessionStorage.setItem(SESSION_OPEN_KEY, '1');
+      sessionStorage.setItem(SESSION_TAB_KEY, state.tab);
+    } catch (_) {}
     if (isSettingsRoute()) { open(); return; }
     history.pushState({}, '', '/settings');
     // React Router listens on popstate; pushState alone fires nothing.
@@ -798,9 +810,16 @@
   function handle(act, id, b, e) {
     switch (act) {
       case 'close': return close();
-      case 'tab': state.tab = b.getAttribute('data-tab'); state.sub = null; return render();
-      case 'back': state.sub = null; state.tab = 'roles'; return render();
-      case 'back-groups': state.sub = null; state.tab = 'groups'; return render();
+      case 'tab':
+        state.tab = b.getAttribute('data-tab'); state.sub = null;
+        try { sessionStorage.setItem(SESSION_TAB_KEY, state.tab); } catch (_) {}
+        return render();
+      case 'back': state.sub = null; state.tab = 'roles';
+        try { sessionStorage.setItem(SESSION_TAB_KEY, state.tab); } catch (_) {}
+        return render();
+      case 'back-groups': state.sub = null; state.tab = 'groups';
+        try { sessionStorage.setItem(SESSION_TAB_KEY, state.tab); } catch (_) {}
+        return render();
 
       /* users */
       case 'new-user': return renderUsers(true);
@@ -1179,6 +1198,17 @@
     try {
       syncRoute();          // drop stale RBAC DOM before re-injecting anything
       ensureNav();
+      if (isAdmin() && isSettingsRoute() && !document.getElementById(PAGE_ID)) {
+        var shouldRestore = false;
+        try { shouldRestore = sessionStorage.getItem(SESSION_OPEN_KEY) === '1'; } catch (_) {}
+        if (shouldRestore) {
+          var savedTab = '';
+          try { savedTab = sessionStorage.getItem(SESSION_TAB_KEY) || ''; } catch (_) {}
+          state.tab = TABS.some(function (tab) { return tab[0] === savedTab; }) ? savedTab : 'dashboard';
+          state.sub = null;
+          open();
+        }
+      }
       ensureSettingsCard();
     }
     finally { if (_rbacObs) _rbacObs.observe(document.body, { childList: true, subtree: true }); }
@@ -1195,6 +1225,7 @@
     ensureSettingsCard();
     _rbacObs = new MutationObserver(_rbacSchedule);
     _rbacObs.observe(document.body, { childList: true, subtree: true });
+    _rbacRun();
     setInterval(_rbacRun, 5000);   // long safety net only, not a driver
   }
   window.__hrmsOpenRBAC = openAt;   // programmatic entry (parity with other helpers)

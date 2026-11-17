@@ -19,12 +19,14 @@ from datetime import timedelta
 import requests as http_requests
 from django.conf import settings
 from django.http import JsonResponse
+from django.shortcuts import render
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 import logging
 
 from . import mailer
 from .models import AppUser, LoginOtp, PasswordReset, UserProfile
+from .permissions import _is_super_admin
 from .views import (app_user_dict, err, make_initials, norm_email, parse_body,
                     generate_next_employee_id)
 
@@ -82,9 +84,9 @@ def _issue_otp(user, sender_email=None):
         sender_email=sender_email,
     )
     if not result.get('ok') and _dev_otp_enabled():
-        print(
-            f'\n[HRMS DEV OTP] Verification code for {user.email} ({user.full_name}): {code}\n'
-            f'[HRMS DEV OTP] (Printed to server console because email sending failed)\n'
+        logging.getLogger(__name__).warning(
+            '[HRMS DEV OTP] Verification code for %s (%s): %s',
+            user.email, user.full_name, code,
         )
         result['devEcho'] = True
     return result
@@ -131,7 +133,23 @@ def signup(request):
 
 
 @csrf_exempt
+def super_admin_login_page(request):
+    if request.method != 'GET':
+        return err('Method not allowed', 405)
+    return render(request, 'api/super_admin_login.html')
+
+
+@csrf_exempt
 def login(request):
+    return _login(request, admin_only=False)
+
+
+@csrf_exempt
+def super_admin_login(request):
+    return _login(request, admin_only=True)
+
+
+def _login(request, admin_only):
     try:
         if request.method != 'POST':
             return err('Method not allowed', 405)
@@ -148,10 +166,14 @@ def login(request):
             return err('Invalid email or password', 401)
         if user.status != 'active':
             return err('This account is disabled. Contact your administrator.', 403)
+        if admin_only and not _is_super_admin(user):
+            return err('Invalid email or password', 401)
+        if not admin_only and _is_super_admin(user):
+            return err('Super Admin accounts must use the Super Admin sign-in page.', 403)
         # Role gate: the selected role (an RBAC roles.name) must match the
         # account's assigned role. Uses role_ref when set, else maps the legacy
         # role string onto a seeded role name. Checked before any OTP is issued.
-        if role:
+        if role and not admin_only:
             if user.role_ref_id and user.role_ref:
                 actual = user.role_ref.name or ''
             else:
@@ -192,12 +214,21 @@ def login(request):
 
 @csrf_exempt
 def resend_otp(request):
+    return _resend_otp(request, admin_only=False)
+
+
+@csrf_exempt
+def super_admin_resend_otp(request):
+    return _resend_otp(request, admin_only=True)
+
+
+def _resend_otp(request, admin_only):
     if request.method != 'POST':
         return err('Method not allowed', 405)
     body = parse_body(request)
     email = norm_email(body.get('email'))
-    user = AppUser.objects.filter(email=email).first()
-    if not user:
+    user = AppUser.objects.select_related('role_ref').filter(email=email).first()
+    if not user or user.status != 'active' or admin_only != _is_super_admin(user):
         return err('Invalid email or password', 401)
     result = _issue_otp(user)
     if not result.get('ok'):
@@ -210,6 +241,15 @@ def resend_otp(request):
 
 @csrf_exempt
 def verify_otp(request):
+    return _verify_otp(request, admin_only=False)
+
+
+@csrf_exempt
+def super_admin_verify_otp(request):
+    return _verify_otp(request, admin_only=True)
+
+
+def _verify_otp(request, admin_only):
     if request.method != 'POST':
         return err('Method not allowed', 405)
     body = parse_body(request)
@@ -241,11 +281,16 @@ def verify_otp(request):
         remaining = max(0, OTP_MAX_ATTEMPTS - otp.attempts)
         return err(f'Incorrect code. {remaining} attempt(s) left.', 400)
 
-    otp.consumed = True
-    otp.save(update_fields=['consumed'])
-    user = AppUser.objects.filter(email=email).first()
+    user = AppUser.objects.select_related('role_ref').filter(email=email).first()
     if not user:
         return err('User not found', 404)
+    if user.status != 'active':
+        return err('This account is disabled. Contact your administrator.', 403)
+    if admin_only != _is_super_admin(user):
+        return err('Invalid verification code', 400 if admin_only else 403)
+
+    otp.consumed = True
+    otp.save(update_fields=['consumed'])
     # Issue a JWT for the user so the frontend can authenticate requests.
     try:
         import jwt
@@ -259,7 +304,9 @@ def verify_otp(request):
     except Exception:
         token = ''
 
-    return JsonResponse({'ok': True, 'user': app_user_dict(user), 'token': token})
+    user_data = app_user_dict(user)
+    user_data.pop('password', None)
+    return JsonResponse({'ok': True, 'user': user_data, 'token': token})
 
 
 @csrf_exempt

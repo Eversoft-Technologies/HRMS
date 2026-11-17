@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Super Admin Sign In | EverSoft HRMS</title>
+  <style>
+    :root { color-scheme: light; font-family: "DM Sans", "Segoe UI", sans-serif; color: #111827; background: #f0f1f4; }
+    * { box-sizing: border-box; }
+    body { min-height: 100vh; margin: 0; display: grid; place-items: center; padding: 24px; background: linear-gradient(115deg, #dce5f2, #e7e5ef 54%, #eee8f6); }
+    main { width: min(100%, 394px); padding: 32px 28px 30px; border: 1px solid #d8d9e0; border-radius: 16px; background: rgba(235,235,240,.97); box-shadow: 0 22px 56px rgba(30,35,52,.2); }
+    .brand { display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 22px; font-size: 15px; font-weight: 700; }
+    .brand img { width: 38px; height: 38px; object-fit: contain; border-radius: 9px; }
+    h1 { margin: 0; text-align: center; font-size: 21px; }
+    .subtitle { margin: 8px 0 22px; color: #596579; text-align: center; font-size: 13px; line-height: 1.5; }
+    label { display: block; margin: 15px 0 6px; font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+    input { width: 100%; height: 44px; padding: 0 12px; border: 1px solid #c7cbd4; border-radius: 9px; background: #e3e5e9; color: #17202e; font: inherit; outline: none; }
+    input:focus { border-color: #397cf0; box-shadow: 0 0 0 2px rgba(57,124,240,.22); }
+    #admin-code { height: 47px; text-align: center; font-family: Consolas, monospace; font-size: 18px; letter-spacing: .34em; padding-left: .34em; }
+    button { width: 100%; min-height: 42px; margin-top: 17px; border: 0; border-radius: 9px; background: linear-gradient(105deg, #347be7, #7652f4); color: white; font: inherit; font-weight: 700; cursor: pointer; }
+    button:disabled { opacity: .65; cursor: wait; }
+    .message { min-height: 0; margin-top: 12px; color: #b42318; font-size: 12px; line-height: 1.45; }
+    .message:not(:empty) { padding: 9px 10px; border: 1px solid #efb4b1; border-radius: 8px; background: #f8e4e3; text-align: center; }
+    .message.success:not(:empty) { color: #149b79; border-color: #9bdcca; background: #d9efeb; }
+    .otp-links { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 5px; margin-top: 18px; color: #384354; font-size: 12px; }
+    .otp-links button { width: auto; min-height: 0; margin: 0; padding: 0; border: 0; border-radius: 0; background: none; color: #2867c7; font: inherit; font-weight: 500; }
+    .otp-links button:hover { text-decoration: underline; }
+    .regular-link { margin-top: 20px; text-align: center; font-size: 13px; }
+    a { color: #2867c7; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="brand"><img src="/logo.jpg" alt=""><span>EverSoft HRMS · Admin Portal</span></div>
+    <section id="login-step">
+      <h1>Super Admin Sign In</h1>
+      <p class="subtitle">Sign in with your administrator account. A verification code is required.</p>
+      <form id="login-form">
+        <label for="admin-email">Email address</label>
+        <input id="admin-email" name="email" type="email" autocomplete="username" required>
+        <label for="admin-password">Password</label>
+        <input id="admin-password" name="password" type="password" autocomplete="current-password" required>
+        <button id="login-submit" type="submit">Continue</button>
+      </form>
+      <div class="regular-link"><a href="/login?portal=regular">Regular sign in</a></div>
+    </section>
+    <section id="otp-step" hidden>
+      <h1>Verify your login</h1>
+      <p class="subtitle" id="otp-intro">Enter the 6-digit code to finish signing in.</p>
+      <form id="otp-form">
+        <label for="admin-code">Verification code</label>
+        <input id="admin-code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" required aria-describedby="admin-message">
+        <button id="otp-submit" type="submit">Verify &amp; Sign In</button>
+      </form>
+      <div class="otp-links"><span>Didn't get the code?</span><button id="resend-code" type="button">Resend code</button><span>·</span><button id="back-to-admin-login" type="button">Back to Sign In</button></div>
+    </section>
+    <div id="admin-message" class="message" role="status" aria-live="polite"></div>
+  </main>
+  <script>
+    (function () {
+      var email = '';
+      var loginForm = document.getElementById('login-form');
+      var otpForm = document.getElementById('otp-form');
+      var message = document.getElementById('admin-message');
+      var loginButton = document.getElementById('login-submit');
+      var otpButton = document.getElementById('otp-submit');
+      var codeInput = document.getElementById('admin-code');
+
+      function showMessage(text, success) {
+        message.textContent = text || '';
+        message.classList.toggle('success', !!success);
+      }
+
+      async function post(url, body) {
+        var response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        var data = await response.json().catch(function () { return {}; });
+        if (!response.ok) throw new Error(data.message || 'The request could not be completed.');
+        return data;
+      }
+
+      codeInput.addEventListener('input', function () {
+        var digits = codeInput.value.replace(/\D/g, '').slice(0, 6);
+        if (codeInput.value !== digits) codeInput.value = digits;
+      });
+
+      loginForm.addEventListener('submit', async function (event) {
+        event.preventDefault();
+        showMessage('');
+        loginButton.disabled = true;
+        try {
+          email = document.getElementById('admin-email').value.trim();
+          var data = await post('/api/auth/super-admin/login', {
+            email: email,
+            password: document.getElementById('admin-password').value
+          });
+          document.getElementById('login-step').hidden = true;
+          document.getElementById('otp-step').hidden = false;
+          if (data.devMode) {
+            document.getElementById('otp-intro').textContent = 'Enter the 6-digit code printed to the server console.';
+            showMessage(data.message, true);
+          } else {
+            document.getElementById('otp-intro').textContent = 'We emailed a 6-digit code to ' + email + '. Enter it below to finish signing in.';
+            showMessage('');
+          }
+          document.getElementById('admin-code').focus();
+        } catch (error) {
+          showMessage(error.message);
+        } finally {
+          loginButton.disabled = false;
+        }
+      });
+
+      otpForm.addEventListener('submit', async function (event) {
+        event.preventDefault();
+        showMessage('');
+        var code = codeInput.value.trim();
+        if (!/^\d{6}$/.test(code)) {
+          showMessage('Enter all 6 digits from the server terminal.');
+          codeInput.focus();
+          return;
+        }
+        otpButton.disabled = true;
+        try {
+          var data = await post('/api/auth/super-admin/verify-otp', {
+            email: email,
+            code: code
+          });
+          var user = data.user || {};
+          var name = user.name || email.split('@')[0];
+          var initials = user.initials || name.split(/\s+/).map(function (part) { return part[0] || ''; }).join('').slice(0, 2).toUpperCase();
+          sessionStorage.setItem('hrms_auth_portal', 'super-admin');
+          localStorage.setItem('hrms_session', JSON.stringify({
+            name: name,
+            email: user.email || email,
+            initials: initials,
+            role: 'admin'
+          }));
+          window.location.replace('/');
+        } catch (error) {
+          showMessage(error.message);
+        } finally {
+          otpButton.disabled = false;
+        }
+      });
+
+      document.getElementById('resend-code').addEventListener('click', async function () {
+        var button = this;
+        button.disabled = true;
+        showMessage('');
+        try {
+          var data = await post('/api/auth/super-admin/resend-otp', { email: email });
+          showMessage(data.message || 'A new verification code was requested.', true);
+        } catch (error) {
+          showMessage(error.message);
+        } finally {
+          button.disabled = false;
+        }
+      });
+
+      document.getElementById('back-to-admin-login').addEventListener('click', function () {
+        document.getElementById('otp-step').hidden = true;
+        document.getElementById('login-step').hidden = false;
+        codeInput.value = '';
+        document.getElementById('admin-password').value = '';
+        showMessage('');
+        document.getElementById('admin-password').focus();
+      });
+    })();
+  </script>
+</body>
+</html>

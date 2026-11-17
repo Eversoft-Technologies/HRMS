@@ -8,6 +8,63 @@
   <meta http-equiv="Expires" content="0" />
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <script>
+    (function () {
+      var style = document.createElement('style');
+      style.textContent = 'html.hrms-kpi-restoring #root,html.hrms-kpi-restoring #attendance-portal-root,html.hrms-rbac-restoring #root,html.hrms-rbac-restoring #attendance-portal-root{visibility:hidden!important}';
+      document.head.appendChild(style);
+      try {
+        var root = document.documentElement;
+        if (sessionStorage.getItem('__hrmsRecruitKpiOpen') === location.href) {
+          root.classList.add('hrms-kpi-restoring');
+          window.setTimeout(function () { root.classList.remove('hrms-kpi-restoring'); }, 4000);
+        }
+        if (location.pathname.replace(/\/+$/, '') === '/settings' && sessionStorage.getItem('__hrmsRbacOpen') === '1') {
+          root.classList.add('hrms-rbac-restoring');
+          window.setTimeout(function () { root.classList.remove('hrms-rbac-restoring'); }, 4000);
+        }
+      } catch (_) {}
+    })();
+  </script>
+  <script>
+    (function () {
+      var portalKey = 'hrms_auth_portal';
+      function routeForPortal(url) {
+        if (url == null) return url;
+        try {
+          var target = new URL(url, window.location.href);
+          if (target.origin !== window.location.origin || target.pathname.replace(/\/+$/, '') !== '/login') return url;
+          if (target.searchParams.get('portal') === 'regular') {
+            sessionStorage.removeItem(portalKey);
+            return url;
+          }
+          if (sessionStorage.getItem(portalKey) === 'super-admin') return '/super-admin/login';
+        } catch (_) {}
+        return url;
+      }
+
+      try {
+        var current = new URL(window.location.href);
+        if (current.pathname.replace(/\/+$/, '') === '/login' && current.searchParams.get('portal') === 'regular') {
+          sessionStorage.removeItem(portalKey);
+        } else if (current.pathname.replace(/\/+$/, '') === '/login' && sessionStorage.getItem(portalKey) === 'super-admin') {
+          window.location.replace('/super-admin/login');
+        }
+      } catch (_) {}
+
+      ['pushState', 'replaceState'].forEach(function (method) {
+        var original = history[method];
+        history[method] = function (state, title, url) {
+          var nextUrl = routeForPortal(url);
+          if (nextUrl === '/super-admin/login') {
+            window.location.replace(nextUrl);
+            return;
+          }
+          return original.call(this, state, title, nextUrl);
+        };
+      });
+    })();
+  </script>
   <title>HRMS — AI-Powered HR Platform</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -224,6 +281,7 @@
     })();
   </script>
   <script type="module" crossorigin src="/assets/index-DCh6bk0Rv4.js?v=91"></script>
+  <script defer src="/assets/hrms-auth-role-filter.js?v=1"></script>
   <script defer src="/assets/hrms-net.js?v=2"></script>
   <script defer src="/assets/hrms-live.js?v=9"></script>
   <script defer src="/assets/google-auth.js?v=12"></script>
@@ -237,13 +295,13 @@
   <script defer src="/assets/hrms-chat.js?v=12"></script>
   <script defer src="/assets/hrms-status.js?v=13"></script>
   <script defer src="/assets/hrms-attendance.js?v=6"></script>
-  <script defer src="/assets/hrms-rbac.js?v=13"></script>
+  <script defer src="/assets/hrms-rbac.js?v=15"></script>
   <script defer src="/assets/hrms-perms.js?v=19"></script>
   <script defer src="/assets/hrms-onboarding-form-builder.js?v=2"></script>
   <script defer src="/assets/hrms-onboarding.js?v=33"></script>
   <script defer src="/assets/hrms-candidate-portal.js?v=2"></script>
   <script defer src="/assets/hrms-notifications.js?v=5"></script>
-  <script defer src="/assets/hrms-recruit-kpi.js?v=12"></script>
+  <script defer src="/assets/hrms-recruit-kpi.js?v=16"></script>
   <script defer src="/assets/hrms-attendance-actions.js?v=24"></script>
   <script defer src="/assets/hrms-attendance-ui.js?v=2"></script>
   <script defer src="/assets/hrms-jobs-table.js?v=19"></script>

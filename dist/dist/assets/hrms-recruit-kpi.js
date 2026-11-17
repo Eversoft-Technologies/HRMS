@@ -14,6 +14,8 @@
   var BTN_ID      = 'hrms-kpi-btn';
   var REFRESH_MS  = 60000;
   var HISTORY_KEY = '__hrmsRecruitKpiOverlay';
+  var SESSION_OPEN_KEY = '__hrmsRecruitKpiOpen';
+  var SESSION_TAB_KEY = '__hrmsRecruitKpiTab';
 
   var state = {
     tab:             'overview',
@@ -311,15 +313,20 @@
   }
 
   /* ── open / close ─────────────────────────────────────────────────────── */
-  function open() {
+  function open(restoring) {
     if (document.getElementById(OVERLAY_ID)) return;
-    state.historyToken = String(Date.now()) + '-' + Math.random().toString(36).slice(2);
+    try { sessionStorage.setItem(SESSION_OPEN_KEY, location.href); } catch (_) {}
     var currentHistoryState = history.state;
-    var overlayHistoryState = currentHistoryState && typeof currentHistoryState === 'object'
-      ? Object.assign({}, currentHistoryState)
-      : {};
-    overlayHistoryState[HISTORY_KEY] = state.historyToken;
-    history.pushState(overlayHistoryState, '', location.href);
+    if (restoring && currentHistoryState && currentHistoryState[HISTORY_KEY]) {
+      state.historyToken = currentHistoryState[HISTORY_KEY];
+    } else {
+      state.historyToken = String(Date.now()) + '-' + Math.random().toString(36).slice(2);
+      var overlayHistoryState = currentHistoryState && typeof currentHistoryState === 'object'
+        ? Object.assign({}, currentHistoryState)
+        : {};
+      overlayHistoryState[HISTORY_KEY] = state.historyToken;
+      history.pushState(overlayHistoryState, '', location.href);
+    }
 
     injectStyle();
     var o = document.createElement('div');
@@ -329,6 +336,7 @@
     document.addEventListener('keydown', onKey);
     window.addEventListener('popstate', onPopState);
     buildShell();
+    document.documentElement.classList.remove('hrms-kpi-restoring');
     
     loadChartJs(function () {
       loadAndRender();
@@ -341,6 +349,8 @@
   }
 
   function close() {
+    try { sessionStorage.removeItem(SESSION_OPEN_KEY); } catch (_) {}
+    try { sessionStorage.removeItem(SESSION_TAB_KEY); } catch (_) {}
     var currentHistoryState = history.state;
     if (state.historyToken && currentHistoryState &&
         currentHistoryState[HISTORY_KEY] === state.historyToken) {
@@ -504,6 +514,7 @@
 
   /* ── shell ────────────────────────────────────────────────────────────── */
   function updateToolbarUI() {
+    try { sessionStorage.setItem(SESSION_TAB_KEY, state.tab); } catch (_) {}
     updateTabs();
     var sum = document.getElementById("kpi-filter-summary");
     if (sum) sum.textContent = filterSummary();
@@ -2172,6 +2183,15 @@
 
   function boot() {
     tryMount();
+    try {
+      if (sessionStorage.getItem(SESSION_OPEN_KEY) === location.href && canOwn()) {
+        var savedTab = sessionStorage.getItem(SESSION_TAB_KEY);
+        if (savedTab && tabs().some(function (tab) { return tab[0] === savedTab; })) {
+          state.tab = savedTab;
+        }
+        open(true);
+      }
+    } catch (_) {}
     // __hrmsCan fails open until /api/me/permissions answers, so re-evaluate the
     // moment the real grants land — otherwise the button lingers for a user who
     // turns out to have neither KPI scope.
