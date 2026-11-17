@@ -16,3 +16,5 @@ langchain-anthropic>=0.1.0
 holidays>=0.106,<1
 # Encrypts secrets stored from the UI (the AI provider key); see HRMS_SECRETS_KEY.
 cryptography>=41.0
+# Eva's voice in AI interview recordings (api/tts_views.py): Microsoft neural TTS, no key needed.
+edge-tts>=7.0.0

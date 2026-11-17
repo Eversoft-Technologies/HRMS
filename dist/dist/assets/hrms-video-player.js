@@ -971,10 +971,31 @@
       };
     }
 
-    // Build question cards with estimated timestamps
+    // Each card starts when Eva began asking that question. The interview page
+    // records askedAt (seconds into the recording) with every answer; older
+    // recordings without it fall back to an estimate weighted by how much was
+    // said in each question and answer (~150 words a minute), never an even split.
+    function computeStarts(total) {
+      var real = items.length > 0 && items.every(function (r) {
+        return typeof r.askedAt === 'number' && isFinite(r.askedAt) && r.askedAt >= 0;
+      });
+      if (real) {
+        var ordered = items.every(function (r, i) { return i === 0 || r.askedAt >= items[i - 1].askedAt; });
+        if (ordered) {
+          return items.map(function (r) { return total > 0 ? Math.min(r.askedAt, total) : r.askedAt; });
+        }
+      }
+      var words = function (t) { return String(t || '').trim().split(/\s+/).filter(Boolean).length; };
+      var weights = items.map(function (r) { return 6 + words(r.q) / 2.6 + words(r.transcript) / 2.4; });
+      var sum = weights.reduce(function (a, b) { return a + b; }, 0) || 1;
+      var acc = 0;
+      return weights.map(function (w) { var start = (acc / sum) * total; acc += w; return start; });
+    }
+
+    var starts = computeStarts(dur);
     var cardEls = [];
     items.forEach(function (r, idx) {
-      var estimatedStartSec = (idx / totalItems) * dur;
+      var estimatedStartSec = starts[idx];
       var card = document.createElement('div');
       card.className = 'hvp-trans-item';
       card.setAttribute('data-idx', String(idx));
@@ -991,12 +1012,13 @@
           : '<div class="hvp-trans-q"><strong>Eva:</strong> ' + escapeHtml(r.q || '—') + '</div><div class="hvp-trans-a"><strong>Candidate:</strong> ' + escapeHtml(r.transcript || '(no speech detected)') + '</div>'
       ].join('');
 
+      var entry = { el: card, start: estimatedStartSec };
       card.addEventListener('click', function () {
-        onSeek(estimatedStartSec);
+        onSeek(entry.start);
       });
 
       list.appendChild(card);
-      cardEls.push({ el: card, start: estimatedStartSec });
+      cardEls.push(entry);
     });
 
     var currentActiveIdx = -1;
@@ -1004,17 +1026,22 @@
     return {
       element: panel,
       updateActive: function (curTime, totalDur) {
-        if (totalDur > 0 && totalDur !== dur) {
+        if (totalDur > 0 && isFinite(totalDur) && totalDur !== dur) {
           dur = totalDur;
-          // Recalculate time pills if total duration changed
+          // Recalculate starts and time pills now the real duration is known
+          var fresh = computeStarts(dur);
           cardEls.forEach(function (c, idx) {
-            c.start = (idx / totalItems) * dur;
+            c.start = fresh[idx];
             var pill = c.el.querySelector('.hvp-trans-time-pill');
             if (pill) pill.textContent = '⏱ ' + formatSeconds(c.start);
           });
         }
 
-        var activeIdx = Math.min(totalItems - 1, Math.floor((curTime / (dur || 1)) * totalItems));
+        // Active card = the last question that had been asked by this moment
+        var activeIdx = 0;
+        for (var i = 0; i < cardEls.length; i++) {
+          if (cardEls[i].start <= curTime + 0.25) activeIdx = i;
+        }
         if (activeIdx !== currentActiveIdx) {
           currentActiveIdx = activeIdx;
           cardEls.forEach(function (c, idx) {
