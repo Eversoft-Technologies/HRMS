@@ -765,7 +765,6 @@ class AppUserSerializer(serializers.ModelSerializer):
             'authProvider': instance.auth_provider,
             'profilePic': instance.profile_pic or '',
             'createdAt': instance.created_at.strftime(DATETIME_FMT) if instance.created_at else None,
-            'isSuperAdmin': bool(getattr(instance, 'is_superadmin', False)),
         }
 
     def create(self, validated_data):

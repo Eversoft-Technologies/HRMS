@@ -179,8 +179,6 @@ def login(request):
         # Constant-ish messaging: don't reveal which half was wrong.
         if not user or not _verify_password(password, user):
             return err('Invalid email or password', 401)
-        if getattr(user, 'is_superadmin', False):
-            return err('Super Admin accounts must sign in via the /superadmin portal.', 403)
         if user.status != 'active':
             return err('This account is disabled. Contact your administrator.', 403)
         # Role gate: the selected role (an RBAC roles.name) must match the
@@ -295,114 +293,6 @@ def verify_otp(request):
         token = ''
 
     return JsonResponse({'ok': True, 'user': app_user_dict(user), 'token': token})
-
-
-@csrf_exempt
-def superadmin_login(request):
-    """Separate authentication endpoint strictly for Super Admin accounts.
-    Does not require a role selection."""
-    try:
-        if request.method != 'POST':
-            return err('Method not allowed', 405)
-        body = parse_body(request)
-        email = norm_email(body.get('email'))
-        password = body.get('password') or ''
-        if not email or not password:
-            return err('Email and password are required')
-
-        user = AppUser.objects.filter(email=email).first()
-        if not user or not _verify_password(password, user):
-            return err('Invalid email or password', 401)
-        if not getattr(user, 'is_superadmin', False):
-            return err('Access denied. This portal is strictly for Super Administrators.', 403)
-        if user.status != 'active':
-            return err('This administrator account is disabled.', 403)
-
-        result = _issue_otp(user)
-        if not result.get('ok'):
-            if result.get('devEcho'):
-                return JsonResponse({
-                    'otpRequired': True,
-                    'emailSent': False,
-                    'devMode': True,
-                    'email': user.email,
-                    'message': 'Email service is unreachable — your 6-digit code was printed to the server console (dev mode). Enter it below to continue.',
-                })
-            return JsonResponse({
-                'otpRequired': True,
-                'emailSent': False,
-                'message': 'Could not send the verification code: ' + result.get('error', 'unknown error'),
-            }, status=502)
-
-        masked = _mask_email(user.email)
-        return JsonResponse({
-            'otpRequired': True,
-            'emailSent': True,
-            'email': user.email,
-            'message': f'A 6-digit verification code was sent to {masked}.',
-        })
-    except Exception:
-        logging.exception('Unhandled exception in auth_views.superadmin_login')
-        return err('Server error', 500)
-
-
-@csrf_exempt
-def superadmin_verify_otp(request):
-    """Verifies OTP for Super Admin login and returns session with god-mode privileges."""
-    if request.method != 'POST':
-        return err('Method not allowed', 405)
-    body = parse_body(request)
-    email = norm_email(body.get('email'))
-    code = str(body.get('code') or '').strip()
-    if not email or not code:
-        return err('email and code are required')
-
-    otp = (
-        LoginOtp.objects
-        .filter(email=email, consumed=False)
-        .order_by('-id')
-        .first()
-    )
-    if not otp:
-        return err('No active code. Please request a new one.', 400)
-    if otp.expires_at < timezone.now():
-        otp.consumed = True
-        otp.save(update_fields=['consumed'])
-        return err('This code has expired. Please request a new one.', 400)
-    if otp.attempts >= OTP_MAX_ATTEMPTS:
-        otp.consumed = True
-        otp.save(update_fields=['consumed'])
-        return err('Too many incorrect attempts. Please request a new code.', 429)
-
-    if _hash_code(code, otp.salt) != otp.code_hash:
-        otp.attempts += 1
-        otp.save(update_fields=['attempts'])
-        remaining = max(0, OTP_MAX_ATTEMPTS - otp.attempts)
-        return err(f'Incorrect code. {remaining} attempt(s) left.', 400)
-
-    otp.consumed = True
-    otp.save(update_fields=['consumed'])
-    user = AppUser.objects.filter(email=email).first()
-    if not user or not getattr(user, 'is_superadmin', False):
-        return err('Access denied. Not a Super Admin account.', 403)
-
-    try:
-        import jwt
-        from datetime import datetime, timedelta
-        payload = {
-            'email': user.email,
-            'name': user.full_name,
-            'isSuperAdmin': True,
-            'exp': datetime.utcnow() + timedelta(minutes=int(os.environ.get('JWT_ACCESS_MINUTES', '60')))
-        }
-        token = jwt.encode(payload, settings.SECRET_KEY, algorithm='HS256')
-    except Exception:
-        token = ''
-
-    u_dict = app_user_dict(user)
-    u_dict['role'] = 'admin'
-    u_dict['isSuperAdmin'] = True
-    return JsonResponse({'ok': True, 'user': u_dict, 'token': token, 'isSuperAdmin': True})
 
 
 @csrf_exempt
