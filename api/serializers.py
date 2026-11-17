@@ -600,6 +600,7 @@ class InterviewRecordingSerializer(serializers.ModelSerializer):
                 'thumbnailUrl': f"/api/interview-recordings/{instance.id}/thumbnail" if getattr(instance, 'thumbnail_file', None) else None,
                 'videoSize': getattr(instance, 'video_size', 0) or 0,
                 'videoMime': getattr(instance, 'video_mime', None) or 'video/mp4',
+                'sttStatus': getattr(instance, 'stt_status', '') or '',
                 'createdAt': instance.created_at.strftime(DATETIME_FMT) if instance.created_at else None,
             }
 
@@ -625,6 +626,13 @@ class InterviewRecordingSerializer(serializers.ModelSerializer):
             'aiEvaluation': instance.ai_evaluation if isinstance(instance.ai_evaluation, dict) else {},
             'executiveSummary': instance.executive_summary or '',
             'round2Questions': safe_list(instance.round2_questions),
+            # Deepgram transcript of the saved video (api/transcription.py)
+            'sttStatus': instance.stt_status or '',
+            'sttError': instance.stt_error or '',
+            'sttTranscript': instance.stt_transcript or '',
+            'sttSegments': safe_list(instance.stt_segments),
+            'sttAnswers': safe_list(instance.stt_answers),
+            'sttAt': instance.stt_at.strftime(DATETIME_FMT) if instance.stt_at else None,
             'createdAt': instance.created_at.strftime(DATETIME_FMT) if instance.created_at else None,
         }
 
@@ -1127,14 +1135,15 @@ class WorkSubmissionSerializer(serializers.ModelSerializer):
             'fileSize': instance.file_size or 0,
             # The bytes are fetched on demand from /submissions/<id>/file;
             # the list only says whether there is anything to fetch.
-            'hasFile': bool(instance.file_data),
+            'hasFile': bool(instance.has_file),
             'status': instance.status,
             'reviewer': instance.reviewer or '',
             'reviewerEmail': instance.reviewer_email or '',
             'teamId': instance.team_id,
             'teamName': instance.team.name if instance.team_id and instance.team else '',
             'collaborators': [c.email for c in instance.collaborators.all()],
-            'commentCount': instance.comments.count(),
+            'commentCount': (instance.comment_count if hasattr(instance, 'comment_count')
+                             else instance.comments.count()),
             'reviewerNote': instance.reviewer_note or '',
             'reviewerNoteBy': instance.reviewer_note_by or '',
             'reviewerNoteAt': (instance.reviewer_note_at.strftime(DATETIME_FMT)
@@ -1143,7 +1152,7 @@ class WorkSubmissionSerializer(serializers.ModelSerializer):
             'reviewFileMime': instance.review_file_mime or '',
             'reviewFileSize': instance.review_file_size or 0,
             # Fetched on demand from /submissions/<id>/review-file.
-            'hasReviewFile': bool(instance.review_file_data),
+            'hasReviewFile': bool(instance.has_review_file),
             'aiScore': instance.ai_score or 0,
             'createdAt': instance.created_at.strftime(DATETIME_FMT) if instance.created_at else None,
         }
@@ -1265,18 +1274,19 @@ class BenchSalesProfileSerializer(serializers.ModelSerializer):
 
     @staticmethod
     def _has_file(instance, col):
-        """Instances from views._bench_sales_profile_qs() carry a
-        '<col>_len' LENGTH() annotation with the base64 column deferred; use
-        it so the has-file flag never fetches a ~45 MB blob. Falls back to the
-        column itself for a plainly-loaded instance."""
-        length = getattr(instance, f'{col}_len', None)
-        if length is not None:
-            return length > 0
-        return bool(getattr(instance, col))
+        """The small '<name>_has_file' column, kept in step wherever the file
+        is written or cleared (views._store_bench_sales_file_data and the
+        file DELETE), so the flag never reads a ~45 MB blob."""
+        return bool(getattr(instance, col[:-len('_file_data')] + '_has_file'))
 
     def to_representation(self, instance):
-        # only(): never pull each file's base64 body just to list names.
-        certificate_rows = list(instance.certificate_files.only('id', 'file_name', 'kind', 'profile_id'))
+        # only(): never pull each file's base64 body just to list names. The
+        # roster prefetches these (views._bench_sales_profile_qs) so listing N
+        # profiles is one query, not N.
+        if 'certificate_files' in getattr(instance, '_prefetched_objects_cache', {}):
+            certificate_rows = list(instance.certificate_files.all())
+        else:
+            certificate_rows = list(instance.certificate_files.only('id', 'file_name', 'kind', 'profile_id'))
         return {
             'id': instance.id,
             'name': instance.name,
@@ -1317,6 +1327,8 @@ ATTENDANCE_EVENT_LABELS = {
     'break-end': 'Break End',
     'remote-switch': 'Remote Switch',
     'office-switch': 'Office Switch',
+    'auto-checkout-departure': 'Auto Check Out',
+    'hr-edit': 'HR Edit',
 }
 ATTENDANCE_EVENT_COLORS = {
     'check-in': 'success',
@@ -1325,7 +1337,29 @@ ATTENDANCE_EVENT_COLORS = {
     'break-end': 'success',
     'remote-switch': 'accent',
     'office-switch': 'success',
+    'auto-checkout-departure': 'danger',
+    'hr-edit': 'gray',
 }
+
+
+def attendance_location_label(event, location, geo_fence_id):
+    """Uniform location label for the activity log and attendance popups.
+    Never surfaces a raw geofence name (which may be a person's name) — every
+    row reads the same way: Office / Home / Remote / Outside office."""
+    e = event or ''
+    low = (location or '').strip().lower()
+    if e == 'remote-switch' or 'remote' in low:
+        return 'Remote'
+    if 'outside office' in low or 'off-site' in low or 'offsite' in low:
+        return 'Outside office'
+    if 'home' in low:
+        return 'Home'
+    if (location or '').strip() or geo_fence_id or e in (
+            'check-in', 'check-out', 'office-switch', 'break-start',
+            'break-end', 'auto-checkout-departure'):
+        return 'Office'
+    return ''
+
 
 
 class AttendanceEventSerializer(serializers.ModelSerializer):
@@ -1343,8 +1377,9 @@ class AttendanceEventSerializer(serializers.ModelSerializer):
             'email': instance.email,
             'employee': instance.employee_name or '',
             'type': instance.event,
-            'event': ATTENDANCE_EVENT_LABELS.get(instance.event, instance.event),
-            'location': instance.location or '—',
+            'event': (ATTENDANCE_EVENT_LABELS.get(instance.event)
+                      or (str(instance.event or '').replace('-', ' ').replace('_', ' ').title() or '—')),
+            'location': attendance_location_label(instance.event, instance.location, instance.geo_fence_id),
             'time': instance.at.strftime('%I:%M %p') if instance.at else '',
             'color': ATTENDANCE_EVENT_COLORS.get(instance.event, 'gray'),
             'at': instance.at.strftime(DATETIME_FMT) if instance.at else None,
@@ -1511,10 +1546,11 @@ class ShiftAssignmentSerializer(serializers.ModelSerializer):
     effectiveTo = serializers.DateField(source='effective_to', required=False, allow_null=True)
     createdBy = serializers.CharField(source='created_by', required=False, allow_blank=True, default='')
     shiftName = serializers.SerializerMethodField()
+    timezone = serializers.CharField(required=False, default='IST')
 
     class Meta:
         model = ShiftAssignment
-        fields = ['id', 'email', 'shift', 'effectiveFrom', 'effectiveTo', 'createdBy', 'shiftName']
+        fields = ['id', 'email', 'shift', 'effectiveFrom', 'effectiveTo', 'createdBy', 'shiftName', 'timezone']
         read_only_fields = ['id']
 
     def get_shiftName(self, obj):

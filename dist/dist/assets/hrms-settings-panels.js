@@ -306,8 +306,99 @@
   panel({
     key: 'ai',
     title: 'Anthropic API Key',
-    build: function (root) { loadAi(root, ''); }
+    // Our slot holds two cards: the AI provider key and the speech-to-text
+    // (Deepgram) key used to transcribe interview videos.
+    build: function (root) {
+      root.className = '';
+      root.removeAttribute('style');
+      root.style.cssText = 'display:flex;flex-direction:column;gap:14px';
+      var aiCard = document.createElement('div'); aiCard.className = 'card';
+      var sttCard = document.createElement('div'); sttCard.className = 'card'; sttCard.setAttribute('data-hsp-stt', '1');
+      root.appendChild(aiCard); root.appendChild(sttCard);
+      loadAi(aiCard, '');
+      loadStt(sttCard, '');
+    }
   });
+
+  /* ── Speech-to-text (Deepgram) key ─────────────────────────────────────── */
+  function loadStt(root, flash) {
+    root.innerHTML = '<div class="card-title">Speech-to-text (Deepgram)</div><div class="hsp-s">Loading…</div>';
+    api('/api/stt/settings').then(function (m) {
+      renderStt(root, m, flash);
+      api('/api/stt/settings/audit').then(function (a) { renderAudit(root, a.events || []); }).catch(function () {});
+    }).catch(function (e) {
+      root.innerHTML = '<div class="card-title">Speech-to-text (Deepgram)</div><div class="hsp-s">' +
+        (e.status === 403 ? 'AI settings are restricted to approved administrators.' : 'Could not load the speech-to-text settings: ' + esc(e.message)) + '</div>';
+    });
+  }
+
+  function renderStt(root, m, flash) {
+    var ok = m.configured, managed = m.managed || {}, warn = '';
+    if (managed.present && !managed.readable)
+      warn += '<div class="hsp-warn">A key is saved but the server cannot decrypt it (HRMS_SECRETS_KEY changed or missing). Transcription is using the fallback. Save the key again to fix this.</div>';
+    if (m.canManage && !m.encryptionReady)
+      warn += '<div class="hsp-warn">Saving a key here is disabled: the server has no usable encryption key. You can still set <b>DEEPGRAM_API_KEY</b> in the server .env.</div>';
+    var html = '<div class="card-title">Speech-to-text (Deepgram)</div>' + warn +
+      '<div class="hsp-s" style="margin-bottom:10px">Transcribes every AI interview video after it is uploaded, so HR sees each candidate’s complete answers (the live captions in the browser can miss words).</div>' +
+      '<dl class="hsp-kv">' +
+      '<dt>Status</dt><dd><span class="hsp-dot" style="background:' + (ok ? 'var(--green,#22c55e)' : 'var(--text3)') + '"></span>' + (ok ? 'Configured — interviews are transcribed' : 'Not configured — only live captions are kept') + '</dd>' +
+      '<dt>Provider</dt><dd>' + esc(m.providerLabel) + '</dd>' +
+      '<dt>Model</dt><dd>' + esc(m.model) + ' <span class="hsp-s">(' + esc(m.language) + ')</span></dd>' +
+      '<dt>Key source</dt><dd>' + esc(m.sourceLabel) + '</dd>' +
+      (m.keyFingerprint ? '<dt>Active key ID</dt><dd><code>' + esc(m.keyFingerprint) + '</code> <span class="hsp-s">(fingerprint, not the key)</span></dd>' : '') +
+      (managed.present ? '<dt>Saved key</dt><dd>by ' + esc(managed.updatedBy || '—') + ' · ' + esc(fmtTime(managed.updatedAt)) + '</dd>' : '') +
+      '</dl>';
+    if (m.canManage) {
+      html += '<div style="display:flex;gap:10px;flex-wrap:wrap">' +
+        '<input class="input-field" data-a="key" type="password" autocomplete="new-password" spellcheck="false" placeholder="' + (managed.present ? 'New Deepgram key to rotate to' : 'Deepgram API key') + '" style="flex:1;min-width:220px"' + (m.encryptionReady ? '' : ' disabled') + '>' +
+        '</div>' +
+        '<div class="hsp-btns">' +
+        '<button type="button" class="btn-sm" data-a="test">Test key</button>' +
+        '<button type="button" class="btn-primary" data-a="save"' + (m.encryptionReady ? '' : ' disabled') + ' style="padding:7px 16px">' + (managed.present ? 'Rotate key' : 'Save &amp; activate') + '</button>' +
+        (managed.present ? '<button type="button" class="btn-sm" data-a="remove" style="color:var(--red,#ef4444)">Remove saved key</button>' : '') +
+        '</div>' +
+        '<div class="hsp-msg" data-a="msg" aria-live="polite"></div>' +
+        '<div class="hsp-note">Get a key at console.deepgram.com › API Keys. It is checked with Deepgram before it is activated, stored encrypted on the server, and never shown again. ' + esc(m.fallbackPolicy || '') + '</div>';
+    } else {
+      html += '<div class="hsp-note">Only administrators with the “Manage AI Settings” permission can change the key.</div>';
+    }
+    html += '<div style="margin-top:16px"><div class="card-title" style="font-size:11px">Change history</div><ul class="hsp-audit" data-a="audit"><li class="hsp-s">Loading…</li></ul></div>';
+    root.innerHTML = html;
+
+    var msg = root.querySelector('[data-a="msg"]');
+    function say(text, kind) { if (msg) { msg.className = 'hsp-msg ' + (kind || ''); msg.textContent = text; } }
+    if (flash) say(flash, 'ok');
+    var input = root.querySelector('[data-a="key"]');
+    function keyValue() { return input ? input.value.trim() : ''; }
+    function busy(on) { root.querySelectorAll('[data-a="test"],[data-a="save"],[data-a="remove"]').forEach(function (b) { b.disabled = on || (b.getAttribute('data-a') === 'save' && !m.encryptionReady); }); }
+    function refreshAudit() { api('/api/stt/settings/audit').then(function (a) { renderAudit(root, a.events || []); }).catch(function () {}); }
+    function failed(e) { busy(false); say(e.message || 'Something went wrong.', 'err'); refreshAudit(); }
+    var t = root.querySelector('[data-a="test"]');
+    if (t) t.addEventListener('click', function () {
+      if (!keyValue()) { say('Paste the key to test first.', 'err'); return; }
+      busy(true); say('Testing…');
+      api('/api/stt/settings/validate', jsonOpts('POST', { apiKey: keyValue() })).then(function (r) {
+        busy(false); say(r.message, r.valid ? 'ok' : 'err'); refreshAudit();
+      }).catch(failed);
+    });
+    var s = root.querySelector('[data-a="save"]');
+    if (s) s.addEventListener('click', function () {
+      if (!keyValue()) { say('Paste the key first.', 'err'); return; }
+      busy(true); say('Checking the key with Deepgram…');
+      api('/api/stt/settings/key', jsonOpts('PUT', { apiKey: keyValue() })).then(function () {
+        if (input) input.value = '';
+        loadStt(root, managed.present ? 'Key rotated. New interviews use the new key.' : 'Key saved and active. New interview videos will be transcribed.');
+      }).catch(function (e) { if (input) input.focus(); failed(e); });
+    });
+    var rm = root.querySelector('[data-a="remove"]');
+    if (rm) rm.addEventListener('click', function () {
+      var fallback = m.environmentKeyPresent ? 'Transcription will fall back to the key in the server .env.'
+                                             : 'No other key is configured, so interviews will keep only the live captions.';
+      if (!window.confirm('Remove the saved Deepgram key? ' + fallback)) return;
+      busy(true); say('Removing…');
+      api('/api/stt/settings/key', { method: 'DELETE' }).then(function () { loadStt(root, 'Saved key removed. ' + fallback); }).catch(failed);
+    });
+  }
 
   function loadAi(root, flash) {
     root.innerHTML = '<div class="card-title">AI Provider Key</div><div class="hsp-s">Loading…</div>';

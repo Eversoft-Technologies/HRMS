@@ -2164,7 +2164,16 @@
       changed = true;
     }
     if (root.parentElement !== main) main.appendChild(root);
-    if (!changed) { updateActiveNav(); return; }
+    if (!changed) {
+      // React can write its own title ("Recruit") a few milliseconds after our
+      // render set this page's name, and which one sticks is a race. Put ours
+      // back on every check for as long as it is wrong.
+      var ownTitle = page === 'submissions' ? 'Bench Work Submissions' : 'Bench Sales';
+      var ttOwn = document.querySelector('.topbar-title');
+      if (ttOwn && ttOwn.textContent !== ownTitle) ttOwn.textContent = ownTitle;
+      updateActiveNav();
+      return;
+    }
 
     state.page = page;
     updateActiveNav();

@@ -2929,11 +2929,11 @@ html[data-theme="light"] div[style*="position: fixed"]:has(span:is([style*="Pipe
 
 /* --- the page settles in ------------------------------------------------ */
 :where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) .content > *:not(.hrms-dash):not(.wsq):not(#hrms-live-dashboard-wrap):not(#hrms-chat-page):not([style*="position: fixed"]):not([style*="position:fixed"]) {
-  animation: hrms-page-in .3s cubic-bezier(.2, .7, .3, 1) both;
+  animation: hrms-page-in .3s cubic-bezier(.2, .7, .3, 1) backwards; /* not `both`: a finished animation that still holds a transform makes the page the anchor for position:fixed pop-ups */
 }
 
 .main > :not(.topbar):not(.content):not(.hrms-dash):not(.wsq):not([style*="position: fixed"]):not([style*="position:fixed"]) {
-  animation: hrms-page-in .3s cubic-bezier(.2, .7, .3, 1) both;
+  animation: hrms-page-in .3s cubic-bezier(.2, .7, .3, 1) backwards; /* not `both`: a finished animation that still holds a transform makes the page the anchor for position:fixed pop-ups */
 }
 
 /* --- KPI cards: tinted wash, staggered rise, lift ----------------------- */
@@ -3303,3 +3303,12 @@ body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"])):not(:has(#
     margin-top: auto !important;
 }
 
+/* --- Recruiter (USA): page title wording --------------------------------
+   hrms-usa-nav.js stores the USA name of the page in data-usa-title and
+   leaves the title's own text untouched (other scripts keep rewriting it).
+   The original text is collapsed to zero size and the USA name is painted
+   in its place, at the title's normal size for each screen width. */
+.topbar .topbar-title[data-usa-title] { font-size: 0 !important; }
+.topbar .topbar-title[data-usa-title]::after { content: attr(data-usa-title); font-size: 16px; }
+@media (max-width: 768px) { .topbar .topbar-title[data-usa-title]::after { font-size: 14px; } }
+@media (max-width: 400px) { .topbar .topbar-title[data-usa-title]::after { font-size: 13px; } }
