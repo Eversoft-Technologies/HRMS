@@ -324,6 +324,7 @@ def app_user_dict(o):
         'authProvider': o.auth_provider,
         'profilePic': o.profile_pic or '',
         'createdAt': dt(o.created_at),
+        'isSuperAdmin': bool(getattr(o, 'is_superadmin', False)),
     }
 
 
@@ -8158,7 +8159,7 @@ def rbac_stats(request):
 @api_view(['GET', 'POST'])
 def roles(request):
     if request.method == 'GET':
-        qs = Role.objects.select_related('created_by').annotate(**_role_annot()).order_by('name')
+        qs = Role.objects.exclude(name__iexact='Super Admin').select_related('created_by').annotate(**_role_annot()).order_by('name')
         if request.GET.get('active') in ('1', 'true', 'True'):
             qs = qs.filter(is_active=True)
         return Response(RoleSerializer(qs, many=True).data)

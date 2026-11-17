@@ -30,6 +30,7 @@ class Migration(migrations.Migration):
                     related_name='directory_entry',
                     serialize=False,
                     to='api.userprofile',
+                    db_constraint=False,
                 )),
             ],
             options={
