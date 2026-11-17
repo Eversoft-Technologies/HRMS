@@ -165,7 +165,10 @@ def stt_settings_key(request):
         return base._msg(f'Key not saved: {message}', 400, 'KEY_INVALID')
     row = _row() or AIProviderSetting(provider=PROVIDER)
     rotated = bool(row.encrypted_key)
-    row.encrypted_key = base._encrypt(key)
+    try:
+        row.encrypted_key = base._encrypt(key)
+    except base.SecretsNotConfigured:
+        return base._encryption_failed(ENV)
     row.key_fingerprint = fp
     row.validated_at = timezone.now()
     row.updated_by = caller

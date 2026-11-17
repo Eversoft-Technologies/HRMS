@@ -1546,10 +1546,11 @@ class ShiftAssignmentSerializer(serializers.ModelSerializer):
     effectiveTo = serializers.DateField(source='effective_to', required=False, allow_null=True)
     createdBy = serializers.CharField(source='created_by', required=False, allow_blank=True, default='')
     shiftName = serializers.SerializerMethodField()
+    timezone = serializers.CharField(required=False, default='IST')
 
     class Meta:
         model = ShiftAssignment
-        fields = ['id', 'email', 'shift', 'effectiveFrom', 'effectiveTo', 'createdBy', 'shiftName']
+        fields = ['id', 'email', 'shift', 'effectiveFrom', 'effectiveTo', 'createdBy', 'shiftName', 'timezone']
         read_only_fields = ['id']
 
     def get_shiftName(self, obj):
