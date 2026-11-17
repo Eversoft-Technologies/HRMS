@@ -56,18 +56,17 @@ def _get_caller(request):
 def _is_super_admin(user):
     """True when the user is a Super Admin.
 
-    An explicitly assigned RBAC role (``role_ref``) is authoritative: such a user
-    is Super Admin *only if* that role is literally "Super Admin". The legacy
-    ``role == 'admin'`` string is honoured *only* as a fallback for accounts that
-    have no ``role_ref`` (e.g. created via signup/OTP, whose ``role`` still
-    defaults to 'admin') — otherwise assigning a limited role would be silently
-    overridden and the user would keep full access.
+    An account with is_superadmin=True is a system Super Admin with god-mode
+    privileges that bypasses all RBAC permission checks.
+    Also honors role_ref.name == 'Super Admin' or legacy role == 'admin' as fallback.
     """
     if not user:
         return False
+    if getattr(user, 'is_superadmin', False):
+        return True
     if user.role_ref_id and user.role_ref:
         return user.role_ref.name == 'Super Admin'
-    return (user.role or '').lower() == 'admin'
+    return (user.role or '').lower() in ('admin', 'superadmin')
 
 
 # Accounts that predate RBAC carry only a legacy role string, which

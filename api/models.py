@@ -333,6 +333,7 @@ class AppUser(models.Model):
     password = models.CharField(max_length=255, default='', blank=True)
     initials = models.CharField(max_length=10, default='', blank=True)
     role = models.CharField(max_length=40, default='admin')      # admin | recruitment | hr (legacy string)
+    is_superadmin = models.BooleanField(default=False, db_index=True)
     status = models.CharField(max_length=20, default='active')   # active | disabled
     # RBAC links (see the roles / companies tables). Nullable + additive so the
     # legacy ``role`` string above keeps driving the current login role-gate.
@@ -401,6 +402,7 @@ class EmployeeDirectoryEntry(models.Model):
         primary_key=True,
         db_column='email',
         related_name='directory_entry',
+        db_constraint=False,
     )
 
     class Meta:
