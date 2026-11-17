@@ -9156,6 +9156,9 @@ def shift_detail(request, pk):
     return Response(ShiftSerializer(obj).data)
 
 
+SHIFT_TIMEZONES = {'IST', 'ET', 'CT', 'MT', 'PT'}
+
+
 @api_view(['GET', 'POST'])
 @require_perm({'GET': 'employee.view', 'POST': 'settings.manage'})
 def shift_assignments(request):
@@ -9185,19 +9188,23 @@ def shift_assignments(request):
     eff_to = parse_date(body.get('effectiveTo') or body.get('effective_to'))
     if eff_to and eff_to < eff_from:
         return err('The end date is before the start date.')
+    timezone = (body.get('timezone') or 'IST').upper()
+    if timezone not in SHIFT_TIMEZONES:
+        return err(f'Unknown time zone "{timezone}".')
     later = ShiftAssignment.objects.filter(email=email, effective_from__gt=eff_from).order_by('effective_from').first()
     if later and (eff_to is None or eff_to >= later.effective_from):
         return err(f'This employee already has a shift assignment starting {later.effective_from:%Y-%m-%d}. '
                    'End this one before then, or remove that one first.', 409)
     same_day = ShiftAssignment.objects.filter(email=email, effective_from=eff_from).first()
     if same_day:
-        same_day.shift, same_day.effective_to = shift, eff_to
+        same_day.shift, same_day.effective_to, same_day.timezone = shift, eff_to, timezone
         same_day.save()
         return Response(ShiftAssignmentSerializer(same_day).data)
     (ShiftAssignment.objects.filter(email=email, effective_from__lt=eff_from)
      .filter(Q(effective_to__isnull=True) | Q(effective_to__gte=eff_from))
      .update(effective_to=eff_from - timedelta(days=1)))
     row = ShiftAssignment.objects.create(email=email, shift=shift, effective_from=eff_from, effective_to=eff_to,
+                                         timezone=timezone,
                                          created_by=_resolve_recipient_email(request, 'system'))
     create_notification(email, 'Shift updated',
                         f'Your shift is "{shift.name}" from {eff_from:%d %b %Y}'
