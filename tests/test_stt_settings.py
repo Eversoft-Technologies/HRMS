@@ -117,3 +117,34 @@ class SttSettingsTests(TestCase):
         self.put_key(self.boss, GOOD)
         self.assertEqual(len(self.boss.get('/api/stt/settings/audit').json()['events']), 1)
         self.assertEqual(self.boss.get('/api/ai/settings/audit').json()['events'], [])
+
+
+@mock.patch('api.stt_settings.requests.get', side_effect=fake_get)
+class FirstSaveCreatesKeyFileTests(TestCase):
+    """A fresh server with no HRMS_SECRETS_KEY: the page says saving is ready
+    (the key file is created on first save) — the save must not 500."""
+
+    def setUp(self):
+        import tempfile
+        Permission.objects.create(code='ai.settings.view', name='View AI Settings')
+        Permission.objects.create(code='ai.settings.manage', name='Manage AI Settings')
+        AppUser.objects.create(email='boss@co.com', full_name='Boss', password='x',
+                               role_ref=Role.objects.create(name='Super Admin'))
+        self.boss = Client(HTTP_X_USER_EMAIL='boss@co.com', HTTP_AUTHORIZATION='Bearer ' + token_for('boss@co.com'))
+        self.keyfile = os.path.join(tempfile.mkdtemp(prefix='hrms-sec-'), 'secrets.key')
+
+    def test_first_save_creates_the_key_file(self, _get):
+        env = {'HRMS_SECRETS_KEY': '', 'HRMS_SECRETS_FILE': self.keyfile, 'HRMS_SECRETS_AUTOGEN': '1', 'DEEPGRAM_API_KEY': ''}
+        with mock.patch.dict(os.environ, env):
+            self.assertTrue(self.boss.get('/api/stt/settings').json()['encryptionReady'])
+            r = self.boss.put('/api/stt/settings/key', {'apiKey': GOOD}, content_type='application/json')
+            self.assertEqual(r.status_code, 200, r.content)
+            self.assertTrue(os.path.exists(self.keyfile))
+            self.assertEqual(transcription.api_key(), GOOD)
+
+    def test_unwritable_key_file_gives_a_clear_message_not_500(self, _get):
+        env = {'HRMS_SECRETS_KEY': '', 'HRMS_SECRETS_FILE': self.keyfile, 'HRMS_SECRETS_AUTOGEN': '1', 'DEEPGRAM_API_KEY': ''}
+        with mock.patch.dict(os.environ, env), mock.patch('api.secret_box._create_key_file', return_value=''):
+            r = self.boss.put('/api/stt/settings/key', {'apiKey': GOOD}, content_type='application/json')
+        self.assertEqual((r.status_code, r.json()['code']), (503, 'ENCRYPTION_NOT_CONFIGURED'))
+        self.assertIn('DEEPGRAM_API_KEY', r.json()['message'])
