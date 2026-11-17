@@ -30,7 +30,7 @@
 
   var HRIS_PATH = '/hr/hris';
   var TITLE = 'Employee Profile';
-  var ID = { root: 'hrms-hris-root', style: 'hrms-hris-style', modal: 'hrms-hris-modal', toast: 'hrms-hris-toast' };
+  var ID = { root: 'hrms-hris-root', style: 'hrms-hris-style', modal: 'hrms-hris-modal', deleteModal: 'hrms-hris-delete-modal', toast: 'hrms-hris-toast' };
 
   var state = {
     key: '',          // profile key taken from the URL
@@ -246,6 +246,26 @@
       /* HRIS list rows that link to a profile */
       'tr[data-hris-email] .av-row span { color: var(--accent, #4f8ef7); }',
       'tr[data-hris-email]:hover td { background: var(--bg3, rgba(148,163,184,.08)); }',
+      '.hris-delete-btn { color: #b91c1c; border-color: rgba(185,28,28,.35); }',
+      '.hris-delete-btn:hover { background: rgba(185,28,28,.08); }',
+      '.hris-delete-overlay { position: fixed; inset: 0; z-index: 100002; display: flex; align-items: center; justify-content: center; padding: 16px; background: rgba(2,6,23,.62); backdrop-filter: blur(3px); }',
+      '.hris-delete-dialog { width: min(440px,100%); overflow: hidden; border: 1px solid var(--border2,#e5e7eb); border-radius: 16px; background: var(--bg2,#fff); color: var(--text,#0f172a); box-shadow: 0 24px 64px rgba(2,6,23,.35); font-family: var(--font,"DM Sans",sans-serif); }',
+      '.hris-delete-content { padding: 24px 24px 20px; }',
+      '.hris-delete-heading { display: flex; align-items: flex-start; gap: 14px; }',
+      '.hris-delete-icon { display: flex; width: 44px; height: 44px; flex: 0 0 44px; align-items: center; justify-content: center; border: 1px solid rgba(185,28,28,.18); border-radius: 12px; background: rgba(185,28,28,.09); color: #b91c1c; font-size: 21px; font-weight: 800; }',
+      '.hris-delete-title { margin: 2px 0 6px; font-family: var(--font-d,"Syne",sans-serif); font-size: 17px; font-weight: 700; color: var(--text,#0f172a); }',
+      '.hris-delete-copy { margin: 0; color: var(--text2,#475569); font-size: 13px; line-height: 1.55; }',
+      '.hris-delete-person { margin: 18px 0 0 58px; padding: 11px 13px; overflow-wrap: anywhere; border: 1px solid var(--border2,#e5e7eb); border-radius: 10px; background: var(--bg3,#f8fafc); }',
+      '.hris-delete-name { font-size: 13px; font-weight: 700; color: var(--text,#0f172a); }',
+      '.hris-delete-email { margin-top: 3px; color: var(--text3,#64748b); font-size: 11.5px; }',
+      '.hris-delete-note { margin: 14px 0 0 58px; color: var(--text3,#64748b); font-size: 11.5px; line-height: 1.5; }',
+      '.hris-delete-actions { display: flex; justify-content: flex-end; gap: 9px; padding: 14px 20px; border-top: 1px solid var(--border2,#e5e7eb); background: var(--bg3,#f8fafc); }',
+      '.hris-delete-actions button { min-height: 36px; padding: 0 13px; border: 1px solid var(--border2,#e5e7eb); border-radius: 8px; background: var(--bg2,#fff); color: var(--text2,#475569); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; }',
+      '.hris-delete-actions button:focus-visible { outline: 2px solid var(--accent,#4f8ef7); outline-offset: 2px; }',
+      '.hris-delete-actions .hris-delete-confirm { border-color: #b91c1c; background: #b91c1c; color: #fff; }',
+      '.hris-delete-actions .hris-delete-confirm:hover { background: #991b1b; }',
+      '.hris-delete-actions button:disabled { opacity: .6; cursor: wait; }',
+      '@media (max-width: 480px) { .hris-delete-content { padding: 20px 18px 18px; } .hris-delete-person,.hris-delete-note { margin-left: 0; } .hris-delete-actions { padding: 12px 18px; } }',
       '@media (max-width: 640px) { #' + ID.root + ' { padding: 14px; } .hp-row { grid-template-columns: 1fr; gap: 2px; } }'
     ].join('\n');
     var st = document.createElement('style');
@@ -1274,27 +1294,148 @@
 
   /* ── HRIS list (/hr/hris): make the React table rows open the profile ───── */
   var listCache = null, listFetchedAt = 0, listLoading = false;
+  var listCanDelete = null, listPermissionLoading = false;
+  function listNameKey(name) {
+    return String(name || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  }
+  function loadListPermissions() {
+    if (listCanDelete !== null || listPermissionLoading) return;
+    var email = sessionEmail();
+    if (!email) { listCanDelete = false; return; }
+    listPermissionLoading = true;
+    api('/api/me/permissions?email=' + encodeURIComponent(email))
+      .then(function (result) {
+        var permissions = result && Array.isArray(result.permissions) ? result.permissions : [];
+        listCanDelete = !!(result && result.superAdmin) || permissions.indexOf('employee.delete') !== -1;
+      })
+      .catch(function (e) {
+        listCanDelete = false;
+        toast('Could not check employee delete permission: ' + e.message, true);
+      })
+      .then(function () {
+        listPermissionLoading = false;
+        schedule();
+      });
+  }
+  function addDeleteAction(table, tr) {
+    var header = table.querySelector('thead tr');
+    if (header && !header.querySelector('[data-hris-actions-header]')) {
+      var th = document.createElement('th');
+      th.setAttribute('data-hris-actions-header', '1');
+      th.textContent = 'Actions';
+      header.appendChild(th);
+    }
+    if (tr.querySelector('[data-hris-delete]')) return;
+    var cell = document.createElement('td');
+    var button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'btn-sm hris-delete-btn';
+    button.setAttribute('data-hris-delete', '1');
+    button.textContent = 'Delete';
+    button.setAttribute('aria-label', 'Delete HRIS record');
+    cell.appendChild(button);
+    tr.appendChild(cell);
+  }
+  function showDeleteConfirmation(tr, email, name) {
+    var existing = document.getElementById(ID.deleteModal);
+    if (existing) existing.remove();
+    var overlay = document.createElement('div');
+    overlay.id = ID.deleteModal;
+    overlay.className = 'hris-delete-overlay';
+    overlay.innerHTML = '<div class="hris-delete-dialog" role="dialog" aria-modal="true" aria-labelledby="hris-delete-title" aria-describedby="hris-delete-copy">' +
+      '<div class="hris-delete-content">' +
+        '<div class="hris-delete-heading"><div class="hris-delete-icon" aria-hidden="true">!</div><div>' +
+          '<h2 class="hris-delete-title" id="hris-delete-title">Remove from Employee Records?</h2>' +
+          '<p class="hris-delete-copy" id="hris-delete-copy">This will remove this employee from the HRIS directory.</p>' +
+        '</div></div>' +
+        '<div class="hris-delete-person"><div class="hris-delete-name">' + esc(name || email) + '</div>' +
+          '<div class="hris-delete-email">' + esc(email) + '</div></div>' +
+        '<p class="hris-delete-note">Their profile details and account will be kept.</p>' +
+      '</div>' +
+      '<div class="hris-delete-actions"><button type="button" data-hris-delete-cancel>Cancel</button>' +
+        '<button type="button" class="hris-delete-confirm" data-hris-delete-confirm>Remove employee</button></div>' +
+      '</div>';
+    document.body.appendChild(overlay);
+
+    var cancel = overlay.querySelector('[data-hris-delete-cancel]');
+    var confirm = overlay.querySelector('[data-hris-delete-confirm]');
+    var deleting = false;
+    function close() {
+      document.removeEventListener('keydown', onKeydown);
+      if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+    }
+    function onKeydown(ev) {
+      if (ev.key === 'Escape' && !deleting) {
+        ev.preventDefault();
+        close();
+      }
+    }
+    cancel.addEventListener('click', close);
+    overlay.addEventListener('click', function (ev) {
+      if (ev.target === overlay && !deleting) close();
+    });
+    confirm.addEventListener('click', function () {
+      if (deleting) return;
+      deleting = true;
+      confirm.disabled = true;
+      cancel.disabled = true;
+      confirm.textContent = 'Removing...';
+      api('/api/employees/' + encodeURIComponent(email), { method: 'DELETE' })
+        .then(function () {
+          close();
+          if (tr.parentNode) tr.parentNode.removeChild(tr);
+          toast('Employee row removed. Profile details and account were kept.');
+        })
+        .catch(function (err) {
+          deleting = false;
+          confirm.disabled = false;
+          cancel.disabled = false;
+          confirm.textContent = 'Remove employee';
+          toast('Could not delete HRIS record: ' + err.message, true);
+        });
+    });
+    document.addEventListener('keydown', onKeydown);
+    cancel.focus();
+  }
+  function deleteListRecord(e) {
+    var button = e.target && e.target.closest ? e.target.closest('[data-hris-delete]') : null;
+    if (!button) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (button.disabled) return;
+    var tr = button.closest('tr');
+    var email = tr && tr.getAttribute('data-hris-email');
+    if (!email) return;
+    var nameEl = tr.querySelector('td .av-row span') || tr.querySelector('td');
+    var name = nameEl ? (nameEl.textContent || '').trim() : email;
+    showDeleteConfirmation(tr, email, name);
+  }
   function decorateList() {
     var table = document.querySelector('.content table');
     if (!table) return;
     var rows = table.querySelectorAll('tbody tr');
     if (!rows.length) return;
     ensureStyle();
+    loadListPermissions();
     var unmatched = false;
     rows.forEach(function (tr) {
-      if (tr.hasAttribute('data-hris-email') || tr.hasAttribute('data-hris-skip')) return;
-      var nameEl = tr.querySelector('td .av-row span') || tr.querySelector('td');
-      var name = nameEl ? (nameEl.textContent || '').trim().toLowerCase() : '';
-      if (!name || tr.children.length < 3) { tr.setAttribute('data-hris-skip', '1'); return; }   // the "no employees" placeholder row
-      var email = listCache && listCache[name];
-      if (!email) { unmatched = true; return; }
-      tr.setAttribute('data-hris-email', email);
-      tr.style.cursor = 'pointer';
-      tr.title = 'Open employee profile';
-      tr.addEventListener('click', function (ev) {
-        if (ev.target.closest('a, button, input, select')) return;
-        navTo(profileUrl(email));
-      });
+      if (tr.hasAttribute('data-hris-skip')) return;
+      var email = tr.getAttribute('data-hris-email');
+      if (!email) {
+        var nameEl = tr.querySelector('td .av-row span') || tr.querySelector('td');
+        var name = nameEl ? listNameKey(nameEl.textContent) : '';
+        if (!name || tr.children.length < 3) { tr.setAttribute('data-hris-skip', '1'); return; }   // the "no employees" placeholder row
+        email = listCache && listCache[name];
+        if (!email) { unmatched = true; return; }
+        tr.setAttribute('data-hris-email', email);
+        tr.style.cursor = 'pointer';
+        tr.title = 'Open employee profile';
+        tr.addEventListener('click', function (ev) {
+          if (ev.target.closest('a, button, input, select')) return;
+          navTo(profileUrl(email));
+        });
+      }
+      if (listCanDelete) addDeleteAction(table, tr);
     });
     if ((!listCache || unmatched) && !listLoading && Date.now() - listFetchedAt > 5000) {
       listLoading = true;
@@ -1302,12 +1443,22 @@
         listCache = {};
         listOf(list).forEach(function (u) {
           var nm = ((u.firstName || '') + ' ' + (u.lastName || '')).trim() || u.email || '';
-          if (nm && u.email) listCache[nm.toLowerCase()] = u.email;
+          if (nm && u.email) listCache[listNameKey(nm)] = u.email;
         });
       }).catch(function () { listCache = listCache || {}; })
         .then(function () { listLoading = false; listFetchedAt = Date.now(); schedule(); });
     }
   }
+  document.addEventListener('click', deleteListRecord);
+  window.addEventListener('hrmsEmployeeSaved', function (e) {
+    var saved = e && e.detail || {};
+    var name = listNameKey(saved.name);
+    var email = String(saved.email || '').trim().toLowerCase();
+    if (!name || !email) return;
+    if (!listCache) listCache = {};
+    listCache[name] = email;
+    schedule();
+  });
 
   /* ── mount / unmount ────────────────────────────────────────────────────── */
   function ensureLayout() {

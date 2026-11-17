@@ -29,7 +29,7 @@ from django.contrib.auth.hashers import make_password
 from django.db import transaction
 from django.db.models import (
     BinaryField, BooleanField, Case, CharField, Count, ExpressionWrapper, F, Func,
-    IntegerField, OuterRef, Q, Subquery, Sum, Value, When,
+    IntegerField, OuterRef, Prefetch, Q, Subquery, Sum, Value, When,
 )
 from django.db.models.functions import Coalesce, Substr
 from django.http import HttpResponse, JsonResponse
@@ -41,7 +41,7 @@ from rest_framework.parsers import MultiPartParser
 from rest_framework.response import Response
 
 from . import ai, mailer, social_poster
-from .permissions import require_perm, require_admin, check_perm
+from .permissions import require_perm, require_admin, check_perm, _get_caller
 from .timeutil import local_now, local_today, reset_company_tz_cache, valid_timezone
 from .models import (
     AppUser,
@@ -49,6 +49,7 @@ from .models import (
     Company,
     CompanyDetail,
     EmployeeAttendance,
+    EmployeeDirectoryEntry,
     EmployeeTask,
     MasterDataSet,
     InterviewLink,
@@ -1223,7 +1224,13 @@ def _save_resume(serializer):
 @require_perm({'GET': 'recruitment.view', 'POST': 'recruitment.create'})
 def resume_scores(request):
     if request.method == 'GET':
-        return Response(ResumeScoreSerializer(ResumeScore.objects.all(), many=True).data)
+        # defer(): the list never shows the uploaded file, but selecting it
+        # pulled every resume's base64 body out of MySQL on each page load
+        # (Recruit, Resume Scoring), which is what made the list slow once
+        # there were real resumes. The file is still served on demand by
+        # resume_score_file().
+        return Response(ResumeScoreSerializer(
+            ResumeScore.objects.defer('file_data'), many=True).data)
 
     body = request.data
     if isinstance(body, list):
@@ -1434,6 +1441,7 @@ def recordings(request):
         qs = _recording_list_qs().defer(
             'transcript', 'responses', 'ai_evaluation',
             'executive_summary', 'round2_questions',
+            'stt_transcript', 'stt_segments', 'stt_answers',
         )
         return Response(InterviewRecordingSerializer(
             qs, many=True, context={'summary': True},
@@ -1602,6 +1610,35 @@ def _complete_interview(pk):
         _mark_interview_taken(rec['candidate_email'], rec['role'], rec['total_score'])
 
 
+def _start_transcription(pk):
+    """Full speech-to-text of the saved video (Deepgram), on a background
+    thread — the candidate's upload never waits for it, and a failure there
+    never fails the upload."""
+    try:
+        from . import transcription
+        transcription.transcribe_async(pk)
+    except Exception:
+        logger.exception('[STT] could not queue recording %s', pk)
+
+
+@api_view(['POST'])
+@require_perm('recruitment.edit')
+def recording_transcribe(request, pk):
+    """HR: (re)run the Deepgram transcription of one recording."""
+    from . import transcription
+    rec = InterviewRecording.objects.filter(pk=pk).values('has_video').first()
+    if rec is None:
+        return err('Recording not found', 404)
+    if not rec['has_video']:
+        return err('This interview has no video to transcribe.', 400)
+    if not transcription.is_configured():
+        return Response({'message': 'Speech-to-text is not set up: add the Deepgram key in '
+                                    'Settings › AI Settings › Speech-to-text.', 'code': 'NO_KEY'}, status=503)
+    transcription.transcribe_async(pk)
+    row = InterviewRecording.objects.filter(pk=pk).values('stt_status', 'stt_error').first()
+    return Response({'ok': True, 'sttStatus': row['stt_status'], 'sttError': row['stt_error']})
+
+
 @csrf_exempt
 def recording_video(request, pk):
     """
@@ -1622,6 +1659,7 @@ def recording_video(request, pk):
             from . import video_processor
             result = video_processor.save_interview_video(pk, data, mime)
             _complete_interview(pk)
+            _start_transcription(pk)
             return JsonResponse(result)
         except Exception as exc:
             logger.error(f"[RecordingVideo] Disk save failed: {exc}", exc_info=True)
@@ -1629,6 +1667,7 @@ def recording_video(request, pk):
             InterviewRecording.objects.filter(pk=pk).update(
                 video_buffer=data, video_mime=mime, has_video=True)
             _complete_interview(pk)
+            _start_transcription(pk)
             return JsonResponse({'ok': True, 'fallback': 'buffer'})
 
     if request.method != 'GET':
@@ -2072,7 +2111,7 @@ def get_or_create_company_details():
                 country='India',
                 timezone='Asia/Kolkata',
                 currency='INR',
-                date_format='DD/MM/YYYY',
+                date_format='MM/DD/YYYY',
                 work_week=['Mon', 'Tue', 'Wed', 'Thu', 'Fri'],
                 emp_id_prefix='EV-',
                 emp_id_min_digits=4,
@@ -2107,7 +2146,7 @@ def company_public_config():
         'companyLogo': obj.company_logo or '',
         'timezone': obj.timezone or '',
         'currency': (obj.currency or 'INR').upper(),
-        'dateFormat': obj.date_format or 'DD/MM/YYYY',
+        'dateFormat': obj.date_format or 'MM/DD/YYYY',
         'workWeek': week or ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'],
         'empIdPrefix': obj.emp_id_prefix if obj.emp_id_prefix is not None else 'EV-',
         'empIdMinDigits': int(obj.emp_id_min_digits or 4),
@@ -2309,7 +2348,7 @@ def company_settings(request):
                         'country': getattr(obj, 'country', 'India'),
                         'timezone': getattr(obj, 'timezone', 'Asia/Kolkata'),
                         'currency': getattr(obj, 'currency', 'INR'),
-                        'dateFormat': getattr(obj, 'date_format', 'DD/MM/YYYY'),
+                        'dateFormat': getattr(obj, 'date_format', 'MM/DD/YYYY'),
                         'workWeek': getattr(obj, 'work_week', ['Mon', 'Tue', 'Wed', 'Thu', 'Fri']),
                         'empIdPrefix': getattr(obj, 'emp_id_prefix', 'EV-'),
                         'empIdMinDigits': getattr(obj, 'emp_id_min_digits', 4),
@@ -2329,7 +2368,7 @@ def company_settings(request):
                     'country': 'India',
                     'timezone': 'Asia/Kolkata',
                     'currency': 'INR',
-                    'dateFormat': 'DD/MM/YYYY',
+                    'dateFormat': 'MM/DD/YYYY',
                     'workWeek': ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'],
                     'empIdPrefix': 'EV-',
                     'empIdMinDigits': 4,
@@ -2455,7 +2494,19 @@ def users(request):
     serializer = AppUserSerializer(data={**body, 'name': name, 'email': email, 'employeeId': emp_id})
     if not serializer.is_valid():
         return serializer_err(serializer)
-    serializer.save(employee_id=emp_id)
+    created = serializer.save(employee_id=emp_id)
+
+    # A login created under a named access profile (e.g. "Recruiter (India)")
+    # is assigned that RBAC role, so its permissions and the login role gate
+    # follow the profile. Super Admin is never assignable from here.
+    role_name = str(body.get('roleName') or '').strip().lower()
+    if role_name and role_name != 'super admin':
+        rbac_role = next((r for r in Role.objects.filter(is_active=True)
+                          if r.name.strip().lower() == role_name), None)
+        if rbac_role:
+            created.role_ref = rbac_role
+            created.role = _legacy_from_role(rbac_role.name)
+            created.save(update_fields=['role_ref', 'role'])
 
     # Sync UserProfile
     UserProfile.objects.update_or_create(
@@ -2466,7 +2517,7 @@ def users(request):
             'last_name': ' '.join(name.split()[1:]) if len(name.split()) > 1 else '',
         }
     )
-    return Response(serializer.data, status=201)
+    return Response(AppUserSerializer(created).data, status=201)
 
 
 @api_view(['PUT', 'DELETE'])
@@ -2516,7 +2567,9 @@ def user_detail(request, email):
 def employees(request):
     """List and create employee profiles used by the HR employee directory."""
     if request.method == 'GET':
-        profiles = UserProfile.objects.all().order_by('first_name', 'last_name', 'email')
+        profiles = UserProfile.objects.filter(
+            directory_entry__isnull=False,
+        ).order_by('first_name', 'last_name', 'email')
         data = UserProfileSerializer(profiles, many=True).data
         for item in data:
             comp = EmployeeCompensation.objects.filter(email__iexact=item.get('email', '')).order_by('-effective_from').first()
@@ -2537,7 +2590,7 @@ def employees(request):
     full_name = str(body.get('fullName') or body.get('name') or '').strip()
     if not email or not full_name or not body.get('department') or not body.get('jobTitle'):
         return err('fullName, email, department and jobTitle are required')
-    if UserProfile.objects.filter(email=email).exists():
+    if EmployeeDirectoryEntry.objects.filter(profile__email__iexact=email).exists():
         return err('An employee with this email already exists', 409)
 
     name_parts = full_name.split()
@@ -2555,10 +2608,13 @@ def employees(request):
         'annualCtc': body.get('annualCtc', body.get('salary')) or None,
         'startDate': body.get('startDate') or None,
     }
-    serializer = UserProfileSerializer(data=data)
+    profile = UserProfile.objects.filter(email__iexact=email).first()
+    serializer = (UserProfileSerializer(profile, data=data, partial=True)
+                  if profile else UserProfileSerializer(data=data))
     if not serializer.is_valid():
         return serializer_err(serializer)
-    serializer.save()
+    profile = serializer.save()
+    EmployeeDirectoryEntry.objects.get_or_create(profile=profile)
 
     # Automatically generate Indian Payroll Compensation record
     from api.services.payroll_service import sync_employee_compensation
@@ -2657,16 +2713,15 @@ def _profile_stats(email, include_payroll):
     leave and (when the caller may see payroll) the latest payslip."""
     today = local_today()
     since = today - timedelta(days=PROFILE_STATS_DAYS - 1)
-    counts = {'present': 0, 'late': 0, 'absent': 0, 'half-day': 0}
-    for status in EmployeeAttendance.objects.filter(
-            email=email, date__gte=since, date__lte=today).values_list('status', flat=True):
-        status = str(status or '').lower()
-        if status in counts:
-            counts[status] += 1
-    denom = sum(counts.values())
+    # Same numbers as the Attendance tab (/api/attendance/summary/ and
+    # attendancePct() in hrms-employee-tabs.js), so the header and the tab
+    # always agree: approved leave counts as a day not attended.
+    from .services.attendance_service import AttendanceService
+    sm = AttendanceService.get_attendance_summary(email, since, today)
+    denom = sm['present'] + sm['late'] + sm['absent'] + sm['half_day'] + sm.get('leave', 0)
     pct = None
     if denom:
-        got = counts['present'] + counts['late'] + 0.5 * counts['half-day']
+        got = sm['present'] + sm['late'] + 0.5 * sm['half_day']
         pct = int(round(got / denom * 100))
 
     stages = EmployeeTask.objects.filter(assignee_email=email).values_list('stage', flat=True)
@@ -2993,18 +3048,34 @@ def employee_profile(request, key):
     })
 
 
-@api_view(['GET', 'PATCH'])
+@api_view(['GET', 'PATCH', 'DELETE'])
 def employee_detail(request, key):
     """Read or partially update one employee's HRIS profile.
 
     PATCH accepts the camelCase keys of ``UserProfileSerializer``. Personal
     details may be changed by the employee themselves or anyone with
     employee.edit; employment details need employee.edit. Unlike the Settings
-    profile PUT, fields that are not sent are left untouched.
+    profile PUT, fields that are not sent are left untouched. DELETE removes
+    only the HRIS directory entry; the profile and employee account remain.
     """
     user, profile, email = _resolve_employee(key)
     if not email or (user is None and profile is None):
         return err('Employee not found', 404)
+
+    if request.method == 'DELETE':
+        allowed, caller_email, caller = check_perm(request, 'employee.delete')
+        if not caller_email or not caller:
+            return err('Authentication required. Please sign in again.', 401)
+        if not allowed:
+            return err('Permission denied: employee.delete', 403)
+        if profile is None:
+            return err('Employee profile not found', 404)
+        directory_entry = EmployeeDirectoryEntry.objects.filter(profile=profile).first()
+        if directory_entry is None:
+            return err('HRIS directory row not found', 404)
+        directory_entry.delete()
+        return Response({'ok': True, 'email': email})
+
     denied, _caller, is_self, has = _profile_gate(request, email)
     if denied:
         return denied
@@ -3606,6 +3677,15 @@ LOCATION_PRECISE_M = 500
 #: started counts as "somewhere else".
 LOCATION_DRIFT_RADIUS_M = 300
 LOCATION_AWAY_TITLE = 'Location check: you appear to be elsewhere'
+#: Indoor GPS wanders 50-150 m between rooms of the same house. For deciding
+#: whether a WFH employee LEFT home, the home fence counts as at least this
+#: wide (check-in verification still uses the fence's own radius).
+HOME_DRIFT_TOLERANCE_M = 200
+#: One precise "away" reading is only a suspicion; a second one, taken at
+#: least this long after it, confirms it. Any reading at the expected place
+#: in between clears the suspicion.
+AWAY_CONFIRM_AFTER_S = 4 * 60
+AWAY_RECHECK_MS = 5 * 60 * 1000
 
 
 def _fmt_dist(m):
@@ -3629,9 +3709,20 @@ def _where_vs_session(att, lat, lng, accuracy):
     out = {'state': 'uncertain', 'distance': None, 'place': ''}
     if lat is None or lng is None or accuracy is None or accuracy > LOCATION_PRECISE_M:
         return out
-    if att.is_wfh and home_fence_for(att.email):
-        fences = [home_fence_for(att.email)]
-    elif not _session_is_offsite(att):
+    home = home_fence_for(att.email) if att.is_wfh else None
+    if home is not None:
+        # Home: the fence counts as at least HOME_DRIFT_TOLERANCE_M wide, so
+        # moving between rooms (or indoor GPS wobble) never reads as leaving.
+        dist = _haversine_distance(lat, lng, home.latitude, home.longitude)
+        tol = max(float(home.radius_meters or 0), HOME_DRIFT_TOLERANCE_M)
+        out['place'] = home.name or 'home'
+        out['distance'] = round(dist)
+        if dist <= tol + min(accuracy, GEO_ACCURACY_ALLOWANCE_CAP_M):
+            out['state'] = 'ok'
+        elif dist - tol > accuracy:
+            out['state'] = 'away'
+        return out
+    if not _session_is_offsite(att):
         fences = None                                   # the office fences
     else:
         fences = []
@@ -3683,6 +3774,23 @@ def _open_attendance_session(email, today):
         return None
     shift = Shift.objects.filter(pk=previous.shift_id, is_night_shift=True).first()
     return previous if shift else None
+
+
+def _any_open_session(email, now):
+    """The employee's most recent still-running session (check-in set, no
+    check-out), even one opened on a previous day. Used where finding the
+    live session matters more than the strict night-shift rule — notably
+    the hourly location punch, which must keep capturing past midnight for
+    anyone still checked in (working late), not only night-shift workers.
+    Bounded to the last 20h so a forgotten, days-old open row is ignored.
+    """
+    cutoff = now - timedelta(hours=20)
+    for att in (EmployeeAttendance.objects
+                .filter(email=email, check_in__isnull=False, check_in__gte=cutoff)
+                .order_by('-check_in')[:3]):
+        if _is_checked_in(att):
+            return att
+    return None
 
 
 @api_view(['POST'])
@@ -4019,6 +4127,13 @@ def attendance_check_in(request):
             obj.late_minutes = 0          # provisional until the shift's own check-in
             obj.status = 'present'
 
+    # A successful check-in is never "absent": that status is reserved for a
+    # day with no check-in at all. Clear a stale 'absent' the late sweep may
+    # have pre-stamped (notably on a flexible shift, whose status is only set
+    # when the row is first created).
+    if obj.status == 'absent' or not obj.status:
+        obj.status = 'present'
+
     # Start a new session
     obj.check_in = now
     obj.save()
@@ -4092,11 +4207,23 @@ def attendance_check_out(request):
 
     # Automatic close on leaving the office: only for a session that started
     # at the office. An approved off-site / WFH day has no office to leave.
-    is_auto = str(body.get('auto') or '').lower() in ('1', 'true', 'yes', 'geofence', 'geofence_departure')
+    is_auto = str(body.get('auto') or '').lower() in ('geofence', 'geofence_departure')
     if is_auto and _session_is_offsite(obj):
         return Response({'message': 'This session did not start at the office, so it is not '
                                     'closed automatically when you are away from it.',
                          'code': 'NOT_AN_OFFICE_SESSION', 'checkedIn': True}, status=409)
+    outside_mins = None
+    if is_auto:
+        # The browser's word is not enough: a throttled or sleeping tab, a
+        # network reconnect or a second tab can all think time passed. Only the
+        # server's own record of an unbroken outside run counts.
+        pol = _departure_policy_values()
+        outside_mins = _outside_run_minutes(obj, now)
+        need = max(int(pol.get('timeout_minutes') or 15) - 1, 1)
+        if not pol.get('enabled', True) or outside_mins is None or outside_mins < need:
+            return Response({'message': 'Not checked out: you have not been outside the office long enough.',
+                             'code': 'AUTO_CHECKOUT_UNCONFIRMED', 'checkedIn': True,
+                             'outsideMinutes': outside_mins}, status=409)
 
     # GPS check for event
     lat = body.get('latitude')
@@ -4118,6 +4245,8 @@ def attendance_check_out(request):
         else:
             loc_desc = 'Office'
 
+    from .timesheets import audit_snapshot as _ts_snap, log_attendance_change as _ts_log
+    _ts_before = _ts_snap(obj) if is_auto else None   # audit trail (never raises)
     # Close session
     if _is_checked_in(obj):
         session = max(int((now - obj.check_in).total_seconds() // 60), 0)
@@ -4147,9 +4276,10 @@ def attendance_check_out(request):
     # The browser can close a session when the employee leaves the geofence.
     # Stamping it keeps an auto-closed day distinguishable from one the person
     # ended themselves, which matters if they dispute the hours.
+    obj.outside_since = obj.outside_last_at = None
     if is_auto:
         obj.auto_checkout_at = now
-        mins = body.get('outside_minutes') or 15
+        mins = outside_mins
         try:
             away_m = float(body.get('distance')) if body.get('distance') is not None else None
         except (TypeError, ValueError):
@@ -4185,7 +4315,15 @@ def attendance_check_out(request):
         else:
             obj.overtime_minutes = 0
 
+    # A day the employee checked in is never 'absent' once closed: keep 'late'
+    # if they arrived late, otherwise 'present'. (Absent stays reserved for a
+    # day with no check-in at all.)
+    if obj.check_in and obj.status in ('', 'absent', None):
+        obj.status = 'late' if (obj.late_minutes or 0) > 0 else 'present'
+
     obj.save()
+    if is_auto:
+        _ts_log(obj, _ts_before, 'auto_checkout', 'system', obj.note or 'Left the office geofence')
 
     evt_name = 'auto-checkout-departure' if str(body.get('auto') or '').lower() in ('geofence', 'geofence_departure') else 'check-out'
     AttendanceEvent.objects.create(
@@ -4208,7 +4346,7 @@ def attendance_check_out(request):
         '/employees/attendance',
     )
     if is_auto:
-        _tell_hr_auto_checkout(obj, now, body.get('outside_minutes') or 15, where_txt)
+        _tell_hr_auto_checkout(obj, now, outside_mins, where_txt)
     _maybe_send_long_day_alert(obj, shift)
     return Response(EmployeeAttendanceSerializer(obj).data)
 
@@ -4320,6 +4458,8 @@ def attendance_geofence_check(request):
                 and (distance - (nearest.radius_meters or 0)) < accuracy)
         )
     )
+    if att is not None and not wfh:
+        _note_outside(att, now, 'inside' if inside else ('uncertain' if uncertain else 'outside'))
     if att is not None and not wfh and not inside and not uncertain:
         # Tell the employee through the bell (sound / desktop pop-up too), not
         # only a banner they may never see — at most once per 30 minutes.
@@ -4437,6 +4577,10 @@ def attendance_today(request):
     else:
         data = dict(EmployeeAttendanceSerializer(obj).data)
     data.update(_live_clock_extras(email, obj.date if obj else today, obj))
+    # Defensive: a row that has a check-in must never read 'absent' on the
+    # widget, even if an older late-sweep left that status on it.
+    if obj is not None and obj.check_in and data.get('status') == 'absent':
+        data['status'] = 'late' if (obj.late_minutes or 0) > 0 else 'present'
     if obj is not None and obj.date != today:
         data['overnight'] = True          # a night shift that started yesterday
     return Response(data)
@@ -4472,11 +4616,21 @@ def _live_clock_extras(email, day, obj):
             on_break, since = False, None
     if obj is not None and obj.check_out:
         on_break, since = False, None
+    # Whether a break is OPEN comes from the event trail above, never from a
+    # break row: a stale/stuck 'active' Break row (left by earlier testing)
+    # must not freeze the live Working counter. The break id is surfaced only
+    # to let the client end the break the trail already reports as open.
+    active_break = None
+    if on_break:
+        from .models import Break
+        active_break = (Break.objects.filter(email=email, status='active')
+                        .order_by('-break_start').first())
     open_session = obj is not None and _is_checked_in(obj)
     return {
         'overtimeAfterMinutes': threshold,
         'onBreak': on_break,
         'breakStartedAt': since.strftime('%Y-%m-%d %H:%M:%S') if since else None,
+        'breakId': active_break.id if active_break is not None else None,
         # The live Working tile = earlier sessions + the running one.
         'priorWorkedMinutes': _prior_worked(obj) if open_session else 0,
         'breaksBeforeSessionMinutes': _break_minutes_before(obj, obj.check_in) if open_session else 0,
@@ -4504,6 +4658,8 @@ def attendance_detail(request, pk):
                        f'time is calculated from the check-in and check-out times.',
             'code': 'SESSION_OPEN'}, status=409)
     before = (obj.check_in, obj.check_out, obj.break_minutes, obj.worked_minutes)
+    from .timesheets import audit_snapshot as _ts_snap, log_attendance_change as _ts_log
+    _ts_before = _ts_snap(obj)   # audit trail (never raises)
     serializer = EmployeeAttendanceSerializer(obj, data=data, partial=True)
     if not serializer.is_valid():
         return serializer_err(serializer)
@@ -4531,6 +4687,7 @@ def attendance_detail(request, pk):
         email=obj.email, employee_name=obj.employee_name, date=obj.date, event='hr-edit',
         location=(f'{actor or "HR"}: worked {_fmt_dur(before[3] or 0)} → {_fmt_dur(obj.worked_minutes or 0)}')[:120],
         at=local_now())
+    _ts_log(obj, _ts_before, 'edit', actor or '', str(data.get('reason') or data.get('auditReason') or ''))
     return Response(EmployeeAttendanceSerializer(obj).data)
 
 
@@ -4722,7 +4879,7 @@ def remote_switch_check(email, day=None):
 
 #: A house plus an indoor GPS fix. Tighter than this and people get flagged at
 #: their own kitchen table; looser and "home" starts covering the next street.
-HOME_FENCE_DEFAULT_RADIUS_M = 150
+HOME_FENCE_DEFAULT_RADIUS_M = 200   # indoor GPS drifts between rooms
 
 #: Past this the captured fix is too vague to be worth confirming — accepting it
 #: would register a "home" the size of a district and verify nothing.
@@ -5194,16 +5351,20 @@ def attendance_events(request):
             acc = None
         if event == 'remote-switch':
             home = home_fence_for(email)
-            if home is None:
-                return Response({'message': _home_missing_help(email).split(' For today')[0]
-                                 + ' Remote work can only start from an approved home location.',
-                                 'code': 'HOME_NOT_APPROVED', 'homeLocationStatus': _home_status_label(email)},
-                                status=403)
-            ok, fence_obj, _n, dist = _locate_against_fences(lat, lng, acc, fences=[home])
-            if not ok:
-                return Response({'message': f'You appear to be about {round(dist or 0)} m from your approved '
-                                            f'home location, so you cannot switch to remote here.',
-                                 'code': 'OUTSIDE_HOME_FENCE', 'distance': round(dist) if dist else None}, status=403)
+            if home is not None:
+                ok, fence_obj, _n, dist = _locate_against_fences(lat, lng, acc, fences=[home])
+                if not ok:
+                    return Response({'message': f'You appear to be about {round(dist or 0)} m from your approved '
+                                                f'home location, so you cannot switch to remote here.',
+                                     'code': 'OUTSIDE_HOME_FENCE', 'distance': round(dist) if dist else None}, status=403)
+                switch_ok = fence_obj
+            else:
+                # No approved home on file: still allow the switch to remote and
+                # record where the employee actually is as this remote session's
+                # basis. Punches are then measured as drift from here (see
+                # _session_is_offsite / _where_vs_session), not against the
+                # office, so remote punches work without a pre-registered home.
+                switch_ok = True
         else:
             if not _geofencing_enabled():
                 return Response({'message': 'No office location has been set up yet, so a switch to the '
@@ -5215,7 +5376,7 @@ def attendance_events(request):
                                             f'{nearest.name if nearest else "the office"}, so you cannot switch '
                                             f'to the office here.',
                                  'code': 'OUTSIDE_OFFICE_FENCE', 'distance': round(dist) if dist else None}, status=403)
-        switch_ok = fence_obj
+            switch_ok = fence_obj
     elif lat is not None and lng is not None:
         _, fence_obj = _check_geofence(lat, lng)
 
@@ -5345,10 +5506,16 @@ def _personal_status(att):
 def _team_status(event, att):
     """Live status label + 'since' datetime for the Team Status panel. An
     explicit presence choice (STATUS picker / break) wins; otherwise we fall
-    back to the location implied by the latest activity event. Checked-out or
-    no-show employees are Absent."""
-    if att is None or not _is_checked_in(att):
-        return 'Absent', None
+    back to the location implied by the latest activity event. An approved
+    WFH / remote day reads Remote whatever the check-in event said, unless the
+    person has since switched back to the office. Checked-out or no-show
+    employees are Absent."""
+    if att is None or not att.check_in:
+        return 'Offline', None          # not checked in today (live panel shows Offline, not Absent)
+    if not _is_checked_in(att):
+        # Checked in earlier and has since checked out: they worked today, so
+        # they are not 'Absent' — they are done for the day, shown as Offline.
+        return 'Offline', (att.check_out or att.presence_at or att.check_in)
     if att.presence:
         # A break-type status (Away / Coffee break / …) shows as "In Break";
         # every other choice shows its own label verbatim.
@@ -5357,15 +5524,19 @@ def _team_status(event, att):
         return att.presence, (att.presence_at or att.check_in)
     if event is not None:
         e = event.event
-        if e in ('check-in', 'office-switch', 'break-end'):
-            loc = (event.location or '').lower()
-            remote = 'home' in loc or 'remote' in loc
-            return ('Remote' if remote else 'In Office'), event.at
         if e == 'remote-switch':
             return 'Remote', event.at
+        if e == 'office-switch':
+            return 'In Office', event.at
         if e == 'break-start':
             return IN_BREAK_LABEL, event.at
-    return ('Remote' if att.device == 'mobile' else 'In Office'), att.check_in
+        if e in ('check-in', 'break-end'):
+            loc = (event.location or '').lower()
+            # An approved WFH / remote day is Remote regardless of where the
+            # check-in event happened to be logged.
+            remote = bool(att.is_wfh) or 'home' in loc or 'remote' in loc
+            return ('Remote' if remote else 'In Office'), event.at
+    return ('Remote' if (att.is_wfh or att.device == 'mobile') else 'In Office'), att.check_in
 
 
 @api_view(['GET'])
@@ -5407,7 +5578,7 @@ def attendance_team(request):
             att = today_att.get(email)
             roster.append((email, event_name.get(email) or (att.employee_name if att else '')))
 
-    priority = {'In Office': 0, 'Remote': 1, 'In Break': 2, 'Absent': 3}
+    priority = {'In Office': 0, 'Remote': 1, 'In Break': 2, 'Offline': 3, 'Absent': 4}
     rows = []
     for email, name in roster:
         att = today_att.get(email)
@@ -5714,18 +5885,34 @@ def attendance_remind(request):
     if not emails_to_remind:
         return err('Employee email is required')
 
+    today_date = local_now().date()
     today_str = local_now().strftime('%A, %b %d')
     sent_count = 0
 
     for email, name in emails_to_remind:
         display_name = name or email.split('@')[0]
+        shift = _get_active_shift(email, today_date)
+        shift_detail = ''
+        if shift and not shift.is_flexible:
+            st = shift.start_time
+            et = shift.end_time
+            if isinstance(st, str):
+                st = datetime.strptime(st, '%H:%M:%S' if len(st) > 5 else '%H:%M').time()
+            if isinstance(et, str):
+                et = datetime.strptime(et, '%H:%M:%S' if len(et) > 5 else '%H:%M').time()
+            s_str = st.strftime('%I:%M %p').lstrip('0')
+            e_str = et.strftime('%I:%M %p').lstrip('0')
+            shift_detail = f" for your assigned shift ({shift.name}: {s_str} – {e_str})"
+        elif shift:
+            shift_detail = f" for your assigned shift ({shift.name})"
+
         # 1. In-app Notification for employee
         create_notification(
             recipient=email,
             title='⏰ Attendance Check-in Reminder',
-            message=f"Hi {display_name}, you have not logged attendance for today ({today_str}). Please check in or submit a WFH / leave request.",
+            message=f"Hi {display_name}, you have not logged attendance for today ({today_str}){shift_detail}. Please check in or submit a WFH / leave request.",
             notification_type='warning',
-            link='/employees/check-in',
+            link='/employees/checkin',
         )
         # 2. External broadcast if available
         try:
@@ -5733,9 +5920,9 @@ def attendance_remind(request):
             NotificationService.send_notification(
                 recipient_email=email,
                 title='⏰ Attendance Check-in Reminder',
-                message=f"Reminder: You have not logged attendance for today ({today_str}). Please open HRMS to check in.",
+                message=f"Reminder: You have not logged attendance for today ({today_str}){shift_detail}. Please open HRMS to check in.",
                 notification_type='warning',
-                link='/employees/check-in',
+                link='/employees/checkin',
             )
         except Exception:
             pass
@@ -6077,6 +6264,104 @@ def _fmt_dur(minutes):
     return f'{h}h {m}m' if h else f'{m}m'
 
 
+def _checkin_reminders(email, now=None):
+    """Notify employee to check in based on their assigned shift and work date.
+
+    Individual users receive:
+    - Shift Starting Soon: 15 minutes before shift start until grace period ends.
+    - Check-in Overdue Reminder: after grace period ends while shift is still active.
+    - Flexible shift reminder: gentle reminder on the work date if not yet checked in.
+
+    Excludes employees who:
+    - are inactive or deactivated
+    - have already checked in for this work date
+    - are on approved leave for this work date
+    """
+    now = now or local_now()
+    user = AppUser.objects.filter(email__iexact=email).first()
+    if not user or (user.status and user.status.lower() != 'active'):
+        return
+
+    work_date = _work_date_for(email, now)
+
+    # Already checked in for this work date?
+    if EmployeeAttendance.objects.filter(email=email, date=work_date, check_in__isnull=False).exists():
+        return
+
+    # On approved leave for this work date?
+    if LeaveRequest.objects.filter(
+        email=email, status__iexact='approved',
+        from_date__lte=work_date, to_date__gte=work_date
+    ).exists():
+        return
+
+    shift = _get_active_shift(email, work_date)
+    if not shift:
+        return
+
+    if shift.is_flexible:
+        # Flexible shift: gentle reminder on the work date if it's 11:00 AM or later
+        if now.date() == work_date and now.hour >= 11:
+            tag = f'/employees/checkin?checkin-flex={work_date.isoformat()}'
+            if not Notification.objects.filter(recipient=email, link=tag).exists():
+                flex_h = shift.flex_hours_per_day or 8
+                create_notification(
+                    email,
+                    f'🔔 Flexible Shift Reminder: {shift.name}',
+                    f'You are assigned to {shift.name} ({flex_h}h/day). Remember to log your check-in when you begin work today.',
+                    'info',
+                    tag
+                )
+        return
+
+    st = shift.start_time
+    et = shift.end_time
+    if isinstance(st, str):
+        st = datetime.strptime(st, '%H:%M:%S' if len(st) > 5 else '%H:%M').time()
+    if isinstance(et, str):
+        et = datetime.strptime(et, '%H:%M:%S' if len(et) > 5 else '%H:%M').time()
+
+    start_dt = datetime.combine(work_date, st)
+    grace_minutes = shift.grace_minutes or 0
+    grace_dt = start_dt + timedelta(minutes=grace_minutes)
+    end_dt = _shift_end_dt(shift, work_date)
+    if end_dt <= start_dt:
+        end_dt += timedelta(days=1)
+
+    # Only remind during the shift window: from 15m prior to shift end
+    upcoming_start = start_dt - timedelta(minutes=15)
+    if now < upcoming_start or now > end_dt:
+        return
+
+    starts_fmt = start_dt.strftime('%I:%M %p').lstrip('0')
+    ends_fmt = end_dt.strftime('%I:%M %p').lstrip('0')
+    if end_dt.date() != start_dt.date():
+        ends_fmt += end_dt.strftime(' (%d %b)')
+
+    if now < grace_dt:
+        upcoming_tag = f'/employees/checkin?checkin-upcoming={work_date.isoformat()}'
+        if not Notification.objects.filter(recipient=email, link=upcoming_tag).exists():
+            create_notification(
+                email,
+                f'🔔 Shift Starting Soon: {shift.name}',
+                f'Your shift ({shift.name}) is scheduled from {starts_fmt} to {ends_fmt}. Please remember to check in on time.',
+                'info',
+                upcoming_tag
+            )
+    else:
+        overdue_tag = f'/employees/checkin?checkin-overdue={work_date.isoformat()}'
+        if not Notification.objects.filter(recipient=email, link=overdue_tag).exists():
+            grace_fmt = grace_dt.strftime('%I:%M %p').lstrip('0')
+            create_notification(
+                email,
+                '⏰ Attendance Check-in Reminder',
+                f'Your assigned shift ({shift.name}) started at {starts_fmt} (grace period ended at {grace_fmt}). '
+                f'You have not checked in yet. Please log your check-in as soon as possible.',
+                'warning',
+                overdue_tag
+            )
+
+
 def _checkout_reminders(email, now=None):
     now = now or local_now()
     rows = (EmployeeAttendance.objects
@@ -6090,6 +6375,23 @@ def _checkout_reminders(email, now=None):
             or _get_active_shift(email, row.date)
         end = _expected_end(row, shift)
         due = end + CHECKOUT_REMINDER_AFTER
+
+        # 1. Shift ended reminder right after shift end (end <= now < due)
+        if current is not None and current.pk == row.pk:
+            if end <= now < due:
+                ended_tag = f'/employees/checkin?checkout-ended={row.pk}'
+                if not Notification.objects.filter(recipient=email, link=ended_tag).exists():
+                    ends = end.strftime('%I:%M %p').lstrip('0')
+                    if end.date() != now.date():
+                        ends += end.strftime(' on %d %b')
+                    create_notification(
+                        email,
+                        f'🔔 Shift Ended: {shift.name}',
+                        f'Your assigned shift ({shift.name}) ended at {ends}. If you have wrapped up your work, please remember to check out.',
+                        'info',
+                        ended_tag
+                    )
+
         if now < due:
             continue
         tag = f'/employees/checkin?checkout-reminder={row.pk}'
@@ -6125,9 +6427,10 @@ def notifications(request):
     if not email:
         return Response([])
     try:
+        _checkin_reminders(email)
         _checkout_reminders(email)
     except Exception:
-        logger.exception('check-out reminders failed for %s', email)
+        logger.exception('attendance reminders failed for %s', email)
     qs = Notification.objects.filter(recipient=email)
     unread_only = str(request.GET.get('unreadOnly') or request.GET.get('unread') or '').strip().lower()
     if unread_only in {'1', 'true', 'yes', 'on'}:
@@ -6454,6 +6757,15 @@ def submissions(request):
         status_filter = request.GET.get('status')
         if status_filter:
             qs = qs.filter(status=status_filter)
+        # The queue only needs to know WHETHER a file exists, so the two
+        # base64 attachment columns are not selected (they were being shipped
+        # from MySQL for every row on every load); the has_file /
+        # has_review_file flags answer that. The team, collaborators and
+        # comment count come with the list instead of three queries per row.
+        qs = (qs.defer('file_data', 'review_file_data')
+                .annotate(comment_count=Count('comments', distinct=True))
+                .select_related('team')
+                .prefetch_related('collaborators'))
         return Response(WorkSubmissionSerializer(qs, many=True).data)
 
     body = dict(request.data or {})
@@ -6739,19 +7051,27 @@ _BENCH_SALES_FILE_DATA_COLS = {
 }
 
 
+def _bench_sales_flag_col(data_col):
+    """'resume_file_data' -> 'resume_has_file'."""
+    return data_col[:-len('_file_data')] + '_has_file'
+
+
 def _bench_sales_profile_qs():
     """Profiles WITHOUT their base64 document columns loaded.
 
     A 34 MB PDF is ~45 MB of base64 per column, so selecting the blobs just to
     list the roster (or to re-save an unchanged row on edit) would move hundreds
     of MB per request and blow past MySQL's max_allowed_packet. The columns are
-    deferred; a LENGTH() annotation per column lets the serializer report
-    has-file flags without touching the data."""
-    from django.db.models.functions import Length
+    deferred, and the has-file flags come from the small *_has_file columns.
+    (They used to come from a LENGTH() of each blob, but MySQL has to read the
+    whole file to answer that: 40 consultants took over two seconds to list.)"""
     cols = list(_BENCH_SALES_FILE_DATA_COLS.values())
-    return BenchSalesProfile.objects.defer(*cols).annotate(
-        **{f'{col}_len': Length(col) for col in cols}
-    )
+    # prefetch: every profile's certificate names in ONE query (names only,
+    # never the file bodies) instead of one query per profile in the roster.
+    return BenchSalesProfile.objects.defer(*cols).prefetch_related(Prefetch(
+        'certificate_files',
+        queryset=BenchSalesCertificate.objects.only('id', 'file_name', 'kind', 'profile_id'),
+    ))
 
 
 def _pop_bench_sales_file_data(body):
@@ -6773,7 +7093,8 @@ def _store_bench_sales_file_data(pk, files):
     single multi-column write of two 34 MB files (~91 MB) drops the connection
     with 'MySQL server has gone away'."""
     for col, data in files.items():
-        BenchSalesProfile.objects.filter(pk=pk).update(**{col: data})
+        BenchSalesProfile.objects.filter(pk=pk).update(
+            **{col: data, _bench_sales_flag_col(col): bool(data)})
 
 
 BENCH_SALES_DOC_MIMES = {
@@ -6995,7 +7316,8 @@ def bench_sales_profile_file(request, pk, field):
     if request.method == 'DELETE':
         if not BenchSalesProfile.objects.filter(pk=pk).exists():
             return err('Profile not found', 404)
-        BenchSalesProfile.objects.filter(pk=pk).update(**{c: '' for c in cols})
+        BenchSalesProfile.objects.filter(pk=pk).update(
+            **{c: '' for c in cols}, **{_bench_sales_flag_col(cols[2]): False})
         return Response(BenchSalesProfileSerializer(_bench_sales_profile_qs().get(pk=pk)).data)
     # only() the requested document: never drag the other two blobs along.
     obj = BenchSalesProfile.objects.only(*cols).filter(pk=pk).first()
@@ -7469,6 +7791,126 @@ def directory_search(request):
 # record, the payroll figure and the employee directory. It now needs
 # dashboard.view — the same permission the UI already uses to decide who may
 # open the Dashboard route at all.
+USA_RECRUITER_ROLE = 'Recruiter (USA)'
+INDIA_RECRUITER_ROLE = 'Recruiter (India)'
+USA_PAY_FREQUENCY = 'Monthly'   # Weekly | Biweekly | Semimonthly | Monthly
+
+
+def _usa_when(at, today):
+    """'Today at 09:02 AM' / 'Yesterday at ...' / '03/14/2026 at ...' (US date order)."""
+    if not at:
+        return 'Today'
+    clock = at.strftime('%I:%M %p')
+    if at.date() == today:
+        return f'Today at {clock}'
+    if at.date() == today - timedelta(days=1):
+        return f'Yesterday at {clock}'
+    return f"{at.strftime('%m/%d/%Y')} at {clock}"
+
+
+def _region_scope_emails(role_name):
+    """People a regional recruiter's dashboard counts (Recruiter (USA) or (India)).
+
+    The shared tables (attendance, leave, submissions, payroll ...) have no
+    region column, so each regional dashboard counts only the recruiter accounts
+    of its own role that have actually done something. India and USA never see
+    each other's data, and a fresh team starts at zero everywhere.
+    """
+    usa = list(AppUser.objects.filter(role_ref__name=role_name).values_list('email', flat=True))
+    if not usa:
+        return []
+    seen = set()
+    for model in (EmployeeAttendance, LeaveRequest, WfhRequest, WorkSubmission,
+                  AttendanceCorrection, EmployeeCompensation, AttendanceEvent):
+        try:
+            seen.update(model.objects.filter(email__in=usa).values_list('email', flat=True).distinct())
+        except Exception:
+            pass
+    return [e for e in usa if e in seen]
+
+
+def _usa_dashboard_extras(email, today, now, payroll_value, on_pto_count, remote_count, scope=None):
+    """Figures the USA recruiter dashboard shows beyond the shared payload.
+
+    Clocked-in / not-yet-clocked-in / absent are judged against each person's
+    own shift: someone whose shift has not ended is "not yet clocked in", never
+    "absent". Time zone is the business clock (one company zone today).
+    """
+    active_qs = AppUser.objects.filter(status='active')
+    if scope is not None:
+        active_qs = active_qs.filter(email__in=scope)
+    active = list(active_qs.values_list('email', flat=True))
+    rows = {r.email: r for r in EmployeeAttendance.objects.filter(date=today)}
+    pto = set(LeaveRequest.objects.filter(
+        status='Approved', from_date__lte=today, to_date__gte=today).values_list('email', flat=True))
+    shifts = {}
+    for sa in ShiftAssignment.objects.filter(effective_from__lte=today).filter(
+            Q(effective_to__isnull=True) | Q(effective_to__gte=today)).select_related('shift'):
+        shifts.setdefault(sa.email, sa.shift)
+    default_end = time(18, 0)
+
+    clocked_in = clocked_out = not_yet = absent = on_pto = 0
+    for em in active:
+        row = rows.get(em)
+        if row and row.check_in:
+            clocked_in += 1
+            if row.check_out:
+                clocked_out += 1
+        elif em in pto:
+            on_pto += 1
+        else:
+            sh = shifts.get(em)
+            end = sh.end_time if sh else default_end
+            night = bool(sh and sh.is_night_shift)
+            if not night and now.time() >= end:
+                absent += 1
+            else:
+                not_yet += 1
+
+    feed = []
+
+    def add(at, name, text, kind, loc=''):
+        name = name or 'Employee'
+        if at:
+            feed.append({'at': at, 'initial': name[:1].upper(), 'kind': kind,
+                         'title': f'{name} \u2013 {text}', 'loc': loc})
+
+    def _sc(qs):
+        return qs if scope is None else qs.filter(email__in=scope)
+
+    for ev in _sc(AttendanceEvent.objects).order_by('-at')[:8]:
+        low = (ev.event or '').lower()
+        text = ('Clock In' if 'check-in' in low else
+                'Clock Out' if 'check-out' in low else (ev.event or '').title().replace('-', ' '))
+        name = ev.employee_name or (ev.email.split('@')[0] if ev.email else '')
+        add(ev.at, name, text, 'in' if 'check-in' in low else 'out', ev.location or '')
+    for lr in _sc(LeaveRequest.objects).filter(status='Approved').order_by('-updated_at')[:4]:
+        add(lr.updated_at, lr.employee_name, 'PTO Approved', 'pto')
+    for u in _sc(AppUser.objects).order_by('-created_at')[:4]:
+        add(u.created_at, u.full_name, 'New Employee Joined', 'join')
+    for ws in _sc(WorkSubmission.objects).order_by('-created_at')[:4]:
+        add(ws.created_at, ws.employee_name, 'Timesheet Submitted', 'sheet')
+    for wr in _sc(WfhRequest.objects).order_by('-created_at')[:4]:
+        add(wr.created_at, wr.employee_name, 'Remote Work Request Submitted', 'remote')
+    feed.sort(key=lambda f: f['at'], reverse=True)
+    highlights = [{
+        'initial': f['initial'], 'kind': f['kind'], 'title': f['title'],
+        'sub': _usa_when(f['at'], today) + (f" ({f['loc']})" if f['loc'] else ''),
+    } for f in feed[:6]]
+
+    return {
+        'email': email,
+        'payrollValue': float(payroll_value or 0),
+        'payFrequency': USA_PAY_FREQUENCY,
+        'attendance': {
+            'total': len(active), 'clockedIn': clocked_in, 'clockedOut': clocked_out,
+            'notYetClockedIn': not_yet, 'onPto': on_pto, 'absent': absent,
+            'remote': remote_count,
+        },
+        'highlights': highlights,
+    }
+
+
 @api_view(['GET'])
 @require_perm('dashboard.view')
 def dashboard_stats(request):
@@ -7512,15 +7954,16 @@ def dashboard_stats(request):
     try:
         latest_run = PayrollRun.objects.order_by('-period_start').first()
         if latest_run and latest_run.total_gross and latest_run.total_gross > 0:
-            monthly_payroll_fmt = format_money_short(latest_run.total_gross, cur)
+            payroll_value = latest_run.total_gross
         else:
             comp_sum = EmployeeCompensation.objects.filter(status='active').aggregate(s=Sum('base_amount'))['s']
             if comp_sum and comp_sum > 0:
-                monthly_payroll_fmt = format_money_short(comp_sum, cur)
+                payroll_value = comp_sum
             else:
-                monthly_payroll_fmt = format_money_short(max(active_users, 1) * 35000, cur)
+                payroll_value = max(active_users, 1) * 35000
     except Exception:
-        monthly_payroll_fmt = format_money_short(max(active_users, 1) * 35000, cur)
+        payroll_value = max(active_users, 1) * 35000
+    monthly_payroll_fmt = format_money_short(payroll_value, cur)
 
     # 5. Pending Actions (Real database counts)
     try:
@@ -7625,9 +8068,85 @@ def dashboard_stats(request):
     employee_directory = _directory_rows(
         AppUser.objects.select_related('role_ref').order_by('id')[:DIRECTORY_MAX])
 
+    # Recruiter (USA) / (India): count only that region's own records (see _region_scope_emails).
+    _pre_email, _pre_caller = _get_caller(request)
+    usa_scope = None
+    _region_role = (_pre_caller.role_ref.name if _pre_caller and _pre_caller.role_ref_id
+                    and _pre_caller.role_ref.name in (USA_RECRUITER_ROLE, INDIA_RECRUITER_ROLE) else None)
+    if _region_role:
+        S = _region_scope_emails(_region_role)
+        usa_scope = S
+        total_users = len(S)
+        active_users = AppUser.objects.filter(email__in=S, status='active').count()
+        new_this_month = AppUser.objects.filter(email__in=S, created_at__gte=first_of_month).count()
+        _att = EmployeeAttendance.objects.filter(date=today, email__in=S)
+        present_count = _att.filter(check_in__isnull=False).count()
+        wfh_count = _att.filter(is_wfh=True).count()
+        late_count = _att.filter(status='late').count()
+        on_leave_today = LeaveRequest.objects.filter(
+            email__in=S, status='Approved', from_date__lte=today, to_date__gte=today).count()
+        base_headcount = active_users
+        att_rate = round((present_count / base_headcount) * 100, 1) if base_headcount else 0.0
+        active_jobs_count = 0      # job posts carry no owner or region
+        total_openings = 0
+        payroll_value = EmployeeCompensation.objects.filter(
+            email__in=S, status='active').aggregate(s=Sum('base_amount'))['s'] or 0
+        monthly_payroll_fmt = format_money_short(payroll_value, cur)
+        pending_leaves = LeaveRequest.objects.filter(email__in=S, status='Pending').count()
+        pending_wfh = WfhRequest.objects.filter(email__in=S, status='Pending').count()
+        pending_corrections = AttendanceCorrection.objects.filter(email__in=S, status='Pending').count()
+        pending_submissions = WorkSubmission.objects.filter(email__in=S, status='Pending').count()
+        _pl = lambda n, w: f"{n} {w}{'s' if n != 1 else ''}"
+        pending_actions = [
+            {'label': _pl(pending_leaves, 'leave request'), 'color': 'blue', 'path': '/employees/leave', 'count': pending_leaves},
+            {'label': _pl(pending_wfh, 'WFH request'), 'color': 'purple', 'path': '/employees/attendance', 'count': pending_wfh},
+            {'label': _pl(pending_corrections, 'attendance correction'), 'color': 'orange', 'path': '/employees/attendance', 'count': pending_corrections},
+            {'label': _pl(pending_submissions, 'work deliverable'), 'color': 'green', 'path': '/employees/submissions', 'count': pending_submissions},
+            {'label': _pl(0, 'active job post'), 'color': 'cyan', 'path': '/recruit/job-board', 'count': 0},
+        ]
+        months_trend = []
+        for i in range(5, -1, -1):
+            m_date = today - timedelta(days=i * 30)
+            m_start = m_date.replace(day=1)
+            m_end = (m_date.replace(year=m_date.year + 1, month=1, day=1) if m_date.month == 12
+                     else m_date.replace(month=m_date.month + 1, day=1))
+            months_trend.append({
+                'month': m_date.strftime('%b'),
+                'hires': AppUser.objects.filter(email__in=S, created_at__gte=m_start, created_at__lt=m_end).count(),
+                'headcount': AppUser.objects.filter(email__in=S, created_at__lt=m_end).count(),
+            })
+        _dc = {}
+        for pr in UserProfile.objects.filter(email__in=S).exclude(department='').values('department').annotate(c=Count('email')):
+            _dc[pr['department'].strip()] = _dc.get(pr['department'].strip(), 0) + pr['c']
+        dept_list = [{'department': k, 'count': v} for k, v in sorted(_dc.items(), key=lambda x: -x[1]) if k]
+        highlights = []
+        for ev in AttendanceEvent.objects.filter(email__in=S).order_by('-at')[:6]:
+            _nm = ev.employee_name or (ev.email.split('@')[0] if ev.email else '')
+            _ci = 'check-in' in (ev.event or '').lower()
+            _t = 'Check In' if _ci else ('Check Out' if 'check-out' in (ev.event or '').lower() else (ev.event or '').title().replace('-', ' '))
+            highlights.append({
+                'initial': (_nm[:1] or 'U').upper(), 'isCheckIn': _ci,
+                'color': '#10b981' if _ci else '#f97316', 'dot': '#10b981',
+                'title': f"{_nm} — {_t}",
+                'sub': f"At {ev.at.strftime('%I:%M %p') if ev.at else 'Today'} {('(' + ev.location + ')') if ev.location else ''}".strip(),
+            })
+        employee_directory = _directory_rows(
+            AppUser.objects.filter(email__in=S).select_related('role_ref').order_by('id')[:DIRECTORY_MAX])
+
     company_obj = get_or_create_company_details()
 
-    return Response({
+    # Extra figures for the USA recruiter view only (see _usa_dashboard_extras).
+    # Every other caller gets exactly the payload they always did.
+    usa_extras = None
+    _caller_email, _caller = _get_caller(request)
+    india_view = None
+    if _caller and _caller.role_ref_id and _caller.role_ref.name == USA_RECRUITER_ROLE:
+        usa_extras = _usa_dashboard_extras(
+            _caller_email, today, now, payroll_value, on_leave_today, wfh_count, scope=usa_scope)
+    elif _caller and _caller.role_ref_id and _caller.role_ref.name == INDIA_RECRUITER_ROLE:
+        india_view = {'email': _caller_email}
+
+    payload = Response({
         'company': CompanyDetailSerializer(company_obj).data,
         'totalEmployees': total_users,
         'activeEmployees': active_users,
@@ -7654,6 +8173,11 @@ def dashboard_stats(request):
         'employeesTruncated': total_users > DIRECTORY_MAX,
         'serverTime': now.strftime('%I:%M:%S %p')
     })
+    if usa_extras is not None:
+        payload.data['usa'] = usa_extras
+    if india_view is not None:
+        payload.data['india'] = india_view
+    return payload
 
 
 @api_view(['GET'])
@@ -8674,6 +9198,9 @@ def shift_detail(request, pk):
     return Response(ShiftSerializer(obj).data)
 
 
+SHIFT_TIMEZONES = {'IST', 'ET', 'CT', 'MT', 'PT'}
+
+
 @api_view(['GET', 'POST'])
 @require_perm({'GET': 'employee.view', 'POST': 'settings.manage'})
 def shift_assignments(request):
@@ -8703,19 +9230,23 @@ def shift_assignments(request):
     eff_to = parse_date(body.get('effectiveTo') or body.get('effective_to'))
     if eff_to and eff_to < eff_from:
         return err('The end date is before the start date.')
+    timezone = (body.get('timezone') or 'IST').upper()
+    if timezone not in SHIFT_TIMEZONES:
+        return err(f'Unknown time zone "{timezone}".')
     later = ShiftAssignment.objects.filter(email=email, effective_from__gt=eff_from).order_by('effective_from').first()
     if later and (eff_to is None or eff_to >= later.effective_from):
         return err(f'This employee already has a shift assignment starting {later.effective_from:%Y-%m-%d}. '
                    'End this one before then, or remove that one first.', 409)
     same_day = ShiftAssignment.objects.filter(email=email, effective_from=eff_from).first()
     if same_day:
-        same_day.shift, same_day.effective_to = shift, eff_to
+        same_day.shift, same_day.effective_to, same_day.timezone = shift, eff_to, timezone
         same_day.save()
         return Response(ShiftAssignmentSerializer(same_day).data)
     (ShiftAssignment.objects.filter(email=email, effective_from__lt=eff_from)
      .filter(Q(effective_to__isnull=True) | Q(effective_to__gte=eff_from))
      .update(effective_to=eff_from - timedelta(days=1)))
     row = ShiftAssignment.objects.create(email=email, shift=shift, effective_from=eff_from, effective_to=eff_to,
+                                         timezone=timezone,
                                          created_by=_resolve_recipient_email(request, 'system'))
     create_notification(email, 'Shift updated',
                         f'Your shift is "{shift.name}" from {eff_from:%d %b %Y}'
@@ -8921,6 +9452,8 @@ def attendance_correction_detail(request, pk):
                 date=inst.attendance_date
             )
             basis = _correction_basis(inst, att)      # before check_in/out change
+            from .timesheets import audit_snapshot as _ts_snap, log_attendance_change as _ts_log
+            _ts_before = None if created else _ts_snap(att)   # audit trail (never raises)
             if inst.requested_check_in:
                 att.check_in = inst.requested_check_in
             if inst.requested_check_out:
@@ -8955,6 +9488,7 @@ def attendance_correction_detail(request, pk):
                     else:
                         att.overtime_minutes = 0
             att.save()
+            _ts_log(att, _ts_before, 'correction', _who or '', inst.reason or '')
 
             create_notification(
                 obj.email,
@@ -10008,15 +10542,20 @@ def chat_meetings(request):
     # POST — schedule a meeting and announce it in the room timeline.
     body = request.data or {}
     creator = norm_email(body.get("created_by") or request.headers.get("X-Actor-Email") or "")
-    title = (body.get("title") or "").strip()
+    # "Meet now": starts immediately, no title or time to fill in.
+    instant = str(body.get("instant") or "").lower() in ("1", "true", "yes")
+    title = (body.get("title") or "").strip() or ("Instant meeting" if instant else "")
     if not title:
         return err("Meeting title is required")
-    if not body.get("scheduled_at"):
+    if instant and not body.get("scheduled_at"):
+        dt = _chat_now()
+    elif not body.get("scheduled_at"):
         return err("scheduled_at is required")
-    try:
-        dt = _parse_dt(body.get("scheduled_at"))
-    except Exception:
-        return err("Invalid scheduled_at")
+    else:
+        try:
+            dt = _parse_dt(body.get("scheduled_at"))
+        except Exception:
+            return err("Invalid scheduled_at")
 
     room = ChatRoom.objects.filter(id=body.get("room_id")).first() if body.get("room_id") else None
 
@@ -10057,7 +10596,10 @@ def chat_meetings(request):
 
     if room:
         when = dt.strftime("%b %d, %Y %I:%M %p")
-        text = f"\U0001F4C5 Meeting scheduled: “{title}” on {when}. Join: {join_url}"
+        if instant:
+            text = f"\U0001F3A5 {creator_name or creator} started a video meeting — join now: {join_url}"
+        else:
+            text = f"\U0001F4C5 Meeting scheduled: “{title}” on {when}. Join: {join_url}"
         msg = ChatMessage.objects.create(
             room=room,
             sender_email=creator,
@@ -10073,6 +10615,17 @@ def chat_meetings(request):
             "message": text,
             "created_at": _fmt_dt(now),
         })
+
+    if instant:
+        # Ring everyone else in the conversation (bell + sound + desktop pop-up).
+        link = f"/employees/chat?room={room.id}" if room else "/employees/chat"
+        for who in attendees:
+            if who and who != creator:
+                try:
+                    create_notification(who, f"{creator_name or creator} started a video meeting",
+                                        f"Join now: {join_url}", "info", link)
+                except Exception:
+                    logger.debug("instant meeting notify failed for %s", who, exc_info=True)
 
     return Response(ChatMeetingSerializer(meeting).data, status=201)
 
@@ -10517,6 +11070,8 @@ def attendance_punch_ticket_decide(request, pk):
         rec = EmployeeAttendance(email=c.email,
                                  employee_name=c.employee_name or c.email,
                                  date=c.attendance_date, status='present')
+    from .timesheets import audit_snapshot as _ts_snap, log_attendance_change as _ts_log
+    _ts_before = _ts_snap(rec)   # None for a new row; audit trail (never raises)
     if c.kind == 'forgot_checkin' or not rec.check_in:
         rec.check_in = datetime.combine(c.attendance_date, start_t)
         rec.late_minutes = 0
@@ -10531,6 +11086,7 @@ def attendance_punch_ticket_decide(request, pk):
     if not rec.shift_id and shift:
         rec.shift_id = shift.id
     rec.save()
+    _ts_log(rec, _ts_before, 'punch_ticket', caller or '', (c.reason or c.kind or '') + (f' — {note}' if note else ''))
 
     c.status = 'Approved'
     c.reviewer = caller
@@ -10585,6 +11141,11 @@ def _event_label(ev):
     return ev
 
 
+def _attendance_location_label(event, location, geo_fence_id):
+    from .serializers import attendance_location_label
+    return attendance_location_label(event, location, geo_fence_id)
+
+
 @api_view(['GET'])
 def attendance_day_detail(request):
     email = norm_email(request.query_params.get('email'))
@@ -10607,14 +11168,17 @@ def attendance_day_detail(request):
     rec = EmployeeAttendance.objects.filter(email=email, date=day).first()
     shift = _get_active_shift(email, day)
     check_in = rec.check_in if rec else None
-    check_out = rec.check_out if rec else None
+    # While the current session is still open (they checked in again after an
+    # earlier check-out), there is no check-out for it yet — show no checkout
+    # (the card reads '--') instead of the stale previous one.
+    check_out = rec.check_out if (rec and not _is_checked_in(rec)) else None
     gross, effective = _day_gross_effective(rec)
     name = (rec.employee_name if rec and rec.employee_name else '') or email.split('@')[0]
     events = AttendanceEvent.objects.filter(email=email, date=day).order_by('at')
     ev = [{
         'event': e.event, 'label': _event_label(e.event),
         'time': _fmt_ampm(e.at), 'at': dt(e.at),
-        'location': e.location or '',
+        'location': _attendance_location_label(e.event, e.location, e.geo_fence_id),
         'latitude': e.latitude, 'longitude': e.longitude,
     } for e in events]
     punches = AttendanceLocationPunch.objects.filter(email=email, date=day).order_by('captured_at')
@@ -10653,6 +11217,38 @@ def _tell_hr_auto_checkout(att, now, minutes, where_txt=''):
     mgr = org_views.approver_for(att.email)
     if mgr and not Notification.objects.filter(recipient=mgr, link=link).exists():
         create_notification(mgr, title, msg, 'warning', link)
+
+
+#: Readings of an outside run must come at least this often (the watcher
+#: samples every 5 min). A longer gap — the laptop slept, the tab was frozen,
+#: the network dropped — starts the run again instead of adding to it.
+OUTSIDE_RUN_MAX_GAP_S = 12 * 60
+
+
+def _note_outside(att, now, state):
+    """Keep the session's outside-the-office run current.
+    ``state`` is 'inside', 'outside' (precise) or 'uncertain' (left alone)."""
+    if att is None or state == 'uncertain':
+        return
+    if state == 'inside':
+        if att.outside_since or att.outside_last_at:
+            EmployeeAttendance.objects.filter(pk=att.pk).update(outside_since=None, outside_last_at=None)
+            att.outside_since = att.outside_last_at = None
+        return
+    fresh = att.outside_last_at and (now - att.outside_last_at).total_seconds() <= OUTSIDE_RUN_MAX_GAP_S
+    since = att.outside_since if (att.outside_since and fresh) else now
+    EmployeeAttendance.objects.filter(pk=att.pk).update(outside_since=since, outside_last_at=now)
+    att.outside_since, att.outside_last_at = since, now
+
+
+def _outside_run_minutes(att, now):
+    """Minutes of the current unbroken outside run, or None if there is none
+    (or its last reading is too old to still count)."""
+    if not (att.outside_since and att.outside_last_at):
+        return None
+    if (now - att.outside_last_at).total_seconds() > OUTSIDE_RUN_MAX_GAP_S:
+        return None
+    return int((now - att.outside_since).total_seconds() // 60)
 
 
 def _departure_policy_values():
@@ -10710,10 +11306,29 @@ def attendance_location_punch(request):
     # The open session — last night's one too, after midnight on a night shift.
     rec = _current_attendance(email, now)
     if not (rec and _is_checked_in(rec)):
+        # A session that began before midnight and is still open (someone
+        # working late, not only night shifts) is still the live session, so
+        # keep punching under it rather than stopping capture at 00:00.
+        rec = _any_open_session(email, now)
+    if not (rec and _is_checked_in(rec)):
         return Response({'stored': False, 'reason': 'not_checked_in'})
     last = AttendanceLocationPunch.objects.filter(email=email, date=rec.date).order_by('-captured_at').first()
+    # The last DECISIVE reading of this session (approximate ones are skipped:
+    # they neither raise nor clear a suspicion).
+    prev_state = None
+    for q in AttendanceLocationPunch.objects.filter(email=email, date=rec.date).order_by('-captured_at')[:6]:
+        st = _where_vs_session(rec, q.latitude, q.longitude, q.accuracy)['state']
+        if st != 'uncertain':
+            prev_state = st
+            break
     if last and (now - last.captured_at).total_seconds() < 55 * 60:
-        return Response({'stored': False, 'reason': 'too_soon'})
+        # Hourly, except one early confirmation reading after a suspicion.
+        since = (now - last.captured_at).total_seconds()
+        if not (prev_state == 'away' and since >= AWAY_CONFIRM_AFTER_S):
+            out = {'stored': False, 'reason': 'too_soon'}
+            if prev_state == 'away':
+                out['recheckInMs'] = int(max(0, AWAY_CONFIRM_AFTER_S - since) * 1000) + 1000
+            return Response(out)
     if acc is None or acc > LOCATION_PRECISE_M:
         # Never name a town from a reading that cannot tell towns apart.
         label = ('Approximate location' + (f' (±{_fmt_dist(acc)})' if acc else '')
@@ -10725,7 +11340,12 @@ def attendance_location_punch(request):
     where = _where_vs_session(rec, lat, lng, acc)
     out = {'stored': True, 'id': p.id, 'time': _fmt_ampm(now), 'state': where['state'],
            'approximate': acc is None or acc > LOCATION_PRECISE_M}
-    if where['state'] == 'away':
+    if where['state'] == 'away' and prev_state != 'away':
+        # First precise reading elsewhere: only a suspicion. No warning yet —
+        # the browser takes one more reading in a few minutes to confirm.
+        out['state'] = 'away_pending'
+        out['recheckInMs'] = AWAY_RECHECK_MS
+    if out['state'] == 'away':
         msg = (f'Your {_fmt_ampm(now)} location punch was about {_fmt_dist(where["distance"])} from '
                f'{where["place"] or "where you checked in"}'
                + (f' ({label})' if label else '') + '. If you have not moved, turn on precise '

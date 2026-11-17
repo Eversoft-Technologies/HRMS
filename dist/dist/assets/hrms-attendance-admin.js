@@ -534,7 +534,7 @@
     }
     function fmtDay(iso) {
       var dd = new Date(iso + 'T00:00:00');
-      return isNaN(dd) ? iso : dd.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+      return isNaN(dd) ? iso : dd.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
     }
     var heatPanel = document.createElement('div');
     heatPanel.className = 'haa-heat-panel';
@@ -1716,7 +1716,7 @@
         '<td><span class="haa-pill" style="background:' +
         ((f.isActive === false) ? 'var(--haa-err-bg);color:var(--haa-err-fg)' : 'var(--haa-ok-bg);color:var(--haa-ok-fg)') + '">' +
         ((f.isActive === false) ? 'Inactive' : 'Active') + '</span></td>' +
-        '<td style="text-align:right"><button class="haa-btn" style="background-color: #2b70fa; color: white; margin-right: 6px;" data-edit-fence="' + f.id + '">Edit</button><button class="haa-btn dgr" data-del-fence="' + f.id + '">Delete</button></td>'
+      '<td style="text-align:right"><button class="haa-btn" data-edit-fence="' + f.id + '" style="margin-right: 6px;">Edit</button><button class="haa-btn dgr" data-del-fence="' + f.id + '">Delete</button></td>'
     }).join('');
     return errorBanner('fences') +
       '<div class="haa-card"><div style="font-weight:700;margin-bottom:12px;font-size:14px;">Add an office location</div>' +
@@ -1783,6 +1783,39 @@
   }
 
   /* ── tab: shifts ─────────────────────────────────────────────────────── */
+  var SHIFT_TIMEZONES = [
+    ['IST', 'IST — India'],
+    ['ET', 'ET — US Eastern'],
+    ['CT', 'CT — US Central'],
+    ['MT', 'MT — US Mountain'],
+    ['PT', 'PT — US Pacific']
+  ];
+  var TZ_OFFSET_HOURS = { IST: 5.5, ET: -5, CT: -6, MT: -7, PT: -8 };
+
+  /* Shift times are authored in IST. Converts a start/end pair into the
+   * employee's assigned zone (standard, non-DST offsets) and reports how many
+   * calendar days later the shift ends there, so night-shift-style crossings
+   * introduced purely by the timezone shift still get the "(next day)" tag. */
+  function convertShiftTiming(startTime, endTime, isNightShift, tz) {
+    var deltaMin = Math.round(((TZ_OFFSET_HOURS[tz] != null ? TZ_OFFSET_HOURS[tz] : TZ_OFFSET_HOURS.IST) - TZ_OFFSET_HOURS.IST) * 60);
+    function toMinutes(t) {
+      var parts = String(t || '').split(':');
+      return (parseInt(parts[0], 10) || 0) * 60 + (parseInt(parts[1], 10) || 0);
+    }
+    function fmt(totalMin) {
+      var m = ((totalMin % 1440) + 1440) % 1440;
+      var h = Math.floor(m / 60), mm = m % 60;
+      return (h < 10 ? '0' : '') + h + ':' + (mm < 10 ? '0' : '') + mm;
+    }
+    var startMin = toMinutes(startTime);
+    var endMinRaw = toMinutes(endTime);
+    var endMin = (isNightShift || endMinRaw <= startMin) ? endMinRaw + 1440 : endMinRaw;
+    var startTotal = startMin + deltaMin;
+    var endTotal = endMin + deltaMin;
+    var dayDiff = Math.floor(endTotal / 1440) - Math.floor(startTotal / 1440);
+    return { start: fmt(startTotal), end: fmt(endTotal), dayDiff: dayDiff };
+  }
+
   function shiftsHtml() {
     var rows = state.shifts.map(function (s) {
       var st = String(s.startTime || s.start_time || '').slice(0, 5);
@@ -1816,10 +1849,23 @@
         : (!to || to >= todayIso) ? '<span class="haa-pill" style="background:var(--haa-ok-bg,#dcfce7);color:var(--haa-ok-fg,#166534)">Current</span>'
         : '<span class="haa-pill" style="background:var(--haa-chip);color:var(--haa-text2)">Ended</span>';
       if ((!to || to >= todayIso) && from <= todayIso) shiftOf[a.email] = sh ? sh.name : (a.shiftName || '');
+      var timing = '—';
+      if (sh) {
+        var tSt = String(sh.startTime || sh.start_time || '').slice(0, 5);
+        var tEn = String(sh.endTime || sh.end_time || '').slice(0, 5);
+        var tNight = !!(sh.isNightShift != null ? sh.isNightShift : sh.is_night_shift);
+        var tz = String(a.timezone || 'IST').toUpperCase();
+        if (tSt || tEn) {
+          var conv = convertShiftTiming(tSt, tEn, tNight, tz);
+          timing = esc(conv.start) + ' – ' + esc(conv.end) + ' ' + esc(tz) +
+            (conv.dayDiff >= 1 ? ' <span style="font-size:11px;color:var(--haa-faint)">(next day)</span>' : '');
+        }
+      }
       return '<tr><td>' + esc(nameOf[a.email] || a.email) + (nameOf[a.email] ? '<div style="font-size:11px;color:var(--haa-faint)">' + esc(a.email) + '</div>' : '') + ' ' + status + '</td><td>' + esc(sh ? sh.name : (a.shiftName || '—')) + '</td>' +
+        '<td>' + timing + '</td>' +
         '<td>' + esc(a.effectiveFrom || a.effective_from || '') + '</td>' +
         '<td>' + esc(a.effectiveTo || a.effective_to || 'open-ended') + '</td>' +
-        '<td style="text-align:right"><button class="haa-btn dgr" data-del-asg="' + a.id + '">Remove</button></td></tr>';
+        '<td style="text-align:right"><button class="haa-btn" data-edit-asg="' + a.id + '">Edit</button> <button class="haa-btn dgr" data-del-asg="' + a.id + '">Remove</button></td>'
     }).join('');
     return errorBanner('shifts') +
       '<div class="haa-card"><div style="font-weight:700;margin-bottom:12px;font-size:14px;">Create a shift</div>' +
@@ -1841,12 +1887,15 @@
       '<div class="haa-grid">' +
       '<div><label class="haa-lbl">Employee</label>' + rosterSelect('haa-a-email', shiftOf) + '</div>' +
       '<div><label class="haa-lbl">Shift</label><select class="haa-in" id="haa-a-shift">' + opts + '</select></div>' +
+      '<div><label class="haa-lbl">Time zone</label><select class="haa-in" id="haa-a-tz">' +
+      SHIFT_TIMEZONES.map(function (tz) { return '<option value="' + tz[0] + '">' + esc(tz[1]) + '</option>'; }).join('') +
+      '</select></div>' +
       '<div><label class="haa-lbl">Effective from</label><input class="haa-in" id="haa-a-from" type="date"></div>' +
       '<div><label class="haa-lbl">Until (optional)</label><input class="haa-in" id="haa-a-to" type="date"></div>' +
       '</div><div style="margin-top:12px"><button class="haa-btn" id="haa-a-add"' +
       (state.shifts.length ? '' : ' disabled') + '>Assign</button></div></div>' +
       (state.assignments.length
-        ? '<table class="haa-tbl"><thead><tr><th>Employee</th><th>Shift</th><th>From</th><th>Until</th><th></th></tr></thead><tbody>' + asg + '</tbody></table>'
+        ? '<table class="haa-tbl"><thead><tr><th>Employee</th><th>Shift</th><th>Timing</th><th>From</th><th>Until</th><th></th></tr></thead><tbody>' + asg + '</tbody></table>'
         : '<div class="haa-empty">No individual assignments — everyone is on the default shift.</div>');
   }
 
@@ -2263,6 +2312,20 @@
     for (var i = 0; i < tabs.length; i++) {
       tabs[i].className = 'haa-tab' + (tabs[i].getAttribute('data-tab') === state.tab ? ' on' : '');
     }
+    // On a phone the tab row swipes sideways: bring the chosen tab to the middle
+    // of the row so it is never left half hidden at the edge.
+    try {
+      var strip = el.querySelector('.haa-tabs');
+      var onTab = el.querySelector('.haa-tab.on');
+      if (strip && onTab && strip.scrollWidth > strip.clientWidth + 1) {
+        var sr = strip.getBoundingClientRect(), tr = onTab.getBoundingClientRect();
+        var to = strip.scrollLeft + (tr.left - sr.left) - (strip.clientWidth - tr.width) / 2;
+        to = Math.max(0, Math.min(to, strip.scrollWidth - strip.clientWidth));
+        if (Math.abs(to - strip.scrollLeft) > 2) {
+          if (strip.scrollTo && !document.hidden) strip.scrollTo({ left: to, behavior: 'smooth' }); else strip.scrollLeft = to;
+        }
+      }
+    } catch (_) {}
     if (state.busy) { body.innerHTML = '<div class="haa-empty">Loading…</div>'; return; }
     body.innerHTML = state.tab === 'live_map' ? liveMapHtml()
       : state.tab === 'fences' ? fencesHtml()
@@ -2617,13 +2680,15 @@
     if (aAdd) aAdd.onclick = function () {
       var email = val('haa-a-email'), from = val('haa-a-from'), to = val('haa-a-to');
       var shiftId = parseInt(val('haa-a-shift'), 10);
+      var tz = val('haa-a-tz') || 'IST';
       if (!email || !from || !shiftId) return toast('Employee, shift and start date are required', true);
       api('/api/shift-assignments', {
         method: 'POST',
         body: JSON.stringify({
           email: email, shift: shiftId, shiftId: shiftId,
           effectiveFrom: from, effective_from: from,
-          effectiveTo: to || null, effective_to: to || null
+          effectiveTo: to || null, effective_to: to || null,
+          timezone: tz
         })
       }).then(function () { toast('Shift assigned'); loadAll(); })
         .catch(function (e) { toast(e.message, true); });
@@ -2641,27 +2706,75 @@
           };
         })(els[i]);
       }
-      function bindEdit(attr, url, label) {
-    var els = body.querySelectorAll('[' + attr + ']');
-    for (var i = 0; i < els.length; i++) {
-        (function (el) {
-            el.onclick = function () {
-                var id = el.getAttribute(attr);
-                api(url + id, { method: 'GET' })
-                    .then(function (data) {
-                        toast(label + ' loaded for editing');
-                    })
-                    .catch(function (e) { toast(e.message, true); });
-            };
-        })(els[i]);
-    }
-}
-
-bindEdit('data-edit-fence', '/api/attendance/geofences/', 'location');
     }
     bindDelete('data-del-fence', '/api/attendance/geofences/', 'location');
     bindDelete('data-del-shift', '/api/shifts/', 'shift');
     bindDelete('data-del-asg', '/api/shift-assignments/', 'assignment');
+    bindEdit('data-edit-asg')
+    function bindEdit(attr) {
+    body.onclick = function (e) {
+        var el = e.target.closest('[' + attr + ']');
+        if (!el) return;
+        e.stopPropagation();
+        var id = el.getAttribute(attr);
+        
+        if (attr === 'data-edit-asg') {
+            var assignment = state.assignments.find(function (a) {
+                return a.id == id || a.id == parseInt(id, 10) || String(a.id) === String(id);
+            });
+            if (assignment) {
+                document.getElementById('haa-a-email').value = assignment.email;
+                document.getElementById('haa-a-shift').value = assignment.shiftId || assignment.shift;
+                document.getElementById('haa-a-from').value = assignment.effectiveFrom || '';
+                document.getElementById('haa-a-to').value = assignment.effectiveTo || '';
+                state.editingAssignmentId = assignment.id;
+            }
+        } else {
+            var fence = state.fences && state.fences.find(function (f) {
+                return f.id == id || f.id == parseInt(id, 10) || String(f.id) === String(id);
+            });
+            if (fence) {
+                state.editingFenceId = fence.id;
+                document.getElementById('haa-f-name').value = fence.name || '';
+                document.getElementById('haa-f-rad').value = fence.radiusMeters || fence.radius || '';
+                document.getElementById('haa-f-lat').value = fence.latitude || '';
+                document.getElementById('haa-f-lng').value = fence.longitude || '';
+            }
+        }
+    };
+}
+
+bindEdit('data-edit-fence');
+bindEdit('data-edit-asg');
+    function bindEdit(attr) {
+        var els = body.querySelectorAll('[' + attr + ']');
+        for (var i = 0; i < els.length; i++) {
+            (function (el) {
+                el.onclick = function (e) {
+                    e.stopPropagation();
+                    var id = el.getAttribute(attr);
+                    var fence = state.fences && state.fences.find(function(f) { 
+                        return f.id == id || f.id == parseInt(id, 10) || String(f.id) === String(id); 
+                    });
+                    
+                    if (fence) {
+                        // Store the editing ID so the save action knows we are updating
+                        state.editingFenceId = fence.id;
+                        
+                        document.getElementById('haa-f-name').value = fence.name || '';
+                        document.getElementById('haa-f-rad').value = fence.radiusMeters || fence.radius_meters || 200;
+                        document.getElementById('haa-f-lat').value = fence.latitude || '';
+                        document.getElementById('haa-f-lng').value = fence.longitude || '';
+                        
+                        // Change button text to indicate update mode
+                        var addBtn = document.getElementById('haa-f-add');
+                        if (addBtn) addBtn.textContent = 'Update Location';
+                    }
+                };
+            })(els[i]);
+        }
+    }
+    bindEdit('data-edit-fence');
 
     function decide(attr, decision) {
       var els = body.querySelectorAll('[' + attr + ']');
@@ -2907,9 +3020,17 @@ bindEdit('data-edit-fence', '/api/attendance/geofences/', 'location');
     return /check-?in/i.test(location.pathname + location.hash);
   }
 
+  /* The shared can() fails OPEN while permissions are still loading (or if
+     loading failed), which is right for ordinary page content but showed this
+     admin-only button to every role — Recruiters and Employees included — until
+     the real set arrived. An admin control waits for a confirmed answer. */
+  function permsConfirmed() {
+    try { return !!(window.__hrmsPerms && window.__hrmsPerms()); } catch (_) { return false; }
+  }
+
   function mount() {
     var existing = document.getElementById(BTN_ID);
-    if (!onAttendancePage() || !can('attendance.edit')) {
+    if (!onAttendancePage() || !permsConfirmed() || !can('attendance.edit')) {
       if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
       return;
     }
