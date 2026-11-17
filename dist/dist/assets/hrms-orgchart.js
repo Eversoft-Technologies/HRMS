@@ -138,7 +138,11 @@
       '.oc-err{margin-top:8px;color:var(--danger,#dc2626);font-size:12.5px;}',
       /* no-manager group */
       '.oc-loose{padding:14px 16px;}',
-      '.oc-chips{display:flex;flex-wrap:wrap;gap:8px;}',
+      '.oc-chips{display:flex;flex-wrap:wrap;gap:8px;max-height:132px;overflow-y:auto;padding:2px 4px 2px 0;}',
+      /* With people in "No manager set" the chart gives up some height so both fit on screen. */
+      '.oc-page.oc-has-loose .oc-vp{height:calc(100vh - 440px);min-height:320px;}',
+      '.oc-page.oc-has-loose .oc-panel{max-height:calc(100vh - 440px);}',
+      '.oc-loose .oc-hint{font-size:11.5px;color:var(--text3);margin:-2px 0 8px;}',
       '.oc-chip{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--border2);background:var(--bg2);border-radius:999px;padding:4px 12px 4px 4px;font-size:12.5px;color:var(--text);cursor:pointer;font-family:inherit;max-width:100%;}',
       '.oc-chip:hover{border-color:var(--accent);}',
       '.oc-chip.oc-sel{border-color:var(--accent);box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 30%,transparent);}',
@@ -339,9 +343,12 @@
   function renderLoose() {
     var box = q('#oc-loose');
     if (!box) return;
-    if (st.loading || st.error || !st.loose.length) { box.hidden = true; return; }
+    var page = box.closest ? box.closest('.oc-page') : null;
+    if (st.loading || st.error || !st.loose.length) { box.hidden = true; if (page) page.classList.remove('oc-has-loose'); return; }
     box.hidden = false;
-    box.innerHTML = '<div class="oc-sh">No manager set (' + st.loose.length + ')</div><div class="oc-chips">' +
+    if (page) page.classList.add('oc-has-loose');
+    box.innerHTML = '<div class="oc-sh">No manager set (' + st.loose.length + ')</div>' +
+      '<div class="oc-hint">Not in the tree yet: open a person and use “Change manager” to place them under their manager.</div><div class="oc-chips">' +
       st.loose.map(function (e) {
         var n = st.by[e];
         return '<button type="button" class="oc-chip' + (st.sel === e ? ' oc-sel' : '') + (st.hit === e ? ' oc-hit' : '') +
