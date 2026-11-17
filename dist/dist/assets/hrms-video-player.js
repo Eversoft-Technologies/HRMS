@@ -1083,7 +1083,7 @@
     return {
       element: panel,
       updateActive: function (curTime, totalDur) {
-        if (totalDur > 0 && totalDur !== dur) {
+        if (totalDur > 0 && isFinite(totalDur) && totalDur !== dur) {
           dur = totalDur;
           if (!realTimes && view !== 'full') {
             var n = cardEls.length || 1;

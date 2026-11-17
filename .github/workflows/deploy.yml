@@ -138,6 +138,15 @@ jobs:
             python manage.py collectstatic --noinput
             python manage.py migrate --noinput
 
+            # 3a. Make stored interview recordings seekable (see
+            #     api/video_processor.py). MP4 uploads (Chrome/Edge) are
+            #     re-indexed in pure Python - nothing to install. WebM ones
+            #     (Firefox) need ffmpeg: place a static linux build at
+            #     ${SHARED_DIR}/bin/ffmpeg (+ ffprobe) once and run the command
+            #     without --remux-only. Never fails the deploy.
+            python manage.py index_recordings --remux-only || true
+            [ -x "${SHARED_DIR}/bin/ffmpeg" ] || echo "note: no ${SHARED_DIR}/bin/ffmpeg - WebM recordings stay unindexed"
+
             # If APP_LINK is an initial physical directory created by cPanel (not a symlink yet),
             # remove it so it can be cleanly replaced by the atomic symlink.
             if [ ! -L "${APP_LINK}" ] && [ -d "${APP_LINK}" ]; then

@@ -537,13 +537,40 @@
       var out = body.querySelector('[data-h-out]');
       out.innerHTML = '<div class="ts-empty">Loading…</div>';
       var my = S.seq;
-      api('/api/attendance/audit' + q).then(function (rows) {
+      var who = S.hist.email || (SC.me().email || '');
+      /* Never spin forever: a dropped connection becomes a message + Retry. */
+      function timed(p) {
+        return Promise.race([p, new Promise(function (_, rej) {
+          setTimeout(function () { rej(new Error('The server did not answer in time.')); }, 20000);
+        })]);
+      }
+      // The attendance days themselves (existing data) …
+      var daysP = timed(api('/api/attendance?email=' + encodeURIComponent(who) + '&from=' + encodeURIComponent(S.hist.from) +
+                            '&to=' + encodeURIComponent(S.hist.to))).then(function (r) { return Array.isArray(r) ? r : []; });
+      // … and the field-by-field change log (recorded from this release on).
+      var auditP = timed(api('/api/attendance/audit' + q));
+      Promise.all([daysP, auditP]).then(function (res) {
         if (my !== S.seq) return;
+        var days = res[0], rows = res[1] || [];
+        var changes = {};
+        rows.forEach(function (r) { changes[r.date] = (changes[r.date] || 0) + 1; });
+        var mins = function (m) { m = Number(m) || 0; return Math.floor(m / 60) + 'h ' + (m % 60) + 'm'; };
+        var tm = function (v) { return v ? esc(fmtDT(v)) : '—'; };
+        var dh = '<div class="ts-tablewrap"><div class="ts-sub" style="padding:12px 14px 4px;font-weight:700">Attendance days</div>' +
+          '<table class="ts-table"><thead><tr><th>Date</th><th>Check-in</th><th>Check-out</th><th>Worked</th><th>Break</th><th>Status</th><th>Changes</th></tr></thead><tbody>';
+        days.slice().sort(function (a, b) { return String(b.date).localeCompare(String(a.date)); }).forEach(function (d) {
+          dh += '<tr><td style="white-space:nowrap">' + esc(fmtDate(d.date)) + '</td><td>' + tm(d.checkIn || d.check_in) + '</td><td>' + tm(d.checkOut || d.check_out) +
+            '</td><td>' + mins(d.workedMinutes != null ? d.workedMinutes : d.worked_minutes) + '</td><td>' + mins(d.breakMinutes != null ? d.breakMinutes : d.break_minutes) +
+            '</td><td>' + esc(d.status || '') + (d.autoCheckedOut ? ' <span class="ts-badge ts-src-auto_checkout">auto</span>' : '') +
+            '</td><td>' + (changes[d.date] ? changes[d.date] + ' change' + (changes[d.date] > 1 ? 's' : '') : '—') + '</td></tr>';
+        });
+        dh += '</tbody></table></div>';
+        if (!days.length) dh = '<div class="ts-empty">No attendance days in this period.</div>';
         if (!rows.length) {
-          out.innerHTML = '<div class="ts-empty">No attendance changes in this period. Edits, approved corrections, punch tickets, automatic check-outs and recalculations appear here.</div>';
+          out.innerHTML = dh + '<div class="ts-empty" style="border-top:1px solid var(--border2)">No changes recorded in this period. Edits, approved corrections, punch tickets, automatic check-outs and recalculations are recorded from now on.</div>';
           return;
         }
-        var h = '<div class="ts-tablewrap"><table class="ts-table"><thead><tr><th>When</th><th>Day</th><th>Source</th><th>Field</th><th>Change</th><th>By</th><th>Reason</th></tr></thead><tbody>';
+        var h = dh + '<div class="ts-tablewrap" style="border-top:1px solid var(--border2)"><div class="ts-sub" style="padding:12px 14px 4px;font-weight:700">Changes</div><table class="ts-table"><thead><tr><th>When</th><th>Day</th><th>Source</th><th>Field</th><th>Change</th><th>By</th><th>Reason</th></tr></thead><tbody>';
         rows.forEach(function (r) {
           h += '<tr><td style="white-space:nowrap">' + esc(fmtDT(r.at)) + '</td>' +
             '<td style="white-space:nowrap">' + esc(fmtDate(r.date)) + '</td>' +
@@ -555,9 +582,11 @@
             '<td style="color:var(--text2);max-width:280px">' + esc(r.reason || '') + '</td></tr>';
         });
         out.innerHTML = h + '</tbody></table></div>';
-      }, function (e) {
+      }).catch(function (e) {
         if (my !== S.seq) return;
-        out.innerHTML = '<div class="ts-note danger" style="margin:14px">' + esc(e.status === 403 ? 'You can only see your own attendance history or your team\'s.' : e.message) + '</div>';
+        out.innerHTML = '<div class="ts-note danger" style="margin:14px">' + esc(e.status === 403 ? 'You can only see your own attendance history or your team\'s.' : (e.message || 'Could not load.')) +
+          ' <button class="btn-sm" data-h-retry style="margin-left:8px">Retry</button></div>';
+        var rb = out.querySelector('[data-h-retry]'); if (rb) rb.onclick = load;
       });
     }
     body.querySelector('[data-h-go]').onclick = function () {

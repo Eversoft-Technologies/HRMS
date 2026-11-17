@@ -8,6 +8,7 @@ from . import chat_extras
 from . import notification_prefs
 from . import org_views
 from . import submission_discussion
+from . import tts_views
 from . import work_setup
 from . import (auth_views, email_template_views, linkedin_oauth, live_views, views,
                attendance_views, job_form_views, onboarding_views, payroll_views)
@@ -88,6 +89,8 @@ urlpatterns = [
     path('ai/score-resume/', views.ai_score_resume),
     path('ai/evaluate-interview', views.ai_evaluate_interview),
     path('ai/evaluate-interview/', views.ai_evaluate_interview),
+    # Eva's spoken lines as audio, so the interview recording includes her voice.
+    path('eva-tts', tts_views.eva_tts),
     # Server-managed AI key (Settings > AI Settings); never returns the key.
     path('ai/settings', ai_settings.ai_settings),
     path('ai/settings/validate', ai_settings.ai_settings_validate),
