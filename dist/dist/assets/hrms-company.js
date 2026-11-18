@@ -23,7 +23,7 @@
   var KEY = 'hrms_company';
   var DEFAULTS = {
     companyName: '', brandName: '', companyLogo: '', timezone: '',
-    currency: 'INR', dateFormat: 'DD/MM/YYYY',
+    currency: 'INR', dateFormat: 'MM/DD/YYYY',
     workWeek: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'],
     empIdPrefix: 'EV-', empIdMinDigits: 4, empIdSuffix: ''
   };
@@ -97,6 +97,17 @@
       out += ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
     }
     return out;
+  }
+
+  // Date and time in the company format, always with HH:MM when there is a time.
+  function dateTime(value) { return date(value, { time: hasTime(value) || value instanceof Date }); }
+  // Compact "Nov 17" (with ", 2025" when not this year) — for chat separators,
+  // chips and other tight spots. US month-day order.
+  function dateShort(value) {
+    var d = parseDate(value);
+    if (!d) return value == null ? '' : String(value);
+    var s = MONTHS[d.getMonth()] + ' ' + d.getDate();
+    return d.getFullYear() === new Date().getFullYear() ? s : s + ', ' + d.getFullYear();
   }
 
   /* ── employee codes / work week ─────────────────────────────────────────── */
@@ -190,10 +201,17 @@
   else boot();
   setInterval(refresh, 10 * 60 * 1000);
 
+  /* For the React bundle's patched date cells: reformat ONLY real ISO dates
+     ('YYYY-MM-DD[ HH:MM[:SS]]'); free text such as "Nov 20" or "TBD" is
+     returned untouched (Date.parse would misread it). */
+  window.__hrmsDate = function (v) {
+    return (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2})?)?$/.test(v.trim())) ? date(v.trim()) : v;
+  };
+
   window.HRMSCompany = {
     get: get, set: set, refresh: refresh, apply: apply,
     money: money, symbol: symbol,
-    date: date, parseDate: parseDate,
+    date: date, dateTime: dateTime, dateShort: dateShort, parseDate: parseDate,
     empId: empId, workWeek: workWeek, isWorkDay: isWorkDay,
     timezone: timezone, tzDiffers: tzDiffers, timeString: timeString, dateString: dateString
   };

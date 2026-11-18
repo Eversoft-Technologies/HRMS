@@ -19,6 +19,7 @@ class Command(BaseCommand):
                 {'name': 'Settings', 'icon': 'settings', 'order': 7},
                 {'name': 'RBAC', 'icon': 'shield', 'order': 8},
                 {'name': 'Onboarding', 'icon': 'user-check', 'order': 9},
+                {'name': 'Workspace', 'icon': 'briefcase', 'order': 10},
             ]
             modules = {}
             for m_info in modules_data:
@@ -40,6 +41,7 @@ class Command(BaseCommand):
                 {'name': 'Settings Group', 'module': 'Settings', 'desc': 'Manage general settings and credentials'},
                 {'name': 'RBAC Group', 'module': 'RBAC', 'desc': 'Manage roles, permissions, and user access'},
                 {'name': 'Onboarding Group', 'module': 'Onboarding', 'desc': 'Work authorization, documents, verification, and employee onboarding'},
+                {'name': 'Workspace Group', 'module': 'Workspace', 'desc': 'Service desk tickets, timesheets and attendance history'},
             ]
             groups = {}
             for g_info in groups_data:
@@ -128,6 +130,10 @@ class Command(BaseCommand):
                 {'name': 'Allocate IT Assets', 'code': 'onboarding.assets', 'group': 'Onboarding Group'},
                 {'name': 'Complete Payroll Information', 'code': 'onboarding.payroll', 'group': 'Onboarding Group'},
                 {'name': 'Manage Onboarding Settings', 'code': 'onboarding.settings', 'group': 'Onboarding Group'},
+                # Phase 3 (see migration 0093)
+                {'name': 'Manage Tickets', 'code': 'ticket.manage', 'group': 'Workspace Group'},
+                {'name': 'Approve Timesheets', 'code': 'timesheet.approve', 'group': 'Workspace Group'},
+                {'name': 'View Attendance History', 'code': 'attendance.audit', 'group': 'Workspace Group'},
             ]
             permissions = {}
             for p_info in perms_data:
@@ -155,7 +161,8 @@ class Command(BaseCommand):
                 {'name': 'Team Lead', 'desc': 'Review work submitted by their team; view attendance and leave'},
                 {'name': 'IT Admin', 'desc': 'Allocate and track IT assets for onboarding candidates'},
                 {'name': 'Payroll Admin', 'desc': 'Complete payroll information for onboarding candidates'},
-                {'name': 'Recruiter', 'desc': 'Create and edit onboarding candidates'},
+                {'name': 'Recruiter (India)', 'desc': 'Create and edit onboarding candidates (India)'},
+                {'name': 'Recruiter (USA)', 'desc': 'Create and edit onboarding candidates (USA)'},
             ]
             roles = {}
             for r_info in roles_data:
@@ -190,6 +197,7 @@ class Command(BaseCommand):
                     # HR Executive is the recruiter today: creates and edits the
                     # candidate, but cannot verify, approve, or touch payroll.
                     'onboarding.view', 'onboarding.create', 'onboarding.edit',
+                    'ticket.manage', 'attendance.audit',
                 ],
                 'Employee': [
                     # task.edit (not task.delete) lets an employee accept/reject
@@ -197,7 +205,12 @@ class Command(BaseCommand):
                     'employee.view', 'task.edit', 'attendance.view', 'attendance.create',
                     'leave.view', 'leave.create', 'settings.view'
                 ],
-                'Recruiter': [
+                'Recruiter (India)': [
+                    'recruitment.view', 'recruitment.create', 'recruitment.edit',
+                    'recruitment.kpi.view_own', 'settings.view',
+                    'onboarding.view', 'onboarding.create', 'onboarding.edit',
+                ],
+                'Recruiter (USA)': [
                     'recruitment.view', 'recruitment.create', 'recruitment.edit',
                     'recruitment.kpi.view_own', 'settings.view',
                     'onboarding.view', 'onboarding.create', 'onboarding.edit',
@@ -207,6 +220,7 @@ class Command(BaseCommand):
                     'attendance.view', 'leave.view', 'leave.action',
                     'settings.view',
                     'onboarding.view', 'onboarding.approve',
+                    'timesheet.approve',
                 ],
                 # A lead reviews their team's work. Deliberately without
                 # submission.action / leave.action / onboarding.* — grant those
@@ -214,14 +228,17 @@ class Command(BaseCommand):
                 'Team Lead': [
                     'employee.view', 'submission.view_all', 'task.edit', 'task.delete',
                     'attendance.view', 'leave.view', 'settings.view',
+                    'timesheet.approve',
                 ],
                 'IT Admin': [
                     'settings.view',
                     'onboarding.view', 'onboarding.assets',
+                    'ticket.manage',
                 ],
                 'Payroll Admin': [
                     'payroll.view', 'payroll.manage', 'settings.view',
                     'onboarding.view', 'onboarding.payroll',
+                    'ticket.manage',
                 ],
             }
 
