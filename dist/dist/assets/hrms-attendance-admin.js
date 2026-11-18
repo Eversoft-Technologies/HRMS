@@ -27,7 +27,7 @@
                 arrangements: [], roster: [], homes: [], mapFeed: { fences: [], employees: [] },
                 departurePolicy: { enabled: true, timeout_minutes: 15, warning_minutes: 5 },
                 mapMode: 'markers', mapFilter: 'all', deptFilter: 'all', basemap: 'auto',
-                searchQuery: '', busy: false, errors: {} };
+                searchQuery: '', asgSearch: '', asgPage: 1, asgPageSize: 10, busy: false, errors: {} };
 
   /* ── basemap providers & geocoding ───────────────────────────────────── */
   var BASEMAPS = {
@@ -1529,6 +1529,21 @@
       '.haa-back .haa-in::placeholder{color:var(--haa-faint)}',
       '.haa-back .haa-in:focus{outline:none;border-color:#0f9d58}',
       '.haa-back select.haa-in{cursor:pointer}',
+      '.haa-back .haa-combo{position:relative}',
+      '.haa-back .haa-combo-list{position:absolute;left:0;right:0;top:100%;margin-top:4px;max-height:240px;',
+      'overflow-y:auto;background:var(--haa-surface);border:1px solid var(--haa-line);border-radius:8px;',
+      'box-shadow:0 10px 28px rgba(0,0,0,.2);z-index:60;display:none}',
+      '.haa-back .haa-combo-list.open{display:block}',
+      '.haa-back .haa-combo-opt{padding:8px 10px;font-size:13px;color:var(--haa-text);cursor:pointer}',
+      '.haa-back .haa-combo-opt:hover{background:var(--haa-alt)}',
+      '.haa-back .haa-combo-opt[hidden]{display:none}',
+      '.haa-back .haa-pager{display:flex;align-items:center;justify-content:space-between;gap:10px;',
+      'flex-wrap:wrap;margin-top:10px;font-size:12.5px;color:var(--haa-muted)}',
+      '.haa-back .haa-pager-sz{width:auto;padding:5px 8px}',
+      '.haa-back .haa-pager-nav{display:flex;align-items:center;gap:6px;flex-wrap:wrap}',
+      '.haa-back .haa-pager-nav button{min-width:30px;height:28px;padding:0 9px;font-size:12.5px}',
+      '.haa-back .haa-pager-nav button.on{background:var(--haa-accent,#4f46e5);color:#fff}',
+      '.haa-back .haa-pager-gap{padding:0 2px;color:var(--haa-faint)}',
       /* ── buttons ────────────────────────────────────────────────────── */
       '.haa-back .haa-btn{padding:8px 16px;border-radius:8px;border:none;background:#0f9d58;color:#fff;',
       'font-size:13px;font-weight:700;cursor:pointer}',
@@ -1861,7 +1876,8 @@
             (conv.dayDiff >= 1 ? ' <span style="font-size:11px;color:var(--haa-faint)">(next day)</span>' : '');
         }
       }
-      return '<tr><td>' + esc(nameOf[a.email] || a.email) + (nameOf[a.email] ? '<div style="font-size:11px;color:var(--haa-faint)">' + esc(a.email) + '</div>' : '') + ' ' + status + '</td><td>' + esc(sh ? sh.name : (a.shiftName || '—')) + '</td>' +
+      return '<tr data-search="' + esc(((nameOf[a.email] || '') + ' ' + (a.email || '')).toLowerCase()) + '">' +
+        '<td>' + esc(nameOf[a.email] || a.email) + (nameOf[a.email] ? '<div style="font-size:11px;color:var(--haa-faint)">' + esc(a.email) + '</div>' : '') + ' ' + status + '</td><td>' + esc(sh ? sh.name : (a.shiftName || '—')) + '</td>' +
         '<td>' + timing + '</td>' +
         '<td>' + esc(a.effectiveFrom || a.effective_from || '') + '</td>' +
         '<td>' + esc(a.effectiveTo || a.effective_to || 'open-ended') + '</td>' +
@@ -1885,7 +1901,7 @@
         : '<div class="haa-empty">No shifts defined — everyone falls back to General Shift (09:00–18:00).</div>') +
       '<div class="haa-card" style="margin-top:18px"><div style="font-weight:700;margin-bottom:12px;font-size:14px;">Assign a shift</div>' +
       '<div class="haa-grid">' +
-      '<div><label class="haa-lbl">Employee</label>' + rosterSelect('haa-a-email', shiftOf) + '</div>' +
+      '<div><label class="haa-lbl">Employee</label>' + rosterCombobox('haa-a-email', shiftOf) + '</div>' +
       '<div><label class="haa-lbl">Shift</label><select class="haa-in" id="haa-a-shift">' + opts + '</select></div>' +
       '<div><label class="haa-lbl">Time zone</label><select class="haa-in" id="haa-a-tz">' +
       SHIFT_TIMEZONES.map(function (tz) { return '<option value="' + tz[0] + '">' + esc(tz[1]) + '</option>'; }).join('') +
@@ -1895,7 +1911,12 @@
       '</div><div style="margin-top:12px"><button class="haa-btn" id="haa-a-add"' +
       (state.shifts.length ? '' : ' disabled') + '>Assign</button></div></div>' +
       (state.assignments.length
-        ? '<table class="haa-tbl"><thead><tr><th>Employee</th><th>Shift</th><th>Timing</th><th>From</th><th>Until</th><th></th></tr></thead><tbody>' + asg + '</tbody></table>'
+        ? '<input class="haa-in" id="haa-asg-search" type="text" placeholder="Search employee…" ' +
+          'autocomplete="off" style="max-width:280px;margin-bottom:10px" value="' + esc(state.asgSearch || '') + '">' +
+          '<table class="haa-tbl" id="haa-asg-tbl"><thead><tr><th>Employee</th><th>Shift</th><th>Timing</th><th>From</th><th>Until</th><th></th></tr></thead><tbody>' +
+          asg + '<tr id="haa-asg-empty-row" style="display:none"><td colspan="6" class="haa-empty"></td></tr>' +
+          '</tbody></table>' +
+          '<div id="haa-asg-pager"></div>'
         : '<div class="haa-empty">No individual assignments — everyone is on the default shift.</div>');
   }
 
@@ -1966,6 +1987,182 @@
       }).join('') + '</select>';
   }
 
+  /* A single field that is both the picker and the search box: click it (or
+   * type) and a filtered list of the roster drops open underneath, the way a
+   * searchable select behaves. The roster of a mid-size company does not fit
+   * on screen as a plain dropdown, and scrolling it to find one name is slow.
+   *
+   * `id` keeps working as a plain value holder — a hidden input, read with
+   * the same val(id) / document.getElementById(id).value everything else
+   * already uses — so only the markup changed, not how callers read it.
+   * Falls back to rosterSelect's own free-text input when the roster is
+   * empty, since there is nothing to pick from or search.
+   */
+  function rosterCombobox(id, current) {
+    if (!state.roster.length) return rosterSelect(id, current);
+    current = current || {};
+    var opts = state.roster.map(function (u) {
+      var tag = current[u.email] ? '  · ' + current[u.email] : '';
+      return '<div class="haa-combo-opt" data-val="' + esc(u.email) + '" data-text="' +
+        esc((u.name + ' ' + u.email + tag).toLowerCase()) + '">' +
+        esc(u.name) + ' <span style="color:var(--haa-faint)">(' + esc(u.email) + ')</span>' +
+        (tag ? '<span style="color:var(--haa-faint)">' + esc(tag) + '</span>' : '') + '</div>';
+    }).join('');
+    return '<div class="haa-combo" data-combo="' + id + '">' +
+      '<input type="hidden" id="' + id + '">' +
+      '<input class="haa-in haa-combo-in" type="text" id="' + id + '-search" ' +
+      'placeholder="Search employee…" autocomplete="off">' +
+      '<div class="haa-combo-list" id="' + id + '-list">' + opts + '</div>' +
+      '</div>';
+  }
+
+  // One delegated listener for the whole page lifetime closes any open combo
+  // clicked outside of, rather than each bindRosterCombobox() call adding its
+  // own document listener — this runs again on every render() (every tab
+  // switch, every create/edit/delete), and a fresh listener each time would
+  // leak for as long as the admin panel stays open.
+  var comboOutsideBound = false;
+  function ensureComboOutsideHandler() {
+    if (comboOutsideBound) return;
+    comboOutsideBound = true;
+    document.addEventListener('mousedown', function (e) {
+      document.querySelectorAll('.haa-combo-list.open').forEach(function (l) {
+        var wrap = l.closest('.haa-combo');
+        if (wrap && !wrap.contains(e.target)) l.classList.remove('open');
+      });
+    });
+  }
+
+  function bindRosterCombobox(body, id) {
+    var wrap = body.querySelector('.haa-combo[data-combo="' + id + '"]');
+    if (!wrap) return;
+    var hidden = wrap.querySelector('#' + id);
+    var input = wrap.querySelector('#' + id + '-search');
+    var list = wrap.querySelector('#' + id + '-list');
+    if (!hidden || !input || !list) return;
+
+    function filter() {
+      var q = input.value.toLowerCase().trim();
+      var opts = list.querySelectorAll('.haa-combo-opt');
+      for (var i = 0; i < opts.length; i++) {
+        opts[i].hidden = !!q && opts[i].getAttribute('data-text').indexOf(q) === -1;
+      }
+    }
+    function open() { filter(); list.classList.add('open'); }
+
+    input.addEventListener('focus', open);
+    input.addEventListener('click', open);
+    input.addEventListener('input', function () { hidden.value = ''; open(); });
+    list.addEventListener('mousedown', function (e) {
+      var opt = e.target.closest('.haa-combo-opt');
+      if (!opt) return;
+      e.preventDefault();
+      hidden.value = opt.getAttribute('data-val');
+      input.value = opt.textContent.trim();
+      list.classList.remove('open');
+    });
+    ensureComboOutsideHandler();
+  }
+
+  // Sets both halves of a rosterCombobox field — the hidden value callers
+  // read and the visible search text — e.g. when Edit pre-fills the form.
+  function setRosterCombobox(id, email) {
+    var hidden = document.getElementById(id);
+    if (!hidden) return;
+    hidden.value = email || '';
+    var input = document.getElementById(id + '-search');
+    if (!input) return;
+    var match = state.roster.find(function (u) { return u.email === email; });
+    input.value = match ? (match.name + ' (' + match.email + ')') : (email || '');
+  }
+
+  /* Search + paging for the shift-assignments table — sidecar style, like
+   * hrms-hris-pager.js: every row is already in the DOM (rendered once by
+   * shiftsHtml()), this only shows/hides which ones are on the current page
+   * of the current search. That keeps the search box from ever losing focus
+   * mid-keystroke, which a full re-render on every character would cause.
+   */
+  function pageNumberList(current, pages) {
+    // 1 … 4 5 6 … 12 — first, last and the current page's immediate neighbours
+    var out = [], last = 0;
+    for (var p = 1; p <= pages; p++) {
+      if (p === 1 || p === pages || Math.abs(p - current) <= 1) {
+        if (last && p - last > 1) out.push(0);
+        out.push(p); last = p;
+      }
+    }
+    return out;
+  }
+
+  function applyAsgPager(body) {
+    var tbl = body.querySelector('#haa-asg-tbl');
+    var pagerBox = body.querySelector('#haa-asg-pager');
+    if (!tbl || !pagerBox) return;
+    var emptyRow = tbl.querySelector('#haa-asg-empty-row');
+    var rows = Array.prototype.slice.call(tbl.querySelectorAll('tbody > tr[data-search]'));
+    var searchEl = body.querySelector('#haa-asg-search');
+    var q = ((searchEl ? searchEl.value : state.asgSearch) || '').toLowerCase().trim();
+
+    var matched = rows.filter(function (tr) { return !q || tr.getAttribute('data-search').indexOf(q) !== -1; });
+    var total = matched.length;
+    var size = state.asgPageSize || 10;
+    var pages = Math.max(1, Math.ceil(total / size));
+    if (state.asgPage > pages) state.asgPage = pages;
+    if (state.asgPage < 1) state.asgPage = 1;
+    var from = (state.asgPage - 1) * size, to = Math.min(total, from + size);
+
+    rows.forEach(function (tr) { tr.style.display = 'none'; });
+    for (var i = from; i < to; i++) matched[i].style.display = '';
+
+    if (emptyRow) {
+      emptyRow.style.display = total ? 'none' : '';
+      emptyRow.querySelector('td').textContent = q
+        ? 'No employee matches "' + searchEl.value + '".'
+        : 'No individual assignments — everyone is on the default shift.';
+    }
+
+    var sizeOpts = [10, 25, 50].map(function (n) {
+      return '<option value="' + n + '"' + (n === size ? ' selected' : '') + '>' + n + ' / page</option>';
+    }).join('');
+    var nav = '<button type="button" class="haa-btn sec" data-asg-pg="prev"' + (state.asgPage <= 1 ? ' disabled' : '') + '>Prev</button>';
+    pageNumberList(state.asgPage, pages).forEach(function (p) {
+      nav += p ? '<button type="button" class="haa-btn' + (p === state.asgPage ? ' on' : ' sec') + '" data-asg-pg="' + p + '">' + p + '</button>'
+               : '<span class="haa-pager-gap">…</span>';
+    });
+    nav += '<button type="button" class="haa-btn sec" data-asg-pg="next"' + (state.asgPage >= pages ? ' disabled' : '') + '>Next →</button>';
+
+    pagerBox.className = 'haa-pager';
+    pagerBox.innerHTML = '<select class="haa-in haa-pager-sz" id="haa-asg-pagesize">' + sizeOpts + '</select>' +
+      '<div class="haa-pager-nav">' + nav + '</div>';
+
+    pagerBox.querySelector('#haa-asg-pagesize').onchange = function (e) {
+      state.asgPageSize = parseInt(e.target.value, 10) || 10;
+      state.asgPage = 1;
+      applyAsgPager(body);
+    };
+    pagerBox.querySelectorAll('[data-asg-pg]').forEach(function (btn) {
+      btn.onclick = function () {
+        var v = btn.getAttribute('data-asg-pg');
+        state.asgPage = v === 'prev' ? state.asgPage - 1 : v === 'next' ? state.asgPage + 1 : parseInt(v, 10) || 1;
+        applyAsgPager(body);
+      };
+    });
+  }
+
+  function bindAsgPager(body) {
+    var tbl = body.querySelector('#haa-asg-tbl');
+    if (!tbl) return;
+    var searchEl = body.querySelector('#haa-asg-search');
+    if (searchEl) {
+      searchEl.addEventListener('input', function () {
+        state.asgSearch = searchEl.value;
+        state.asgPage = 1;
+        applyAsgPager(body);
+      });
+    }
+    applyAsgPager(body);
+  }
+
   function employeePicker() {
     if (!state.roster.length) {
       return '<input class="haa-in" id="haa-wa-email" placeholder="person@company.com">' +
@@ -1976,14 +2173,7 @@
     }
     var have = {};
     state.arrangements.forEach(function (a) { have[a.email] = a.arrangement; });
-    return '<select class="haa-in" id="haa-wa-email">' +
-      '<option value="">Select an employee…</option>' +
-      state.roster.map(function (u) {
-        var tag = have[u.email] ? '  · ' + have[u.email] : '';
-        return '<option value="' + esc(u.email) + '">' +
-          esc(u.name) + ' (' + esc(u.email) + ')' + esc(tag) + '</option>';
-      }).join('') +
-      '</select>';
+    return rosterCombobox('haa-wa-email', have);
   }
 
   function arrangementsHtml() {
@@ -2676,6 +2866,10 @@
       });
     });
 
+    bindRosterCombobox(body, 'haa-a-email');
+
+    bindAsgPager(body);
+
     var aAdd = body.querySelector('#haa-a-add');
     if (aAdd) aAdd.onclick = function () {
       var email = val('haa-a-email'), from = val('haa-a-from'), to = val('haa-a-to');
@@ -2723,7 +2917,7 @@
                 return a.id == id || a.id == parseInt(id, 10) || String(a.id) === String(id);
             });
             if (assignment) {
-                document.getElementById('haa-a-email').value = assignment.email;
+                setRosterCombobox('haa-a-email', assignment.email);
                 document.getElementById('haa-a-shift').value = assignment.shiftId || assignment.shift;
                 document.getElementById('haa-a-from').value = assignment.effectiveFrom || '';
                 document.getElementById('haa-a-to').value = assignment.effectiveTo || '';
@@ -2837,6 +3031,7 @@ bindEdit('data-edit-asg');
     });
 
     /* ── work arrangements ─────────────────────────────────────────────── */
+    bindRosterCombobox(body, 'haa-wa-email');
     var kind = body.querySelector('#haa-wa-kind');
     if (kind) {
       var hybridBox = body.querySelector('#haa-wa-hybrid');
@@ -2863,7 +3058,7 @@ bindEdit('data-edit-asg');
       var emailEl = body.querySelector('#haa-wa-email');
       var email = (emailEl.value || '').trim();
       if (!email) {
-        return toast(emailEl.tagName === 'SELECT'
+        return toast(body.querySelector('#haa-wa-email-search')
           ? 'Select an employee' : 'Employee email is required', true);
       }
       // Carry the name across so the table reads "Ravi Kumar", not a bare
