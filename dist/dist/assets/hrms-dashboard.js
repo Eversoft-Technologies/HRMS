@@ -311,13 +311,13 @@
     var deptFlt = state.deptFilter;
     var statusFlt = state.statusFilter;
 
-    var filtered = employees.filter(function (emp) {
-    var empDept = typeof emp.department === 'object' && emp.department !== null 
-    ? (emp.department.name || emp.department.title || '') 
-    : (emp.department || '');
-if (deptFlt !== 'all' && empDept.toLowerCase() !== deptFlt.toLowerCase()) {
-    return false;
-}
+   var filtered = employees.filter(function (emp) {
+    var empDept = typeof emp.department === 'object' && emp.department !== null
+        ? (emp.department.name || emp.department.title || '')
+        : (emp.department || '');
+    if (deptFlt && deptFlt !== 'all' && empDept.toLowerCase() !== deptFlt.toLowerCase()) {
+        return false;
+    }
       if (statusFlt !== 'all' && (emp.status || '').toLowerCase() !== statusFlt.toLowerCase()) {
         return false;
       }
@@ -892,17 +892,18 @@ if (deptFlt !== 'all' && empDept.toLowerCase() !== deptFlt.toLowerCase()) {
     }
 
     // Department quick pills
-    document.querySelectorAll('[data-dept-filter]').forEach(function (el) {
-      el.addEventListener('click', function (e) {
-        e.preventDefault();
-        var targetDept = el.getAttribute('data-dept-filter');
-        if (targetDept) {
-            state.deptFilter = targetDept;
-            state.page = 1;
-            updateEmployeeTable();
-        }
-      });
-    });
+document.addEventListener('click', function (e) {
+    var pill = e.target.closest('[data-dept-filter]');
+    if (!pill) return;
+    
+    e.preventDefault();
+    var targetDept = pill.getAttribute('data-dept-filter');
+    if (targetDept) {
+        state.deptFilter = targetDept.trim();
+        state.page = 1;
+        updateEmployeeTable();
+    }
+});
 
     wireDeptListEvents();
 
