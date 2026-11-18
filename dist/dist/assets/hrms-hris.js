@@ -1286,7 +1286,22 @@
       var nameEl = tr.querySelector('td .av-row span') || tr.querySelector('td');
       var name = nameEl ? (nameEl.textContent || '').trim().toLowerCase() : '';
       if (!name || tr.children.length < 3) { tr.setAttribute('data-hris-skip', '1'); return; }   // the "no employees" placeholder row
-      var email = listCache && listCache[name];
+      // HRIS data can include an email in a second line/cell. Prefer that
+      // stable identifier; name matching is only a fallback for table
+      // variants that omit the email.
+      var emailEl = tr.querySelector('[data-email], .employee-email, .av-row small, .av-row + small');
+      var email = emailEl && (emailEl.getAttribute('data-email') || emailEl.textContent || '').trim();
+      if (!email || email.indexOf('@') === -1) {
+        email = '';
+        var cells = tr.querySelectorAll('td');
+        for (var ci = 0; ci < cells.length && !email; ci++) {
+          var candidate = (cells[ci].textContent || '').trim();
+          var match = candidate.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+          if (match) email = match[0];
+        }
+      }
+      email = email || (listCache && listCache[name]);
+      if (email) email = email.toLowerCase();
       if (!email) { unmatched = true; return; }
       tr.setAttribute('data-hris-email', email);
       tr.style.cursor = 'pointer';
@@ -1295,6 +1310,10 @@
         if (ev.target.closest('a, button, input, select')) return;
         navTo(profileUrl(email));
       });
+      if (nameEl && !nameEl.closest('a, button')) {
+        nameEl.style.cursor = 'pointer';
+        nameEl.setAttribute('title', 'Open employee profile');
+      }
     });
     if ((!listCache || unmatched) && !listLoading && Date.now() - listFetchedAt > 5000) {
       listLoading = true;
