@@ -3290,6 +3290,18 @@ body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"])):not(:has(#
 @media (hover: none), (prefers-reduced-motion: reduce) {
   body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"])):not(:has(#hrms-chat-page)) :is(.content, .main > :not(.topbar):not(.content)) :is(.kanban-card, .stat-card, .kpi-card, .card, .hram-card, .hrms-iv-status-card, .ob-card, .ob-panel):hover { transform: none; }
 }
+/* Force the Performance cards to use flex layout */
+.grid-2 .card {
+    display: flex !important;
+    flex-direction: column !important;
+    justify-content: space-between !important;
+    height: 100%;
+}
+
+/* Push the chart to the bottom */
+.chart-bars {
+    margin-top: auto !important;
+}
 
 /* --- Recruiter (USA): page title wording --------------------------------
    hrms-usa-nav.js stores the USA name of the page in data-usa-title and
