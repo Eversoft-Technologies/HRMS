@@ -27,7 +27,7 @@
                 arrangements: [], roster: [], homes: [], mapFeed: { fences: [], employees: [] },
                 departurePolicy: { enabled: true, timeout_minutes: 15, warning_minutes: 5 },
                 mapMode: 'markers', mapFilter: 'all', deptFilter: 'all', basemap: 'auto',
-                searchQuery: '', busy: false, errors: {} };
+                searchQuery: '', asgSearch: '', asgPage: 1, asgPageSize: 10, busy: false, errors: {} };
 
   /* ── basemap providers & geocoding ───────────────────────────────────── */
   var BASEMAPS = {
@@ -534,7 +534,7 @@
     }
     function fmtDay(iso) {
       var dd = new Date(iso + 'T00:00:00');
-      return isNaN(dd) ? iso : dd.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+      return isNaN(dd) ? iso : dd.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
     }
     var heatPanel = document.createElement('div');
     heatPanel.className = 'haa-heat-panel';
@@ -1529,6 +1529,21 @@
       '.haa-back .haa-in::placeholder{color:var(--haa-faint)}',
       '.haa-back .haa-in:focus{outline:none;border-color:#0f9d58}',
       '.haa-back select.haa-in{cursor:pointer}',
+      '.haa-back .haa-combo{position:relative}',
+      '.haa-back .haa-combo-list{position:absolute;left:0;right:0;top:100%;margin-top:4px;max-height:240px;',
+      'overflow-y:auto;background:var(--haa-surface);border:1px solid var(--haa-line);border-radius:8px;',
+      'box-shadow:0 10px 28px rgba(0,0,0,.2);z-index:60;display:none}',
+      '.haa-back .haa-combo-list.open{display:block}',
+      '.haa-back .haa-combo-opt{padding:8px 10px;font-size:13px;color:var(--haa-text);cursor:pointer}',
+      '.haa-back .haa-combo-opt:hover{background:var(--haa-alt)}',
+      '.haa-back .haa-combo-opt[hidden]{display:none}',
+      '.haa-back .haa-pager{display:flex;align-items:center;justify-content:space-between;gap:10px;',
+      'flex-wrap:wrap;margin-top:10px;font-size:12.5px;color:var(--haa-muted)}',
+      '.haa-back .haa-pager-sz{width:auto;padding:5px 8px}',
+      '.haa-back .haa-pager-nav{display:flex;align-items:center;gap:6px;flex-wrap:wrap}',
+      '.haa-back .haa-pager-nav button{min-width:30px;height:28px;padding:0 9px;font-size:12.5px}',
+      '.haa-back .haa-pager-nav button.on{background:var(--haa-accent,#4f46e5);color:#fff}',
+      '.haa-back .haa-pager-gap{padding:0 2px;color:var(--haa-faint)}',
       /* ── buttons ────────────────────────────────────────────────────── */
       '.haa-back .haa-btn{padding:8px 16px;border-radius:8px;border:none;background:#0f9d58;color:#fff;',
       'font-size:13px;font-weight:700;cursor:pointer}',
@@ -1716,15 +1731,15 @@
         '<td><span class="haa-pill" style="background:' +
         ((f.isActive === false) ? 'var(--haa-err-bg);color:var(--haa-err-fg)' : 'var(--haa-ok-bg);color:var(--haa-ok-fg)') + '">' +
         ((f.isActive === false) ? 'Inactive' : 'Active') + '</span></td>' +
-        '<td style="text-align:right"><button class="haa-btn dgr" data-del-fence="' + f.id + '">Delete</button></td></tr>';
+      '<td style="text-align:right"><button class="haa-btn" data-edit-fence="' + f.id + '" style="margin-right: 6px;">Edit</button><button class="haa-btn dgr" data-del-fence="' + f.id + '">Delete</button></td>'
     }).join('');
     return errorBanner('fences') +
       '<div class="haa-card"><div style="font-weight:700;margin-bottom:12px;font-size:14px;">Add an office location</div>' +
       '<div class="haa-grid" style="margin-bottom:12px">' +
       '<div><label class="haa-lbl">Name</label><input class="haa-in" id="haa-f-name" placeholder="Head Office"></div>' +
       '<div><label class="haa-lbl">Radius (m)</label><input class="haa-in" id="haa-f-rad" value="200" type="number" min="20" step="10"></div>' +
-      '<div><label class="haa-lbl">Latitude</label><input class="haa-in" id="haa-f-lat" placeholder="click the map" readonly></div>' +
-      '<div><label class="haa-lbl">Longitude</label><input class="haa-in" id="haa-f-lng" placeholder="click the map" readonly></div>' +
+      '<div><label class="haa-lbl">Latitude</label><input class="haa-in" id="haa-f-lat" placeholder="click the map" ></div>' +
+      '<div><label class="haa-lbl">Longitude</label><input class="haa-in" id="haa-f-lng" placeholder="click the map" ></div>' +
       '</div>' +
       '<div id="haa-picker"></div>' +
       '<div style="margin-top:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' +
@@ -1783,6 +1798,39 @@
   }
 
   /* ── tab: shifts ─────────────────────────────────────────────────────── */
+  var SHIFT_TIMEZONES = [
+    ['IST', 'IST — India'],
+    ['ET', 'ET — US Eastern'],
+    ['CT', 'CT — US Central'],
+    ['MT', 'MT — US Mountain'],
+    ['PT', 'PT — US Pacific']
+  ];
+  var TZ_OFFSET_HOURS = { IST: 5.5, ET: -5, CT: -6, MT: -7, PT: -8 };
+
+  /* Shift times are authored in IST. Converts a start/end pair into the
+   * employee's assigned zone (standard, non-DST offsets) and reports how many
+   * calendar days later the shift ends there, so night-shift-style crossings
+   * introduced purely by the timezone shift still get the "(next day)" tag. */
+  function convertShiftTiming(startTime, endTime, isNightShift, tz) {
+    var deltaMin = Math.round(((TZ_OFFSET_HOURS[tz] != null ? TZ_OFFSET_HOURS[tz] : TZ_OFFSET_HOURS.IST) - TZ_OFFSET_HOURS.IST) * 60);
+    function toMinutes(t) {
+      var parts = String(t || '').split(':');
+      return (parseInt(parts[0], 10) || 0) * 60 + (parseInt(parts[1], 10) || 0);
+    }
+    function fmt(totalMin) {
+      var m = ((totalMin % 1440) + 1440) % 1440;
+      var h = Math.floor(m / 60), mm = m % 60;
+      return (h < 10 ? '0' : '') + h + ':' + (mm < 10 ? '0' : '') + mm;
+    }
+    var startMin = toMinutes(startTime);
+    var endMinRaw = toMinutes(endTime);
+    var endMin = (isNightShift || endMinRaw <= startMin) ? endMinRaw + 1440 : endMinRaw;
+    var startTotal = startMin + deltaMin;
+    var endTotal = endMin + deltaMin;
+    var dayDiff = Math.floor(endTotal / 1440) - Math.floor(startTotal / 1440);
+    return { start: fmt(startTotal), end: fmt(endTotal), dayDiff: dayDiff };
+  }
+
   function shiftsHtml() {
     var rows = state.shifts.map(function (s) {
       var st = String(s.startTime || s.start_time || '').slice(0, 5);
@@ -1816,10 +1864,24 @@
         : (!to || to >= todayIso) ? '<span class="haa-pill" style="background:var(--haa-ok-bg,#dcfce7);color:var(--haa-ok-fg,#166534)">Current</span>'
         : '<span class="haa-pill" style="background:var(--haa-chip);color:var(--haa-text2)">Ended</span>';
       if ((!to || to >= todayIso) && from <= todayIso) shiftOf[a.email] = sh ? sh.name : (a.shiftName || '');
-      return '<tr><td>' + esc(nameOf[a.email] || a.email) + (nameOf[a.email] ? '<div style="font-size:11px;color:var(--haa-faint)">' + esc(a.email) + '</div>' : '') + ' ' + status + '</td><td>' + esc(sh ? sh.name : (a.shiftName || '—')) + '</td>' +
+      var timing = '—';
+      if (sh) {
+        var tSt = String(sh.startTime || sh.start_time || '').slice(0, 5);
+        var tEn = String(sh.endTime || sh.end_time || '').slice(0, 5);
+        var tNight = !!(sh.isNightShift != null ? sh.isNightShift : sh.is_night_shift);
+        var tz = String(a.timezone || 'IST').toUpperCase();
+        if (tSt || tEn) {
+          var conv = convertShiftTiming(tSt, tEn, tNight, tz);
+          timing = esc(conv.start) + ' – ' + esc(conv.end) + ' ' + esc(tz) +
+            (conv.dayDiff >= 1 ? ' <span style="font-size:11px;color:var(--haa-faint)">(next day)</span>' : '');
+        }
+      }
+      return '<tr data-search="' + esc(((nameOf[a.email] || '') + ' ' + (a.email || '')).toLowerCase()) + '">' +
+        '<td>' + esc(nameOf[a.email] || a.email) + (nameOf[a.email] ? '<div style="font-size:11px;color:var(--haa-faint)">' + esc(a.email) + '</div>' : '') + ' ' + status + '</td><td>' + esc(sh ? sh.name : (a.shiftName || '—')) + '</td>' +
+        '<td>' + timing + '</td>' +
         '<td>' + esc(a.effectiveFrom || a.effective_from || '') + '</td>' +
         '<td>' + esc(a.effectiveTo || a.effective_to || 'open-ended') + '</td>' +
-        '<td style="text-align:right"><button class="haa-btn dgr" data-del-asg="' + a.id + '">Remove</button></td></tr>';
+        '<td style="text-align:right"><button class="haa-btn" data-edit-asg="' + a.id + '">Edit</button> <button class="haa-btn dgr" data-del-asg="' + a.id + '">Remove</button></td>'
     }).join('');
     return errorBanner('shifts') +
       '<div class="haa-card"><div style="font-weight:700;margin-bottom:12px;font-size:14px;">Create a shift</div>' +
@@ -1839,14 +1901,22 @@
         : '<div class="haa-empty">No shifts defined — everyone falls back to General Shift (09:00–18:00).</div>') +
       '<div class="haa-card" style="margin-top:18px"><div style="font-weight:700;margin-bottom:12px;font-size:14px;">Assign a shift</div>' +
       '<div class="haa-grid">' +
-      '<div><label class="haa-lbl">Employee</label>' + rosterSelect('haa-a-email', shiftOf) + '</div>' +
+      '<div><label class="haa-lbl">Employee</label>' + rosterCombobox('haa-a-email', shiftOf) + '</div>' +
       '<div><label class="haa-lbl">Shift</label><select class="haa-in" id="haa-a-shift">' + opts + '</select></div>' +
+      '<div><label class="haa-lbl">Time zone</label><select class="haa-in" id="haa-a-tz">' +
+      SHIFT_TIMEZONES.map(function (tz) { return '<option value="' + tz[0] + '">' + esc(tz[1]) + '</option>'; }).join('') +
+      '</select></div>' +
       '<div><label class="haa-lbl">Effective from</label><input class="haa-in" id="haa-a-from" type="date"></div>' +
       '<div><label class="haa-lbl">Until (optional)</label><input class="haa-in" id="haa-a-to" type="date"></div>' +
       '</div><div style="margin-top:12px"><button class="haa-btn" id="haa-a-add"' +
       (state.shifts.length ? '' : ' disabled') + '>Assign</button></div></div>' +
       (state.assignments.length
-        ? '<table class="haa-tbl"><thead><tr><th>Employee</th><th>Shift</th><th>From</th><th>Until</th><th></th></tr></thead><tbody>' + asg + '</tbody></table>'
+        ? '<input class="haa-in" id="haa-asg-search" type="text" placeholder="Search employee…" ' +
+          'autocomplete="off" style="max-width:280px;margin-bottom:10px" value="' + esc(state.asgSearch || '') + '">' +
+          '<table class="haa-tbl" id="haa-asg-tbl"><thead><tr><th>Employee</th><th>Shift</th><th>Timing</th><th>From</th><th>Until</th><th></th></tr></thead><tbody>' +
+          asg + '<tr id="haa-asg-empty-row" style="display:none"><td colspan="6" class="haa-empty"></td></tr>' +
+          '</tbody></table>' +
+          '<div id="haa-asg-pager"></div>'
         : '<div class="haa-empty">No individual assignments — everyone is on the default shift.</div>');
   }
 
@@ -1917,6 +1987,182 @@
       }).join('') + '</select>';
   }
 
+  /* A single field that is both the picker and the search box: click it (or
+   * type) and a filtered list of the roster drops open underneath, the way a
+   * searchable select behaves. The roster of a mid-size company does not fit
+   * on screen as a plain dropdown, and scrolling it to find one name is slow.
+   *
+   * `id` keeps working as a plain value holder — a hidden input, read with
+   * the same val(id) / document.getElementById(id).value everything else
+   * already uses — so only the markup changed, not how callers read it.
+   * Falls back to rosterSelect's own free-text input when the roster is
+   * empty, since there is nothing to pick from or search.
+   */
+  function rosterCombobox(id, current) {
+    if (!state.roster.length) return rosterSelect(id, current);
+    current = current || {};
+    var opts = state.roster.map(function (u) {
+      var tag = current[u.email] ? '  · ' + current[u.email] : '';
+      return '<div class="haa-combo-opt" data-val="' + esc(u.email) + '" data-text="' +
+        esc((u.name + ' ' + u.email + tag).toLowerCase()) + '">' +
+        esc(u.name) + ' <span style="color:var(--haa-faint)">(' + esc(u.email) + ')</span>' +
+        (tag ? '<span style="color:var(--haa-faint)">' + esc(tag) + '</span>' : '') + '</div>';
+    }).join('');
+    return '<div class="haa-combo" data-combo="' + id + '">' +
+      '<input type="hidden" id="' + id + '">' +
+      '<input class="haa-in haa-combo-in" type="text" id="' + id + '-search" ' +
+      'placeholder="Search employee…" autocomplete="off">' +
+      '<div class="haa-combo-list" id="' + id + '-list">' + opts + '</div>' +
+      '</div>';
+  }
+
+  // One delegated listener for the whole page lifetime closes any open combo
+  // clicked outside of, rather than each bindRosterCombobox() call adding its
+  // own document listener — this runs again on every render() (every tab
+  // switch, every create/edit/delete), and a fresh listener each time would
+  // leak for as long as the admin panel stays open.
+  var comboOutsideBound = false;
+  function ensureComboOutsideHandler() {
+    if (comboOutsideBound) return;
+    comboOutsideBound = true;
+    document.addEventListener('mousedown', function (e) {
+      document.querySelectorAll('.haa-combo-list.open').forEach(function (l) {
+        var wrap = l.closest('.haa-combo');
+        if (wrap && !wrap.contains(e.target)) l.classList.remove('open');
+      });
+    });
+  }
+
+  function bindRosterCombobox(body, id) {
+    var wrap = body.querySelector('.haa-combo[data-combo="' + id + '"]');
+    if (!wrap) return;
+    var hidden = wrap.querySelector('#' + id);
+    var input = wrap.querySelector('#' + id + '-search');
+    var list = wrap.querySelector('#' + id + '-list');
+    if (!hidden || !input || !list) return;
+
+    function filter() {
+      var q = input.value.toLowerCase().trim();
+      var opts = list.querySelectorAll('.haa-combo-opt');
+      for (var i = 0; i < opts.length; i++) {
+        opts[i].hidden = !!q && opts[i].getAttribute('data-text').indexOf(q) === -1;
+      }
+    }
+    function open() { filter(); list.classList.add('open'); }
+
+    input.addEventListener('focus', open);
+    input.addEventListener('click', open);
+    input.addEventListener('input', function () { hidden.value = ''; open(); });
+    list.addEventListener('mousedown', function (e) {
+      var opt = e.target.closest('.haa-combo-opt');
+      if (!opt) return;
+      e.preventDefault();
+      hidden.value = opt.getAttribute('data-val');
+      input.value = opt.textContent.trim();
+      list.classList.remove('open');
+    });
+    ensureComboOutsideHandler();
+  }
+
+  // Sets both halves of a rosterCombobox field — the hidden value callers
+  // read and the visible search text — e.g. when Edit pre-fills the form.
+  function setRosterCombobox(id, email) {
+    var hidden = document.getElementById(id);
+    if (!hidden) return;
+    hidden.value = email || '';
+    var input = document.getElementById(id + '-search');
+    if (!input) return;
+    var match = state.roster.find(function (u) { return u.email === email; });
+    input.value = match ? (match.name + ' (' + match.email + ')') : (email || '');
+  }
+
+  /* Search + paging for the shift-assignments table — sidecar style, like
+   * hrms-hris-pager.js: every row is already in the DOM (rendered once by
+   * shiftsHtml()), this only shows/hides which ones are on the current page
+   * of the current search. That keeps the search box from ever losing focus
+   * mid-keystroke, which a full re-render on every character would cause.
+   */
+  function pageNumberList(current, pages) {
+    // 1 … 4 5 6 … 12 — first, last and the current page's immediate neighbours
+    var out = [], last = 0;
+    for (var p = 1; p <= pages; p++) {
+      if (p === 1 || p === pages || Math.abs(p - current) <= 1) {
+        if (last && p - last > 1) out.push(0);
+        out.push(p); last = p;
+      }
+    }
+    return out;
+  }
+
+  function applyAsgPager(body) {
+    var tbl = body.querySelector('#haa-asg-tbl');
+    var pagerBox = body.querySelector('#haa-asg-pager');
+    if (!tbl || !pagerBox) return;
+    var emptyRow = tbl.querySelector('#haa-asg-empty-row');
+    var rows = Array.prototype.slice.call(tbl.querySelectorAll('tbody > tr[data-search]'));
+    var searchEl = body.querySelector('#haa-asg-search');
+    var q = ((searchEl ? searchEl.value : state.asgSearch) || '').toLowerCase().trim();
+
+    var matched = rows.filter(function (tr) { return !q || tr.getAttribute('data-search').indexOf(q) !== -1; });
+    var total = matched.length;
+    var size = state.asgPageSize || 10;
+    var pages = Math.max(1, Math.ceil(total / size));
+    if (state.asgPage > pages) state.asgPage = pages;
+    if (state.asgPage < 1) state.asgPage = 1;
+    var from = (state.asgPage - 1) * size, to = Math.min(total, from + size);
+
+    rows.forEach(function (tr) { tr.style.display = 'none'; });
+    for (var i = from; i < to; i++) matched[i].style.display = '';
+
+    if (emptyRow) {
+      emptyRow.style.display = total ? 'none' : '';
+      emptyRow.querySelector('td').textContent = q
+        ? 'No employee matches "' + searchEl.value + '".'
+        : 'No individual assignments — everyone is on the default shift.';
+    }
+
+    var sizeOpts = [10, 25, 50].map(function (n) {
+      return '<option value="' + n + '"' + (n === size ? ' selected' : '') + '>' + n + ' / page</option>';
+    }).join('');
+    var nav = '<button type="button" class="haa-btn sec" data-asg-pg="prev"' + (state.asgPage <= 1 ? ' disabled' : '') + '>Prev</button>';
+    pageNumberList(state.asgPage, pages).forEach(function (p) {
+      nav += p ? '<button type="button" class="haa-btn' + (p === state.asgPage ? ' on' : ' sec') + '" data-asg-pg="' + p + '">' + p + '</button>'
+               : '<span class="haa-pager-gap">…</span>';
+    });
+    nav += '<button type="button" class="haa-btn sec" data-asg-pg="next"' + (state.asgPage >= pages ? ' disabled' : '') + '>Next →</button>';
+
+    pagerBox.className = 'haa-pager';
+    pagerBox.innerHTML = '<select class="haa-in haa-pager-sz" id="haa-asg-pagesize">' + sizeOpts + '</select>' +
+      '<div class="haa-pager-nav">' + nav + '</div>';
+
+    pagerBox.querySelector('#haa-asg-pagesize').onchange = function (e) {
+      state.asgPageSize = parseInt(e.target.value, 10) || 10;
+      state.asgPage = 1;
+      applyAsgPager(body);
+    };
+    pagerBox.querySelectorAll('[data-asg-pg]').forEach(function (btn) {
+      btn.onclick = function () {
+        var v = btn.getAttribute('data-asg-pg');
+        state.asgPage = v === 'prev' ? state.asgPage - 1 : v === 'next' ? state.asgPage + 1 : parseInt(v, 10) || 1;
+        applyAsgPager(body);
+      };
+    });
+  }
+
+  function bindAsgPager(body) {
+    var tbl = body.querySelector('#haa-asg-tbl');
+    if (!tbl) return;
+    var searchEl = body.querySelector('#haa-asg-search');
+    if (searchEl) {
+      searchEl.addEventListener('input', function () {
+        state.asgSearch = searchEl.value;
+        state.asgPage = 1;
+        applyAsgPager(body);
+      });
+    }
+    applyAsgPager(body);
+  }
+
   function employeePicker() {
     if (!state.roster.length) {
       return '<input class="haa-in" id="haa-wa-email" placeholder="person@company.com">' +
@@ -1927,14 +2173,7 @@
     }
     var have = {};
     state.arrangements.forEach(function (a) { have[a.email] = a.arrangement; });
-    return '<select class="haa-in" id="haa-wa-email">' +
-      '<option value="">Select an employee…</option>' +
-      state.roster.map(function (u) {
-        var tag = have[u.email] ? '  · ' + have[u.email] : '';
-        return '<option value="' + esc(u.email) + '">' +
-          esc(u.name) + ' (' + esc(u.email) + ')' + esc(tag) + '</option>';
-      }).join('') +
-      '</select>';
+    return rosterCombobox('haa-wa-email', have);
   }
 
   function arrangementsHtml() {
@@ -2263,13 +2502,136 @@
     for (var i = 0; i < tabs.length; i++) {
       tabs[i].className = 'haa-tab' + (tabs[i].getAttribute('data-tab') === state.tab ? ' on' : '');
     }
+    // On a phone the tab row swipes sideways: bring the chosen tab to the middle
+    // of the row so it is never left half hidden at the edge.
+    try {
+      var strip = el.querySelector('.haa-tabs');
+      var onTab = el.querySelector('.haa-tab.on');
+      if (strip && onTab && strip.scrollWidth > strip.clientWidth + 1) {
+        var sr = strip.getBoundingClientRect(), tr = onTab.getBoundingClientRect();
+        var to = strip.scrollLeft + (tr.left - sr.left) - (strip.clientWidth - tr.width) / 2;
+        to = Math.max(0, Math.min(to, strip.scrollWidth - strip.clientWidth));
+        if (Math.abs(to - strip.scrollLeft) > 2) {
+          if (strip.scrollTo && !document.hidden) strip.scrollTo({ left: to, behavior: 'smooth' }); else strip.scrollLeft = to;
+        }
+      }
+    } catch (_) {}
     if (state.busy) { body.innerHTML = '<div class="haa-empty">Loading…</div>'; return; }
     body.innerHTML = state.tab === 'live_map' ? liveMapHtml()
       : state.tab === 'fences' ? fencesHtml()
       : state.tab === 'shifts' ? shiftsHtml()
       : state.tab === 'arrangements' ? arrangementsHtml()
+      : state.tab === 'recalc' ? recalcHtml()
       : (homesHtml() + reviewsHtml());
     wire(body);
+    if (state.tab === 'recalc') wireRecalc(body);
+  }
+
+
+  /* ── Recalculate Hours ─────────────────────────────────────────────────
+     Days saved before multi-session days added up kept only their last
+     session. Preview what recalculating would change (old → new hours per
+     day), then apply. Defaults to this month: earlier months may already be
+     paid, so including them needs an explicit tick. The server refuses an
+     apply if the records moved since the preview. */
+  function ymdLocal(d) { return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2); }
+  function rcState() {
+    if (!state.recalc) {
+      var now = new Date();
+      state.recalc = { from: ymdLocal(new Date(now.getFullYear(), now.getMonth(), 1)), to: ymdLocal(now),
+                       email: '', data: null, loading: false, applying: false, allowClosed: false, msg: '', bad: false };
+    }
+    return state.recalc;
+  }
+  function hmTxt(m) { m = Math.max(0, Math.round(m || 0)); var h = Math.floor(m / 60); return (h ? h + 'h ' : '') + (m % 60) + 'm'; }
+  function recalcHtml() {
+    var s = rcState(), d = s.data;
+    var monthStart = d ? d.monthStart : null;
+    var closed = monthStart ? s.from < monthStart : (s.from < rcState().from && false);
+    var html =
+      '<div style="font-size:13px;color:var(--haa-sub,#64748b);line-height:1.6;margin-bottom:14px">' +
+        'Days where someone checked in and out more than once were saved with only their <b>last</b> session. ' +
+        'This rebuilds each closed day from its check-in / check-out records (each session minus its own breaks) and ' +
+        'shows what would change. <b>Nothing changes until you click Apply.</b> Every change is noted on that day’s timeline.</div>' +
+      '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:14px">' +
+        '<label style="font-size:12px">From<br><input class="haa-in" type="date" id="rc-from" value="' + esc(s.from) + '"></label>' +
+        '<label style="font-size:12px">To<br><input class="haa-in" type="date" id="rc-to" value="' + esc(s.to) + '"></label>' +
+        '<label style="font-size:12px;flex:1;min-width:200px">Employee email (optional)<br><input class="haa-in" type="email" id="rc-email" placeholder="Everyone" value="' + esc(s.email) + '" style="width:100%"></label>' +
+        '<button class="haa-btn" id="rc-preview"' + (s.loading ? ' disabled' : '') + '>' + (s.loading ? 'Checking…' : 'Preview') + '</button>' +
+      '</div>';
+    if (s.msg) html += '<div style="margin-bottom:12px;padding:10px 12px;border-radius:8px;font-size:13px;background:' + (s.bad ? 'rgba(220,38,38,.12);color:#dc2626' : 'rgba(15,157,88,.12);color:#0f9d58') + '">' + esc(s.msg) + '</div>';
+    if (!d) return html + '<div class="haa-empty">Pick a range and click Preview. The default is this month, which has not been paid yet.</div>';
+    if (d.includesClosedMonths) {
+      html += '<div style="margin-bottom:12px;padding:10px 12px;border-radius:8px;font-size:13px;background:rgba(245,158,11,.14);color:#b45309">' +
+        'This range starts before ' + esc(d.monthStart) + '. Those months may already be paid — changing them changes historical figures.</div>';
+    }
+    if (!d.changes.length) {
+      html += '<div class="haa-empty">Nothing to change between ' + esc(d.from) + ' and ' + esc(d.to) + ' — every closed day already adds up.</div>';
+    } else {
+      html += '<div style="font-size:13px;margin-bottom:8px"><b>' + d.changes.length + '</b> day' + (d.changes.length === 1 ? '' : 's') + ' would change:</div>' +
+        '<div style="max-height:340px;overflow:auto;border-radius:8px"><table class="haa-tbl"><thead><tr><th>Date</th><th>Employee</th><th>Worked now</th><th>Worked after</th><th>Overtime now</th><th>Overtime after</th></tr></thead><tbody>' +
+        d.changes.map(function (r) {
+          var up = r.newWorkedMinutes > r.oldWorkedMinutes;
+          return '<tr><td>' + esc(r.date) + '</td><td>' + esc(r.employee) + '<div style="font-size:11px;opacity:.65">' + esc(r.email) + '</div></td>' +
+            '<td>' + hmTxt(r.oldWorkedMinutes) + '</td><td style="font-weight:700;color:' + (up ? '#0f9d58' : '#dc2626') + '">' + hmTxt(r.newWorkedMinutes) + '</td>' +
+            '<td>' + hmTxt(r.oldOvertimeMinutes) + '</td><td style="font-weight:600">' + hmTxt(r.newOvertimeMinutes) + '</td></tr>';
+        }).join('') + '</tbody></table></div>' +
+        '<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:14px">' +
+          (d.includesClosedMonths ? '<label style="font-size:12.5px;display:flex;gap:6px;align-items:center"><input type="checkbox" id="rc-closed"' + (s.allowClosed ? ' checked' : '') + '> I understand earlier months may already be paid</label>' : '') +
+          '<button class="haa-btn" id="rc-apply"' + (s.applying || (d.includesClosedMonths && !s.allowClosed) ? ' disabled' : '') + '>' + (s.applying ? 'Applying…' : 'Apply ' + d.changes.length + ' change' + (d.changes.length === 1 ? '' : 's')) + '</button>' +
+          '<button class="haa-btn sec" id="rc-csv">Download CSV</button>' +
+        '</div>';
+    }
+    if (d.skipped && d.skipped.length) {
+      html += '<div style="margin-top:14px;font-size:12.5px;color:var(--haa-sub,#64748b)"><b>' + d.skipped.length + '</b> day' + (d.skipped.length === 1 ? ' is' : 's are') +
+        ' left as they are — their check-in / check-out records do not pair up (e.g. a check-out was never recorded): ' +
+        d.skipped.slice(0, 15).map(function (r) { return esc(r.employee + ' ' + r.date); }).join(', ') + (d.skipped.length > 15 ? ' …' : '') + '</div>';
+    }
+    return html;
+  }
+  function recalcQuery() {
+    var s = rcState();
+    return 'from=' + encodeURIComponent(s.from) + '&to=' + encodeURIComponent(s.to) + (s.email ? '&email=' + encodeURIComponent(s.email) : '');
+  }
+  function wireRecalc(body) {
+    var s = rcState();
+    var f = body.querySelector('#rc-from'), t = body.querySelector('#rc-to'), e = body.querySelector('#rc-email');
+    if (!f) return;
+    function sync() { s.from = f.value; s.to = t.value; s.email = e.value.trim(); }
+    [f, t, e].forEach(function (x) { x.onchange = function () { sync(); s.data = null; s.msg = ''; render(); }; });
+    body.querySelector('#rc-preview').onclick = function () {
+      sync(); s.loading = true; s.msg = ''; s.allowClosed = false; render();
+      api('/api/attendance/recalculate?' + recalcQuery())
+        .then(function (d) { s.data = d; })
+        .catch(function (er) { s.data = null; s.msg = er.message; s.bad = true; })
+        .then(function () { s.loading = false; render(); });
+    };
+    var cl = body.querySelector('#rc-closed');
+    if (cl) cl.onchange = function () { s.allowClosed = cl.checked; render(); };
+    var csv = body.querySelector('#rc-csv');
+    if (csv) csv.onclick = function () {
+      var lines = [['date', 'employee', 'email', 'worked_now_min', 'worked_after_min', 'overtime_now_min', 'overtime_after_min']]
+        .concat(s.data.changes.map(function (r) { return [r.date, r.employee, r.email, r.oldWorkedMinutes, r.newWorkedMinutes, r.oldOvertimeMinutes, r.newOvertimeMinutes]; }));
+      var text = lines.map(function (row) { return row.map(function (v) { return '"' + String(v).replace(/"/g, '""') + '"'; }).join(','); }).join('\n');
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([text], { type: 'text/csv' }));
+      a.download = 'attendance-recalculation-' + s.data.from + '-to-' + s.data.to + '.csv';
+      a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+    };
+    var ap = body.querySelector('#rc-apply');
+    if (ap) ap.onclick = function () {
+      var n = s.data.changes.length;
+      if (!window.confirm('Update worked time and overtime on ' + n + ' day' + (n === 1 ? '' : 's') + '? Each change is noted on that day’s timeline.')) return;
+      s.applying = true; render();
+      api('/api/attendance/recalculate', { method: 'POST', body: JSON.stringify({
+        from: s.data.from, to: s.data.to, email: s.email, expect: n, allowClosedMonths: s.allowClosed }) })
+        .then(function (r) {
+          s.msg = r.applied + ' day' + (r.applied === 1 ? '' : 's') + ' updated.'; s.bad = false; s.data = null;
+          toast(s.msg);
+        })
+        .catch(function (er) { s.msg = er.message; s.bad = true; })
+        .then(function () { s.applying = false; render(); });
+    };
   }
 
   function val(id) { var e = document.getElementById(id); return e ? e.value.trim() : ''; }
@@ -2504,17 +2866,23 @@
       });
     });
 
+    bindRosterCombobox(body, 'haa-a-email');
+
+    bindAsgPager(body);
+
     var aAdd = body.querySelector('#haa-a-add');
     if (aAdd) aAdd.onclick = function () {
       var email = val('haa-a-email'), from = val('haa-a-from'), to = val('haa-a-to');
       var shiftId = parseInt(val('haa-a-shift'), 10);
+      var tz = val('haa-a-tz') || 'IST';
       if (!email || !from || !shiftId) return toast('Employee, shift and start date are required', true);
       api('/api/shift-assignments', {
         method: 'POST',
         body: JSON.stringify({
           email: email, shift: shiftId, shiftId: shiftId,
           effectiveFrom: from, effective_from: from,
-          effectiveTo: to || null, effective_to: to || null
+          effectiveTo: to || null, effective_to: to || null,
+          timezone: tz
         })
       }).then(function () { toast('Shift assigned'); loadAll(); })
         .catch(function (e) { toast(e.message, true); });
@@ -2536,6 +2904,71 @@
     bindDelete('data-del-fence', '/api/attendance/geofences/', 'location');
     bindDelete('data-del-shift', '/api/shifts/', 'shift');
     bindDelete('data-del-asg', '/api/shift-assignments/', 'assignment');
+    bindEdit('data-edit-asg')
+    function bindEdit(attr) {
+    body.onclick = function (e) {
+        var el = e.target.closest('[' + attr + ']');
+        if (!el) return;
+        e.stopPropagation();
+        var id = el.getAttribute(attr);
+        
+        if (attr === 'data-edit-asg') {
+            var assignment = state.assignments.find(function (a) {
+                return a.id == id || a.id == parseInt(id, 10) || String(a.id) === String(id);
+            });
+            if (assignment) {
+                setRosterCombobox('haa-a-email', assignment.email);
+                document.getElementById('haa-a-shift').value = assignment.shiftId || assignment.shift;
+                document.getElementById('haa-a-from').value = assignment.effectiveFrom || '';
+                document.getElementById('haa-a-to').value = assignment.effectiveTo || '';
+                state.editingAssignmentId = assignment.id;
+            }
+        } else {
+            var fence = state.fences && state.fences.find(function (f) {
+                return f.id == id || f.id == parseInt(id, 10) || String(f.id) === String(id);
+            });
+            if (fence) {
+                state.editingFenceId = fence.id;
+                document.getElementById('haa-f-name').value = fence.name || '';
+                document.getElementById('haa-f-rad').value = fence.radiusMeters || fence.radius || '';
+                document.getElementById('haa-f-lat').value = fence.latitude || '';
+                document.getElementById('haa-f-lng').value = fence.longitude || '';
+            }
+        }
+    };
+}
+
+bindEdit('data-edit-fence');
+bindEdit('data-edit-asg');
+    function bindEdit(attr) {
+        var els = body.querySelectorAll('[' + attr + ']');
+        for (var i = 0; i < els.length; i++) {
+            (function (el) {
+                el.onclick = function (e) {
+                    e.stopPropagation();
+                    var id = el.getAttribute(attr);
+                    var fence = state.fences && state.fences.find(function(f) { 
+                        return f.id == id || f.id == parseInt(id, 10) || String(f.id) === String(id); 
+                    });
+                    
+                    if (fence) {
+                        // Store the editing ID so the save action knows we are updating
+                        state.editingFenceId = fence.id;
+                        
+                        document.getElementById('haa-f-name').value = fence.name || '';
+                        document.getElementById('haa-f-rad').value = fence.radiusMeters || fence.radius_meters || 200;
+                        document.getElementById('haa-f-lat').value = fence.latitude || '';
+                        document.getElementById('haa-f-lng').value = fence.longitude || '';
+                        
+                        // Change button text to indicate update mode
+                        var addBtn = document.getElementById('haa-f-add');
+                        if (addBtn) addBtn.textContent = 'Update Location';
+                    }
+                };
+            })(els[i]);
+        }
+    }
+    bindEdit('data-edit-fence');
 
     function decide(attr, decision) {
       var els = body.querySelectorAll('[' + attr + ']');
@@ -2598,6 +3031,7 @@
     });
 
     /* ── work arrangements ─────────────────────────────────────────────── */
+    bindRosterCombobox(body, 'haa-wa-email');
     var kind = body.querySelector('#haa-wa-kind');
     if (kind) {
       var hybridBox = body.querySelector('#haa-wa-hybrid');
@@ -2624,7 +3058,7 @@
       var emailEl = body.querySelector('#haa-wa-email');
       var email = (emailEl.value || '').trim();
       if (!email) {
-        return toast(emailEl.tagName === 'SELECT'
+        return toast(body.querySelector('#haa-wa-email-search')
           ? 'Select an employee' : 'Employee email is required', true);
       }
       // Carry the name across so the table reads "Ravi Kumar", not a bare
@@ -2756,6 +3190,7 @@
       '<button class="haa-tab" data-tab="shifts">Shifts</button>' +
       '<button class="haa-tab" data-tab="reviews">Off-site Approvals</button>' +
       '<button class="haa-tab" data-tab="arrangements">Work Arrangements</button>' +
+      '<button class="haa-tab" data-tab="recalc">Recalculate Hours</button>' +
       '</div><div class="haa-body"></div></div>';
     document.body.appendChild(back);
 
@@ -2780,9 +3215,17 @@
     return /check-?in/i.test(location.pathname + location.hash);
   }
 
+  /* The shared can() fails OPEN while permissions are still loading (or if
+     loading failed), which is right for ordinary page content but showed this
+     admin-only button to every role — Recruiters and Employees included — until
+     the real set arrived. An admin control waits for a confirmed answer. */
+  function permsConfirmed() {
+    try { return !!(window.__hrmsPerms && window.__hrmsPerms()); } catch (_) { return false; }
+  }
+
   function mount() {
     var existing = document.getElementById(BTN_ID);
-    if (!onAttendancePage() || !can('attendance.edit')) {
+    if (!onAttendancePage() || !permsConfirmed() || !can('attendance.edit')) {
       if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
       return;
     }

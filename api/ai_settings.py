@@ -55,7 +55,10 @@ encryption_ready = secret_box.encryption_ready
 
 
 def _encrypt(plain):
-    f = _fernet()
+    # create=True: with no HRMS_SECRETS_KEY the key file is made on the first
+    # save — encryption_ready() promises exactly that. Without it the first
+    # save on a fresh server crashed (500) although the page said "ready".
+    f = _fernet(create=True)
     if f is None:
         raise SecretsNotConfigured()
     return f.encrypt(plain.encode()).decode()
@@ -197,6 +200,11 @@ def _msg(message, status, code=None):
         body['code'] = code
     return Response(body, status=status)
 
+def _encryption_failed(env_name):
+    return _msg(f'The key could not be stored encrypted: the server has no usable encryption key and could not '
+                f'create {secret_box.key_file_path()} (check that folder is writable). Set {SECRETS_ENV} in the '
+                f'server .env, or put the key in {env_name} instead.', 503, 'ENCRYPTION_NOT_CONFIGURED')
+
 
 def _manage_guard(request):
     """ai.settings.manage plus a valid sign-in token for the same person.
@@ -290,7 +298,10 @@ def ai_settings_key(request):
         return _msg(f'Key not saved: {message}', 400, 'KEY_INVALID')
     row = _managed_row() or AIProviderSetting(provider=PROVIDER)
     rotated = bool(row.encrypted_key)
-    row.encrypted_key = _encrypt(key)
+    try:
+        row.encrypted_key = _encrypt(key)
+    except SecretsNotConfigured:
+        return _encryption_failed('ANTHROPIC_API_KEY')
     row.key_fingerprint = fp
     row.validated_at = timezone.now()
     row.updated_by = caller
@@ -303,7 +314,7 @@ def ai_settings_key(request):
 @api_view(['GET'])
 @require_perm('ai.settings.view')
 def ai_settings_audit(request):
-    rows = AISettingsAudit.objects.all()[:50]
+    rows = AISettingsAudit.objects.filter(provider=PROVIDER)[:50]   # Deepgram has its own history
     return Response({'events': [{
         'actor': r.actor_email, 'action': r.action, 'keyFingerprint': r.key_fingerprint,
         'detail': r.detail, 'at': r.created_at.isoformat() if r.created_at else None,

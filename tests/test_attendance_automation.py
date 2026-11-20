@@ -203,6 +203,11 @@ class AutoCheckoutTests(TestCase):
         )
 
     def test_an_auto_checkout_is_stamped_and_labelled(self):
+        # the server's own record of 16 minutes outside (see geofence-check)
+        from api.timeutil import local_now
+        now = local_now()
+        EmployeeAttendance.objects.filter(email=self.email).update(
+            outside_since=now - timedelta(minutes=16), outside_last_at=now - timedelta(minutes=1))
         resp = self.client.post('/api/attendance/check-out',
                                 data={'email': self.email, 'auto': 'geofence'},
                                 content_type='application/json',
