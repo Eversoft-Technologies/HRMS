@@ -1099,13 +1099,31 @@ div[style*="position: fixed"][style*="bottom: 80px"][style*="right: 28px"] {
 }
 
 /* --- cards: quiet by default, responsive on approach ------------------ */
-.hrms-dash .card {
+.hrms-dash .card,
+.hrms-dash .hrms-dash-pro-card {
   transition: transform .2s cubic-bezier(.22, 1, .36, 1),
               box-shadow .2s ease, border-color .2s ease;
 }
-.hrms-dash .card:hover {
+/* .hrms-dash-pro-card is the newer card used for Department Headcount,
+   Today's Attendance, Pending Actions and Live Highlights. It was left out
+   of this rule, so those four cards did not react to the pointer while the
+   Headcount chart beside them (a plain .card) did. The box-shadow is marked
+   important only for the pro card, whose resting shadow is set inline. */
+.hrms-dash .card:hover,
+.hrms-dash .hrms-dash-pro-card:hover {
   transform: translateY(-2px);
   box-shadow: 0 10px 26px rgba(12, 20, 40, .10);
+  border-color: color-mix(in srgb, var(--accent) 20%, var(--border2));
+}
+.hrms-dash .hrms-dash-pro-card:hover { box-shadow: 0 10px 26px rgba(12, 20, 40, .10) !important; }
+/* "Headcount & Hiring Growth" is a plain .card. A site-wide card rule further
+   down this file (higher specificity) sets transform:none on hover, and the
+   card's resting shadow is set inline, so neither the lift nor the shadow
+   showed; only its border changed. This gives it the same hover as the four
+   cards above. */
+.hrms-dash .hrms-dash-charts > .card:hover {
+  transform: translateY(-2px) !important;
+  box-shadow: 0 10px 26px rgba(12, 20, 40, .10) !important;
   border-color: color-mix(in srgb, var(--accent) 20%, var(--border2));
 }
 
@@ -1196,7 +1214,10 @@ div[style*="position: fixed"][style*="bottom: 80px"][style*="right: 28px"] {
 /* --- phones: no hover, so drop the lift and keep the entrance ----------- */
 @media (hover: none) {
   .hrms-dash .stat-card:hover,
-  .hrms-dash .card:hover { transform: none; box-shadow: none; }
+  .hrms-dash .card:hover,
+  .hrms-dash .hrms-dash-pro-card:hover { transform: none; box-shadow: none; }
+  .hrms-dash .hrms-dash-pro-card:hover { box-shadow: 0 2px 10px rgba(0,0,0,0.02) !important; }
+  .hrms-dash .hrms-dash-charts > .card:hover { transform: none !important; box-shadow: 0 4px 14px rgba(0,0,0,0.03) !important; }
 }
 
 
@@ -3300,3 +3321,81 @@ body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"])):not(:has(#
 .topbar .topbar-title[data-usa-title]::after { content: attr(data-usa-title); font-size: 16px; }
 @media (max-width: 768px) { .topbar .topbar-title[data-usa-title]::after { font-size: 14px; } }
 @media (max-width: 400px) { .topbar .topbar-title[data-usa-title]::after { font-size: 13px; } }
+
+/* ==========================================================================
+   Hover audit (Nov 2026) — every clickable thing answers the pointer, and
+   the answer can be seen on the dark theme.
+
+   A pass over every page, as every role, in both themes found two gaps:
+
+   1. Buttons, tabs and chips with no hover state at all (the pointer turned
+      into a hand and nothing else happened).
+   2. Cards whose hover was a dark shadow. On the dark theme a dark shadow on
+      a near-black page cannot be seen, so only a faint border change was left.
+
+   Nothing here changes how anything looks at rest.
+   ========================================================================== */
+
+/* --- 1a. colour-filled buttons: brighten, rise 1px, soft glow ------------ */
+:is(.haa-ci-card .btn-sm, .haa-btn, .haa-switch, .hcx-newbtn, .wsq-tabs button,
+    .hram-pill.active, .hcx-chip.on, .cc-toggle-tab.active):not(:disabled):hover {
+  filter: brightness(1.12) !important;
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px color-mix(in srgb, var(--accent) 38%, transparent) !important;
+}
+/* round controls in the top bar and the floating assistant button: glow ring */
+:is(.topbar .av, .hrms-ci-switch, .app > button):hover {
+  filter: brightness(1.12) !important;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 32%, transparent) !important;
+}
+
+/* --- 1b. plain buttons, tabs and chips: accent tint, border and full-strength text --- */
+:is(.hrms-toolbar-btn, .hrms-toolbar-btn ~ button, .hram-pill, .hcx-chip, .tk-tab, .tk-kpi,
+    .ts-tab, .ts-day, .cc-toggle-tab, .hrms-dir-page-btn, .oc-chip, .ob-row):not(.active):not(.on):not(:disabled):hover {
+  background-color: color-mix(in srgb, var(--accent) 14%, var(--bg2)) !important;
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--border2)) !important;
+  color: var(--text) !important;
+}
+:is(.tk-check, .hrms-drawer-signout):hover { color: var(--accent) !important; }
+/* column headers that sort or filter: a tinted cell, not just lighter text */
+:is(.hrms-table-header-sortable, .jt-th, .cc-th):hover {
+  background-color: color-mix(in srgb, var(--accent) 12%, transparent) !important;
+  color: var(--text) !important;
+}
+:is(.hrms-toolbar-btn, .hrms-toolbar-btn ~ button, .hram-pill, .hcx-chip, .tk-tab, .tk-kpi, .ts-tab, .ts-day,
+    .cc-toggle-tab, .hrms-dir-page-btn, .oc-chip, .ob-row, .haa-btn, .haa-switch, .hcx-newbtn, .wsq-tabs button,
+    .hrms-table-header-sortable, .jt-th, .cc-th) {
+  transition: background-color .16s ease, border-color .16s ease, color .16s ease,
+              box-shadow .16s ease, transform .16s ease, filter .16s ease;
+}
+
+/* --- 2. dark theme: card hover that shows ---------------------------------
+   The dark shadow is replaced by a thin accent ring and a soft accent glow,
+   with a brighter border. Check In / Out and Chat keep their own look, as
+   before. */
+:root[data-theme="dark"] body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"])):not(:has(#hrms-chat-page)) :is(.content, .main > :not(.topbar):not(.content)) :is(.kanban-card, .stat-card, .kpi-card, .card, .ob-panel, .hram-card, .hrms-iv-status-card, .pr-stat-card):hover {
+  border-color: color-mix(in srgb, var(--accent) 62%, var(--border2)) !important;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 34%, transparent),
+              0 10px 30px color-mix(in srgb, var(--accent) 20%, transparent) !important;
+}
+:root[data-theme="dark"] .hrms-dash :is(.hrms-dash-pro-card, .hrms-dash-charts > .card):hover {
+  border-color: color-mix(in srgb, var(--accent) 62%, var(--border2)) !important;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 34%, transparent),
+              0 10px 30px color-mix(in srgb, var(--accent) 20%, transparent) !important;
+}
+
+/* Recruit toolbar (Filters, KPI Dashboard): an older rule with a higher rank
+   set a hover background one shade from the resting one, and the buttons'
+   inline border kept its colour, so nothing visible changed. */
+div:has(> #hrms-kpi-btn) button:hover, #hrms-kpi-btn:hover,
+html[data-theme="light"] div:has(> #hrms-kpi-btn) button:hover, html[data-theme="light"] #hrms-kpi-btn:hover {
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg2)) !important;
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--border2)) !important;
+  color: var(--text) !important;
+}
+
+/* touch screens have no hover: leave everything at rest */
+@media (hover: none) {
+  :is(.haa-ci-card .btn-sm, .haa-btn, .haa-switch, .hcx-newbtn, .wsq-tabs button, .hram-pill.active, .hcx-chip.on,
+      .cc-toggle-tab.active, .topbar .av, .hrms-ci-switch, .app > button):hover { filter: none !important; transform: none; }
+}
