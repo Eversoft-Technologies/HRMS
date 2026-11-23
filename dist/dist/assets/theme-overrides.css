@@ -3311,6 +3311,18 @@ body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"])):not(:has(#
 @media (hover: none), (prefers-reduced-motion: reduce) {
   body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"])):not(:has(#hrms-chat-page)) :is(.content, .main > :not(.topbar):not(.content)) :is(.kanban-card, .stat-card, .kpi-card, .card, .hram-card, .hrms-iv-status-card, .ob-card, .ob-panel):hover { transform: none; }
 }
+/* Force the Performance cards to use flex layout */
+.grid-2 .card {
+    display: flex !important;
+    flex-direction: column !important;
+    justify-content: space-between !important;
+    height: 100%;
+}
+
+/* Push the chart to the bottom */
+.chart-bars {
+    margin-top: auto !important;
+}
 
 /* --- Recruiter (USA): page title wording --------------------------------
    hrms-usa-nav.js stores the USA name of the page in data-usa-title and
@@ -3398,4 +3410,82 @@ html[data-theme="light"] div:has(> #hrms-kpi-btn) button:hover, html[data-theme=
 @media (hover: none) {
   :is(.haa-ci-card .btn-sm, .haa-btn, .haa-switch, .hcx-newbtn, .wsq-tabs button, .hram-pill.active, .hcx-chip.on,
       .cc-toggle-tab.active, .topbar .av, .hrms-ci-switch, .app > button):hover { filter: none !important; transform: none; }
+}
+
+/* --- Check In / Out: cards answer the pointer -----------------------------
+   This page was left out of the site-wide card hover on purpose ("keeps its
+   own look"), which in practice meant its cards did nothing at all under the
+   pointer. Same language as everywhere else: the four big panels (clock,
+   activity log, work from home, team status) get an accent border and a
+   shadow and stay put; the six small tiles (working / overtime / break and
+   pending / approved / rejected) also rise 2px. The tiles keep their own
+   coloured top edge. On the dark theme the shadow is an accent ring and glow,
+   because a dark shadow cannot be seen there. */
+:is(.card.haa-ci-card, .card.haa-scope) { transition: border-color .2s ease, box-shadow .2s ease; }
+:is(.card.haa-ci-card, .card.haa-scope):hover {
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--border2)) !important;
+  box-shadow: 0 8px 22px rgba(15, 23, 42, .12), 0 1px 4px rgba(15, 23, 42, .06) !important;
+}
+:root[data-theme="dark"] :is(.card.haa-ci-card, .card.haa-scope):hover {
+  border-color: color-mix(in srgb, var(--accent) 62%, var(--border2)) !important;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 34%, transparent),
+              0 10px 30px color-mix(in srgb, var(--accent) 20%, transparent) !important;
+}
+:is(.haa-ci-stat, .haa-stat) {
+  transition: transform .2s cubic-bezier(.22, 1, .36, 1), box-shadow .2s ease, background-color .2s ease;
+}
+:is(.haa-ci-stat, .haa-stat):hover {
+  transform: translateY(-2px);
+  background-color: color-mix(in srgb, var(--accent) 10%, var(--bg3, var(--bg2))) !important;
+  box-shadow: 0 8px 18px rgba(15, 23, 42, .16) !important;
+}
+:root[data-theme="dark"] :is(.haa-ci-stat, .haa-stat):hover {
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 32%, transparent),
+              0 8px 22px color-mix(in srgb, var(--accent) 22%, transparent) !important;
+}
+@media (hover: none), (prefers-reduced-motion: reduce) {
+  :is(.haa-ci-stat, .haa-stat):hover { transform: none; }
+}
+
+/* --- Work Submissions: cards answer the pointer ---------------------------
+   The rows inside the Submission Queue reacted to the pointer, but the cards
+   themselves did not: the queue card, the status strip above it and the four
+   counters at the top are built from their own classes (.wsq-*), so the
+   site-wide card hover never reached them. Same language as everywhere else:
+   the big queue card and the strip get an accent border and a shadow and stay
+   put; the four counters also rise 2px and keep their coloured top edge. On
+   the dark theme the shadow is an accent ring and glow. */
+/* Stronger than the first version, which read as "barely there": a solid
+   accent border, a 2px accent ring, a wide accent glow and a light accent
+   wash over the card. */
+.wsq :is(.wsq-card, .wsq-bar) { transition: border-color .2s ease, box-shadow .2s ease, background-color .2s ease; }
+.wsq :is(.wsq-card, .wsq-bar):hover {
+  border-color: var(--accent) !important;
+  background-color: color-mix(in srgb, var(--accent) 4%, var(--bg2)) !important;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent),
+              0 14px 34px color-mix(in srgb, var(--accent) 26%, transparent),
+              0 2px 6px rgba(15, 23, 42, .10) !important;
+}
+:root[data-theme="dark"] .wsq :is(.wsq-card, .wsq-bar):hover {
+  border-color: var(--accent) !important;
+  background-color: color-mix(in srgb, var(--accent) 7%, var(--bg2)) !important;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 50%, transparent),
+              0 16px 44px color-mix(in srgb, var(--accent) 38%, transparent) !important;
+}
+.wsq .wsq-kpis > * {
+  transition: transform .2s cubic-bezier(.22, 1, .36, 1), box-shadow .2s ease, background-color .2s ease;
+}
+.wsq .wsq-kpis > *:hover {
+  transform: translateY(-4px);
+  background-color: color-mix(in srgb, var(--accent) 12%, var(--bg2)) !important;
+  box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--accent) 45%, transparent),
+              0 14px 28px color-mix(in srgb, var(--accent) 28%, transparent) !important;
+}
+:root[data-theme="dark"] .wsq .wsq-kpis > *:hover {
+  background-color: color-mix(in srgb, var(--accent) 16%, var(--bg2)) !important;
+  box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--accent) 60%, transparent),
+              0 14px 34px color-mix(in srgb, var(--accent) 40%, transparent) !important;
+}
+@media (hover: none), (prefers-reduced-motion: reduce) {
+  .wsq .wsq-kpis > *:hover { transform: none; }
 }

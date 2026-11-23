@@ -281,7 +281,8 @@
       '.hrms-dir-code { display: inline-block; background: rgba(79, 142, 247, 0.12); color: var(--accent); border: 1px solid rgba(79, 142, 247, 0.3); border-radius: 6px; padding: 3px 8px; font-size: 11px; font-weight: 700; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; letter-spacing: 0.5px; }',
       '.hrms-dir-person { display: flex; align-items: center; gap: 10px; min-width: 0; }',
       '.hrms-dir-avatar { width: 32px; height: 32px; border-radius: 50%; background: linear-gradient(135deg, #4f46e5, #06b6d4); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; flex-shrink: 0; box-shadow: 0 2px 5px rgba(79, 70, 229, 0.25); }',
-      '.hrms-dir-name { font-size: 13px; font-weight: 600; color: var(--text); line-height: 1.25; }',
+      '.hrms-dir-name { display: inline-block; font-size: 13px; font-weight: 600; color: var(--text); line-height: 1.25; text-decoration: underline; text-decoration-color: transparent; text-underline-offset: 3px; cursor: pointer; }',
+      '.hrms-dir-name:hover, .hrms-dir-name:focus-visible { color: var(--accent); text-decoration-color: currentColor; outline: none; }',
       '.hrms-dir-email { font-size: 11px; color: var(--text2); line-height: 1.25; margin-top: 2px; }',
       '.hrms-dir-dept { font-weight: 500; }',
       '.hrms-dir-role { font-weight: 600; color: var(--text); }',
@@ -438,13 +439,13 @@
     var deptFlt = state.deptFilter;
     var statusFlt = state.statusFilter;
 
-    var filtered = employees.filter(function (emp) {
-    var empDept = typeof emp.department === 'object' && emp.department !== null 
-    ? (emp.department.name || emp.department.title || '') 
-    : (emp.department || '');
-if (deptFlt !== 'all' && empDept.toLowerCase() !== deptFlt.toLowerCase()) {
-    return false;
-}
+   var filtered = employees.filter(function (emp) {
+    var empDept = typeof emp.department === 'object' && emp.department !== null
+        ? (emp.department.name || emp.department.title || '')
+        : (emp.department || '');
+    if (deptFlt && deptFlt !== 'all' && empDept.toLowerCase() !== deptFlt.toLowerCase()) {
+        return false;
+    }
       if (statusFlt !== 'all' && (emp.status || '').toLowerCase() !== statusFlt.toLowerCase()) {
         return false;
       }
@@ -486,7 +487,7 @@ if (deptFlt !== 'all' && empDept.toLowerCase() !== deptFlt.toLowerCase()) {
           '<div class="hrms-dir-person">' +
             '<div class="hrms-dir-avatar">' + esc(emp.initials || getInitials(emp.name, emp.email)) + '</div>' +
             '<div style="min-width:0;">' +
-              '<div class="hrms-dir-name">' + esc(nameText) + '</div>' +
+              '<a class="hrms-dir-name" href="/hr/hris/' + encodeURIComponent(emp.id) + '" aria-label="View ' + esc(nameText) + ' profile">' + esc(nameText) + '</a>' +
               '<div class="hrms-dir-email">' + esc(emp.email) + '</div>' +
             '</div>' +
           '</div>' +
