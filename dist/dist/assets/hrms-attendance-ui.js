@@ -856,11 +856,12 @@
       '.hram-table-wrap{overflow-x:auto;overflow-y:auto;max-height:480px}' +
       '.hram-table{width:100%;border-collapse:collapse;font-size:12px}' +
       '.hram-table thead{background:var(--bg3,#f9fafb)}' +
-      '.hram-table th{text-align:left;padding:9px;font-weight:600;color:var(--text3,#6b7280);text-transform:uppercase;font-size:10px;letter-spacing:.03em;white-space:nowrap;position:sticky;top:0;background:var(--bg3,#f9fafb);z-index:1}' +
-      '.hram-table td{padding:9px;border-bottom:1px solid var(--border2,#f3f4f6);white-space:nowrap}' +
+      '.hram-table th{text-align:center;padding:9px;font-weight:600;color:var(--text3,#6b7280);text-transform:uppercase;font-size:10px;letter-spacing:.03em;white-space:nowrap;position:sticky;top:0;background:var(--bg3,#f9fafb);z-index:1}' +
+      '.hram-table td{padding:9px;border-bottom:1px solid var(--border2,#f3f4f6);white-space:nowrap;text-align:center}' +
       '.hram-strong{font-weight:600;color:var(--text,#111827)}' +
       '.hram-emp-cell{white-space:normal}' +
-      '.hram-emp-row{display:flex;align-items:center;gap:8px;min-width:170px}' +
+      '.hram-emp-row{display:flex;align-items:center;justify-content:center;gap:8px;min-width:170px;text-align:center}' +
+      '.hram-ta-identity{text-align:center}' +
       '.hram-avatar-sm{width:26px;height:26px;font-size:10px}' +
       '.hram-status-badge{display:inline-block;padding:3px 8px;border-radius:4px;font-weight:600;font-size:10px;text-transform:capitalize;background:var(--bg3,#f3f4f6);color:var(--text2,#374151)}' +
       '.hram-status-badge.late{background:#fef3c7;color:#92400e}' +

@@ -307,10 +307,10 @@
       '.bss-wrap{background:var(--bg2,#141b26);border:1px solid var(--border,#2a3446);border-radius:12px;',
       'overflow-x:auto;overflow-y:auto;max-height:480px;-webkit-overflow-scrolling:touch}',
       '.bss-table{width:100%;border-collapse:separate;border-spacing:0;font-size:13px}',
-      '.bss-table th{text-align:left;padding:11px 14px;font-size:11px;letter-spacing:.04em;text-transform:uppercase;',
+      '.bss-table th{text-align:center;padding:11px 14px;font-size:11px;letter-spacing:.04em;text-transform:uppercase;',
       'color:var(--muted,#8a9bb8);border-bottom:1px solid var(--border,#2a3446);white-space:nowrap;',
       'position:sticky;top:0;z-index:2;background:var(--bg2,#141b26)}',
-      '.bss-table td{padding:11px 14px;border-bottom:1px solid var(--border2,#1d2634);white-space:nowrap}',
+      '.bss-table td{padding:11px 14px;border-bottom:1px solid var(--border2,#1d2634);white-space:nowrap;text-align:center}',
       /* Tech Stack tends to run long (many comma-separated skills) — give it
          roughly double the width of a normal column, but still clip with an
          ellipsis rather than wrapping/stretching the table; the full value

@@ -1413,6 +1413,9 @@
   function decorateList() {
     var table = document.querySelector('.content table');
     if (!table) return;
+    table.querySelectorAll('thead th').forEach(function (th) {
+      th.style.textAlign = 'center';
+    });
     var rows = table.querySelectorAll('tbody tr');
     if (!rows.length) return;
     ensureStyle();
@@ -1420,6 +1423,13 @@
     var unmatched = false;
     rows.forEach(function (tr) {
       if (tr.hasAttribute('data-hris-skip')) return;
+      tr.querySelectorAll('td').forEach(function (td) {
+        td.style.textAlign = 'center';
+        var avRow = td.querySelector('.av-row');
+        if (avRow) {
+          avRow.style.justifyContent = 'center';
+        }
+      });
       var email = tr.getAttribute('data-hris-email');
       if (!email) {
         var nameEl = tr.querySelector('td .av-row span') || tr.querySelector('td');
