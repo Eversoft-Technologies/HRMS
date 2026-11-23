@@ -287,7 +287,34 @@
   /* ── GPS watch & Auto Clock-Out on Geofence Departure ────────────────── */
   var GEO_WATCH_MS = 5 * 60 * 1000;      // sample every 5 minutes
   var departurePolicy = { enabled: true, timeout_minutes: 15, warning_minutes: 5 };
-  var geoWatch = { timer: null, strikes: 0, warned: false };
+  var geoWatch = { timer: null, strikes: 0, warned: false, lastAt: 0, beat: null };
+  /* Reliability: a strike only counts inside an unbroken run of precise
+     samples. A gap longer than this (laptop asleep, frozen background tab,
+     network down) starts the count again. The server keeps its own record
+     too and refuses an auto check-out it cannot confirm. */
+  var GEO_MAX_GAP_MS = 2 * GEO_WATCH_MS;
+  var GEO_STRIKE_MAX_ACC_M = 100;          // only a fix this precise can add a strike
+  /* One tab watches: several open tabs used to count (and act) separately. */
+  var TAB_ID = Math.random().toString(36).slice(2);
+  var LEADER_STALE_MS = 150 * 1000;
+  function leaderKey() { return 'hrms_geo_leader_' + (sessionEmail() || ''); }
+  function isGeoLeader() {
+    try {
+      var now = Date.now(), cur = JSON.parse(localStorage.getItem(leaderKey()) || 'null');
+      if (!cur || cur.id === TAB_ID || now - (cur.ts || 0) > LEADER_STALE_MS) {
+        localStorage.setItem(leaderKey(), JSON.stringify({ id: TAB_ID, ts: now }));
+        return true;
+      }
+      return false;
+    } catch (_) { return true; }
+  }
+  function resetStrikes() { geoWatch.strikes = 0; geoWatch.warned = false; geoWatch.lastAt = 0; }
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) resetStrikes(); });
+  window.addEventListener('online', resetStrikes);
+  window.addEventListener('hrmsNetOnline', resetStrikes);
+  window.addEventListener('pagehide', function () {
+    try { var cur = JSON.parse(localStorage.getItem(leaderKey()) || 'null'); if (cur && cur.id === TAB_ID) localStorage.removeItem(leaderKey()); } catch (_) {}
+  });
 
   function fetchDeparturePolicy() {
     return fetch('/api/attendance/departure-policy')
@@ -303,7 +330,8 @@
 
   function stopGeoWatch() {
     if (geoWatch.timer) clearInterval(geoWatch.timer);
-    geoWatch.timer = null; geoWatch.strikes = 0; geoWatch.warned = false;
+    if (geoWatch.beat) clearInterval(geoWatch.beat);
+    geoWatch.timer = null; geoWatch.beat = null; resetStrikes();
   }
 
   function startGeoWatch() {
@@ -312,6 +340,7 @@
     fetchDeparturePolicy().then(function (pol) {
       if (pol.enabled === false) return;
       geoWatch.timer = setInterval(sampleGeo, GEO_WATCH_MS);
+      geoWatch.beat = setInterval(function () { if (!document.hidden) isGeoLeader(); }, 60 * 1000);
     });
   }
 
@@ -322,6 +351,10 @@
 
     var actor = getActor();
     if (!actor.email) return;
+    if (!isGeoLeader()) { resetStrikes(); return; }          // another tab is watching
+    var nowMs = Date.now();
+    if (geoWatch.lastAt && nowMs - geoWatch.lastAt > GEO_MAX_GAP_MS) resetStrikes();   // slept / throttled
+    geoWatch.lastAt = nowMs;
 
     var timeoutMinutes = (departurePolicy && departurePolicy.timeout_minutes) || 15;
     var requiredStrikes = Math.max(2, Math.round(timeoutMinutes / 5));
@@ -337,7 +370,9 @@
         .then(function (d) {
           // Off-site / WFH sessions have no office to leave: stop watching.
           if (!d || d.enforced === false || d.wfh || d.offsite) { stopGeoWatch(); return; }
-          if (d.inside || d.uncertain) { geoWatch.strikes = 0; geoWatch.warned = false; return; }
+          if (d.inside) { geoWatch.strikes = 0; geoWatch.warned = false; return; }
+          // A vague fix tells us nothing either way: neither counts nor clears.
+          if (d.uncertain || !(pos.accuracy <= GEO_STRIKE_MAX_ACC_M)) return;
 
           geoWatch.strikes++;
           var minutesAway = geoWatch.strikes * 5;
@@ -377,7 +412,15 @@
         longitude: pos ? pos.longitude : undefined
       })
     })
-      .then(function (r) { return r.ok ? r.json().catch(function () { return null; }) : null; })
+      .then(function (r) {
+        if (r.ok) return r.json().catch(function () { return null; });
+        // The server did not see an unbroken outside run long enough (the tab
+        // slept, the network dropped, readings were vague): keep watching.
+        return r.json().catch(function () { return {}; }).then(function (e) {
+          if (e && e.code === 'AUTO_CHECKOUT_UNCONFIRMED') startGeoWatch();
+          return null;
+        });
+      })
       .then(function (record) {
         if (!record) return;
         isCheckedIn = false;
@@ -1266,13 +1309,16 @@
   /* ── reconcile with the server ──────────────────────────────────────── */
   var lastSyncedFor = null;
 
+  var missingEmailOnce = false;
   function syncFromServer(force) {
     var email = sessionEmail();
     if (!email) {
+      if (!missingEmailOnce) { missingEmailOnce = true; return Promise.resolve(isCheckedIn); }
       if (isCheckedIn) { isCheckedIn = false; paintState(); }
       lastSyncedFor = null;
       return Promise.resolve(false);
     }
+    missingEmailOnce = false;
     var key = email + '|' + todayStamp();
     if (!force && lastSyncedFor === key) {
       paintState();

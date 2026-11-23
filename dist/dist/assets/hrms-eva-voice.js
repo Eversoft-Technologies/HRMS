@@ -144,7 +144,7 @@
       rec.onresult = function () { lastResult = Date.now(); return prevResult && prevResult.apply(this, arguments); };
       rec.onstart = function () { lastResult = Date.now(); return prevStart && prevStart.apply(this, arguments); };
       var timer = setInterval(function () {
-        if (!rec.__keep) { clearInterval(timer); try { c.close(); } catch (e) {} return; }
+        if (rec.__stopped) { clearInterval(timer); try { c.close(); } catch (e) {} return; }
         if (!rec.__running) { loud = 0; return; }
         an.getFloatTimeDomainData(buf);
         var sum = 0;

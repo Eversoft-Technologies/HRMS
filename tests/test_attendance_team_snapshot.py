@@ -83,20 +83,20 @@ class TeamSnapshotTests(TestCase):
         rows = {r['email']: r for r in self._get()}
         self.assertEqual(rows['user0@example.com']['status'], 'In Office')     # night shift still running
         self.assertEqual(rows['user100@example.com']['status'], 'In Office')   # checked in today
-        self.assertEqual(rows['user399@example.com']['status'], 'Absent')      # nobody home
+        self.assertEqual(rows['user399@example.com']['status'], 'Offline')     # nobody home
         order = [r['status'] for r in self._get()]
-        self.assertEqual(order, sorted(order, key=lambda s: {'In Office': 0, 'Remote': 1, 'In Break': 2, 'Absent': 3}.get(s, 9)))
+        self.assertEqual(order, sorted(order, key=lambda s: {'In Office': 0, 'Remote': 1, 'In Break': 2, 'Offline': 3, 'Absent': 4}.get(s, 9)))
 
-    def test_yesterdays_session_that_is_not_a_night_shift_is_absent(self):
+    def test_yesterdays_session_that_is_not_a_night_shift_is_offline(self):
         EmployeeAttendance.objects.filter(email='user0@example.com').update(
             shift_id=Shift.objects.get(name='Day').id)
         views._team_snapshot_reset()
         rows = {r['email']: r for r in self._get()}
-        self.assertEqual(rows['user0@example.com']['status'], 'Absent')
+        self.assertEqual(rows['user0@example.com']['status'], 'Offline')
 
     def test_a_change_shows_up_within_a_second_not_a_poll_interval(self):
         before = {r['email']: r['status'] for r in self._get()}
-        self.assertEqual(before['user399@example.com'], 'Absent')
+        self.assertEqual(before['user399@example.com'], 'Offline')
         now = local_now()
         att = EmployeeAttendance.objects.create(email='user399@example.com', date=now.date(),
                                                 check_in=now, shift_id=Shift.objects.get(name='Day').id)

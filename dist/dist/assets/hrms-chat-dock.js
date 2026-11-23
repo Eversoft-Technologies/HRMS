@@ -102,10 +102,10 @@
     var d = parseDt(s);
     if (!d) return '';
     var now = new Date();
-    if (d.toDateString() === now.toDateString()) return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    if (d.toDateString() === now.toDateString()) return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
     var y = new Date(now); y.setDate(now.getDate() - 1);
     if (d.toDateString() === y.toDateString()) return 'Yesterday';
-    return d.toLocaleDateString([], { day: 'numeric', month: 'short' });
+    return d.toLocaleDateString('en-US', { day: 'numeric', month: 'short' });
   }
   function initials(name) {
     var p = String(name || '?').trim().split(/\s+/);
@@ -832,7 +832,7 @@
       if (dl !== day) {
         day = dl; prev = '';
         var today = new Date().toDateString();
-        html += '<div class="sep">' + esc(dl === today ? 'Today' : (d ? d.toLocaleDateString([], { day: 'numeric', month: 'short', year: 'numeric' }) : '')) + '</div>';
+        html += '<div class="sep">' + esc(dl === today ? 'Today' : (d ? d.toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' }) : '')) + '</div>';
       }
       var mine = (m.sender_email || '').toLowerCase() === me();
       var body;
@@ -845,7 +845,7 @@
       }
       html += '<div class="bb' + (mine ? ' me' : '') + (m.is_deleted ? ' del' : '') + '">' +
         (isCh && !mine && prev !== m.sender_email ? '<div class="sn">' + esc(m.sender_name || m.sender_email) + '</div>' : '') +
-        body + '<div class="tm2">' + esc(d ? d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '') + '</div></div>';
+        body + '<div class="tm2">' + esc(d ? d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) : '') + '</div></div>';
       prev = m.sender_email;
     });
     box.innerHTML = html;

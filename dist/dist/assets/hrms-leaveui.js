@@ -44,7 +44,7 @@
     var U = window.__hrmsUI;
     var g = U.g, n = U.n, B = U.B, Us = U.Us, Gn = U.Gn, Hs = U.Hs, le = U.le,
         cn = U.cn, Qe = U.Qe, Bt = U.Bt, Vs = U.Vs, Dr = U.Dr, Et = U.Et;
-    const[L,sL]=g.useState([]),[ld,sld]=g.useState(!0),[er,ser]=g.useState(""),[wr,swr]=g.useState(""),[op,so]=g.useState(!1),[bz,sb]=g.useState(!1),[fm,sf]=g.useState({type:"Casual Leave",fromDate:"",toDate:"",reason:""}),[fe,sfe]=g.useState(""),[q,sq]=g.useState(""),[flt,sflt]=g.useState("All"),[srt,ssrt]=g.useState("newest"),[bal,sbal]=g.useState([]),[exp,sexp]=g.useState(null),[cf,scf]=g.useState(null),[more,smore]=g.useState({}),[hd,shd]=g.useState(null),[per,sper]=g.useState("today"),[cm,scm]=g.useState((new Date).getMonth()),[hol,shol]=g.useState([]),[holEr,sholEr]=g.useState(!1);
+    const[L,sL]=g.useState([]),[ld,sld]=g.useState(!0),[er,ser]=g.useState(""),[wr,swr]=g.useState(""),[op,so]=g.useState(!1),[bz,sb]=g.useState(!1),[fm,sf]=g.useState({type:"Casual Leave",fromDate:"",toDate:"",reason:""}),[fe,sfe]=g.useState(""),[q,sq]=g.useState(""),[flt,sflt]=g.useState("All"),[srt,ssrt]=g.useState("newest"),[bal,sbal]=g.useState([]),[exp,sexp]=g.useState(null),[cf,scf]=g.useState(null),[dr,sdr]=g.useState(""),[more,smore]=g.useState({}),[hd,shd]=g.useState(null),[per,sper]=g.useState("today"),[cm,scm]=g.useState((new Date).getMonth()),[hol,shol]=g.useState([]),[holEr,sholEr]=g.useState(!1);
     /* Missed Clock-Out — cor holds the correction requests: MY own normally,
        everyone's once appr resolves true. The mop/mfm/mfe/mbz quartet mirrors
        op/fm/fe/bz on the Apply Leave form; crj/crn/cre mirror cf on its
@@ -77,7 +77,8 @@
      same scoping for any caller without leave.action, so the param only keeps
      the request honest — it is not the security boundary. loadAppr calls this
      once permissions resolve, so the list is never fetched at the wrong scope. */
-  var loadList=function(all){var e=sess().email||"";sld(!0);return fetch("/api/leave").then(readJson).then(function(r){if(!r.ok||!Array.isArray(r.j))throw 0;sL(r.j);ser("");sld(!1)}).catch(function(){ser("Couldn't load leave requests.");sld(!1)})};
+  var quiet=!1;
+  var loadList=function(all){var e=sess().email||"";var q=quiet;quiet=!1;q||sld(!0);return fetch("/api/leave").then(readJson).then(function(r){if(!r.ok||!Array.isArray(r.j))throw 0;sL(r.j);ser("");sld(!1)}).catch(function(){ser("Couldn't load leave requests.");sld(!1)})};
   var loadBal=function(){var e=sess().email||"";if(!e){sbal([]);return}fetch("/api/leave/balance?email="+encodeURIComponent(e)).then(readJson).then(function(r){var b=r.ok&&r.j&&Array.isArray(r.j.balances)?r.j.balances:[];b.enforce=!(r.j&&r.j.enforceBalance===!1);sbal(b);
         if(b.length)sf(function(p){for(var i=0;i<b.length;i++){if(b[i].type===p.type)return p}var o={...p};o.type=b[0].type;return o})}).catch(function(){sbal([])})};
   /* Signed-in-user scoped, so it no-ops when logged out. Dropping ?email=
@@ -94,6 +95,8 @@
      the caller's permissions are known, so an employee's browser never even
      requests the unscoped list. */
   g.useEffect(function(){loadBal();loadCor(!1);loadAppr()},[]);
+  /* Requests and approvals change when someone ELSE acts, so a list fetched once on mount went stale until a reload. Re-fetch while the page is visible and when the tab is shown again; `quiet` keeps the list from flashing its loading state. */
+  g.useEffect(function(){var refresh=function(){if(document.hidden)return;quiet=!0;loadBal();loadCor(!1);loadAppr()};var t=setInterval(refresh,15000);document.addEventListener("visibilitychange",refresh);window.addEventListener("focus",refresh);return function(){clearInterval(t);document.removeEventListener("visibilitychange",refresh);window.removeEventListener("focus",refresh)}},[]);
   
   /* ---- date helpers ---- */
   var pad=function(v){return String(v).length>1?String(v):"0"+v};
@@ -667,13 +670,15 @@
                           n.jsx("textarea",{className:"input-field",rows:3,style:{resize:"vertical"},value:mfm.reason,onChange:function(d){setMF("reason",d.target.value)},placeholder:"Why the clock-out is missing — your admin sees this"})})}),
                   n.jsx("div",{style:{minHeight:18,fontSize:12,color:"var(--danger)",marginTop:-8},children:mfe||null}),
                   n.jsx(Vs,{onCancel:function(){smo(!1);smfe("")},onConfirm:msubmit,confirmLabel:"Send",loading:mbz})]}),
-            n.jsxs(Hs,{open:!!cf,onClose:function(){scf(null)},title:"Decline this request?",width:420,children:[
+            n.jsxs(Hs,{open:!!cf,onClose:function(){scf(null);sdr("")},title:"Decline this request?",width:420,children:[
                   n.jsxs("div",{style:{fontSize:13,color:"var(--text2)",lineHeight:1.6},children:["You're about to decline ",
                         n.jsx("strong",{children:cf&&(cf.employee||cf.email)||"this employee"}),"'s ",
                         n.jsx("strong",{children:cf&&cf.type||"leave"})," from ",cf&&prettyD(cf.fromDate)||""," to ",cf&&prettyD(cf.toDate)||""," (",cf&&cf.days||0," days). They'll be notified."]}),cf&&cf.reason?
                   n.jsxs("div",{style:{marginTop:13,padding:"10px 12px",background:"var(--bg3)",borderRadius:8,fontSize:12,color:"var(--text2)",lineHeight:1.5},children:[
                         n.jsx("div",{style:{fontSize:11,fontWeight:600,textTransform:"uppercase",letterSpacing:.5,color:"var(--text2)",marginBottom:4},children:"Their reason"}),cf.reason]}):null,
-                  n.jsx(Vs,{onCancel:function(){scf(null)},onConfirm:function(){var t=cf;scf(null);if(t)setSt(t.id,"Rejected")},confirmLabel:"Decline"})]})]})
+                  n.jsx("div",{style:{marginTop:13},children:
+                        n.jsx("textarea",{className:"input-field",rows:3,style:{resize:"vertical"},value:dr,onChange:function(e){sdr(e.target.value)},placeholder:"reason to decline"})}),
+                  n.jsx(Vs,{onCancel:function(){scf(null);sdr("")},onConfirm:function(){var t=cf;scf(null);sdr("");if(t)setSt(t.id,"Rejected")},confirmLabel:"Decline"})]})]})
   };
 
   console.log('[hrms-leaveui] loaded');

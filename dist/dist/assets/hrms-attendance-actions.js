@@ -146,6 +146,7 @@
       /* every break-type status renders as the amber "In Break" pill */
       '.haa-scope .haa-pill.onbreak,.haa-scope .haa-pill.inbreak,.haa-scope .haa-pill.away,.haa-scope .haa-pill.coffeebreak{background:rgba(247,201,79,.16);color:var(--warn,#f7c94f);}',
       '.haa-scope .haa-pill.remote,.haa-scope .haa-pill.wfh{background:rgba(79,142,247,.18);color:var(--accent,#4f8ef7);}',
+      '.haa-scope .haa-pill.offline{background:rgba(148,163,184,.16);color:var(--text3,#94a3b8);}',
       '.haa-scope .haa-pill.travelling{background:rgba(6,182,212,.16);color:#06b6d4;}',
       '.haa-scope .haa-pill.inameeting,.haa-scope .haa-pill.meeting{background:rgba(139,92,246,.18);color:#8b5cf6;}',
       '.haa-scope .haa-pill.invisible{background:rgba(148,163,184,.16);color:var(--text3);}',
@@ -321,6 +322,10 @@
       '<div id="haa-approvals" style="display:none">' +
         '<div class="haa-list-title">Pending approvals (team)</div>' +
         '<ul class="haa-list" id="haa-appr-list"></ul>' +
+      '</div>' +
+      '<div id="haa-offsite" style="display:none">' +
+        '<div class="haa-list-title">Off-site check-ins awaiting approval</div>' +
+        '<ul class="haa-list" id="haa-off-list"></ul>' +
       '</div>';
     card.querySelector('#haa-from').value = todayIso();
     card.querySelector('#haa-to').value = todayIso();
@@ -587,6 +592,18 @@
   function dotColor(c) {
     return ({ success: 'var(--success,#22d3a5)', warn: 'var(--warn,#f7c94f)', danger: 'var(--danger,#f75f4f)', accent: 'var(--accent,#4f8ef7)' })[c] || 'var(--text3)';
   }
+  // Always a human activity label — never a raw slug and never the person's
+  // name. Keyed on the raw type first (the field that is never polluted),
+  // then any proper server label, then a humanised fallback.
+  function eventLabel(r) {
+    var raw = String(r.type || r.event || '').toLowerCase();
+    var MAP = { 'check-in': 'Check In', 'check-out': 'Check Out', 'break-start': 'Break Start',
+      'break-end': 'Break End', 'remote-switch': 'Remote Switch', 'office-switch': 'Office Switch',
+      'auto-checkout-departure': 'Auto Check Out', 'hr-edit': 'HR Edit' };
+    if (MAP[raw]) return MAP[raw];
+    if (r.event && String(r.event).toLowerCase() !== raw) return r.event;
+    return raw ? raw.replace(/[-_]/g, ' ').replace(/\b\w/g, function (c) { return c.toUpperCase(); }) : '—';
+  }
   function renderActivity() {
     var l = document.getElementById('haa-act-list'); if (!l) return;
     var f = state.actFilter;
@@ -595,7 +612,7 @@
     l.innerHTML = rows.map(function (r) {
       var loc = r.location && r.location !== '—' ? '<div class="c-loc">' + esc(r.location) + '</div>' : '';
       return '<div class="haa-tr"><span class="c-tm">' + esc(r.time || '—') + '</span>' +
-        '<span class="c-event"><span class="c-ev">' + esc(r.event || r.type || '—') + '</span>' + loc + '</span>' +
+        '<span class="c-event"><span class="c-ev">' + esc(eventLabel(r)) + '</span>' + loc + '</span>' +
         '<span class="haa-dot" style="background:' + dotColor(r.color) + '"></span></div>';
     }).join('');
   }
@@ -679,8 +696,8 @@
       .then(function (rows) {
         rows = Array.isArray(rows) ? rows : [];
         updateWfhCounts(rows);
-        if (!rows.length) { list.innerHTML = '<li class="haa-empty">No WFH requests yet.</li>'; return; }
-        list.innerHTML = rows.slice(0, 8).map(function (r) {
+        if (!rows.length) { list.__haaHtml = null; list.innerHTML = '<li class="haa-empty">No WFH requests yet.</li>'; return; }
+        var html = rows.slice(0, 8).map(function (r) {
           var status = String(r.status || 'Pending'), cls = status.toLowerCase().replace(/\s+/g, '');
           var approved = /approved/i.test(status);
           var range = esc(r.fromDate || '—') + ' → ' + esc(r.toDate || '—') + (r.days ? ' · ' + esc(r.days) + 'd' : '');
@@ -688,9 +705,14 @@
             (approved ? '<button class="haa-switch" data-switch="1">Switch to WFH</button>' : '') +
             '<span class="haa-pill ' + esc(cls) + '">' + esc(status) + '</span></div></li>';
         }).join('');
+        // The page re-fetches every few seconds; rebuilding identical markup would
+        // replace the buttons under the pointer and can swallow a click.
+        if (list.__haaHtml === html) return;
+        list.__haaHtml = html;
+        list.innerHTML = html;
         list.querySelectorAll('[data-switch]').forEach(function (b) { b.addEventListener('click', switchToWfh); });
       })
-      .catch(function () { list.innerHTML = '<li class="haa-empty">Could not load requests.</li>'; });
+      .catch(function () { list.__haaHtml = null; list.innerHTML = '<li class="haa-empty">Could not load requests.</li>'; });
   }
 
   var isApprover = null;
@@ -719,8 +741,8 @@
           var pending = (Array.isArray(rows) ? rows : []).filter(function (r) { return /pending/i.test(String(r.status || '')); });
           var list = document.getElementById('haa-appr-list'); if (!list) return;
           box.style.display = pending.length ? '' : 'none';
-          if (!pending.length) { list.innerHTML = ''; return; }
-          list.innerHTML = pending.map(function (r) {
+          if (!pending.length) { list.__haaHtml = null; list.innerHTML = ''; return; }
+          var html = pending.map(function (r) {
             return '<li class="haa-li"><span><span class="haa-who">' + esc(r.employee || r.email || '—') + '</span>' +
               '<div class="haa-sub">' + esc(r.fromDate || '—') + ' → ' + esc(r.toDate || '—') + (r.days ? ' · ' + esc(r.days) + 'd' : '') + '</div></span>' +
               '<div class="haa-li-actions">' +
@@ -728,11 +750,71 @@
                 '<button class="haa-appr-btn reject" data-rej="' + esc(r.id) + '">Reject</button>' +
               '</div></li>';
           }).join('');
+          if (list.__haaHtml === html) return;     // unchanged: leave the buttons alone
+          list.__haaHtml = html;
+          list.innerHTML = html;
           list.querySelectorAll('[data-appr]').forEach(function (b) { b.addEventListener('click', function () { decide('approve', b.getAttribute('data-appr'), b); }); });
           list.querySelectorAll('[data-rej]').forEach(function (b) { b.addEventListener('click', function () { decide('reject', b.getAttribute('data-rej'), b); }); });
         })
         .catch(function () { box.style.display = 'none'; });
     });
+  }
+  /* Off-site check-ins awaiting HR. A check-in from outside the office is
+     recorded as Pending and the approvers are only sent a notification; the
+     queue itself lived in the Attendance Settings pop-up, so nothing showed up
+     on this page. Same shape as the WFH approvals above: shown to anyone who
+     may decide (attendance.approve_offsite), re-fetched by the page's refresh
+     and decided in place. The list is only rebuilt when it changed, so a click
+     is never lost to a refresh. */
+  var isOffsiteApprover = null;
+  function checkOffsiteApprover(cb) {
+    if (isOffsiteApprover !== null) { cb(isOffsiteApprover); return; }
+    var em = actorEmail();
+    if (!em) { isOffsiteApprover = false; cb(false); return; }
+    api('/api/me/permissions?email=' + encodeURIComponent(em))
+      .then(function (p) {
+        var perms = (p && Array.isArray(p.permissions)) ? p.permissions : [];
+        isOffsiteApprover = !!(p && (p.superAdmin || perms.indexOf('attendance.approve_offsite') !== -1));
+        cb(isOffsiteApprover);
+      })
+      .catch(function () { isOffsiteApprover = false; cb(false); });
+  }
+  function loadOffsite() {
+    var box = document.getElementById('haa-offsite'); if (!box) return;
+    checkOffsiteApprover(function (ok) {
+      if (!ok) { box.style.display = 'none'; return; }
+      api('/api/attendance/location-reviews?status=Pending')
+        .then(function (rows) {
+          rows = Array.isArray(rows) ? rows : [];
+          var list = document.getElementById('haa-off-list'); if (!list) return;
+          box.style.display = rows.length ? '' : 'none';
+          if (!rows.length) { list.__haaHtml = null; list.innerHTML = ''; return; }
+          var html = rows.map(function (r) {
+            var when = esc(r.date || '') + (r.checkIn ? ' · ' + esc(String(r.checkIn).slice(11, 16)) : '');
+            return '<li class="haa-li"><span><span class="haa-who">' + esc(r.employee || r.email || '—') + '</span>' +
+              '<div class="haa-sub">' + when + '</div>' +
+              (r.reason ? '<div class="haa-sub">“' + esc(r.reason) + '”</div>' : '') + '</span>' +
+              '<div class="haa-li-actions">' +
+                '<button class="haa-appr-btn approve" data-oapp="' + esc(r.id) + '">Approve</button>' +
+                '<button class="haa-appr-btn reject" data-orej="' + esc(r.id) + '">Reject</button>' +
+              '</div></li>';
+          }).join('');
+          if (list.__haaHtml === html) return;
+          list.__haaHtml = html;
+          list.innerHTML = html;
+          list.querySelectorAll('[data-oapp]').forEach(function (b) { b.addEventListener('click', function () { decideOffsite('Approved', b.getAttribute('data-oapp'), b); }); });
+          list.querySelectorAll('[data-orej]').forEach(function (b) { b.addEventListener('click', function () { decideOffsite('Rejected', b.getAttribute('data-orej'), b); }); });
+        })
+        .catch(function () { box.style.display = 'none'; });
+    });
+  }
+  function decideOffsite(decision, id, btn) {
+    if (!id) return;
+    var li = btn.closest('.haa-li');
+    if (li) li.querySelectorAll('button').forEach(function (b) { b.disabled = true; });
+    api('/api/attendance/location-reviews', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: Number(id), decision: decision }) })
+      .then(function () { loadOffsite(); window.dispatchEvent(new CustomEvent('hrmsAttendanceSynced', { detail: {} })); })
+      .catch(function () { if (li) li.querySelectorAll('button').forEach(function (b) { b.disabled = false; }); });
   }
   function decide(action, id, btn) {
     if (!id) return;
@@ -990,7 +1072,6 @@
       '</div>' +
       '<div class="hat-hrs"><span>Effective <b>' + fmtMins(d.effectiveMinutes || 0) + '</b></span>' +
         '<span>Gross <b>' + fmtMins(d.grossMinutes || 0) + '</b></span></div>' +
-      '<div class="haa-list-title">Time logs</div>' + logs +
       '<div class="haa-list-title">Location punch (hourly)</div><div class="hat-punchlist">' + punches + '</div>' +
       '<div class="hat-mf">' +
         (d.isSelf ? '<button class="ok" data-raise="1">Raise Request</button>' : '') +
@@ -1059,7 +1140,11 @@
    * server also throttles to hourly as a backstop. Requires the tab to be open
    * (a web page cannot capture location after the tab/app is closed). */
   var HOUR_MS = 60 * 60 * 1000;
-  var geoBusy = false, geoRetryAt = 0;
+  var geoBusy = false, geoRetryAt = 0, pendingTs = 0;
+  /* A first precise reading away from where the session should be is only a
+     suspicion: the server answers 'away_pending' and one confirmation reading
+     is taken a few minutes later, outside the hourly grid. */
+  var confirmAt = 0, confirming = false;
   function lastTsKey() { return 'hrms_loc_ts_' + (actorEmail() || ''); }
   function getLastTs() { try { return parseInt(localStorage.getItem(lastTsKey()) || '0', 10) || 0; } catch (_) { return 0; } }
   function setLastTs(t) { try { localStorage.setItem(lastTsKey(), String(t)); } catch (_) {} }
@@ -1096,9 +1181,17 @@
       var send = function (label) {
         api('/api/attendance/location-punch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: em, latitude: lat, longitude: lng, accuracy: acc, label: label || '' }) })
           .then(function (r) {
-            if (r && r.stored) setLastTs(Date.now());
+            var wasConfirm = confirming; confirming = false;
+            if (r && r.stored && !wasConfirm) setLastTs(pendingTs || Date.now());
             else if (r && r.reason === 'not_checked_in') geoRetryAt = Date.now() + 30 * 60 * 1000;
+            if (r && (r.state === 'away_pending' || (r.reason === 'too_soon' && r.recheckInMs))) {
+              confirmAt = Date.now() + (r.recheckInMs || 300000);
+              setTimeout(maybeCapture, (r.recheckInMs || 300000) + 500);
+            } else if (r && r.stored) {
+              confirmAt = 0;
+            }
             if (r && r.state === 'away' && r.message) locationAlert('You appear to be elsewhere', r.message);
+            if (r && r.state === 'ok') document.querySelectorAll('.haa-loc-alert').forEach(function (x) { x.remove(); });
           })
           .catch(function () {})
           .then(function () { geoBusy = false; });
@@ -1132,8 +1225,23 @@
     var em = actorEmail(); if (!em || geoBusy) return;
     var now = Date.now();
     if (now < geoRetryAt) return;
-    if ((now - getLastTs()) < 58 * 60 * 1000) return;   // still within the hour
+    if (confirmAt && now >= confirmAt) {               // the confirmation reading
+      confirmAt = 0; confirming = true; geoBusy = true;
+      captureLocation();
+      return;
+    }
+    var last = getLastTs();
+    // Fixed hourly cadence anchored to the first punch: a capture is due a
+    // whole hour after the PREVIOUS SCHEDULED time, and we store that
+    // scheduled time (not the completion time), so GPS/network latency and
+    // the coarse 5-min poll cannot accumulate into drift (1h20m, etc.). Real
+    // spacing stays >= 60 min, so the server's 55-min throttle is satisfied.
+    if (last && (now - last) < HOUR_MS) return;        // not yet an hour since the last slot
     geoBusy = true;
+    // The grid slot this capture represents: the first lands now; later ones
+    // advance by whole hours from the last slot, snapping forward (never into
+    // the future) if the tab was hidden across several hours.
+    pendingTs = last ? Math.min(last + HOUR_MS * Math.floor((now - last) / HOUR_MS), now) : now;
     captureLocation();
   }
 
@@ -1225,7 +1333,7 @@
       wfh.style.gridColumn   = '2'; wfh.style.gridRow   = '1 / span 3'; wfh.style.alignSelf = '';
     }
 
-    if (freshWfh) { loadWfh(); loadApprovals(); }
+    if (freshWfh) { loadWfh(); loadApprovals(); loadOffsite(); }
     if (freshAct) { loadActivity(); }
     if (freshTeam) { loadTeam(); }
   }
@@ -1254,12 +1362,13 @@
         if (n.ot) loadOvertime();
         if (n.wfh) loadWfh();
         if (n.appr) loadApprovals();
+        if (n.off) loadOffsite();
         if (n.act) loadActivity();
         if (n.team) loadTeam();
       }, delay || 300);
     }
-    window.addEventListener('hrmsAttendanceSynced', function () { refreshSoon(['ot', 'wfh', 'appr', 'act', 'team']); });
-    window.addEventListener('hrmsContextUpdate', function () { refreshSoon(['ot', 'wfh', 'appr', 'act', 'team']); });
+    window.addEventListener('hrmsAttendanceSynced', function () { refreshSoon(['ot', 'wfh', 'appr', 'off', 'act', 'team']); });
+    window.addEventListener('hrmsContextUpdate', function () { refreshSoon(['ot', 'wfh', 'appr', 'off', 'act', 'team']); });
     // The app's own Switch to Remote / Switch to Office post the same
     // remote-switch event our button does, and the server refuses it without
     // an approved WFH request. That card has nowhere to print the reason, so
@@ -1271,16 +1380,29 @@
     });
     // Check-in toggled (topbar switch) → refresh totals + team status + activity.
     window.addEventListener('hrmsCheckinToggle', function () { refreshSoon(['ot', 'team', 'act']); });
-    // Background refresh every ~35 s while the tab is in front. Randomised per
-    // browser and per round so a crowd that signed in together does not poll in step.
-    (function poll() {
-      setTimeout(function () {
-        if (!document.hidden && onCheckinPage() && document.getElementById(ID.team)) {
-          loadTeam(false); loadActivity(); loadOvertime();
-        }
-        poll();
-      }, 30000 + Math.random() * 10000);
-    })();
+    function refreshLive() {
+      if (document.hidden || !onCheckinPage()) return;
+      if (document.getElementById(ID.team)) { loadTeam(false); loadActivity(); loadOvertime(); }
+    }
+    // Requests and approvals change when someone ELSE acts (an approver decides,
+    // an employee asks). They were only fetched when the page opened, so every
+    // change needed a reload. Poll them while the page is visible, and refresh
+    // everything the moment the tab is shown again.
+    function refreshRequests() {
+      if (document.hidden || !onCheckinPage() || !document.getElementById(ID.wfh)) return;
+      loadWfh(); loadApprovals(); loadOffsite();
+    }
+    // Every browser used to poll in step (15 s and 5 s timers), so a crowd that
+    // signed in together hit the server together. Same cadence, randomised per
+    // browser and per round; the team list comes from the shared fetch in
+    // hrms-status.js, so the 15 s round costs one cached request.
+    function every(fn, base, spread) {
+      (function loop() { setTimeout(function () { fn(); loop(); }, base + Math.random() * spread); })();
+    }
+    every(refreshLive, 15000, 6000);
+    every(refreshRequests, 10000, 4000);
+    document.addEventListener('visibilitychange', function () { if (!document.hidden) { refreshRequests(); refreshLive(); } });
+    window.addEventListener('focus', function () { refreshRequests(); refreshLive(); });
     // Tick the Working / Overtime / Break tiles once a second while checked
     // in, and refresh right after a Break / Remote / Office button in the
     // app's own card is used (the 30s poll is too slow to feel live).
@@ -1292,7 +1414,7 @@
     document.addEventListener('click', function (e) {
       if (!onCheckinPage()) return;
       var btn = e.target && e.target.closest ? e.target.closest('button') : null;
-      if (btn && /break|remote|office|check/i.test(btn.textContent || '')) {
+      if (btn && /break|remote|office|check|clock/i.test(btn.textContent || '')) {
         setTimeout(function () { refreshSoon(['ot', 'act']); }, 1200);
       }
     }, true);

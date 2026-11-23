@@ -6,7 +6,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('api', '0084_merge_20261103_1945'),
+        ('api', '0093_phase3_permissions'),
     ]
 
     operations = [

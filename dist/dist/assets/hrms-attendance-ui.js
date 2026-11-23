@@ -157,7 +157,7 @@
   function fmtDatePretty(dateStr) {
     if (!dateStr) return '--';
     var d = new Date(dateStr + 'T00:00:00');
-    return isNaN(d) ? dateStr : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+    return isNaN(d) ? dateStr : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
   }
   function periodLabel(fromStr, toStr) {
     if (!fromStr || !toStr) return '--';
@@ -1053,7 +1053,7 @@
   }
 
   function enhanceEmployeeHistory() {
-    var card = cardContaining(/My Recent Attendance|^Attendance History/i);
+    var card = cardContaining(/My Recent (?:Time & )?Attendance|^(?:Time & )?Attendance History/i);
     if (!card) return;
     // Never touch this on the admin page — our own "Attendance History" card
     // there already has this exact same heading; only replace the personal

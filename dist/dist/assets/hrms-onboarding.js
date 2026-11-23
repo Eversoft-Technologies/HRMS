@@ -79,6 +79,37 @@
   /* Sentinel for the doc-type dropdown: not a real docType, it tells the upload
      handler to send {isCustom, label} and let the server derive the type. */
   var CUSTOM_DOC_VALUE = '__custom__';
+  /* Form I-9 / E-Verify documents — mirrors I9_DOC_TYPES in api/onboarding_views.py. */
+  var I9_DOC_TYPES = [
+    ['us_passport', 'U.S. Passport', 'List A'],
+    ['passport_card', 'U.S. Passport Card', 'List A'],
+    ['permanent_resident_card', 'Permanent Resident Card (Form I-551)', 'List A'],
+    ['ead', 'Employment Authorization Document (Form I-766)', 'List A'],
+    ['foreign_passport_i94', 'Foreign Passport with Form I-94', 'List A'],
+    ['school_id', 'School ID Card with Photo', 'List B'],
+    ['voter_registration', "Voter's Registration Card", 'List B'],
+    ['military_id', 'U.S. Military Card or Draft Record', 'List B'],
+    ['military_dependent_id', "Military Dependent's ID Card", 'List B'],
+    ['coast_guard_card', 'U.S. Coast Guard Merchant Mariner Card', 'List B'],
+    ['tribal_document', 'Native American Tribal Document', 'List B'],
+    ['birth_certificate', 'Birth Certificate', 'List C'],
+    ['consular_birth_abroad', 'Certification of Report of Birth Abroad (FS-240)', 'List C'],
+    ['us_citizen_id', 'U.S. Citizen ID Card (Form I-197)', 'List C'],
+    ['i797', 'Form I-797 Notice of Action', 'Other'],
+    ['i20', 'Form I-20', 'Other'],
+    ['ds2019', 'Form DS-2019', 'Other'],
+    ['i9_form', 'Form I-9 (completed)', 'Other'],
+    ['e_verify_case', 'E-Verify Case Result', 'Other']
+  ];
+  var I9_GROUP_LABEL = { 'List A': 'I-9 List A — identity & work authorization', 'List B': 'I-9 List B — identity',
+                         'List C': 'I-9 List C — work authorization', 'Other': 'Immigration / E-Verify' };
+  /* The same slug the server derives (custom_doc_slug): lower-case, every run
+     of non-alphanumerics becomes one "_", trimmed, at most 33 characters. */
+  function customDocSlug(name) {
+    var s = String(name || '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+    s = s.slice(0, 33).replace(/_+$/g, '');
+    return s ? 'custom_' + s : '';
+  }
   var MAX_DOC_LABEL = 120;   // mirrors MAX_CUSTOM_DOC_LABEL server-side
   var EVERSOFT_ASSETS = ['Laptop', 'Monitor', 'Mouse', 'Keyboard', 'Dock', 'Bag', 'Headset','Office365','Email_ID','Software License','ID_Card','Desktop','Mobile'];
   var ASSET_STATUSES = ['Assigned', 'Returned', 'Lost', 'Damaged','pending', 'Delivered'];
@@ -150,8 +181,12 @@
     setTimeout(function () { if (el.parentNode) el.remove(); }, 3700);
   }
 
-  function fmtDate(s) { return s ? String(s).slice(0, 10) : '<span class="ob-empty-val">-</span>'; }
-  function fmtDateTime(s) { return s ? String(s).replace('T', ' ').slice(0, 16) : '<span class="ob-empty-val">-</span>'; }
+  /* Company date format (Settings › General, MM/DD/YYYY by default) via
+     hrms-company.js; the raw ISO value if that helper is not loaded. */
+  function coDate(iso) { return window.HRMSCompany ? window.HRMSCompany.date(iso, { time: false }) : iso; }
+  function coDateTime(iso) { return window.HRMSCompany ? window.HRMSCompany.date(iso, { time: true }) : iso; }
+  function fmtDate(s) { return s ? coDate(String(s).slice(0, 10)) : '<span class="ob-empty-val">-</span>'; }
+  function fmtDateTime(s) { return s ? coDateTime(String(s).replace('T', ' ').slice(0, 16)) : '<span class="ob-empty-val">-</span>'; }
   function stageLabel(k) {
     for (var i = 0; i < STAGES.length; i++) if (STAGES[i][0] === k) return STAGES[i][1];
     return k;
@@ -200,11 +235,18 @@
       '.ob-search{max-width:280px}',
       '.ob-search{max-width:280px}',
       /* cards */
-      '.ob-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;margin-bottom:22px;width:100%;box-sizing:border-box}',
-      '.ob-card{background:var(--bg2,#141b26);border:1px solid var(--border,#2a3446);border-radius:12px;padding:16px;box-sizing:border-box;transition:border-color .15s}',
-      '.ob-card:hover{border-color:var(--accent,#4f8ef7)}',
-      '.ob-card .n{font-size:26px;font-weight:800;line-height:1.1;color:var(--text,#e6edf7)}',
-      '.ob-card .l{color:var(--muted,#8a9bb8);font-size:12px;margin-top:6px;font-weight:500}',
+      '.ob-cards{display:grid;grid-template-columns:repeat(8,1fr);gap:14px;margin-bottom:22px;width:100%;box-sizing:border-box}',
+      '.ob-card{background:var(--bg2,#141b26);border:1px solid var(--border,#2a3446);border-radius:12px;padding:16px 14px;box-sizing:border-box;position:relative;overflow:hidden;min-width:0;transition:transform .2s cubic-bezier(.22,1,.36,1),box-shadow .2s ease,border-color .2s ease}',
+      '.ob-card:before{content:"";position:absolute;top:0;left:0;right:0;height:2px;background:var(--accent,#4f8ef7)}',
+      '.ob-card.blue:before{background:var(--accent,#4f8ef7)}',
+      '.ob-card.purple:before{background:var(--accent2,#7c5cfc)}',
+      '.ob-card.green:before{background:var(--accent3,#22d3a5)}',
+      '.ob-card.orange:before{background:var(--accent4,#f7954f)}',
+      '.ob-card:hover{border-color:color-mix(in srgb, var(--accent,#4f8ef7) 26%, var(--border,#2a3446));transform:translateY(-3px);box-shadow:0 10px 26px rgba(0,0,0,.28)}',
+      '@media (hover:none){.ob-card:hover{transform:none;box-shadow:none}}',
+      '@media (prefers-reduced-motion: reduce){.ob-card{transition:none}}',
+      '.ob-card .l{color:var(--muted,#8a9bb8);font-size:10px;font-weight:600;letter-spacing:.5px;text-transform:uppercase;margin-bottom:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
+      '.ob-card .n{font-family:var(--font-d,inherit);font-size:22px;font-weight:800;line-height:1;color:var(--text,#e6edf7)}',
       /* panels & grids */
       '.ob-grid1{display:grid;grid-template-columns:1fr;gap:16px;margin-bottom:22px;width:100%;box-sizing:border-box}',
       '.ob-grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;margin-bottom:22px;width:100%;box-sizing:border-box}',
@@ -345,6 +387,10 @@
       '.ob-fd-cf select,.ob-fd-cf input{flex:1;min-width:0;background:var(--bg2,#141b26);border:1px solid var(--border,#2a3446);',
       'border-radius:7px;color:var(--text,#e6edf7);font:inherit;font-size:12px;padding:7px 8px}',
       '.ob-fd-cfx{flex:0 0 auto;width:30px;background:var(--bg2,#141b26);border:1px solid var(--border,#2a3446);border-radius:7px;color:#ef4444;cursor:pointer}',
+      /* responsive tablet styles */
+      '@media (max-width: 1100px) and (min-width: 641px){',
+      '  .ob-cards{grid-template-columns:repeat(4,1fr)!important;gap:10px!important}',
+      '}',
       /* responsive mobile styles */
       '@media (max-width: 640px){',
       '  #' + ID.root + '{padding:14px 12px!important;width:100%!important;max-width:100vw!important;box-sizing:border-box!important}',
@@ -464,11 +510,14 @@
      The server caps pageSize at 200, so page through until the whole roster is
      collected (bounded by a safety cap so a huge table can't spin forever). */
   var LOAD_PS = 200, LOAD_MAX_PAGES = 100;
-  function loadCandidates() {
-    state.loading = true;
-    state.loaded = false;
-    render();
+  function loadCandidates(quiet) {
+    if (!quiet) {
+      state.loading = true;
+      state.loaded = false;
+      render();
+    }
     function finish(items) {
+      if (quiet && JSON.stringify(items) === JSON.stringify(state.rows)) return;
       state.rows = items;
       state.total = items.length;   // full loaded count (viewGrid shows the filtered count)
       state.loaded = true;
@@ -487,19 +536,23 @@
         finish(items);
       }).catch(function () { finish(items); });   // a partial roster beats none
     }).catch(function (e) {
+      if (quiet) return;   // a background refresh that fails just tries again later
       state.rows = []; state.loaded = true; state.loading = false; render();
       toast(e.message, 'error');
     });
   }
 
-  function loadDashboard() {
-    state.loading = true;
-    render();
+  function loadDashboard(quiet) {
+    if (!quiet) {
+      state.loading = true;
+      render();
+    }
     Promise.all([api('/onboarding/dashboard'), api('/onboarding/alerts')])
       .then(function (r) {
+        if (quiet && JSON.stringify(r) === JSON.stringify([state.dash, state.alerts || []])) return;
         state.dash = r[0]; state.alerts = r[1] || []; state.loading = false; render();
       })
-      .catch(function (e) { state.loading = false; render(); toast(e.message, 'error'); });
+      .catch(function (e) { if (quiet) return; state.loading = false; render(); toast(e.message, 'error'); });
   }
 
   /* ── sorting (client-side, across the whole loaded roster) ────────────── */
@@ -725,10 +778,12 @@
       }).join('') + '</div>';
     }
     var d = state.dash;
-    var cards = CARDS.map(function (c) {
+    var CARD_COLORS = ['blue', 'purple', 'green', 'orange'];
+    var cards = CARDS.map(function (c, i) {
       var n = d.cards[c[0]] || 0;
-      return '<div class="ob-card"><div class="n">' + n + '</div>' +
-             '<div class="l">' + c[1] + '</div></div>';
+      return '<div class="ob-card ' + CARD_COLORS[i % CARD_COLORS.length] + '">' +
+             '<div class="l">' + c[1] + '</div>' +
+             '<div class="n">' + n + '</div></div>';
     }).join('');
 
     var alerts = state.alerts.length
@@ -1115,15 +1170,19 @@
     },
   };
 
-  function loadStage() {
+  function loadStage(quiet) {
     var spec = STAGE_PAGES[state.page];
     if (!spec) return;
-    state.loading = true;
-    state.stageErr = '';
-    render();
+    if (!quiet) {
+      state.loading = true;
+      state.stageErr = '';
+      render();
+    }
     api(spec.url).then(function (rows) {
+      if (quiet && !state.stageErr && JSON.stringify(rows || []) === JSON.stringify(state.list)) return;
       state.list = rows || [];
       state.loading = false;
+      state.stageErr = '';
 
       if (state.page === '/documents') {
         var cols = [
@@ -1169,6 +1228,7 @@
 
       render();
     }).catch(function (e) {
+      if (quiet) return;
       state.list = [];
       state.loading = false;
       // A 403 here is the point of the payroll page, not a failure to hide.
@@ -1739,6 +1799,17 @@
     modal.innerHTML = 
       '<h3 style="margin:0;font-size:16px;font-weight:700;font-family:var(--font-d);">Add Document Requirement</h3>' +
       '<div style="display:flex;flex-direction:column;gap:6px;">' +
+        '<label class="ob-lb" style="margin:0">Document</label>' +
+        '<select class="ob-sel" id="adm-kind" style="margin:0">' +
+          '<option value="">Custom document (type a name below)</option>' +
+          ['List A', 'List B', 'List C', 'Other'].map(function (g) {
+            return '<optgroup label="' + I9_GROUP_LABEL[g] + '">' + I9_DOC_TYPES.filter(function (d) { return d[2] === g; }).map(function (d) {
+              return '<option value="' + d[0] + '">' + d[1] + '</option>';
+            }).join('') + '</optgroup>';
+          }).join('') +
+        '</select>' +
+      '</div>' +
+      '<div style="display:flex;flex-direction:column;gap:6px;">' +
         '<label class="ob-lb" style="margin:0">Document Name / Label</label>' +
         '<input type="text" class="ob-in" id="adm-name" placeholder="e.g. NDA, Degree Certificate" autofocus>' +
       '</div>' +
@@ -1756,6 +1827,11 @@
     document.body.appendChild(ov);
     
     var nameInp = modal.querySelector('#adm-name');
+    var kindSel = modal.querySelector('#adm-kind');
+    kindSel.addEventListener('change', function () {
+      var d = I9_DOC_TYPES.filter(function (x) { return x[0] === kindSel.value; })[0];
+      if (d) nameInp.value = d[1];
+    });
     var sendChk = modal.querySelector('#adm-send');
     var reqChk = modal.querySelector('#adm-req');
     var errDiv = modal.querySelector('#adm-err');
@@ -1784,7 +1860,11 @@
         errDiv.textContent = 'Document name is required.';
         return;
       }
-      var typeKey = 'custom_' + name.toLowerCase().replace(/[^a-z0-9_]/g, '_');
+      // An I-9 / E-Verify pick keeps its own type; anything else gets the same
+      // custom_<slug> the server derives, so uploads always match this slot.
+      var picked = I9_DOC_TYPES.filter(function (x) { return x[0] === kindSel.value; })[0];
+      var typeKey = picked ? picked[0] : customDocSlug(name);
+      if (!typeKey) { errDiv.textContent = 'The name needs at least one letter or number.'; return; }
       if (requestedDocsList.some(function (item) { return item.type === typeKey || item.label.toLowerCase() === name.toLowerCase(); })) {
         errDiv.textContent = 'A document slot with this name already exists.';
         return;
@@ -2611,7 +2691,7 @@
         var d = new Date(s.slice(0, 10) + 'T00:00:00');
         if (isNaN(d.getTime())) return '';
         var days = Math.ceil((d.getTime() - Date.now()) / 86400000);
-        var nice = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+        var nice = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
         if (days < 0) return 'link expired ' + nice;
         if (days === 0) return 'link expires today';
         return 'expires in ' + days + ' day' + (days === 1 ? '' : 's') + ' · ' + nice;
@@ -4207,6 +4287,24 @@
       armed = currentPage();
       setTimeout(ensureLayout, 60);
     });
+
+    /* Live refresh. Onboarding is a hand-off between roles (a recruiter adds a
+       candidate, a manager approves, IT and Payroll follow), so the lists went
+       stale the moment someone else acted and only a reload showed it. Re-fetch
+       the page being viewed in the background; nothing on screen changes unless
+       the data did, and it waits while a drawer, a modal or a field is in use. */
+    function refreshQuiet() {
+      if (document.hidden || !document.getElementById(ID.root)) return;
+      if (document.getElementById(ID.drawer) || document.getElementById(ID.modal)) return;
+      var ae = document.activeElement;
+      if (ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName) && document.getElementById(ID.root).contains(ae)) return;
+      if (state.page === '') loadDashboard(true);
+      else if (STAGE_PAGES[state.page]) loadStage(true);
+      else if (state.page === '/candidates') loadCandidates(true);
+    }
+    setInterval(refreshQuiet, 15000);
+    document.addEventListener('visibilitychange', refreshQuiet);
+    window.addEventListener('focus', refreshQuiet);
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);

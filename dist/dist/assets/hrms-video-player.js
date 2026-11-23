@@ -171,6 +171,12 @@
       '.hvp-trans-q strong { color: #cbd5e1; }',
       '.hvp-trans-a { font-size: 12.5px; color: #f1f5f9; line-height: 1.6; }',
       '.hvp-trans-a strong { color: #e2e8f0; }',
+      '.hvp-stt { font-size: 11.5px; line-height: 1.5; padding: 7px 14px; border-bottom: 1px solid rgba(255,255,255,0.08); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }',
+      '.hvp-stt.ok { color: #4ade80; } .hvp-stt.busy { color: #38bdf8; } .hvp-stt.warn { color: #fbbf24; } .hvp-stt.bad { color: #f87171; }',
+      '.hvp-stt-btn { font: inherit; font-weight: 700; font-size: 11px; padding: 2px 9px; border-radius: 6px; cursor: pointer; border: 1px solid currentColor; background: transparent; color: inherit; }',
+      '.hvp-stt-btn:disabled { opacity: .6; cursor: default; }',
+      '.hvp-live-cap { margin-top: 6px; font-size: 11.5px; color: #94a3b8; }',
+      '.hvp-live-cap summary { cursor: pointer; font-weight: 600; }',
 
       '/* Metrics / Score Strip */',
       '.hvp-scores-strip { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }',
@@ -903,153 +909,204 @@
   }
 
   /* ── Build Synchronized Transcript Component ────────────────────────── */
-  function createTranscriptPanel(responses, duration, onSeek, transcript) {
+  /* Two sources of text:
+       - the browser's live captions (meta.responses / meta.transcript), which
+         drop words whenever the browser stops listening;
+       - Deepgram's transcript of the saved video (meta.stt*), complete and
+         time-stamped (api/transcription.py). Preferred whenever it exists.
+     Per-question view: Deepgram's answer for each question when the interview
+     recorded when each question was asked (askedAtSec), with real times.
+     Full view: Deepgram's paragraphs, each one seeks the video. */
+  function createTranscriptPanel(responses, duration, onSeek, transcript, meta) {
+    meta = meta || {};
     var panel = document.createElement('div');
     panel.className = 'hvp-trans-panel';
 
-    var items = Array.isArray(responses) ? responses : [];
-    if (items.length === 0 && typeof transcript === 'string' && transcript.trim()) {
-      items = transcript.split(/\n\s*\n(?=Q\d+\b)/).map(function (block) {
-        var lines = block.trim().split(/\r?\n/);
-        var header = lines.shift() || '';
-        var headerMatch = header.match(/^Q(\d+)(?:\s*[·|]\s*(.*))?$/);
-
-        if (!headerMatch) {
-          return { transcriptOnly: true, transcript: block.trim() };
-        }
-
-        var questionLines = [];
-        var answerLines = [];
-        var currentSection = 'question';
-        lines.forEach(function (line) {
-          var evaMatch = line.match(/^\s*Eva:\s*/i);
-          var candidateMatch = line.match(/^\s*Candidate:\s*/i);
-          if (evaMatch) {
-            currentSection = 'question';
-            questionLines.push(line.slice(evaMatch[0].length));
-          } else if (candidateMatch) {
-            currentSection = 'answer';
-            answerLines.push(line.slice(candidateMatch[0].length));
-          } else {
-            (currentSection === 'answer' ? answerLines : questionLines).push(line);
-          }
+    function itemsFrom(resps, text) {
+      var items = Array.isArray(resps) ? resps.slice() : [];
+      if (items.length === 0 && typeof text === 'string' && text.trim()) {
+        items = text.split(/\n\s*\n(?=Q\d+\b)/).map(function (block) {
+          var lines = block.trim().split(/\r?\n/);
+          var header = lines.shift() || '';
+          var headerMatch = header.match(/^Q(\d+)(?:\s*[·|]\s*(.*))?$/);
+          if (!headerMatch) return { transcriptOnly: true, transcript: block.trim() };
+          var questionLines = [], answerLines = [], currentSection = 'question';
+          lines.forEach(function (line) {
+            var evaMatch = line.match(/^\s*Eva:\s*/i);
+            var candidateMatch = line.match(/^\s*Candidate:\s*/i);
+            if (evaMatch) { currentSection = 'question'; questionLines.push(line.slice(evaMatch[0].length)); }
+            else if (candidateMatch) { currentSection = 'answer'; answerLines.push(line.slice(candidateMatch[0].length)); }
+            else (currentSection === 'answer' ? answerLines : questionLines).push(line);
+          });
+          return { stageGroup: headerMatch[2] || '', q: questionLines.join('\n').trim() || 'Interview response',
+                   transcript: answerLines.join('\n').trim() || block.trim() };
         });
-
-        return {
-          stageGroup: headerMatch[2] || '',
-          q: questionLines.join('\n').trim() || 'Interview response',
-          transcript: answerLines.join('\n').trim() || block.trim()
-        };
-      });
-    }
-    var totalItems = items.length || 1;
-    var dur = duration || 1;
-
-    panel.innerHTML = [
-      '<div class="hvp-trans-head">',
-      '  <div class="hvp-trans-title">📝 Synchronized Transcript (' + items.length + ' Qs)</div>',
-      '  <button class="hvp-trans-sync-btn" title="Toggle Auto-Scroll">⚡ Auto-Scroll: ON</button>',
-      '</div>',
-      '<div class="hvp-trans-list"></div>'
-    ].join('');
-
-    var list = panel.querySelector('.hvp-trans-list');
-    var syncBtn = panel.querySelector('.hvp-trans-sync-btn');
-    var autoScroll = true;
-
-    syncBtn.addEventListener('click', function () {
-      autoScroll = !autoScroll;
-      syncBtn.classList.toggle('off', !autoScroll);
-      syncBtn.textContent = autoScroll ? '⚡ Auto-Scroll: ON' : 'Auto-Scroll: OFF';
-    });
-
-    if (items.length === 0) {
-      list.innerHTML = '<div style="color:var(--text3);font-size:12px;text-align:center;padding:30px;">No structured transcript available for this interview session.</div>';
-      return {
-        element: panel,
-        updateActive: function () {}
-      };
-    }
-
-    // Each card starts when Eva began asking that question. The interview page
-    // records askedAt (seconds into the recording) with every answer; older
-    // recordings without it fall back to an estimate weighted by how much was
-    // said in each question and answer (~150 words a minute), never an even split.
-    function computeStarts(total) {
-      var real = items.length > 0 && items.every(function (r) {
-        return typeof r.askedAt === 'number' && isFinite(r.askedAt) && r.askedAt >= 0;
-      });
-      if (real) {
-        var ordered = items.every(function (r, i) { return i === 0 || r.askedAt >= items[i - 1].askedAt; });
-        if (ordered) {
-          return items.map(function (r) { return total > 0 ? Math.min(r.askedAt, total) : r.askedAt; });
-        }
       }
-      var words = function (t) { return String(t || '').trim().split(/\s+/).filter(Boolean).length; };
-      var weights = items.map(function (r) { return 6 + words(r.q) / 2.6 + words(r.transcript) / 2.4; });
-      var sum = weights.reduce(function (a, b) { return a + b; }, 0) || 1;
-      var acc = 0;
-      return weights.map(function (w) { var start = (acc / sum) * total; acc += w; return start; });
+      return items;
     }
 
-    var starts = computeStarts(dur);
-    var cardEls = [];
-    items.forEach(function (r, idx) {
-      var estimatedStartSec = starts[idx];
-      var card = document.createElement('div');
-      card.className = 'hvp-trans-item';
-      card.setAttribute('data-idx', String(idx));
-      card.setAttribute('data-start', String(estimatedStartSec));
+    var dur = duration || 1;
+    var autoScroll = true;
+    var view = null;          // 'q' | 'full'
+    var cardEls = [];         // [{el, start}]
+    var realTimes = false;
+    var currentActiveIdx = -1;
+    var pollTimer = null;
 
-      var stageLabel = r.stageGroup ? ' · ' + r.stageGroup : '';
-      card.innerHTML = [
-        '<div class="hvp-trans-item-head">',
-        '  <span class="hvp-trans-qtag">' + (r.transcriptOnly ? 'Transcript' : 'Q' + (idx + 1) + stageLabel) + '</span>',
-        '  <span class="hvp-trans-time-pill">⏱ ' + formatSeconds(estimatedStartSec) + '</span>',
+    function statusHtml(m) {
+      var st = m.sttStatus || '';
+      var btn = function (label) { return ' <button class="hvp-stt-btn" type="button">' + label + '</button>'; };
+      if (st === 'done') return m.sttTranscript ? '<div class="hvp-stt ok">✓ Full transcript by Deepgram (speech-to-text of the recorded video)</div>'
+                                                : '<div class="hvp-stt warn">Deepgram found no speech in this video.' + btn('Retry') + '</div>';
+      if (st === 'queued' || st === 'processing') return '<div class="hvp-stt busy">⏳ Preparing the full transcript with Deepgram… this usually takes under a minute.</div>';
+      if (st === 'failed') return '<div class="hvp-stt bad">Full transcript failed: ' + escapeHtml(m.sttError || 'unknown error') + btn('Retry') + '</div>';
+      if (st === 'no_key') return '<div class="hvp-stt warn">Full speech-to-text is not set up yet (an admin adds the Deepgram key in Settings › AI Settings). Showing the live captions, which can miss words.' + btn('Try again') + '</div>';
+      if (m.hasVideo) return '<div class="hvp-stt warn">Showing the live captions, which can miss words.' + btn('Transcribe now') + '</div>';
+      return '';
+    }
+
+    function render(m) {
+      var items = itemsFrom(m.responses, m.transcript);
+      var stt = Array.isArray(m.sttAnswers) && m.sttAnswers.length === items.length ? m.sttAnswers : null;
+      var segs = Array.isArray(m.sttSegments) ? m.sttSegments : [];
+      realTimes = items.length > 0 && items.every(function (r) { return typeof r.askedAtSec === 'number'; });
+      if (!view) view = (items.length === 0 || (!stt && segs.length)) && segs.length ? 'full' : 'q';
+      var totalItems = items.length || 1;
+
+      panel.innerHTML = [
+        '<div class="hvp-trans-head">',
+        '  <div class="hvp-trans-title">📝 Transcript</div>',
+        '  <div style="display:flex;gap:6px;align-items:center">',
+        segs.length ? '    <button class="hvp-trans-sync-btn hvp-view-btn' + (view === 'q' ? '' : ' off') + '" data-view="q">Per question (' + items.length + ')</button>' +
+                      '<button class="hvp-trans-sync-btn hvp-view-btn' + (view === 'full' ? '' : ' off') + '" data-view="full">Full transcript</button>' : '',
+        '    <button class="hvp-trans-sync-btn hvp-auto-btn' + (autoScroll ? '' : ' off') + '" title="Toggle Auto-Scroll">' + (autoScroll ? '⚡ Auto-Scroll: ON' : 'Auto-Scroll: OFF') + '</button>',
+        '  </div>',
         '</div>',
-        r.transcriptOnly
-          ? '<div class="hvp-trans-a"><strong>Transcript:</strong> ' + escapeHtml(r.transcript) + '</div>'
-          : '<div class="hvp-trans-q"><strong>Eva:</strong> ' + escapeHtml(r.q || '—') + '</div><div class="hvp-trans-a"><strong>Candidate:</strong> ' + escapeHtml(r.transcript || '(no speech detected)') + '</div>'
+        statusHtml(m),
+        '<div class="hvp-trans-list"></div>'
       ].join('');
 
-      var entry = { el: card, start: estimatedStartSec };
-      card.addEventListener('click', function () {
-        onSeek(entry.start);
+      var list = panel.querySelector('.hvp-trans-list');
+      panel.querySelector('.hvp-auto-btn').addEventListener('click', function () {
+        autoScroll = !autoScroll;
+        this.classList.toggle('off', !autoScroll);
+        this.textContent = autoScroll ? '⚡ Auto-Scroll: ON' : 'Auto-Scroll: OFF';
       });
+      Array.prototype.forEach.call(panel.querySelectorAll('.hvp-view-btn'), function (b) {
+        b.addEventListener('click', function () { view = b.getAttribute('data-view'); render(m); });
+      });
+      var sb = panel.querySelector('.hvp-stt-btn');
+      if (sb) sb.addEventListener('click', function () { transcribeNow(m, sb); });
 
-      list.appendChild(card);
-      cardEls.push(entry);
-    });
+      cardEls = []; currentActiveIdx = -1;
 
-    var currentActiveIdx = -1;
+      if (view === 'full' && segs.length) {
+        segs.forEach(function (s, idx) {
+          var card = document.createElement('div');
+          card.className = 'hvp-trans-item';
+          card.innerHTML = '<div class="hvp-trans-item-head"><span class="hvp-trans-qtag">Transcript</span>' +
+            '<span class="hvp-trans-time-pill">⏱ ' + formatSeconds(s.start || 0) + '</span></div>' +
+            '<div class="hvp-trans-a">' + escapeHtml(s.text || '') + '</div>';
+          card.addEventListener('click', function () { onSeek(s.start || 0); });
+          list.appendChild(card);
+          cardEls.push({ el: card, start: s.start || 0, real: true });
+        });
+        return;
+      }
+
+      if (items.length === 0) {
+        list.innerHTML = '<div style="color:var(--text3);font-size:12px;text-align:center;padding:30px;">No structured transcript available for this interview session.</div>';
+        return;
+      }
+
+      items.forEach(function (r, idx) {
+        var start = realTimes ? r.askedAtSec : (idx / totalItems) * dur;
+        var full = stt && stt[idx] ? stt[idx] : '';
+        var live = r.transcript || '';
+        var answer = full || live || '(no speech detected)';
+        var card = document.createElement('div');
+        card.className = 'hvp-trans-item';
+        card.setAttribute('data-idx', String(idx));
+        var stageLabel = r.stageGroup ? ' · ' + r.stageGroup : '';
+        card.innerHTML = [
+          '<div class="hvp-trans-item-head">',
+          '  <span class="hvp-trans-qtag">' + (r.transcriptOnly ? 'Transcript' : 'Q' + (idx + 1) + stageLabel) + '</span>',
+          '  <span class="hvp-trans-time-pill"' + (realTimes ? '' : ' title="Estimated position"') + '>⏱ ' + (realTimes ? '' : '~') + formatSeconds(start) + '</span>',
+          '</div>',
+          r.transcriptOnly
+            ? '<div class="hvp-trans-a"><strong>Transcript:</strong> ' + escapeHtml(answer) + '</div>'
+            : '<div class="hvp-trans-q"><strong>Eva:</strong> ' + escapeHtml(r.q || '—') + '</div>' +
+              '<div class="hvp-trans-a"><strong>Candidate:</strong> ' + escapeHtml(answer) + '</div>' +
+              (full && live && live !== '(no speech detected)' && full.replace(/\W+/g, ' ').trim().toLowerCase() !== live.replace(/\W+/g, ' ').trim().toLowerCase()
+                ? '<details class="hvp-live-cap"><summary>Live caption (during the interview)</summary>' + escapeHtml(live) + '</details>' : '')
+        ].join('');
+        card.addEventListener('click', function (ev) {
+          if (ev.target.closest && ev.target.closest('details')) return;
+          onSeek(start);
+        });
+        list.appendChild(card);
+        cardEls.push({ el: card, start: start, real: realTimes });
+      });
+    }
+
+    function transcribeNow(m, btn) {
+      btn.disabled = true; btn.textContent = 'Starting…';
+      fetch('/api/interview-recordings/' + encodeURIComponent(m.id) + '/transcribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+        .then(function (r) { return r.json().catch(function () { return {}; }).then(function (d) { return { ok: r.ok, d: d }; }); })
+        .then(function (res) {
+          if (!res.ok) { m.sttStatus = 'failed'; m.sttError = (res.d && (res.d.message || res.d.detail)) || 'Could not start the transcription.'; render(m); return; }
+          m.sttStatus = res.d.sttStatus || 'queued'; m.sttError = res.d.sttError || '';
+          render(m); poll(m);
+        })
+        .catch(function () { m.sttStatus = 'failed'; m.sttError = 'The server could not be reached.'; render(m); });
+    }
+
+    function poll(m) {
+      clearTimeout(pollTimer);
+      if (!document.body.contains(panel)) return;
+      if (m.sttStatus !== 'queued' && m.sttStatus !== 'processing') return;
+      pollTimer = setTimeout(function () {
+        fetch('/api/interview-recordings/' + encodeURIComponent(m.id))
+          .then(function (r) { return r.json(); })
+          .then(function (fresh) {
+            if (fresh && fresh.sttStatus !== m.sttStatus) { Object.assign(m, fresh); view = null; render(m); }
+            poll(m);
+          })
+          .catch(function () { poll(m); });
+      }, 5000);
+    }
+
+    var base = Object.assign({}, meta, { responses: responses, transcript: transcript });
+    render(base);
+    if (meta.id) poll(base);
 
     return {
       element: panel,
       updateActive: function (curTime, totalDur) {
         if (totalDur > 0 && isFinite(totalDur) && totalDur !== dur) {
           dur = totalDur;
-          // Recalculate starts and time pills now the real duration is known
-          var fresh = computeStarts(dur);
-          cardEls.forEach(function (c, idx) {
-            c.start = fresh[idx];
-            var pill = c.el.querySelector('.hvp-trans-time-pill');
-            if (pill) pill.textContent = '⏱ ' + formatSeconds(c.start);
-          });
+          if (!realTimes && view !== 'full') {
+            var n = cardEls.length || 1;
+            cardEls.forEach(function (c, idx) {
+              c.start = (idx / n) * dur;
+              var pill = c.el.querySelector('.hvp-trans-time-pill');
+              if (pill) pill.textContent = '⏱ ~' + formatSeconds(c.start);
+            });
+          }
         }
-
-        // Active card = the last question that had been asked by this moment
+        if (!cardEls.length) return;
         var activeIdx = 0;
-        for (var i = 0; i < cardEls.length; i++) {
-          if (cardEls[i].start <= curTime + 0.25) activeIdx = i;
+        if (cardEls[0].real) {
+          for (var i = 0; i < cardEls.length; i++) if (cardEls[i].start <= curTime + 0.2) activeIdx = i;
+        } else {
+          activeIdx = Math.min(cardEls.length - 1, Math.floor((curTime / (dur || 1)) * cardEls.length));
         }
         if (activeIdx !== currentActiveIdx) {
           currentActiveIdx = activeIdx;
           cardEls.forEach(function (c, idx) {
             var isActive = (idx === activeIdx);
             c.el.classList.toggle('active', isActive);
-            if (isActive && autoScroll) {
-              c.el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-            }
+            if (isActive && autoScroll) c.el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
           });
         }
       }
@@ -1163,7 +1220,7 @@
 
     transcriptPanel = createTranscriptPanel(meta.responses, rawDuration, function (targetSec) {
       playerInstance.seekTo(targetSec);
-    }, meta.transcript);
+    }, meta.transcript, meta);
     transSlot.appendChild(transcriptPanel.element);
 
     function closeModal() {
