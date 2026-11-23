@@ -817,6 +817,9 @@ class AttendanceEvent(models.Model):
     class Meta:
         db_table = 'attendance_events'
         ordering = ['at', 'id']
+        # Today's Activity Log asks for one person's events on one day, from every
+        # open Check In/Out page: that pair needs its own index.
+        indexes = [models.Index(fields=['email', 'date'], name='att_event_email_date_idx')]
 
 
 # ===========================================================================
