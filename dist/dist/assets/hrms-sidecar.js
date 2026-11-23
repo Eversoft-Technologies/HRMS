@@ -58,6 +58,9 @@
     if (el) { el.textContent = el.getAttribute('data-sc-old'); el.removeAttribute('data-sc-old'); }
   }
   function markActiveNav(base) {
+    // hrms-sidebar.js lights "Settings" while the account drawer is open;
+    // don't take that highlight away (it hands it back when the drawer closes).
+    if (window.__hrmsSettingsDrawerOpen && window.__hrmsSettingsDrawerOpen()) return;
     document.querySelectorAll('.sidebar a.nav-item').forEach(function (a) {
       var h = a.getAttribute('href') || '';
       var on = !!base && (h === base || h.indexOf(base + '/') === 0);

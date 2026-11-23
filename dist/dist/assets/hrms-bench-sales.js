@@ -2028,6 +2028,8 @@
   }
   function updateActiveNav() {
     var sales = document.getElementById('hrms-bench-sales-link');
+    // hrms-sidebar.js lights "Settings" while the account drawer is open; leave the sidebar alone.
+    if (window.__hrmsSettingsDrawerOpen && window.__hrmsSettingsDrawerOpen()) return;
     var subs = document.getElementById('hrms-bench-submissions-link');
     if (sales) sales.className = 'nav-item' + (state.page === 'sales' ? ' active' : '');
     if (subs) subs.className = 'nav-item' + (state.page === 'submissions' ? ' active' : '');
