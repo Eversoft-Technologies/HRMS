@@ -127,23 +127,117 @@
   var GEO_WAIT_CHECKIN_MS = 15000;   // a person is watching a toggle: bounded
   var GEO_WAIT_SAMPLE_MS = 6000;     // background sweep, every 5 min: cheap
 
-  function getPosition(budgetMs, onProgress) {
+  /* Fast path for the moments a person is staring at the screen (the
+   * check-in toggle, switching office/remote). Waiting for a fix better than
+   * 50 m is right for the background sweep, but a desktop browser typically
+   * reports 60-150 m from WiFi and never gets better, so that rule always ran
+   * the full 15 s before the "outside the office" box could appear. Here the
+   * wait is relaxed with time instead:
+   *     <= 50 m   at once
+   *     <= 150 m  after 1 s
+   *     anything  after 3.5 s     (the server widens the fence by the fix's
+   *                                own error and says how accurate it was)
+   * and the clock is credited with the time a background warm-up (below) has
+   * already spent, so a person who has been on the page for a few seconds gets
+   * an answer with no wait at all. */
+  var GEO_FAST_GOOD_M = 150;
+  var GEO_FAST_GOOD_AFTER_MS = 1000;
+  var GEO_FAST_ANY_AFTER_MS = 3500;
+  function fastAcceptable(acc, waitedMs) {
+    if (acc <= GEO_GOOD_ENOUGH_M) return true;
+    if (acc <= GEO_FAST_GOOD_M && waitedMs >= GEO_FAST_GOOD_AFTER_MS) return true;
+    return waitedMs >= GEO_FAST_ANY_AFTER_MS;
+  }
+
+  /* Warm-up: while the employee is on the page and not yet checked in, and has
+   * ALREADY allowed location for this site (we never trigger the permission
+   * prompt on our own), measure in the background so the fix is waiting when
+   * they click. It runs for a short burst, not continuously, and is started by
+   * opening the page, hovering/touching the toggle, or returning to the tab.
+   * This is this page's own measurement for this signed-in person, kept for
+   * 90 s; it is not the browser's shared cache that maximumAge 0 below exists
+   * to avoid. */
+  var GEO_WARM_MAX_AGE_MS = 90000;
+  var GEO_WARM_RUN_MS = 25000;
+  var geoWarm = { fix: null, fixAt: 0, since: 0, id: null, stopTimer: null, email: '' };
+
+  function warmFix() {
+    var w = geoWarm;
+    if (!w.fix || Date.now() - w.fixAt > GEO_WARM_MAX_AGE_MS) return null;
+    var actor = getActor();
+    if (w.email !== (actor && actor.email || '')) return null;
+    return { fix: w.fix, since: w.since };
+  }
+
+  function stopWarm() {
+    try { if (geoWarm.id !== null) navigator.geolocation.clearWatch(geoWarm.id); } catch (_) {}
+    if (geoWarm.stopTimer) clearTimeout(geoWarm.stopTimer);
+    geoWarm.id = null; geoWarm.stopTimer = null;
+  }
+
+  function warmGeo() {
+    if (!navigator.geolocation || isCheckedIn || geoWarm.id !== null) return;
+    var actor = getActor();
+    if (!actor || !actor.email) return;
+    if (!navigator.permissions || !navigator.permissions.query) return;
+    navigator.permissions.query({ name: 'geolocation' }).then(function (st) {
+      if (st.state !== 'granted' || geoWarm.id !== null || isCheckedIn) return;
+      geoWarm.email = actor.email;
+      geoWarm.since = Date.now();
+      try {
+        geoWarm.id = navigator.geolocation.watchPosition(function (p) {
+          var acc = p.coords.accuracy, held = geoWarm.fix;
+          // Keep the tightest fix of the last 90 s; a worse one only replaces
+          // it once it has gone stale.
+          if (held && Date.now() - geoWarm.fixAt < GEO_WARM_MAX_AGE_MS && !(acc < held.accuracy)) return;
+          geoWarm.fix = { latitude: p.coords.latitude, longitude: p.coords.longitude, accuracy: acc };
+          geoWarm.fixAt = Date.now();
+          if (acc <= GEO_GOOD_ENOUGH_M) stopWarm();
+        }, function () { stopWarm(); }, { enableHighAccuracy: true, timeout: GEO_WARM_RUN_MS, maximumAge: 0 });
+        geoWarm.stopTimer = setTimeout(stopWarm, GEO_WARM_RUN_MS);
+      } catch (_) { stopWarm(); }
+    }).catch(function () {});
+  }
+
+  function getPosition(budgetMs, onProgress, opts) {
     var budget = budgetMs || GEO_WAIT_CHECKIN_MS;
+    var fast = !!(opts && opts.fast);
     return new Promise(function (resolve) {
       if (!navigator.geolocation) return resolve(null);
-      var best = null, id = null, timer = null, done = false;
+      var best = null, id = null, timer = null, tick = null, done = false;
+      var t0 = Date.now();
+
+      if (fast) {
+        var warm = warmFix();
+        if (warm) {
+          best = warm.fix;
+          t0 = Math.min(t0, warm.since);            // credit the warm-up time
+          stopWarm();
+          if (fastAcceptable(best.accuracy, Date.now() - t0)) return resolve(best);
+        }
+      }
 
       function finish() {
         if (done) return;
         done = true;
         try { if (id !== null) navigator.geolocation.clearWatch(id); } catch (_) {}
         if (timer) clearTimeout(timer);
+        if (tick) clearTimeout(tick);
         resolve(best);
+      }
+
+      // Re-check on a timer as well as on each sample: the relaxed thresholds
+      // are reached by waiting, and no further sample may arrive to trigger them.
+      function checkFast() {
+        if (done) return;
+        if (best && fastAcceptable(best.accuracy, Date.now() - t0)) return finish();
+        tick = setTimeout(checkFast, 200);
       }
 
       // Also covers Safari leaving the callbacks pending indefinitely when the
       // permission prompt is dismissed rather than answered.
       timer = setTimeout(finish, budget + 1000);
+      if (fast) checkFast();
 
       try {
         id = navigator.geolocation.watchPosition(
@@ -161,6 +255,7 @@
             // fix tightening; the silent check-in path passes nothing.
             if (onProgress) { try { onProgress(best); } catch (_) {} }
             if (acc <= GEO_GOOD_ENOUGH_M) finish();
+            else if (fast && fastAcceptable(acc, Date.now() - t0)) finish();
           },
           function () {
             // A momentary failure mid-watch must not discard a fix in hand.
@@ -412,6 +507,32 @@
     });
   }
 
+  /* A small pill that appears the instant the toggle is clicked, so the person
+     sees something is happening while the position is measured and the server
+     is asked, instead of a toggle that seems to do nothing. */
+  var LOCATING_ID = 'hrms-ci-locating';
+  function showLocating(text) {
+    try {
+      var el = document.getElementById(LOCATING_ID);
+      if (!el) {
+        el = document.createElement('div');
+        el.id = LOCATING_ID;
+        el.setAttribute('role', 'status');
+        el.style.cssText = 'position:fixed;top:16px;left:50%;transform:translateX(-50%);z-index:100000;' +
+          'display:flex;align-items:center;gap:8px;padding:9px 18px;border-radius:999px;font-size:13px;font-weight:600;' +
+          'background:var(--bg3,#1e293b);color:var(--text,#f1f5f9);border:1px solid var(--border2,#334155);' +
+          'box-shadow:0 8px 24px rgba(0,0,0,.35);pointer-events:none';
+        document.body.appendChild(el);
+      }
+      el.textContent = '📍 ' + text;
+      el.style.display = 'flex';
+    } catch (_) {}
+  }
+  function hideLocating() {
+    var el = document.getElementById(LOCATING_ID);
+    if (el) el.style.display = 'none';
+  }
+
   /* Records the check-in / check-out against the Django attendance API.
      Auth + actor headers are attached automatically by hrms-actor.js. Fires
      'hrmsAttendanceSynced' with the saved record so the check-in page can
@@ -469,9 +590,12 @@
     }
 
     // Every check-in is location-checked, whatever the mode; checking out is not.
-    return (checkedIn ? getPosition() : Promise.resolve(null))
+    if (checkedIn) showLocating('Checking your location\u2026');
+    return (checkedIn ? getPosition(undefined, undefined, { fast: true }) : Promise.resolve(null))
       .then(function (pos) {
+        if (checkedIn) showLocating('Verifying with the office\u2026');
         return post(pos || {}).then(function (r) {
+          hideLocating();
           if (r.ok) return settle(r);
           if (!isGeofenceEnabled()) return settle(r);
           return r.json().catch(function () { return {}; }).then(function (d) {
@@ -565,7 +689,7 @@
           });
         });
       })
-      .catch(function (e) { console.warn('[hrms-checkin] attendance sync failed', e); });
+      .catch(function (e) { hideLocating(); console.warn('[hrms-checkin] attendance sync failed', e); });
   }
 
   /* ── SVG icons ───────────────────────────────────────────────────────── */
@@ -684,6 +808,12 @@
     var knob = document.createElement('span');
     knob.className = 'hrms-ci-knob';
     toggle.appendChild(knob);
+
+    /* Start measuring the moment someone approaches the toggle (hover, focus,
+       touch), so the position is ready by the time they click. */
+    ['pointerenter', 'focusin', 'touchstart'].forEach(function (ev) {
+      wrap.addEventListener(ev, warmGeo, { passive: true });
+    });
 
     /* click handler */
     wrap.addEventListener('click', function (e) {
@@ -1189,6 +1319,10 @@
     wireSettingsFallback();
     watchTopbar();
     syncFromServer(true);
+    // Measure in the background (only if location is already allowed) so a
+    // position is waiting when the employee reaches for the toggle.
+    setTimeout(warmGeo, 1500);
+    document.addEventListener('visibilitychange', function () { if (!document.hidden) warmGeo(); });
   }
 
   if (document.readyState === 'loading') {
@@ -1201,10 +1335,12 @@
   window.addEventListener('popstate', function () {
     paintState();
     syncFromServer(false);
+    warmGeo();
   });
   window.addEventListener('hrmsNavigate', function () {
     paintState();
     syncFromServer(false);
+    warmGeo();
   });
 
   // Signing in or out happens without a reload in this app, so the session key
@@ -1235,7 +1371,7 @@
             init && typeof init.body === 'string') {
           var body = JSON.parse(init.body || '{}');
           if ((body.event === 'remote-switch' || body.event === 'office-switch') && body.latitude == null) {
-            return getPosition().then(function (pos) {
+            return getPosition(undefined, undefined, { fast: true }).then(function (pos) {
               if (pos) { body.latitude = pos.latitude; body.longitude = pos.longitude; body.accuracy = pos.accuracy; }
               return nf(input, Object.assign({}, init, { body: JSON.stringify(body) }));
             }).then(function (resp) {
