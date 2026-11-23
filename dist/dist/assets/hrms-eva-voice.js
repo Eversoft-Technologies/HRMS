@@ -119,4 +119,103 @@
       return false;
     });
   };
+
+  /* Speech-recognition watchdog.
+   *
+   * Chrome's recognizer sometimes stalls without ending or erroring: the
+   * candidate keeps talking and nothing appears. __hrmsSpeechWatch(rec, stream)
+   * watches the microphone level; if the candidate has been speaking for ~2 s
+   * and the recognizer has produced no result for 5 s, it is aborted. The
+   * interview page's end handler then restarts it at once, keeping the text
+   * gathered so far. The watch stops by itself when the recognizer is stopped.
+   */
+  window.__hrmsSpeechWatch = function (rec, stream) {
+    try {
+      var AC = window.AudioContext || window.webkitAudioContext;
+      var tracks = stream && stream.getAudioTracks ? stream.getAudioTracks() : [];
+      if (!AC || !tracks.length) return;
+      var c = new AC();
+      var an = c.createAnalyser();
+      an.fftSize = 1024;
+      c.createMediaStreamSource(new MediaStream([tracks[0]])).connect(an);
+      var buf = new Float32Array(an.fftSize);
+      var loud = 0, lastResult = Date.now();
+      var prevResult = rec.onresult, prevStart = rec.onstart;
+      rec.onresult = function () { lastResult = Date.now(); return prevResult && prevResult.apply(this, arguments); };
+      rec.onstart = function () { lastResult = Date.now(); return prevStart && prevStart.apply(this, arguments); };
+      var timer = setInterval(function () {
+        if (!rec.__keep) { clearInterval(timer); try { c.close(); } catch (e) {} return; }
+        if (!rec.__running) { loud = 0; return; }
+        an.getFloatTimeDomainData(buf);
+        var sum = 0;
+        for (var i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+        loud = Math.sqrt(sum / buf.length) > 0.015 ? loud + 1 : 0;
+        if (loud >= 4 && Date.now() - lastResult > 5000) {
+          console.warn('[Speech] recognizer stalled while the candidate was speaking; restarting it');
+          loud = 0;
+          lastResult = Date.now();
+          try { rec.abort(); } catch (e) {}
+        }
+      }, 500);
+    } catch (e) {
+      console.warn('[Speech] watchdog not started', e);
+    }
+  };
+
+  /* On-device speech recognition (Chrome 139+).
+   *
+   * The default recognizer streams the microphone to Google and waits for text
+   * to come back, so words appear late and long answers lose pieces whenever
+   * the network hiccups. Chrome can instead recognise on the laptop itself:
+   * no round trip, no network drops. __hrmsSpeechPrep() (called when the
+   * interview starts, a user gesture) asks the browser whether an on-device
+   * model exists for the candidate's language and, if it can be downloaded,
+   * installs it. __hrmsSpeechLocalLang() then returns the language to use, or
+   * null to keep the cloud recognizer. Anything unsupported or failing leaves
+   * the interview exactly as it was. Set speechLocal:false in __HRMS_CONFIG__
+   * to switch this off.
+   */
+  var localLang = null, prepared = false;
+  window.__hrmsSpeechPrep = function () {
+    if (prepared) return;
+    prepared = true;
+    try {
+      var cfg = window.__HRMS_CONFIG__ || {};
+      if (cfg.speechLocal === false) return;
+      var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SR || !SR.available || !SR.prototype || !('processLocally' in SR.prototype)) return;
+      var langs = [cfg.speechLang || 'en-IN', 'en-US'];
+      (function next(i) {
+        if (i >= langs.length) return;
+        var lang = langs[i];
+        Promise.resolve(SR.available({ langs: [lang], processLocally: true })).then(function (status) {
+          if (status === 'available') {
+            localLang = lang;
+            console.info('[Speech] on-device recognition ready (' + lang + ')');
+          } else if ((status === 'downloadable' || status === 'downloading') && SR.install) {
+            return Promise.resolve(SR.install({ langs: [lang], processLocally: true })).then(function (ok) {
+              if (ok === false) return next(i + 1);
+              localLang = lang;
+              console.info('[Speech] on-device model installed (' + lang + ')');
+            });
+          } else {
+            next(i + 1);
+          }
+        }).catch(function (e) { console.warn('[Speech] on-device check failed:', e && e.message); });
+      })(0);
+    } catch (e) {
+      console.warn('[Speech] on-device setup skipped', e);
+    }
+  };
+  window.__hrmsSpeechLocalLang = function () { return localLang; };
+  window.__hrmsSpeechNoLocal = function () { localLang = null; };
+
+  /* Bias the on-device recognizer towards the words this question is about
+   * (technologies, concepts), so "FastAPI" is not heard as "fast API". */
+  window.__hrmsSpeechBias = function (rec, words) {
+    try {
+      if (!window.SpeechRecognitionPhrase || !('phrases' in rec)) return;
+      rec.phrases = (words || []).slice(0, 30).map(function (w) { return new window.SpeechRecognitionPhrase(String(w), 3.0); });
+    } catch (e) {}
+  };
 })();
