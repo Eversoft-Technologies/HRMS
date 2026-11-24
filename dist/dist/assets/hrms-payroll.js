@@ -47,7 +47,7 @@
       'body[data-payroll-active="1"] .main > .content { display: none !important; }',
       '#' + ID.root + ' { padding: 24px 32px 64px; color: var(--text, #e8edf7); font-family: "DM Sans", -apple-system, sans-serif; }',
       '#' + ID.root + ' * { box-sizing: border-box; }',
-      '.pr-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 24px; flex-wrap: wrap; gap: 16px; }',
+      '.pr-header { display: flex; justify-content: space-between; *: flex-start; margin-bottom: 24px; flex-wrap: wrap; gap: 16px; }',
       '.pr-title-group h2 { margin: 0 0 6px 0; font-size: 24px; font-weight: 700; font-family: "Syne", sans-serif; color: var(--text, #fff); display: flex; align-items: center; gap: 10px; }',
       '.pr-title-group p { margin: 0; font-size: 13.5px; color: var(--text2, #8a9bb8); }',
       '.pr-actions { display: flex; gap: 10px; align-items: center; }',
