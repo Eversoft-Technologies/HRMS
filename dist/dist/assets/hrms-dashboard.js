@@ -1450,6 +1450,121 @@
     initAttendanceChart(d);
   }
 
+
+  /* ── Card options menu (the ⋮ on "Today's Attendance & Workforce Status").
+     Delegated on document, so it keeps working after the 15 s re-render. ── */
+  var cardMenu = null;
+  function closeCardMenu() {
+    if (!cardMenu) return;
+    if (cardMenu.btn) cardMenu.btn.setAttribute('aria-expanded', 'false');
+    if (cardMenu.el.parentNode) cardMenu.el.parentNode.removeChild(cardMenu.el);
+    cardMenu = null;
+  }
+  function todayIso() {
+    var t = new Date();
+    return t.getFullYear() + '-' + ('0' + (t.getMonth() + 1)).slice(-2) + '-' + ('0' + t.getDate()).slice(-2);
+  }
+  function downloadBlob(blob, name) {
+    var url = URL.createObjectURL(blob), a = document.createElement('a');
+    a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.parentNode.removeChild(a);
+    setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+  }
+  function attendanceCsv() {
+    var d = state.data;
+    if (!d) return null;
+    var sr = attSeries(d);
+    var rows = [['Date', todayIso()], [], ['Status', 'Employees']];
+    for (var i = 0; i < sr.labels.length; i++) rows.push([sr.labels[i], sr.data[i]]);
+    rows.push([]);
+    rows.push(['Total employees', sr.total != null ? sr.total : '']);
+    var badge = document.getElementById('dash-att-rate-badge');
+    if (badge) rows.push(['Rate', badge.textContent.trim()]);
+    return rows.map(function (r) {
+      return r.map(function (c) { var v = String(c == null ? '' : c); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }).join(',');
+    }).join('\r\n');
+  }
+  function goTo(path) {
+    closeCardMenu();
+    if (window.__reactRouterNavigate) window.__reactRouterNavigate(path);
+    else window.location.href = path;
+  }
+  function openCardMenu(btn) {
+    closeCardMenu();
+    var el = document.createElement('div');
+    el.className = 'hrms-card-menu';
+    el.setAttribute('role', 'menu');
+    var items = [
+      ['refresh', 'Refresh now'],
+      ['open', 'View attendance details'],
+      ['csv', 'Download as CSV'],
+      ['png', 'Download chart (PNG)']
+    ];
+    el.innerHTML = items.map(function (it) {
+      return '<button type="button" role="menuitem" data-dash-act="' + it[0] + '">' + it[1] + '</button>';
+    }).join('');
+    document.body.appendChild(el);
+    var r = btn.getBoundingClientRect();
+    var w = el.offsetWidth || 210;
+    el.style.top = (r.bottom + 6) + 'px';
+    el.style.left = Math.max(8, Math.min(window.innerWidth - w - 8, r.right - w)) + 'px';
+    btn.setAttribute('aria-expanded', 'true');
+    cardMenu = { el: el, btn: btn };
+    var first = el.querySelector('button'); if (first) first.focus();
+    el.addEventListener('click', function (e) {
+      var b = e.target.closest ? e.target.closest('[data-dash-act]') : null;
+      if (!b) return;
+      var act = b.getAttribute('data-dash-act');
+      if (act === 'refresh') {
+        closeCardMenu();
+        state.retryAfter = 0;
+        fetchDashboardStats();
+      } else if (act === 'open') {
+        goTo('/employees/attendance');
+      } else if (act === 'csv') {
+        var csv = attendanceCsv();
+        closeCardMenu();
+        if (csv) downloadBlob(new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' }), 'attendance_' + todayIso() + '.csv');
+      } else if (act === 'png') {
+        var cv = document.getElementById('dash-chart-attendance');
+        closeCardMenu();
+        if (cv && cv.toBlob) {
+          // Paint a solid background so the PNG is readable outside the app.
+          var out = document.createElement('canvas'); out.width = cv.width; out.height = cv.height;
+          var ctx = out.getContext('2d');
+          ctx.fillStyle = getComputedStyle(document.body).backgroundColor || '#ffffff';
+          ctx.fillRect(0, 0, out.width, out.height);
+          ctx.drawImage(cv, 0, 0);
+          out.toBlob(function (b2) { if (b2) downloadBlob(b2, 'attendance_chart_' + todayIso() + '.png'); });
+        }
+      }
+    });
+  }
+  function ensureCardMenuStyle() {
+    if (document.getElementById('hrms-card-menu-style')) return;
+    var st = document.createElement('style');
+    st.id = 'hrms-card-menu-style';
+    st.textContent =
+      '.hrms-card-menu-btn{background:none;border:0;font-size:16px;line-height:1;color:var(--text3,#94a3b8);cursor:pointer;padding:2px 6px;border-radius:6px;font-family:inherit}' +
+      '.hrms-card-menu-btn:hover,.hrms-card-menu-btn[aria-expanded="true"]{background:var(--bg3,#f1f5f9);color:var(--text,#0f172a)}' +
+      '.hrms-card-menu{position:fixed;z-index:10050;min-width:210px;padding:6px;border-radius:10px;background:var(--bg2,#fff);border:1px solid var(--border2,#e5e7eb);box-shadow:0 12px 30px rgba(15,23,42,.18)}' +
+      '.hrms-card-menu button{display:block;width:100%;text-align:left;padding:8px 10px;border:0;border-radius:7px;background:none;color:var(--text,#0f172a);font:inherit;font-size:13px;cursor:pointer}' +
+      '.hrms-card-menu button:hover,.hrms-card-menu button:focus{background:var(--bg3,#f1f5f9);outline:none}';
+    document.head.appendChild(st);
+  }
+  ensureCardMenuStyle();
+  document.addEventListener('click', function (e) {
+    var btn = e.target && e.target.closest ? e.target.closest('[data-dash-menu="attendance"]') : null;
+    if (btn) {
+      e.preventDefault(); e.stopPropagation();
+      if (cardMenu && cardMenu.btn === btn) closeCardMenu(); else openCardMenu(btn);
+      return;
+    }
+    if (cardMenu && !cardMenu.el.contains(e.target)) closeCardMenu();
+  }, true);
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && cardMenu) { var b = cardMenu.btn; closeCardMenu(); if (b) b.focus(); } });
+  window.addEventListener('resize', closeCardMenu);
+  window.addEventListener('scroll', closeCardMenu, true);
+
   function tryMount() {
     var path = window.location.pathname;
     var isDashboard = path === '/' || path === '/dashboard' || path === '' || path === '/index.html';

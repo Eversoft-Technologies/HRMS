@@ -56,6 +56,9 @@ def run_late_sweep(now=None, dry_run=False):
     now = now or local_now()
     today = now.date()
     notified = []
+    # One resolver for the whole sweep (calendars loaded once).
+    from .attendance_ext.holidays import HolidayResolver
+    hols = HolidayResolver()
 
     for user in _staff():
         email = (user.email or '').strip()
@@ -79,6 +82,8 @@ def run_late_sweep(now=None, dry_run=False):
             continue                      # already told them today
         if _on_leave_or_wfh(email, today):
             continue                      # approved WFH is not "absent"
+        if hols.is_holiday(email, today):
+            continue                      # their own holiday calendar: a day off
 
         late_by = int((now - deadline).total_seconds() // 60)
         if dry_run:
@@ -149,7 +154,12 @@ def collect_digest(now=None):
     late = [r for r in rows if (r.late_minutes or 0) > 0]
     long_days = [r for r in rows if (r.worked_minutes or 0) >= 540]
 
-    expected = _staff().count()
+    # Nobody is expected in on their own holiday (holiday calendars).
+    from .attendance_ext.holidays import HolidayResolver
+    hols = HolidayResolver()
+    ins = {(r.email or '').strip().lower() for r in checked_in}
+    expected = sum(1 for u in _staff()
+                   if (u.email or '').strip().lower() in ins or not hols.is_holiday(u.email, today))
     absent = max(expected - len(checked_in), 0)
 
     return {

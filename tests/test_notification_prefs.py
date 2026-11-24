@@ -15,7 +15,9 @@ class NotificationPrefsApiTests(TestCase):
         r = self.me.get('/api/user-settings/me@co.com/notification-preferences')
         self.assertEqual(r.status_code, 200)
         cats = {c['key']: c for c in r.json()['categories']}
-        self.assertEqual(len(cats), 8)
+        self.assertEqual(len(cats), 10)
+        self.assertTrue(cats['task_activity']['enabled'] and cats['task_activity']['active'])
+        self.assertTrue(cats['task_emails']['enabled'] and cats['task_emails']['active'])
         self.assertTrue(cats['leave_approvals']['enabled'])
         self.assertFalse(cats['job_applications']['enabled'])
         self.assertFalse(cats['ai_digest']['enabled'])

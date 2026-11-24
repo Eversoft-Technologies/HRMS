@@ -3,7 +3,7 @@
 Each category can be switched off by the person who receives it. Senders tag
 a notification with its category (``create_notification(..., category=...)``)
 and it is simply not delivered to anyone who switched that category off.
-Untagged notifications (security, account, attendance, tasks, ...) are always
+Untagged notifications (security, account, attendance, ...) are always
 delivered.
 
 ``active`` says whether the app currently sends anything in that category, so
@@ -26,6 +26,10 @@ CATEGORIES = [
     ('compliance_deadlines', 'Compliance deadline alerts', 'In-app', True, False),
     ('onboarding_milestones', 'Onboarding milestone nudges', 'In-app', True, True),
     ('ai_digest', 'AI insight digest', 'In-app (weekly)', False, False),
+    # Task Tracker (api/task_notify.py): assigned / reassigned, @mentions,
+    # comments and status changes on issues you are assigned to or watch.
+    ('task_activity', 'Task assignments, mentions & comments', 'In-app', True, True),
+    ('task_emails', 'Task emails (assignments, mentions & comments)', 'Email', True, True),
 ]
 KEYS = {c[0] for c in CATEGORIES}
 DEFAULTS = {c[0]: c[3] for c in CATEGORIES}

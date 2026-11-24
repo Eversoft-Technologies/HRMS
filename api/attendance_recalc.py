@@ -73,6 +73,10 @@ def apply(changes, actor=''):
             _ts_log(att, _ts_before, 'recalc', actor, 'Recalculated from all sessions of the day')
             AttendanceEvent.objects.create(email=att.email, employee_name=att.employee_name, date=att.date,
                                            event='recalculated', location=note[:120], at=now)
+    # After the batch commits: status / overtime / penalties follow the new hours.
+    from .attendance_ext.day_events import after_day_changed
+    for att, _worked, _ot in changes:
+        after_day_changed(att, actor=actor, source='recalc')
 
 
 def _row(att, worked=None, ot=None):

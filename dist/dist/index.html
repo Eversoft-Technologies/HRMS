@@ -23,6 +23,7 @@
         ['/employees/leave',         'leave.view'],
         ['/employees/chat',          'employee.view'],
         ['/employees/work',          'employee.view'],
+        ['/settings/attendance-policies', 'attendance.policy.view'],
         ['/settings/users',          'settings.manage'],
         ['/settings/email',          'settings.manage'],
         ['/settings',                'settings.view'],
@@ -56,6 +57,33 @@
       visibility: hidden !important;
     }
   </style>
+  <style>
+    html.hrms-sc-boot #root .content {
+      visibility: hidden !important;
+    }
+  </style>
+  <script>
+    /* Pages drawn by overlays (Task Tracker, My Team, Guides, ...): hide
+       React's own page for that route until the overlay has mounted, so a
+       refresh never flashes the old screen. hrms-sidecar.js removes the
+       class; the timeout is only a safety net. */
+    (function () {
+      try {
+        var p = location.pathname.replace(/\/+$/, '') || '/';
+        var bases = ['/employees/tasks', '/help/guides', '/my-team', '/tickets'];
+        try { var saved = JSON.parse(localStorage.getItem('hrms_sc_bases') || '[]'); if (Array.isArray(saved)) bases = bases.concat(saved); } catch (_) {}
+        for (var i = 0; i < bases.length; i++) {
+          var b = bases[i];
+          if (b && b !== '/' && (p === b || p.indexOf(b + '/') === 0)) {
+            var de = document.documentElement;
+            de.classList.add('hrms-sc-boot');
+            setTimeout(function () { de.classList.remove('hrms-sc-boot'); }, 6000);
+            break;
+          }
+        }
+      } catch (_) {}
+    })();
+  </script>
   <script>
     (function () {
       var tabs = ['Dashboard', 'AI Interviewer', 'Schedule & Links', 'Follow-up Emails', 'Recordings'];
@@ -371,7 +399,8 @@
   <!-- Must run BEFORE the app bundle: the bundle draws the Leave page on its first
        render, and if this file is not there yet it falls back to the old built-in
        page (cards + table only) and stays on it until you navigate away and back. -->
-  <script defer src="/assets/hrms-leaveui.js?v=23"></script>
+  <script defer src="/assets/hrms-leaveui.js?v=24"></script>
+  <script defer src="/assets/hrms-regularize.js?v=1"></script>
   <script type="module" crossorigin src="/assets/index-DCh6bk0Rv4.js?v=108"></script>
   <script defer src="/assets/hrms-net.js?v=2"></script>
   <script defer src="/assets/hrms-company.js?v=2"></script>
@@ -384,28 +413,41 @@
   <script defer src="/assets/hrms-tab-scroll.js?v=3"></script>
   <script defer src="/assets/hrms-popup-dismiss.js?v=2"></script>
   <script defer src="/assets/hrms-sidebar.js?v=5"></script>
-  <script defer src="/assets/hrms-checkin.js?v=29"></script>
-  <script defer src="/assets/hrms-attendance-admin.js?v=27"></script>
+  <script defer src="/assets/hrms-checkin.js?v=36"></script>
+  <script defer src="/assets/hrms-attendance-admin.js?v=30"></script>
   <script defer src="/assets/hrms-chat.js?v=19"></script>
   <script defer src="/assets/hrms-chat-dock.js?v=15"></script>
   <script defer src="/assets/hrms-status.js?v=18"></script>
   <script defer src="/assets/hrms-attendance.js?v=6"></script>
   <script defer src="/assets/hrms-rbac.js?v=17"></script>
-  <script defer src="/assets/hrms-perms.js?v=24"></script>
+  <script defer src="/assets/hrms-perms.js?v=39"></script>
   <script defer src="/assets/hrms-onboarding-form-builder.js?v=2"></script>
-  <script defer src="/assets/hrms-sidecar.js?v=1"></script>
-  <script defer src="/assets/hrms-tickets.js?v=2"></script>
-  <script defer src="/assets/hrms-timesheets.js?v=3"></script>
-  <script defer src="/assets/hrms-orgchart.js?v=3"></script>
-  <script defer src="/assets/hrms-onboarding.js?v=36"></script>
+  <script defer src="/assets/hrms-sidecar.js?v=7"></script>
+  <script defer src="/assets/hrms-tickets.js?v=3"></script>
+  <script defer src="/assets/hrms-timesheets.js?v=4"></script>
+  <script defer src="/assets/hrms-orgchart.js?v=4"></script>
+  <script defer src="/assets/hrms-careers.js?v=2"></script>
+  <script defer src="/assets/hrms-assets.js?v=1"></script>
+  <script defer src="/assets/hrms-okr.js?v=3"></script>
+  <script defer src="/assets/hrms-myteam.js?v=9"></script>
+  <script defer src="/assets/hrms-holidays.js?v=1"></script>
+  <script defer src="/assets/hrms-att-policy.js?v=1"></script>
+  <script defer src="/assets/hrms-overtime.js?v=1"></script>
+  <script defer src="/assets/hrms-payroll-tax.js?v=2"></script>
+  <script defer src="/assets/hrms-payroll-bank.js?v=2"></script>
+  <script defer src="/assets/hrms-payroll-us.js?v=2"></script>
+  <script defer src="/assets/hrms-payroll-ess.js?v=3"></script>
+  <script defer src="/assets/hrms-payroll-pending.js?v=1"></script>
+  <script defer src="/assets/hrms-payroll-tabs.js?v=3"></script>
+  <script defer src="/assets/hrms-onboarding.js?v=37"></script>
   <script defer src="/assets/hrms-candidate-portal.js?v=2"></script>
   <script defer src="/assets/hrms-sounds.js?v=8"></script>
   <script defer src="/assets/hrms-notifications.js?v=8"></script>
-  <script defer src="/assets/hrms-recruit-kpi.js?v=17"></script>
-  <script defer src="/assets/hrms-attendance-actions.js?v=36"></script>
-  <script defer src="/assets/hrms-attendance-ui.js?v=11"></script>
+  <script defer src="/assets/hrms-recruit-kpi.js?v=18"></script>
+  <script defer src="/assets/hrms-attendance-actions.js?v=38"></script>
+  <script defer src="/assets/hrms-attendance-ui.js?v=12"></script>
   <script defer src="/assets/hrms-jobs-table.js?v=19"></script>
-  <script defer src="/assets/hrms-bench-sales.js?v=17"></script>
+  <script defer src="/assets/hrms-bench-sales.js?v=18"></script>
   <script defer src="/assets/hrms-candidate-compare.js?v=43"></script>
   <script defer src="/assets/hrms-interviews.js?v=27"></script>
   <script defer src="/assets/hrms-qv-filter-dropdowns.js?v=3"></script>
@@ -413,18 +455,21 @@
   <script defer src="/assets/hrms-f2f-candidate-info.js?v=19"></script>
   <script defer src="/assets/hrms-job-form-builder.js?v=19"></script>
   <script defer src="/assets/hrms-search-dd.js?v=6"></script>
-  <script defer src="/assets/hrms-dashboard.js?v=23"></script>
+  <script defer src="/assets/hrms-dashboard.js?v=24"></script>
   <script defer src="/assets/hrms-usa-nav.js?v=8"></script>
   <script defer src="/assets/hrms-company-settings.js?v=10"></script>
-  <script defer src="/assets/hrms-leave-policy.js?v=1"></script>
+  <script defer src="/assets/hrms-leave-policy.js?v=2"></script>
+  <script defer src="/assets/hrms-leave-ledger.js?v=2"></script>
   <script defer src="/assets/hrms-interview-guard.js?v=1"></script>
   <script defer src="/assets/hrms-video-player.js?v=7"></script>
-  <script defer src="/assets/hrms-payroll.js?v=5"></script>
-  <script defer src="/assets/hrms-employee-tabs.js?v=3"></script>
-  <script defer src="/assets/hrms-settings-panels.js?v=8"></script>
-  <script defer src="/assets/hrms-hris.js?v=16"></script>
+  <script defer src="/assets/hrms-payroll.js?v=7"></script>
+  <script defer src="/assets/hrms-employee-tabs.js?v=6"></script>
+  <script defer src="/assets/hrms-settings-panels.js?v=10"></script>
+  <script defer src="/assets/hrms-hris.js?v=18"></script>
   <script defer src="/assets/hrms-hris-pager.js?v=2"></script>
-  <script defer src="/assets/hrms-teams.js?v=2"></script>
+  <script defer src="/assets/hrms-teams.js?v=3"></script>
+  <script defer src="/assets/hrms-projects.js?v=12"></script>
+  <script defer src="/assets/hrms-guides.js?v=3"></script>
   <script defer src="/assets/hrms-org-forms.js?v=2"></script>
   <script defer src="/assets/hrms-submission-discussion.js?v=1"></script>
   <script defer src="/assets/hrms-avatars.js?v=5"></script>

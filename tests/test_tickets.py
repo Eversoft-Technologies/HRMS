@@ -10,10 +10,10 @@ from api.timeutil import local_now
 
 class TicketTests(TestCase):
     def setUp(self):
-        perm = Permission.objects.create(code='ticket.manage', name='Manage tickets')
-        agent_role = Role.objects.create(name='IT Admin')
-        RolePermission.objects.create(role=agent_role, permission=perm)
-        emp_role = Role.objects.create(name='Employee')
+        perm, _ = Permission.objects.get_or_create(code='ticket.manage', defaults={'name': 'Manage tickets'})
+        agent_role, _ = Role.objects.get_or_create(name='IT Admin')
+        RolePermission.objects.get_or_create(role=agent_role, permission=perm)
+        emp_role, _ = Role.objects.get_or_create(name='Employee')
         AppUser.objects.create(email='agent@co.com', full_name='Alice Agent', password='x', role='employee',
                                role_ref=agent_role)
         AppUser.objects.create(email='agent2@co.com', full_name='Bob Agent', password='x', role='employee',

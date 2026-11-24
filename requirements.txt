@@ -18,3 +18,5 @@ holidays>=0.106,<1
 cryptography>=41.0
 # Eva's voice in AI interview recordings (api/tts_views.py): Microsoft neural TTS, no key needed.
 edge-tts>=7.0.0
+reportlab>=4.0
+pypdf>=4.0

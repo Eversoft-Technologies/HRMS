@@ -175,7 +175,10 @@ I9_DOC_TYPES = {
     'i20':                     ('Form I-20', 'Other'),
     'ds2019':                  ('Form DS-2019', 'Other'),
     'i9_form':                 ('Form I-9 (completed)', 'Other'),
+    'i9':                      ('Form I-9', 'Other'),
     'e_verify_case':           ('E-Verify Case Result', 'Other'),
+    'everify':                 ('E-Verify', 'Other'),
+    'e_verify':                ('E-Verify', 'Other'),
 }
 LEGACY_DOC_LABELS = {
     'ssn': 'SSN', 'driver_license': 'Driver License', 'state_id': 'State ID',
@@ -1642,6 +1645,23 @@ def candidate_approval(request, pk):
 # ---------------------------------------------------------------------------
 # IT asset allocation
 # ---------------------------------------------------------------------------
+def _asset_register(name, *args):
+    """Mirror the allocation into the IT asset register (hrms_plus/assets_links):
+    the picked tags become register assignments for the candidate's email, which
+    is the employee login after activation. Never blocks onboarding."""
+    try:
+        from hrms_plus import assets_links
+    except Exception:
+        return None
+    try:
+        with transaction.atomic():
+            return getattr(assets_links, name)(*args)
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception('IT asset register sync (%s) failed', name)
+        return None
+
+
 @api_view(['GET', 'POST'])
 @require_perm({'GET': 'onboarding.view', 'POST': 'onboarding.assets'})
 def candidate_assets(request, pk):
@@ -1701,6 +1721,16 @@ def candidate_assets(request, pk):
     if not serializer.is_valid():
         return serializer_err(serializer)
 
+    # Tags picked from stock (or typed) must still be free to hand over.
+    try:
+        from hrms_plus.assets_links import precheck_allocation, split_tags
+        picked = body.get('assetTags') if isinstance(body.get('assetTags'), list) else []
+        clash = precheck_allocation(split_tags(body.get('assetId')) + [str(t) for t in picked], candidate.email)
+    except ImportError:
+        clash = None
+    if clash:
+        return err(clash, 409)
+
     with transaction.atomic():
         allocation = serializer.save(candidate=candidate, allocated_by=actor)
         set_stage(candidate, 'it_assets', 'Completed', actor)
@@ -1710,7 +1740,11 @@ def candidate_assets(request, pk):
             comments=f"{source}: {', '.join(assets) or allocation.asset_id or '-'}",
             new_value=ItAssetAllocationSerializer(allocation).data,
         )
-    return Response(ItAssetAllocationSerializer(allocation).data, status=201)
+        register = _asset_register('sync_allocation', allocation, actor)
+    data = ItAssetAllocationSerializer(allocation).data
+    if register is not None:
+        data['register'] = register
+    return Response(data, status=201)
 
 
 @api_view(['PATCH', 'DELETE'])
@@ -1731,6 +1765,7 @@ def candidate_asset_detail(request, pk, asset_id):
                 candidate, 'IT Asset Allocation Removed', actor,
                 old_value=ItAssetAllocationSerializer(allocation).data,
             )
+            _asset_register('on_allocation_deleted', allocation, actor)
             allocation.delete()
         return Response({'ok': True})
 
@@ -1750,6 +1785,8 @@ def candidate_asset_detail(request, pk, asset_id):
             comments=f'status: {allocation.status}',
             old_value=before, new_value=ItAssetAllocationSerializer(allocation).data,
         )
+        _asset_register('sync_allocation', allocation, actor)   # new tags / Returned / Lost / Damaged
+        allocation.refresh_from_db()
     return Response(ItAssetAllocationSerializer(allocation).data)
 
 
@@ -1760,6 +1797,9 @@ def candidate_asset_detail(request, pk, asset_id):
 # are the one part of a candidate's record that a Manager or an IT Admin has no
 # business reading, and this is what enforces that.
 # ---------------------------------------------------------------------------
+from .sensitive import mask as mask_identifier  # noqa: E402
+
+
 @api_view(['GET', 'PUT'])
 @require_perm('onboarding.payroll')
 def candidate_payroll(request, pk):
@@ -1778,9 +1818,15 @@ def candidate_payroll(request, pk):
         return err(f"status must be one of: {', '.join(PAYROLL_STATUSES)}")
 
     if status_val == 'Completed':
+        from .sensitive import is_masked_input
         for field, label in (('bankName', 'bankName'), ('accountNumber', 'accountNumber'),
                              ('routingNumber', 'routingNumber'), ('taxState', 'taxState')):
-            if not (body.get(field) or '').strip():
+            sent = (body.get(field) or '').strip()
+            # The form only ever sees the account number masked: sending the
+            # mask back means "keep the number on file".
+            if field == 'accountNumber' and is_masked_input(sent) and payroll and payroll.account_number:
+                continue
+            if not sent:
                 return err(f'{label} is required to complete payroll')
 
     actor = _actor(request)
@@ -2179,11 +2225,11 @@ def payroll_list(request):
     out = []
     for c in _live().select_related('payroll'):
         p = getattr(c, 'payroll', None)
-        acct = (p.account_number or '').strip() if p else ''
+        acct = (p.account_number or '') if p else ''
         row = _who(c)
         row.update({
             'bankName': (p.bank_name or '') if p else '',
-            'accountNumberMasked': ('*' * max(0, len(acct) - 4)) + acct[-4:] if acct else '',
+            'accountNumberMasked': mask_identifier(acct, 'account'),
             'routingNumber': (p.routing_number or '') if p else '',
             'taxState': (p.tax_state or '') if p else '',
             'directDeposit': bool(p.direct_deposit) if p else False,

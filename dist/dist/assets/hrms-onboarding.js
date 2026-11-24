@@ -2457,6 +2457,7 @@
         ? list.map(function (a) {
             return '<div class="ob-row"><span class="k">' +
               badge(a.assetSource, 'neutral') + ' ' + esc((a.assets || []).join(', ') || a.assetId || '—') +
+              ((a.assets || []).length && a.assetId ? ' <span style="font-size:11px;font-family:ui-monospace,Menlo,Consolas,monospace">' + esc(a.assetId) + '</span>' : '') +
               (a.clientName ? '<br><span style="font-size:11px">' + esc(a.clientName) + '</span>' : '') +
               '</span><span class="v">' + badge(a.status, statusKind(a.status)) +
               (ro ? '' : ' <button class="ob-btn danger" style="padding:3px 9px" data-rma="' + a.id + '">Remove</button>') +
@@ -2478,13 +2479,18 @@
             ASSET_STATUSES.map(function (s) { return '<option>' + s + '</option>'; }).join('') + '</select></div>' +
           '<div id="as-clientwrap" style="display:none"><label class="ob-lb">Client Name <span class="req">*</span></label>' +
             '<input class="ob-in" id="as-client"></div>' +
-          '<div><label class="ob-lb">Asset ID</label><input class="ob-in" id="as-id" placeholder="EVS-1042"></div>' +
+          '<div><label class="ob-lb">Asset Tag(s)</label><input class="ob-in" id="as-id" maxlength="120" placeholder="Pick from stock below, or type EVS-1042, EVS-1043"></div>' +
           '<div><label class="ob-lb">Issued Date</label><input type="date" class="ob-in" id="as-date"></div>' +
           '<div class="full" id="as-items"><label class="ob-lb">Assets</label>' +
             EVERSOFT_ASSETS.map(function (a) {
               return '<label class="ob-chk" style="display:inline-flex;margin-right:16px">' +
                      '<input type="checkbox" data-a="' + a + '"> ' + a + '</label>';
             }).join('') + '</div>' +
+          // In-stock picker: what HR hands over is taken from (and recorded in) the IT asset register.
+          '<div class="full" id="as-stockwrap" style="display:none"><label class="ob-lb">Pick from IT asset stock</label>' +
+            '<input class="ob-in" id="as-stockq" placeholder="Search in-stock assets by tag, name or serial">' +
+            '<div id="as-stock" style="margin-top:6px;max-height:190px;overflow:auto;border:1px solid var(--border2);border-radius:8px"></div>' +
+            '<div style="font-size:11px;color:var(--text3);margin-top:4px">Picked assets are assigned to this candidate in IT Assets; tags not in the register are added to it.</div></div>' +
         '</div>' +
         '<div class="ob-act"><button class="ob-btn primary" id="as-save">Allocate</button></div>' +
         '<div class="ob-err" id="as-e"></div>';
@@ -2497,6 +2503,44 @@
         el.querySelector('#as-clientwrap').style.display = isClient ? '' : 'none';
         el.querySelector('#as-items').style.display = isClient ? 'none' : '';
       });
+
+      var picked = [];
+      var CAT_ITEM = { laptop: 'Laptop', desktop: 'Desktop', monitor: 'Monitor', phone: 'Mobile', access_card: 'ID_Card', license: 'Software License' };
+      var stockBox = el.querySelector('#as-stock'), stockQ = el.querySelector('#as-stockq'), stockTimer = null;
+      function idTags() { return el.querySelector('#as-id').value.split(/[,;]+/).map(function (t) { return t.trim(); }).filter(Boolean); }
+      function loadStock() {
+        api('/assets/stock?q=' + encodeURIComponent(stockQ.value.trim())).then(function (d) {
+          el.querySelector('#as-stockwrap').style.display = '';
+          var rows = (d && d.assets) || [];
+          var have = idTags().map(function (t) { return t.toLowerCase(); });
+          stockBox.innerHTML = rows.length ? rows.map(function (a) {
+            var on = have.indexOf(String(a.assetTag).toLowerCase()) !== -1;
+            return '<button type="button" data-stk="' + esc(a.assetTag) + '" data-cat="' + esc(a.category) + '" style="display:flex;justify-content:space-between;gap:8px;width:100%;text-align:left;' +
+              'background:' + (on ? 'var(--bg3)' : 'none') + ';border:none;border-bottom:1px solid var(--border);padding:7px 10px;color:var(--text);cursor:pointer;font:inherit;font-size:12.5px">' +
+              '<span><b>' + esc(a.assetTag) + '</b> ' + esc(a.label) + (a.serialNumber ? ' <span style="color:var(--text3)">S/N ' + esc(a.serialNumber) + '</span>' : '') + '</span>' +
+              '<span style="color:' + (on ? 'var(--success)' : 'var(--text3)') + '">' + (on ? 'Picked ✓' : esc(a.category.replace('_', ' '))) + '</span></button>';
+          }).join('') : '<div style="padding:10px;font-size:12px;color:var(--text3)">No in-stock assets match.</div>';
+          stockBox.querySelectorAll('[data-stk]').forEach(function (b) {
+            b.addEventListener('click', function () {
+              var tag = b.getAttribute('data-stk'), tags = idTags();
+              var i = tags.map(function (t) { return t.toLowerCase(); }).indexOf(tag.toLowerCase());
+              if (i === -1) {
+                tags.push(tag); picked.push(tag);
+                var item = CAT_ITEM[b.getAttribute('data-cat')];
+                var box = item && el.querySelector('[data-a="' + item + '"]');
+                if (box) box.checked = true;
+              } else {
+                tags.splice(i, 1);
+                picked = picked.filter(function (t) { return t.toLowerCase() !== tag.toLowerCase(); });
+              }
+              el.querySelector('#as-id').value = tags.join(', ');
+              loadStock();
+            });
+          });
+        }).catch(function () { el.querySelector('#as-stockwrap').style.display = 'none'; });   // no register access: free text only
+      }
+      stockQ.addEventListener('input', function () { clearTimeout(stockTimer); stockTimer = setTimeout(loadStock, 250); });
+      loadStock();
 
       el.querySelectorAll('[data-rma]').forEach(function (b) {
         b.addEventListener('click', function () {
@@ -2516,6 +2560,7 @@
             clientName: el.querySelector('#as-client').value,
             assets: src.value === 'Client' ? [] : assets,
             assetId: el.querySelector('#as-id').value,
+            assetTags: picked.filter(function (t) { return idTags().indexOf(t) !== -1; }),
             issuedDate: el.querySelector('#as-date').value || null,
             status: el.querySelector('#as-status').value,
           },
