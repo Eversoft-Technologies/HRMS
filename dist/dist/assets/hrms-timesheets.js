@@ -276,12 +276,13 @@
         esc(d.approver.name || d.approver.email) + '</b> for approval.</div>';
     }
 
+    var DAY_COLORS = ['blue', 'purple', 'green', 'orange'];
     html += '<div class="ts-gridwrap"><div class="ts-grid">';
     d.days.forEach(function (day, i) {
       var worked = day.attendanceMinutes || 0;
       var over = worked > 0 && day.hours * 60 > worked + 30;
       var pct = worked ? Math.min(100, Math.round(day.hours * 60 / worked * 100)) : (day.hours ? 100 : 0);
-      html += '<button type="button" class="ts-day' + (locked ? ' locked' : '') + (day.date === todayIso ? ' today' : '') +
+      html += '<button type="button" class="ts-day ' + DAY_COLORS[i % 4] + (locked ? ' locked' : '') + (day.date === todayIso ? ' today' : '') +
         '" data-day="' + esc(day.date) + '"' + (locked ? ' tabindex="-1"' : ' title="Add hours for this day"') + '>' +
         '<div class="ts-dn">' + DAYS[i] + '</div>' +
         '<div class="ts-dd">' + esc(fmtDate(day.date)) + '</div>' +
