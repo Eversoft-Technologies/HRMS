@@ -251,6 +251,14 @@
       '.kpi-card.c-cyan::before{background:linear-gradient(90deg,#06b6d4,#22d3ee)}',
       '.kpi-card.c-indigo::before{background:linear-gradient(90deg,#4f46e5,#6366f1)}',
       '.kpi-card.c-pink::before{background:linear-gradient(90deg,#ec4899,#f472b6)}',
+      /* Recruitment pipeline board: highlight the entire stage column and
+         candidate card on hover, not only the card border. */
+      '.kanban-col{transition:transform .15s ease,box-shadow .15s ease,border-color .15s ease,border .15s ease;}',
+      '.kanban-col:hover{transform:translateY(-2px);border:1px solid var(--accent,#4f8ef7)!important;box-shadow:0 8px 22px rgba(79,142,247,.18);}',
+      '.kanban-col:hover .kanban-col-head{color:var(--text,#e8edf7);}',
+      '.kanban-card{transition:transform .15s ease,box-shadow .15s ease,border-color .15s ease,background .15s ease;}',
+      '.kanban-card:hover{transform:translateY(-1px);border-color:var(--accent,#4f8ef7)!important;box-shadow:0 6px 16px rgba(79,142,247,.22);background:var(--surface,#243351)!important;}',
+      '.kanban-card:hover .kanban-card-title{color:var(--accent,#4f8ef7);}',
       '.kpi-card-val{font-size:26px;font-weight:700;color:var(--text1,#111);line-height:1.1;margin-top:6px;font-family:var(--font-d, "DM Sans", sans-serif)}',
       '.kpi-card-lbl{font-size:11px;font-weight:700;color:var(--text3,#888);text-transform:uppercase;letter-spacing:.5px}',
       '.kpi-card-sub{font-size:11px;color:var(--text3,#888);margin-top:4px}',
