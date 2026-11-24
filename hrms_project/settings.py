@@ -82,6 +82,7 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'rest_framework',
     'api',
+    'hrms_plus',      # careers, matrix reporting, OKRs, IT assets (own migrations)
 ]
 
 # ---------------------------------------------------------------------------
@@ -101,6 +102,8 @@ REST_FRAMEWORK = {
     'DEFAULT_PARSER_CLASSES': [
         'rest_framework.parsers.JSONParser'
     ],
+    # A missing encryption key is a clear 503 (api/fields.py), not a bare 500.
+    'EXCEPTION_HANDLER': 'api.fields.exception_handler',
 }
 
 # ---------------------------------------------------------------------------

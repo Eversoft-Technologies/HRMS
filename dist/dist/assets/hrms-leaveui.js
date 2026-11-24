@@ -44,7 +44,7 @@
     var U = window.__hrmsUI;
     var g = U.g, n = U.n, B = U.B, Us = U.Us, Gn = U.Gn, Hs = U.Hs, le = U.le,
         cn = U.cn, Qe = U.Qe, Bt = U.Bt, Vs = U.Vs, Dr = U.Dr, Et = U.Et;
-    const[L,sL]=g.useState([]),[ld,sld]=g.useState(!0),[er,ser]=g.useState(""),[wr,swr]=g.useState(""),[op,so]=g.useState(!1),[bz,sb]=g.useState(!1),[fm,sf]=g.useState({type:"Casual Leave",fromDate:"",toDate:"",reason:""}),[fe,sfe]=g.useState(""),[q,sq]=g.useState(""),[flt,sflt]=g.useState("All"),[srt,ssrt]=g.useState("newest"),[bal,sbal]=g.useState([]),[exp,sexp]=g.useState(null),[cf,scf]=g.useState(null),[dr,sdr]=g.useState(""),[more,smore]=g.useState({}),[hd,shd]=g.useState(null),[per,sper]=g.useState("today"),[cm,scm]=g.useState((new Date).getMonth()),[hol,shol]=g.useState([]),[holEr,sholEr]=g.useState(!1);
+    const[L,sL]=g.useState([]),[ld,sld]=g.useState(!0),[er,ser]=g.useState(""),[wr,swr]=g.useState(""),[op,so]=g.useState(!1),[bz,sb]=g.useState(!1),[fm,sf]=g.useState({type:"Casual Leave",fromDate:"",toDate:"",reason:""}),[fe,sfe]=g.useState(""),[q,sq]=g.useState(""),[flt,sflt]=g.useState("All"),[srt,ssrt]=g.useState("newest"),[lp,slp]=g.useState(1),[lps,slps]=g.useState(10),[bal,sbal]=g.useState([]),[exp,sexp]=g.useState(null),[cf,scf]=g.useState(null),[dr,sdr]=g.useState(""),[more,smore]=g.useState({}),[hd,shd]=g.useState(null),[per,sper]=g.useState("today"),[cm,scm]=g.useState((new Date).getMonth()),[hol,shol]=g.useState([]),[holEr,sholEr]=g.useState(!1);
     /* Missed Clock-Out — cor holds the correction requests: MY own normally,
        everyone's once appr resolves true. The mop/mfm/mfe/mbz quartet mirrors
        op/fm/fe/bz on the Apply Leave form; crj/crn/cre mirror cf on its
@@ -56,6 +56,14 @@
        bare row id, and a correction id can collide with a leave id, which
        would expand a row in the other list at the same time. */
     const[isAp,sIsAp]=g.useState(!1),[cflt,scflt]=g.useState("Pending"),[crj,scrj]=g.useState(null),[crn,scrn]=g.useState(""),[cre,scre]=g.useState(""),[cexp,scexp]=g.useState(null);
+    /* Our overlay panels live in empty divs this component renders and never
+       re-renders children into: regRef = the ONE missed-punch / regularize
+       panel (hrms-regularize.js, the same one Check In / Out shows), ledRef =
+       the leave balance card that expands into the ledger (hrms-leave-ledger.js).
+       hmeta = /api/holidays?meta=1 (the calendar this list is from, admin
+       switcher); hsel = the calendar id an admin chose to view ("" = own). */
+    const regRef=g.useRef(null),ledRef=g.useRef(null);
+    const[hmeta,shmeta]=g.useState(null),[hsel,shsel]=g.useState("");
   /* pm — the caller's leave-relevant permission flags, null until
      /api/me/permissions resolves: {sa: superAdmin, act: leave.action}.
      Everything role-scoped on this page derives from it: act (or sa) means
@@ -79,24 +87,17 @@
      once permissions resolve, so the list is never fetched at the wrong scope. */
   var quiet=!1;
   var loadList=function(all){var e=sess().email||"";var q=quiet;quiet=!1;q||sld(!0);return fetch("/api/leave").then(readJson).then(function(r){if(!r.ok||!Array.isArray(r.j))throw 0;sL(r.j);ser("");sld(!1)}).catch(function(){ser("Couldn't load leave requests.");sld(!1)})};
-  var loadBal=function(){var e=sess().email||"";if(!e){sbal([]);return}fetch("/api/leave/balance?email="+encodeURIComponent(e)).then(readJson).then(function(r){var b=r.ok&&r.j&&Array.isArray(r.j.balances)?r.j.balances:[];b.enforce=!(r.j&&r.j.enforceBalance===!1);sbal(b);
+  var loadBal=function(){var e=sess().email||"";if(!e){sbal([]);return}fetch("/api/leave/balance?email="+encodeURIComponent(e)).then(readJson).then(function(r){var b=r.ok&&r.j&&Array.isArray(r.j.balances)?r.j.balances:[];b.enforce=!(r.j&&r.j.enforceBalance===!1);sbal(b);try{window.dispatchEvent(new CustomEvent("hrmsLeaveBalanceChanged",{detail:{balances:b}}))}catch(_){}
         if(b.length)sf(function(p){for(var i=0;i<b.length;i++){if(b[i].type===p.type)return p}var o={...p};o.type=b[0].type;return o})}).catch(function(){sbal([])})};
-  /* Signed-in-user scoped, so it no-ops when logged out. Dropping ?email=
-     returns EVERY employee's requests, which the API only serves to a caller
-     holding attendance.view (a super admin bypasses it) — with ?email= the
-     or_self rule lets a normal employee read their own. `all` is passed in
-     rather than read off `appr`, because the permission callback fires before
-     that state has been committed. */
-  var loadCor=function(all){var e=sess().email||"";if(!e){scor([]);return}fetch(all?"/api/attendance/corrections":"/api/attendance/corrections?email="+encodeURIComponent(e)).then(readJson).then(function(r){scor(r.ok&&Array.isArray(r.j)?r.j:[])}).catch(function(){scor([])})};
-  /* Same approver test hrms-attendance-actions.js uses. Fails closed: any
-     error, or no session, leaves the review queue hidden. */
-  var loadAppr=function(){var e=sess().email||"";var asEmp=function(){sIsAp(!1);spm({sa:!1,act:!1});loadList(!1)};if(!e){asEmp();return}fetch("/api/me/permissions?email="+encodeURIComponent(e)).then(readJson).then(function(r){var d=r.ok&&r.j?r.j:null;if(!d){asEmp();return}var sa=d.superAdmin===!0,ps=Array.isArray(d.permissions)?d.permissions:[];var ok=!!(sa||ps.indexOf("settings.manage")!==-1);sIsAp(ok);if(ok)loadCor(!0);var act=sa||ps.indexOf("leave.action")!==-1;spm({sa:sa,act:act});loadList(act)}).catch(asEmp)};
+  /* The caller's leave permissions. Fails closed: any error, or no
+     session, is treated as a plain employee. */
+  var loadAppr=function(){var e=sess().email||"";var asEmp=function(){spm({sa:!1,act:!1});loadList(!1)};if(!e){asEmp();return}fetch("/api/me/permissions?email="+encodeURIComponent(e)).then(readJson).then(function(r){var d=r.ok&&r.j?r.j:null;if(!d){asEmp();return}var sa=d.superAdmin===!0,ps=Array.isArray(d.permissions)?d.permissions:[];var act=sa||ps.indexOf("leave.action")!==-1;spm({sa:sa,act:act});loadList(act)}).catch(asEmp)};
   /* loadList is NOT called here — loadAppr fires it at the right scope once
      the caller's permissions are known, so an employee's browser never even
      requests the unscoped list. */
-  g.useEffect(function(){loadBal();loadCor(!1);loadAppr()},[]);
+  g.useEffect(function(){loadBal();loadAppr()},[]);
   /* Requests and approvals change when someone ELSE acts, so a list fetched once on mount went stale until a reload. Re-fetch while the page is visible and when the tab is shown again; `quiet` keeps the list from flashing its loading state. */
-  g.useEffect(function(){var refresh=function(){if(document.hidden)return;quiet=!0;loadBal();loadCor(!1);loadAppr()};var t=setInterval(refresh,15000);document.addEventListener("visibilitychange",refresh);window.addEventListener("focus",refresh);return function(){clearInterval(t);document.removeEventListener("visibilitychange",refresh);window.removeEventListener("focus",refresh)}},[]);
+  g.useEffect(function(){var refresh=function(){if(document.hidden)return;quiet=!0;loadBal();loadAppr()};var t=setInterval(refresh,15000);document.addEventListener("visibilitychange",refresh);window.addEventListener("focus",refresh);return function(){clearInterval(t);document.removeEventListener("visibilitychange",refresh);window.removeEventListener("focus",refresh)}},[]);
   
   /* ---- date helpers ---- */
   var pad=function(v){return String(v).length>1?String(v):"0"+v};
@@ -129,7 +130,7 @@
   /* Only holiday and weekend cells are hoverable, so the "(Weekend)" tail is
      always correct for anything that can actually reach this. The c.w guard
      keeps it that way if a future change ever makes plain days hoverable. */
-  var holWhy=function(c){return c.h?prettyD(c.d)+" — "+c.h.map(function(x){return x.name+" ("+(CN[x.country]||x.country)+")"}).join(", "):prettyD(c.d)+" — "+WDL[dObj(c.d).getDay()]+(c.w?" (Weekend)":"")};
+  var holWhy=function(c){return c.h?prettyD(c.d)+" — "+c.h.map(function(x){return x.name+(x.optional?" — optional":"")+" ("+(CN[x.country]||x.country)+")"}).join(", "):prettyD(c.d)+" — "+WDL[dObj(c.d).getDay()]+(c.w?" (Weekend)":"")};
 
   /* ---- leave types + colour map ---- */
   /* Leave types come from the admin's leave policy (Settings › General), via
@@ -139,6 +140,10 @@
   var TCYCLE=[{b:"green",v:"var(--success)"},{b:"teal",v:"#14b8a6"},{b:"pink",v:"#ec4899"},{b:"amber",v:"var(--warn)"},{b:"indigo",v:"#6366f1"}];
   var tmeta=function(t){if(TMETA[t])return TMETA[t];var i=TYPES.indexOf(t);if(i<0){i=0;for(var k=0;k<String(t).length;k++)i+=String(t).charCodeAt(k)}return TCYCLE[i%TCYCLE.length]};
   var balTxt=function(b){return!b?"—":b.unlimited||b.allowance==null?"No limit":b.remaining+" of "+b.allowance+" left"};
+  /* Leave ledger extras (attendance_ext/leave_accrual.py): monthly accrual,
+     carry-forward, HR adjustments and the next credit date. A monthly type
+     is checked by the server only, which counts credits due by the leave date. */
+  var accLine=function(b){var p=[],M=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];if(b.accrual==="monthly")p.push(b.accrued+" of "+b.annual+" accrued ("+b.monthlyRate+"/month)");if(b.carriedForward)p.push(b.carriedForward+" carried forward");if(b.adjusted)p.push((b.adjusted>0?"+":"")+b.adjusted+" adjusted by HR");if(b.nextAccrual&&b.accrual==="monthly"){var nd=String(b.nextAccrual.date||"").split("-");p.push("next +"+b.nextAccrual.days+" on "+(+nd[2])+" "+M[(+nd[1])-1])}return p.join(" · ")};
   
   /* ---- form state, validation, submit, approve/decline ---- */
   var setF=function(k,v){sfe("");sf(function(p){var o={...p};o[k]=v;return o})};
@@ -146,7 +151,7 @@
   var vErr=function(){if(!fm.fromDate||!fm.toDate)return"Select both a from and a to date.";if(fm.toDate<fm.fromDate)return"To date cannot be earlier than from date.";
         var sb0=null;for(var i=0;i<bal.length;i++){if(bal[i].type===fm.type){sb0=bal[i];break}}
         if(bal.length&&!sb0)return"Choose a leave type.";
-        if(sb0&&!sb0.unlimited&&sb0.allowance!=null&&bal.enforce!==!1){var left=sb0.remaining-(sb0.pending||0),want=dayCount(fm.fromDate,fm.toDate);if(want>left)return"You have "+Math.max(left,0)+" day"+(left===1?"":"s")+" of "+fm.type+" left"+(sb0.pending?" ("+sb0.pending+" already requested)":"")+" — this request is for "+want+"."}
+        if(sb0&&!sb0.unlimited&&sb0.allowance!=null&&bal.enforce!==!1&&sb0.accrual!=="monthly"){var left=sb0.canApply!=null?sb0.canApply:sb0.remaining-(sb0.pending||0),want=dayCount(fm.fromDate,fm.toDate);if(want>left)return"You have "+Math.max(left,0)+" day"+(left===1?"":"s")+" of "+fm.type+" left"+(sb0.pending?" ("+sb0.pending+" already requested)":"")+" — this request is for "+want+"."}
         return""};
   var submit=function(){var v=vErr();if(v){sfe(v);return}sb(!0);sfe("");var s=sess();var bd={email:s.email||"",employee:s.name||s.email||"",type:fm.type,fromDate:fm.fromDate,toDate:fm.toDate,reason:fm.reason};fetch("/api/leave",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(bd)}).then(readJson).then(function(r){if(!r.ok||!r.j||!r.j.id){sb(!1);sfe(apiErr(r.j,"Couldn't submit the request. Please try again."));return}sL(function(p){return[r.j].concat(p)});sb(!1);so(!1);sfe("");swr("");sf({type:"Casual Leave",fromDate:"",toDate:"",reason:""});loadBal()}).catch(function(){sb(!1);sfe("Couldn't reach the server. Please try again.")})};
   var setSt=function(id,st){var s=sess(),row=null;for(var i=0;i<L.length;i++){if(L[i].id===id){row=L[i];break}}var prev=row?row.status:"Pending";var revert=function(){sL(function(p){return p.map(function(z){return z.id===id?{...z,status:prev}:z})})};swr("");sL(function(p){return p.map(function(z){return z.id===id?{...z,status:st}:z})});fetch("/api/leave/"+id,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({status:st,approver:s.name||s.email||""})}).then(readJson).then(function(r){if(!r.ok){revert();swr(apiErr(r.j,"Couldn't update that request — the change was rolled back."));return}if(r.j&&r.j.id)sL(function(p){return p.map(function(z){return z.id===id?r.j:z})});loadBal()}).catch(function(){revert();swr("Couldn't reach the server — the change was rolled back.")})};
@@ -159,58 +164,14 @@
      leave.action) are refused outright and Decline instead. */
   var delRq=function(row){var id=row.id;swr("");sL(function(p){return p.filter(function(z){return z.id!==id})});fetch("/api/leave/"+id,{method:"DELETE"}).then(readJson).then(function(r){if(!r.ok){sL(function(p){return[row].concat(p)});swr(apiErr(r.j,"Couldn't delete that request — it was restored."));return}loadBal()}).catch(function(){sL(function(p){return[row].concat(p)});swr("Couldn't reach the server — the request was restored.")})};
 
-  /* ---- missed clock-out: helpers, validation, submit ----
-     The employee states the date, the time they actually left and why, and a
-     super admin approves it. Nothing here reads attendance records — the form
-     is filed by hand, so there is no scanning and no prompting. There is also
-     no auto-correct: clamping an open day to shift end would silently erase
-     overtime, so approval writes the stated time and recomputes worked and
-     overtime minutes server-side, which is why the request carries
-     requestedCheckOut. requestedCheckIn is never sent, so approval leaves the
-     genuine clock-in untouched. */
-  var hm=function(s){return String(s||"").slice(11,16)};
-  var pt=function(t){if(!t||t.length<5)return"";var h=parseInt(t.slice(0,2),10),m=t.slice(3,5);if(isNaN(h))return"";var ap=h>=12?"PM":"AM",hh=h%12;return pad(hh===0?12:hh)+":"+m+" "+ap};
-  var hrm=function(m){return Math.floor(m/60)+"h "+pad(m%60)+"m"};
-  /* Returns the SAME object when nothing changed, so React bails out instead of
-     re-rendering the page. <input type="date"> reports "" until all three
-     segments are valid, so typing a 4-digit year fires several identical
-     changes — without this guard each one re-rendered everything and the
-     centred modal visibly jumped. */
-  var setMF=function(k,v){smfe("");smf(function(p){if(p[k]===v)return p;var o={...p};o[k]=v;return o})};
-  /* ONE day, looked up only once a date is chosen — this fills the stamp row
-     and the hour tiles. It is deliberately not a scan of every day: an earlier
-     version swept the whole record set to warn about forgotten punches, and
-     that nagging was removed on purpose. `alive` drops a stale response when
-     the date is changed again mid-flight. */
-  g.useEffect(function(){
-        var d=mfm.date;
-        if(!d){smAtt(null);smLd(!1);return}
-        var e=sess().email||"";
-        if(!e){smAtt(null);smLd(!1);return}
-        var alive=!0;smLd(!0);
-        /* Debounced: the date field emits a change per segment, so firing
-           immediately meant a request (and a loading flip) for every digit. */
-        var t=setTimeout(function(){
-              fetch("/api/attendance?email="+encodeURIComponent(e)+"&date="+encodeURIComponent(d)).then(readJson).then(function(r){if(!alive)return;smAtt(r.ok&&Array.isArray(r.j)&&r.j.length?r.j[0]:null);smLd(!1)}).catch(function(){if(!alive)return;smAtt(null);smLd(!1)})
-            },300);
-        return function(){alive=!1;clearTimeout(t)}
-      },[mfm.date]);
-  var openM=function(){smfe("");shEd({k:"",v:""});smf({date:"",time:"",reason:""});smo(!0)};
-  var mErr=function(){
-        if(!mfm.date)return"Pick the date you missed clocking out.";
-        if(mfm.date>TODAY)return"That date is in the future.";
-        if(!mfm.time)return"Enter the time you actually left, or the hours you worked.";
-        if(mIn&&!mMin)return"The clock-out must be after your clock-in.";
-        if(!(mfm.reason||"").trim())return"Add a short reason for your admin.";
-        return""};
-  /* Approve / reject, optimistic with rollback — the same shape as setSt on the
-     leave table. Uses the perm-gated PUT, never /api/attendance/correction/
-     approve/, which is AllowAny and would let anyone approve their own
-     overtime. Approving is what actually writes the clock-out onto the
-     attendance record and recomputes worked/overtime minutes server-side, and
-     the employee is notified there too — nothing to send from here. */
-  var setCSt=function(id,st,note){var row=null;for(var i=0;i<cor.length;i++){if(cor[i].id===id){row=cor[i];break}}var prev=row?row.status:"Pending";var revert=function(){scor(function(p){return p.map(function(z){return z.id===id?{...z,status:prev}:z})})};var s=sess();swr("");scor(function(p){return p.map(function(z){return z.id===id?{...z,status:st}:z})});fetch("/api/attendance/corrections/"+id,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({status:st,reviewer:s.name||s.email||"",reviewerNote:note||""})}).then(readJson).then(function(r){if(!r.ok){revert();swr(apiErr(r.j,"Couldn't update that request — the change was rolled back."));return}if(r.j&&r.j.id)scor(function(p){return p.map(function(z){return z.id===id?r.j:z})})}).catch(function(){revert();swr("Couldn't reach the server — the change was rolled back.")})};
-  var msubmit=function(){var v=mErr();if(v){smfe(v);return}smb(!0);smfe("");var s=sess();var bd={email:s.email||"",employee:s.name||s.email||"",attendanceDate:mfm.date,requestedCheckOut:(mNext?nextDay(mfm.date):mfm.date)+" "+mfm.time+":00",reason:mfm.reason};fetch("/api/attendance/corrections",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(bd)}).then(readJson).then(function(r){if(!r.ok||!r.j||!r.j.id){smb(!1);smfe(apiErr(r.j,"Couldn't submit the request. Please try again."));return}scor(function(p){return[r.j].concat(p)});smb(!1);smo(!1);smfe("");smf({date:"",time:"",reason:""});scop(!0)}).catch(function(){smb(!1);smfe("Couldn't reach the server. Please try again.")})};
+  /* ---- our overlay panels ----
+     Missed punch / Regularize (window.HRMSRegularize) and the balance +
+     ledger card (window.HRMSLeaveLedger) render into the empty divs behind
+     regRef / ledRef. Both scripts are deferred like this one; poll briefly in
+     case React renders first. */
+  var useMountPanel=function(ref,glob){g.useEffect(function(){var done=!1,un=null,t=null;var go=function(){var el=ref.current,M=window[glob];if(done)return!0;if(!el||!M)return!1;done=!0;un=M.mount(el);return!0};if(!go())t=setInterval(function(){if(go())clearInterval(t)},150);return function(){t&&clearInterval(t);if(typeof un==="function")un()}},[])};
+  useMountPanel(regRef,"HRMSRegularize");
+  useMountPanel(ledRef,"HRMSLeaveLedger");
 
   /* ---- derived data: counts, absences, period windows ---- */
   /* Role-scoped view flags, both off pm (null until permissions load):
@@ -256,6 +217,12 @@
   var totRem=bal.reduce(function(a,b){return a+(b.unlimited?0:(b.remaining||0))},0),totAll=bal.reduce(function(a,b){return a+(b.unlimited?0:(b.allowance||0))},0);
   var qq=q.trim().toLowerCase();
   var rows=g.useMemo(function(){return L.filter(function(z){if(flt!=="All"&&z.status!==flt)return!1;if(!qq)return!0;return((z.employee||"")+" "+(z.email||"")+" "+(z.type||"")).toLowerCase().indexOf(qq)!==-1}).slice().sort(function(a,b){if(srt==="longest")return(b.days||0)-(a.days||0);var x=a.fromDate||"",y=b.fromDate||"";if(x===y)return(b.id||0)-(a.id||0);if(srt==="oldest")return x<y?-1:1;return x<y?1:-1})},[L,flt,qq,srt]);
+  var leavePageCount=Math.max(1,Math.ceil(rows.length/lps));
+  var leavePage=Math.min(lp,leavePageCount);
+  var leaveStart=(leavePage-1)*lps;
+  var pageRows=rows.slice(leaveStart,leaveStart+lps);
+  g.useEffect(function(){slp(1)},[flt,qq,srt,lps]);
+  g.useEffect(function(){if(lp>leavePageCount)slp(leavePageCount)},[lp,leavePageCount]);
   var balColor=function(b){var r=b.allowance?b.remaining/b.allowance:0;return r>=.5?"var(--success)":r>=.25?"var(--warn)":"var(--danger)"};
   var types=g.useMemo(function(){var a=[];L.forEach(function(z){var t=z.type||"Other",f=null;for(var i=0;i<a.length;i++){if(a[i].type===t){f=a[i];break}}if(!f){f={type:t,n:0,days:0};a.push(f)}f.n++;f.days+=z.days||0});a.sort(function(x,y){return y.n-x.n});return a},[L]);
   var maxT=types.reduce(function(m,t){return Math.max(m,t.n)},0)||1;
@@ -266,10 +233,16 @@
      ends of the year. Weekday-aligned by padding the first week. */
   var CAL_Y=dObj(TODAY).getFullYear();
   /* One fetch per year shown; `alive` drops a response for a stale year. */
-  g.useEffect(function(){var alive=!0;sholEr(!1);fetch("/api/holidays?year="+CAL_Y).then(readJson).then(function(r){if(!alive)return;if(r.ok&&Array.isArray(r.j))shol(r.j);else{shol([]);sholEr(!0)}}).catch(function(){if(alive){shol([]);sholEr(!0)}});return function(){alive=!1}},[CAL_Y]);
+  /* ?meta=1 wraps the list with the calendar it comes from (the employee's
+     regional calendar, or the national fallback) and, for settings.view /
+     settings.manage, the calendars an admin may switch to. Optional
+     holidays carry optional:true — their names are no longer suffixed. */
+  g.useEffect(function(){var alive=!0;sholEr(!1);fetch("/api/holidays?year="+CAL_Y+"&meta=1"+(hsel?"&calendar="+encodeURIComponent(hsel):"")).then(readJson).then(function(r){if(!alive)return;var j=r.j;if(r.ok&&j&&Array.isArray(j.holidays)){shol(j.holidays);shmeta(j)}else if(r.ok&&Array.isArray(j)){shol(j);shmeta(null)}else{shol([]);sholEr(!0)}}).catch(function(){if(alive){shol([]);sholEr(!0)}});return function(){alive=!1}},[CAL_Y,hsel]);
+  var calName=hmeta?(hmeta.calendar?hmeta.calendar.name:"National holidays (India + US)"):"";
+  var goCal=function(e){e.preventDefault();if(window.HRMSSidecar&&window.HRMSSidecar.go)window.HRMSSidecar.go("/settings/holidays");else location.href="/settings/holidays"};
   var MNF=["January","February","March","April","May","June","July","August","September","October","November","December"];
   /* Memoised so a keystroke elsewhere on the page doesn't rebuild the month. */
-  var cal=g.useMemo(function(){var a=[],nd=new Date(CAL_Y,cm+1,0).getDate();for(var hi=1;hi<=nd;hi++){var hdt=CAL_Y+"-"+pad(cm+1)+"-"+pad(hi),hh=HMAP[hdt]||null;a.push({d:hdt,h:hh,w:!hh&&isWknd(hdt)})}return a},[CAL_Y,cm,HMAP]);
+  var cal=g.useMemo(function(){var a=[],nd=new Date(CAL_Y,cm+1,0).getDate();for(var hi=1;hi<=nd;hi++){var hdt=CAL_Y+"-"+pad(cm+1)+"-"+pad(hi),hh=HMAP[hdt]||null;a.push({d:hdt,h:hh,o:!!(hh&&hh.every(function(x){return x.optional})),w:!hh&&isWknd(hdt)})}return a},[CAL_Y,cm,HMAP]);
   var calLead=g.useMemo(function(){return new Date(CAL_Y,cm,1).getDay()},[CAL_Y,cm]);
   var calSpan=MNF[cm]+" "+CAL_Y;
   /* This month's holidays, listed under the calendar so they can be read
@@ -316,7 +289,7 @@
               n.jsx("div",{tabIndex:act?0:undefined,"aria-label":act?holWhy(c):undefined,
                   onMouseEnter:act?function(){shd(c.d)}:undefined,onMouseLeave:act?function(){shd(null)}:undefined,
                   onFocus:act?function(){shd(c.d)}:undefined,onBlur:act?function(){shd(null)}:undefined,
-                  style:{height:26,display:"flex",alignItems:"center",justifyContent:"center",borderRadius:6,fontSize:11.5,fontWeight:act?700:600,background:c.h?"var(--cal-holiday-bg)":c.w?"var(--cal-weekend-bg)":"var(--bg3)",color:c.h?"var(--cal-holiday-fg)":c.w?"var(--cal-weekend-fg)":LBL,cursor:act?"help":"default",outline:c.d===TODAY?"2px solid var(--accent2)":"none",outlineOffset:1,boxShadow:on?"0 0 0 2px var(--accent)":"none",transition:"box-shadow .15s"},
+                  style:{height:26,boxSizing:"border-box",display:"flex",alignItems:"center",justifyContent:"center",borderRadius:6,fontSize:11.5,fontWeight:act?700:600,border:c.o?"1px dashed var(--cal-holiday-fg)":"none",background:c.o?"var(--bg3)":c.h?"var(--cal-holiday-bg)":c.w?"var(--cal-weekend-bg)":"var(--bg3)",color:c.h?"var(--cal-holiday-fg)":c.w?"var(--cal-weekend-fg)":LBL,cursor:act?"help":"default",outline:c.d===TODAY?"2px solid var(--accent2)":"none",outlineOffset:1,boxShadow:on?"0 0 0 2px var(--accent)":"none",transition:"box-shadow .15s"},
                   children:dObj(c.d).getDate()}),on?
               n.jsx("div",{role:"tooltip",style:{position:"absolute",bottom:"calc(100% + 6px)",zIndex:30,width:180,background:"var(--surface)",border:"1px solid var(--border2)",borderRadius:7,padding:"6px 9px",fontSize:11.5,lineHeight:1.45,color:"var(--text)",boxShadow:"0 8px 20px rgba(0,0,0,.3)",pointerEvents:"none",...al},children:holWhy(c)}):null]},c.d)};
   var legend=function(col,txt){return n.jsxs("span",{style:{display:"inline-flex",alignItems:"center",gap:5},children:[
@@ -375,7 +348,7 @@
             n.jsxs("td",{colSpan:7,style:msgSt,children:[
                   n.jsx("div",{style:{marginBottom:9},children:"No requests match this filter."}),
                   n.jsx("button",{className:"btn-sm",onClick:function(){sflt("All");sq("")},children:"Clear filters"})]})},"nomatch"));
-  else rows.forEach(function(e){var tm=tmeta(e.type);var live=onDay(e,TODAY);
+  else pageRows.forEach(function(e){var tm=tmeta(e.type);var live=onDay(e,TODAY);
         /* Delete belongs to the employee view ONLY: the owner of a
            still-Pending request, in a role without leave.action. Approvers
            (Super Admin included) never see it — they Decline instead, which
@@ -388,28 +361,28 @@
            API allows the assigned approver; never on your own request). */
         var routed=!own&&(e.approverEmail||"").toLowerCase()===myEmail&&!!myEmail,dp=function(code){return routed?{"data-keepcol":"1"}:{"data-perm":code}};body.push(
             n.jsxs("tr",{onClick:function(){sexp(exp===e.id?null:e.id)},style:{cursor:"pointer"},title:"Show reason, approver and applied date",children:[
-                  n.jsx("td",{children:
-                      n.jsxs("div",{style:{display:"flex",alignItems:"center",gap:9},children:[
+                  n.jsx("td",{style:{textAlign:"left",paddingLeft:12},children:
+                      n.jsxs("div",{style:{display:"flex",alignItems:"center",justifyContent:"flex-start",gap:9},children:[
                             n.jsx("span",{style:{color:"var(--text3)",fontSize:10,width:9,display:"inline-block"},children:exp===e.id?"▼":"▶"}),
                             n.jsx(Et,{initials:initials(e.employee||e.email),size:28,gradient:"135deg, "+tm.v+", var(--accent2)"}),
-                            n.jsxs("div",{style:{minWidth:0},children:[
-                                  n.jsxs("div",{style:{fontSize:12,fontWeight:600,display:"flex",alignItems:"center",gap:6},children:[e.employee||e.email,live?
+                            n.jsxs("div",{style:{minWidth:0,textAlign:"left"},children:[
+                                  n.jsxs("div",{style:{fontSize:12,fontWeight:600,display:"flex",alignItems:"center",justifyContent:"flex-start",gap:6},children:[e.employee||e.email,live?
                                         n.jsx("span",{className:"badge green",style:{fontSize:10,padding:"1px 6px"},children:"Out now"}):null]}),
                                   n.jsx("div",{style:{fontSize:11,color:"var(--text3)",overflow:"hidden",textOverflow:"ellipsis"},children:e.email||""})]})]})}),
-                  n.jsx("td",{children:
+                  n.jsx("td",{style:{textAlign:"center"},children:
                       n.jsx("span",{className:"badge "+tm.b,children:e.type})}),
-                  n.jsxs("td",{style:{fontSize:12},children:[dmy(e.fromDate),
+                  n.jsxs("td",{style:{fontSize:12,textAlign:"center"},children:[dmy(e.fromDate),
                         n.jsx("div",{style:{fontSize:11,color:"var(--text3)"},children:wdOf(e.fromDate)})]}),
-                  n.jsxs("td",{style:{fontSize:12},children:[dmy(e.toDate),
+                  n.jsxs("td",{style:{fontSize:12,textAlign:"center"},children:[dmy(e.toDate),
                         n.jsx("div",{style:{fontSize:11,color:"var(--text3)"},children:wdOf(e.toDate)})]}),
-                  n.jsx("td",{children:
+                  n.jsx("td",{style:{textAlign:"center"},children:
                       n.jsxs("span",{style:{display:"inline-flex",alignItems:"baseline",gap:3,background:"var(--bg3)",border:"1px solid var(--border2)",borderRadius:6,padding:"2px 8px"},children:[
                             n.jsx("span",{style:{fontSize:13,fontWeight:700,fontFamily:"var(--font-d)"},children:e.days}),
                             n.jsx("span",{style:{fontSize:11,color:"var(--text3)"},children:(e.days||0)===1?"day":"days"})]})}),
-                  n.jsx("td",{children:
+                  n.jsx("td",{style:{textAlign:"center"},children:
                       n.jsx(Gn,{status:e.status})}),
-                  n.jsx("td",{children:e.status==="Pending"?
-                      n.jsxs("div",{style:{display:"flex",gap:6,flexWrap:"wrap"},children:[e.status==="Pending"?
+                  n.jsx("td",{style:{textAlign:"center"},children:e.status==="Pending"?
+                      n.jsxs("div",{style:{display:"flex",gap:6,flexWrap:"wrap",justifyContent:"center"},children:[e.status==="Pending"?
                             n.jsx("button",{className:"btn-sm",...dp("leave.approve"),style:{fontSize:11,padding:"2px 8px",color:"var(--success)"},onClick:function(ev){ev.stopPropagation();setSt(e.id,"Approved")},children:"Approve"}):null,e.status==="Pending"?
                             n.jsx("button",{className:"btn-sm",...dp("leave.reject"),style:{fontSize:11,padding:"2px 8px",color:"var(--danger)"},onClick:function(ev){ev.stopPropagation();scf(e)},children:"Decline"}):null,showDel?
                             n.jsx("button",{className:"btn-sm","data-keepcol":"1",style:{fontSize:11,padding:"2px 8px",color:"var(--danger)"},onClick:function(ev){ev.stopPropagation();delRq(e)},children:"Delete"}):null]}):
@@ -463,7 +436,7 @@
   var cPend=cCount("Pending");
   var cRows=isAp&&cflt!=="All"?cor.filter(function(z){return cst(z)===cflt}):cor;
   var cCols=isAp?["Employee","Date","Requested clock-out","Reason","Status","Reviewer","Action"]:["Employee","Date","Requested clock-out","Reason","Status","Reviewer"];
-  var cGrid={display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:10};
+  var cGrid={display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:10,textAlign:"center"};
   /* Timeline dot for the detail panel. The leave table has an identical helper,
      but it is declared inside its row-building loop and is not in scope here. */
   var cdot=function(on,col){return n.jsx("span",{style:{width:9,height:9,borderRadius:"50%",background:on?col:"var(--border2)",display:"inline-block",flex:"0 0 auto"}})};
@@ -482,7 +455,7 @@
                    signed-in user may file one for their OWN day. Tagging it with a
                    module permission (attendance.create) hid it from everyone whose
                    role lacks that code — which is most employees. */
-                n.jsx("button",{className:"btn-sm",onClick:function(){openM()},children:"+ Missed Clock-Out"}),
+                n.jsx("button",{className:"btn-sm","data-hrms-regz-open":"1",title:"Forgot to check in or out? File it for approval",onClick:function(){window.HRMSRegularize&&window.HRMSRegularize.open({})},children:"+ Missed punch / Regularize"}),
                 n.jsx("button",{className:"btn-primary",onClick:function(){sfe("");so(!0)},children:"+ Apply Leave"})]}),
             n.jsxs("div",{style:{display:"flex",gap:14,flexWrap:"wrap",marginBottom:16,alignItems:"stretch"},children:[
                   /* Who's Out is a team-visibility card — an employee's page is
@@ -524,31 +497,32 @@
                               n.jsx("div",{className:"card-title",style:{marginBottom:0,color:LBL},children:"Holidays"}),
                               n.jsxs("div",{style:{display:"flex",alignItems:"center",gap:8,marginLeft:"auto"},children:[calNav(-1,"Previous month"),
                                     n.jsx("div",{"aria-live":"polite",style:{fontSize:12.5,fontWeight:600,color:LBL,minWidth:112,textAlign:"center"},children:calSpan}),calNav(1,"Next month")]})]}),
+                        /* Which calendar this is; admins can view another one and jump to /settings/holidays. */
+                        n.jsxs("div",{"data-hrms-holcal":"1",style:{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",fontSize:11.5,color:LBL,marginTop:6},children:[
+                              n.jsxs("span",{style:{minWidth:0},children:[hsel?"Viewing: ":"Your calendar: ",n.jsx("strong",{style:{color:"var(--text)"},children:calName||"…"})]}),hmeta&&hmeta.canManage&&hmeta.calendars&&hmeta.calendars.length?
+                              n.jsx("select",{value:hsel,"aria-label":"View another holiday calendar",onChange:function(e){shd(null);shsel(e.target.value)},style:{fontFamily:"inherit",fontSize:11.5,padding:"3px 6px",borderRadius:6,border:"1px solid var(--border2)",background:"var(--bg3)",color:"var(--text)",maxWidth:180},children:[n.jsx("option",{value:"",children:"My calendar"},"own")].concat(hmeta.calendars.map(function(c){return n.jsx("option",{value:String(c.id),children:c.name},"c"+c.id)}))}):null,hmeta&&hmeta.canManage?
+                              n.jsx("a",{href:"/settings/holidays",onClick:goCal,style:{marginLeft:"auto",color:"var(--accent)",fontWeight:600,textDecoration:"none",whiteSpace:"nowrap"},children:"Manage calendars →"}):null]}),
                         n.jsx("div",{style:{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:4,marginTop:14},children:["S","M","T","W","T","F","S"].map(function(w,i){return n.jsx("div",{style:{fontSize:10,fontWeight:700,letterSpacing:.6,textAlign:"center",color:LBL,paddingBottom:2},children:w},"wd"+i)})}),
                         n.jsxs("div",{style:{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:4},children:[Array.from({length:calLead},function(_,i){return n.jsx("div",{},"pad"+i)}),cal.map(function(c,i){return holCell(c,(calLead+i)%7)})]}),
-                        n.jsxs("div",{style:{display:"flex",gap:14,fontSize:11,color:LBL,marginTop:10,flexWrap:"wrap"},children:[legend("var(--cal-holiday-dot)","Holiday"),legend("var(--cal-weekend-dot)","Weekend")]}),
+                        n.jsxs("div",{style:{display:"flex",gap:14,fontSize:11,color:LBL,marginTop:10,flexWrap:"wrap"},children:[legend("var(--cal-holiday-dot)","Holiday"),hol.some(function(x){return x.optional})?n.jsxs("span",{style:{display:"inline-flex",alignItems:"center",gap:5},children:[n.jsx("span",{style:{width:8,height:8,borderRadius:2,border:"1px dashed var(--cal-holiday-fg)",display:"inline-block",boxSizing:"border-box"}}),"Optional (not a day off)"]},"opt"):null,legend("var(--cal-weekend-dot)","Weekend")]}),
                         n.jsx("div",{style:{marginTop:10,display:"grid",gap:6,fontSize:11.5,color:LBL},children:holEr?
                               n.jsx("div",{style:{color:"var(--danger)"},children:"Couldn't load holidays."}):calHols.length?calHols.map(function(x){return n.jsxs("div",{style:{display:"flex",alignItems:"center",gap:8,minWidth:0},children:[
                                     n.jsx("span",{style:{fontWeight:700,color:"var(--text)",minWidth:42},children:dObj(x.d).getDate()+" "+MN[dObj(x.d).getMonth()]}),
-                                    n.jsx("span",{style:{flex:"1 1 auto",minWidth:0,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"},children:x.h.name}),
+                                    n.jsx("span",{style:{flex:"1 1 auto",minWidth:0,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"},title:x.h.optional?"Optional holiday — not a day off unless you take it":undefined,children:x.h.name}),x.h.optional?
+                                    n.jsx("span",{className:"badge purple",style:{fontSize:10,padding:"1px 6px",flex:"0 0 auto"},children:"Optional"}):null,
                                     n.jsx("span",{className:"badge "+(x.h.country==="IN"?"orange":"blue"),style:{fontSize:10,padding:"1px 6px",flex:"0 0 auto"},children:CN[x.h.country]||x.h.country})]},x.d+x.h.country+x.h.name)}):
                               n.jsx("div",{children:"No holidays this month."})})]})]}),
             n.jsxs("div",{className:"grid-2 mb-16",children:[
-                  n.jsxs("div",{className:"card",children:[
-                        n.jsxs("div",{style:{display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:10},children:[
-                              n.jsx("div",{className:"card-title",children:"My Leave Balance"}),bal.length?
-                              n.jsxs("div",{style:{textAlign:"right",lineHeight:1.15},children:[
-                                    n.jsx("div",{style:{fontFamily:"var(--font-d)",fontSize:20,fontWeight:700,color:"var(--success)"},children:totRem}),
-                                    n.jsxs("div",{style:{fontSize:11,color:"var(--text3)"},children:["of ",totAll," days left"]})]}):null]}),
-                        n.jsx("div",{style:{color:"var(--text)"},children:bal.length?bal.map(function(b){return n.jsx(Dr,{label:b.type,value:b.unlimited?b.used+" used · no limit":balTxt(b),pct:b.unlimited?0:Math.min(100,Math.round(b.used/(b.allowance||1)*100)),color:b.unlimited?"var(--text3)":balColor(b)},b.type)}):
-                            n.jsx("div",{style:{fontSize:12,color:"var(--text3)",padding:"4px 0"},children:"Sign in to see your leave balance."})}),bal.length?
-                        n.jsx("div",{style:{fontSize:12,color:"var(--text3)",marginTop:12},children:"Bars show days already used against your annual allowance."}):null]}),
+                  /* Balance + ledger in one card: each type expands into its ledger
+                     entries and the leave taken; HR picks an employee, adjusts and
+                     runs the year-end rollover inline (hrms-leave-ledger.js). */
+                  n.jsx("div",{className:"card","data-hrms-leave-balance":"1",children:n.jsx("div",{ref:ledRef,children:undefined})}),
                   n.jsxs("div",{className:"card",children:[
                         n.jsx("div",{className:"card-title",children:"Requests by Type"}),
                         n.jsx("div",{style:{color:"var(--text)"},children:types.length?types.map(function(t){return n.jsx(Dr,{label:t.type,value:t.n+" request"+(t.n===1?"":"s")+" · "+t.days+"d",pct:Math.round(t.n/maxT*100),color:tmeta(t.type).v},t.type)}):
                             n.jsx("div",{style:{fontSize:12,color:"var(--text3)",padding:"4px 0"},children:"No requests to break down yet."})})]})]}),
             n.jsxs("div",{className:"card",children:[
-                  n.jsx(Us,{title:"Leave Requests",subtitle:L.length?rows.length+" of "+L.length+" shown":""}),
+                  n.jsx(Us,{title:"Leave Requests",subtitle:rows.length?"Showing "+(leaveStart+1)+"-"+Math.min(leaveStart+lps,rows.length)+" of "+rows.length+" matching requests ("+L.length+" total)":""}),
                   n.jsxs("div",{style:{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center",marginBottom:14},children:[
                         n.jsx("div",{style:{display:"flex",gap:8,flexWrap:"wrap"},children:["All","Pending","Approved","Rejected"].map(function(s){return n.jsxs("div",{className:"chip"+(flt===s?" active":""),onClick:function(){sflt(s)},children:[s," ",
                                       n.jsx("span",{style:{opacity:.7},children:s==="All"?L.length:byStatus(s).length})]},s)})}),
@@ -563,8 +537,17 @@
                   n.jsx("div",{className:"table-wrap",children:
                       n.jsxs("table",{children:[
                             n.jsx("thead",{children:
-                                n.jsx("tr",{children:["Employee","Type","From","To","Days","Status","Action"].map(function(e){return n.jsx("th",{children:e},e)})})}),
-                            n.jsx("tbody",{children:body})]})})]}),cor.length?
+                                n.jsx("tr",{children:["Employee","Type","From","To","Days","Status","Action"].map(function(e){return n.jsx("th",{style:{textAlign:"center"},children:e},e)})})}),
+                            n.jsx("tbody",{children:body})]})}),
+                  !ld&&!er?n.jsx("div",{style:{display:"flex",alignItems:"center",justifyContent:"flex-end",gap:12,flexWrap:"wrap",minHeight:70,boxSizing:"border-box",padding:"16px 2px",color:"var(--text2)",fontSize:12,borderTop:"1px solid var(--border2)",borderBottom:"1px solid var(--border2)"},children:
+                        n.jsxs("div",{style:{display:"flex",alignItems:"center",gap:10},children:[
+                              n.jsx("label",{children:n.jsx("select",{value:lps,"aria-label":"Requests per page",onChange:function(e){slps(Number(e.target.value));slp(1)},style:{height:36,minWidth:112,color:"var(--text2)",background:"var(--bg2)",border:"1px solid var(--border2)",borderRadius:10,padding:"0 12px",font:"inherit",fontWeight:600,cursor:"pointer"},children:[10,25,50].map(function(size){return n.jsx("option",{value:size,children:size+" / page"},size)})})}),
+                              n.jsx("button",{type:"button",disabled:leavePage<=1,"aria-label":"Previous page",onClick:function(){sexp(null);slp(leavePage-1)},style:{height:36,minWidth:64,color:"var(--text2)",background:"var(--bg2)",border:"1px solid var(--border2)",borderRadius:10,padding:"0 12px",font:"inherit",fontWeight:600,cursor:leavePage<=1?"not-allowed":"pointer",opacity:leavePage<=1?0.45:1},children:"Prev"}),
+                              n.jsx("span",{"aria-current":"page",style:{display:"inline-flex",alignItems:"center",justifyContent:"center",minWidth:40,height:36,boxSizing:"border-box",padding:"0 12px",borderRadius:10,background:"#315eea",color:"#fff",fontSize:13,fontWeight:700},children:leavePage}),
+                              n.jsx("button",{type:"button",disabled:leavePage>=leavePageCount,"aria-label":"Next page",onClick:function(){sexp(null);slp(leavePage+1)},style:{height:36,minWidth:64,color:"var(--text2)",background:"var(--bg2)",border:"1px solid var(--border2)",borderRadius:10,padding:"0 12px",font:"inherit",fontWeight:600,cursor:leavePage>=leavePageCount?"not-allowed":"pointer",opacity:leavePage>=leavePageCount?0.45:1},children:"Next"})]})}):null]}),
+            /* Missed punch / Regularize — the same panel as Check In / Out:
+               flagged days, my requests (every kind), the approval queue. */
+            n.jsx("div",{className:"card",style:{marginTop:16},"data-hrms-regz-card":"1",children:n.jsx("div",{ref:regRef})}),cor.length?
             /* Deliberately NOT a <table>: hrms-perms.js locates the Leave
                action column by scanning every <table> on this route, so a
                second one here would risk it gating the wrong cells. */
@@ -632,44 +615,6 @@
                       n.jsx("textarea",{className:"input-field",rows:3,style:{resize:"vertical"},value:fm.reason,onChange:function(d){setF("reason",d.target.value)},placeholder:"Optional — a short note for your approver"})}),fe?
                   n.jsx("div",{style:{fontSize:12,color:"var(--danger)",marginTop:-8},children:fe}):null,
                   n.jsx(Vs,{onCancel:function(){so(!1);sfe("")},onConfirm:submit,confirmLabel:"Apply",loading:bz})]}),
-            n.jsxs(Hs,{open:mop,onClose:function(){smo(!1);smfe("")},title:"Missed Clock-Out",width:520,children:[
-                  n.jsx("div",{style:{background:"var(--bg3)",border:"1px solid var(--warn)",borderRadius:8,padding:"9px 12px",fontSize:12,color:"var(--warn)",marginBottom:14},children:"You can only adjust a missing clock-out."}),
-                  n.jsx("div",{style:{display:"flex",gap:10,marginBottom:6,flexWrap:"wrap"},children:[["gross","Gross hours",mMin,"Clock-in to clock-out"],["eff","Effective hours",mEff,mBrk?"Gross minus "+hrm(mBrk)+" break":"Gross minus breaks"]].map(function(t){return n.jsxs("label",{style:{flex:"1 1 140px",borderRadius:10,padding:"10px 14px",border:"1px solid var(--border2)",cursor:"text",display:"block"},children:[
-                                n.jsx("input",{type:"text",inputMode:"decimal",value:hEd.k===t[0]?hEd.v:(mMin?durTxt(t[2]):""),placeholder:"h:mm",disabled:!mIn,
-                                  "aria-label":t[1]+" (hours:minutes)",
-                                  onChange:function(d){setHours(t[0],d.target.value)},onBlur:function(){shEd({k:"",v:""})},
-                                  style:{width:"100%",border:"none",outline:"none",background:"transparent",fontFamily:"var(--font-d)",fontSize:20,fontWeight:700,color:"var(--text)",lineHeight:1.1,padding:0}}),
-                                n.jsx("div",{style:{fontSize:12,color:"var(--text3)",marginTop:4},children:t[1]}),
-                                n.jsx("div",{style:{fontSize:10.5,color:"var(--text3)",marginTop:1},children:t[3]})]},t[0])})}),
-                  n.jsx("div",{style:{fontSize:11.5,color:"var(--text3)",marginBottom:14},children:mIn?"Type the hours (e.g. 8:30 or 8.5) or the clock-out time — the other updates."+(mNext?" Clock-out is on the next day (night shift).":""):"Pick the date first; hours can be typed once your clock-in is found."}),
-                  n.jsxs(Bt,{children:[
-                        n.jsx(le,{label:"Date",required:!0,children:
-                            n.jsx(Qe,{type:"date",max:TODAY,value:mfm.date,onChange:function(d){shEd({k:"",v:""});setMF("date",d.target.value)}})}),
-                        n.jsx(le,{label:"Clock-out time",required:!0,children:
-                            n.jsx(Qe,{type:"time",value:mfm.time,onChange:function(d){shEd({k:"",v:""});setMF("time",d.target.value)}})})]}),
-                  n.jsx("div",{style:{fontSize:13,fontWeight:600,color:"var(--text)",marginTop:2},children:"Attendance Adjustment"}),
-                  n.jsx("div",{style:{fontSize:12,color:"var(--text3)",marginTop:4,marginBottom:10},children:"Your recorded clock-in for this day, and the time you actually left."}),
-                  n.jsxs("div",{style:{border:"1px solid var(--border2)",borderRadius:10,overflow:"hidden"},children:[
-                        n.jsx("div",{style:{background:"var(--bg3)",padding:"4px 10px",fontSize:11,color:"var(--text3)"},children:mSrc}),
-                        n.jsxs("div",{style:{display:"flex",alignItems:"stretch"},children:[
-                              n.jsxs("div",{style:{flex:"1 1 0",display:"flex",alignItems:"center",gap:8,padding:"11px 12px",minWidth:0},children:[
-                                    n.jsx("span",{style:{color:"var(--success)",fontSize:13},children:"↙"}),
-                                    n.jsx("span",{style:{fontSize:13,color:mIn?"var(--text)":"var(--text3)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"},children:mLd?"Loading…":mIn?pt(mIn):mfm.date?"No clock-in recorded":"--:--"})]}),
-                              n.jsx("div",{style:{width:1,background:"var(--border2)"}}),
-                              n.jsxs("div",{style:{flex:"1 1 0",display:"flex",alignItems:"center",gap:8,padding:"11px 12px",minWidth:0},children:[
-                                    n.jsx("span",{style:{color:"var(--danger)",fontSize:13},children:"↗"}),
-                                    n.jsx("span",{style:{fontSize:13,color:mfm.time?"var(--text)":"var(--text3)",whiteSpace:"nowrap"},children:mfm.time?pt(mfm.time):"--:--"})]})]})]}),
-                  /* One fixed-height slot for both warnings. They mount and
-                     unmount as the day lookup resolves, and the modal is
-                     vertically centred — reserving the space is what stops it
-                     shifting under the cursor. */
-                  n.jsx("div",{style:{minHeight:34,fontSize:12,color:"var(--warn)",marginTop:8},children:mLd?null:mfm.date&&!mAtt?"There is no clock-in on this day — your admin will need to add both times.":mOut?
-                      n.jsxs("span",{children:["This day already shows a clock-out of ",pt(mOut),". Submitting will ask your admin to replace it."]}):null}),
-                  n.jsx("div",{style:{marginTop:2},children:
-                      n.jsx(le,{label:"Note",required:!0,children:
-                          n.jsx("textarea",{className:"input-field",rows:3,style:{resize:"vertical"},value:mfm.reason,onChange:function(d){setMF("reason",d.target.value)},placeholder:"Why the clock-out is missing — your admin sees this"})})}),
-                  n.jsx("div",{style:{minHeight:18,fontSize:12,color:"var(--danger)",marginTop:-8},children:mfe||null}),
-                  n.jsx(Vs,{onCancel:function(){smo(!1);smfe("")},onConfirm:msubmit,confirmLabel:"Send",loading:mbz})]}),
             n.jsxs(Hs,{open:!!cf,onClose:function(){scf(null);sdr("")},title:"Decline this request?",width:420,children:[
                   n.jsxs("div",{style:{fontSize:13,color:"var(--text2)",lineHeight:1.6},children:["You're about to decline ",
                         n.jsx("strong",{children:cf&&(cf.employee||cf.email)||"this employee"}),"'s ",

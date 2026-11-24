@@ -435,7 +435,7 @@ class OvertimeViewSet(viewsets.ViewSet):
         # action crashed for everyone. Same rule as every other approval now.
         from api import org_views
         approver_email, denied = '', None
-        _ok, approver_email, denied = org_views.can_decide(request, 'attendance.edit', request.data.get('email'))
+        _ok, approver_email, denied = org_views.can_decide(request, 'overtime.approve', request.data.get('email'))
         if denied:
             return denied
 
@@ -565,6 +565,8 @@ class AttendanceCorrectionViewSet(viewsets.ViewSet):
                     attendance.check_out = correction.requested_check_out
                 attendance.save()
                 _ts_log(attendance, _ts_before, 'correction', reviewer_email or '', correction.reason or '')
+                from api.attendance_ext.missed_punch import mark_resolved
+                mark_resolved(attendance)
 
             # Send notification
             NotificationService.send_attendance_correction_notification(

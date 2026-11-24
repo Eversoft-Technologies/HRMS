@@ -29,6 +29,7 @@
     var st = document.createElement('style');
     st.id = STYLE_ID;
     st.textContent = [
+      'body:has(.sidebar a.nav-item.active[href="/hr/hris"]) #root .content .card .table-wrap th{text-align:left!important;}',
       'tr[data-hp-off]{display:none !important;}',
       '#' + PAGER_ID + '{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-top:12px;font-size:12.5px;color:var(--text2,#475569);}',
       '#' + PAGER_ID + ' .hpg-info b{color:var(--text,#0f172a);font-weight:700;}',

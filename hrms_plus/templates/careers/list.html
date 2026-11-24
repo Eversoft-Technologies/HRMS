@@ -1,0 +1,228 @@
+{% extends "careers/base.html" %}
+{% block title %}Careers – {{ company.name }}{% endblock %}
+{% block head %}{% if base %}<link rel="canonical" href="{{ base }}/careers">{% endif %}
+<meta property="og:title" content="Careers at {{ company.name }}">
+<meta property="og:description" content="{{ stats.roles }} open role{{ stats.roles|pluralize }} at {{ company.name }}. Apply online in a few minutes.">
+<meta property="og:type" content="website">{% endblock %}
+{% block style %}
+.hero-list{padding:72px 0 64px}
+.hero-list h1{font-size:clamp(34px,5vw,54px);font-weight:800;line-height:1.05;margin:18px 0 16px;max-width:760px}
+.hero-list h1 em{font-style:normal;background:linear-gradient(90deg,#6ee7b7,#93c5fd);-webkit-background-clip:text;background-clip:text;color:transparent}
+.hero-list .lead{font-size:18px;line-height:1.6;max-width:620px;margin:0 0 30px}
+.searchbar{display:flex;gap:8px;max-width:680px;background:#fff;border-radius:14px;padding:6px;box-shadow:0 20px 50px -18px rgba(0,0,0,.55)}
+.searchbar .in{flex:1;display:flex;align-items:center;gap:10px;padding:0 12px;color:#667085}
+.searchbar input{flex:1;border:0;outline:0;background:transparent;font:inherit;font-size:16px;color:#0b1324;height:46px;min-width:0}
+.searchbar input::placeholder{color:#98a2b3}
+.searchbar:focus-within{box-shadow:0 0 0 4px rgba(52,211,153,.35),0 20px 50px -18px rgba(0,0,0,.55)}
+.stats{display:flex;flex-wrap:wrap;gap:28px;margin-top:34px}
+.stat b{display:block;font-size:28px;font-weight:800;color:#fff;letter-spacing:-.02em;line-height:1.1}
+.stat span{font-size:13px;color:var(--hero-muted)}
+
+.section{padding:56px 0}
+.section-head{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:12px;margin-bottom:22px}
+.section-head h2{font-size:28px;font-weight:800;margin:0}
+.section-head p{margin:6px 0 0;color:var(--muted)}
+.kicker{font-size:12.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--brand-strong);margin:0 0 6px}
+@media (prefers-color-scheme: dark){.kicker{color:var(--brand)}}
+
+.toolbar{display:grid;grid-template-columns:repeat(3,minmax(0,1fr)) auto;gap:10px;padding:14px;margin-bottom:14px}
+.toolbar label{display:block;font-size:12px;font-weight:600;color:var(--muted);margin:0 0 5px}
+.toolbar .actions{display:flex;gap:8px;align-items:flex-end}
+.dept-pills{display:flex;gap:8px;overflow-x:auto;padding:2px 2px 10px;margin-bottom:8px;scrollbar-width:thin}
+.pill{flex:none;display:inline-flex;align-items:center;gap:8px;height:36px;padding:0 14px;border-radius:999px;border:1px solid var(--border-strong);
+  background:var(--surface);color:var(--text);font-size:13.5px;font-weight:500;text-decoration:none;transition:all .15s}
+.pill:hover{border-color:var(--brand);color:var(--brand-strong)}
+.pill .n{font-size:12px;color:var(--muted);background:var(--surface-2);border-radius:999px;padding:0 7px;line-height:20px}
+.pill.on{background:var(--ink);border-color:var(--ink);color:var(--surface)}
+.pill.on .n{background:rgba(255,255,255,.18);color:inherit}
+@media (prefers-color-scheme: dark){.pill.on{background:var(--brand);border-color:var(--brand);color:var(--brand-ink)}}
+
+.result-line{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:6px 0 14px;font-size:14px;color:var(--muted)}
+.result-line b{color:var(--ink)}
+.jobs{list-style:none;margin:0;padding:0;display:grid;gap:12px}
+.job{position:relative;display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:18px;align-items:center;padding:20px 22px;
+  transition:border-color .15s,box-shadow .2s,transform .2s}
+.job:hover{border-color:color-mix(in srgb,var(--brand) 45%,var(--border));box-shadow:var(--shadow-lg);transform:translateY(-2px)}
+.job .mono{width:46px;height:46px;border-radius:12px;display:grid;place-items:center;font-weight:800;font-size:16px;
+  color:var(--brand-strong);background:var(--brand-soft)}
+@media (prefers-color-scheme: dark){.job .mono{color:var(--brand)}}
+.job h3{margin:0;font-size:17.5px;font-weight:700;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.job h3 a{color:var(--ink);text-decoration:none}
+.job h3 a::after{content:"";position:absolute;inset:0;border-radius:var(--radius)}   /* whole card clickable */
+.job .meta{display:flex;flex-wrap:wrap;gap:4px 16px;margin-top:6px;font-size:13.5px;color:var(--muted)}
+.job .meta span{display:inline-flex;align-items:center;gap:6px}
+.job .sum{margin:8px 0 0;color:var(--muted);font-size:14px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.job .go{display:flex;align-items:center;gap:6px;font-size:14px;font-weight:600;color:var(--brand-strong);white-space:nowrap}
+@media (prefers-color-scheme: dark){.job .go{color:var(--brand)}}
+.job:hover .go svg{transform:translateX(3px)}
+.job .go svg{transition:transform .2s}
+.empty{text-align:center;padding:56px 20px}
+.empty .ill{width:64px;height:64px;margin:0 auto 14px;border-radius:18px;display:grid;place-items:center;background:var(--brand-soft);color:var(--brand-strong)}
+.empty h3{margin:0 0 6px;font-size:18px}
+.empty p{margin:0 0 18px;color:var(--muted)}
+
+.process{background:var(--surface);border-top:1px solid var(--border);border-bottom:1px solid var(--border)}
+.steps{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px;counter-reset:s}
+.step{padding:22px;border-radius:var(--radius);border:1px solid var(--border);background:var(--bg);position:relative}
+.step::before{counter-increment:s;content:counter(s,decimal-leading-zero);display:block;font-size:13px;font-weight:800;color:var(--brand-strong);margin-bottom:10px;letter-spacing:.04em}
+@media (prefers-color-scheme: dark){.step::before{color:var(--brand)}}
+.step h3{margin:0 0 6px;font-size:16px}
+.step p{margin:0;color:var(--muted);font-size:14px}
+.cta{padding:56px 0}
+.cta .box{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:16px;padding:32px;border-radius:20px}
+.cta h2{margin:0 0 6px;font-size:24px}
+.cta p{margin:0}
+
+@media (max-width:900px){.steps{grid-template-columns:1fr 1fr}.toolbar{grid-template-columns:1fr 1fr}.toolbar .actions{grid-column:1/-1}}
+@media (max-width:640px){
+  .hero-list{padding:44px 0 40px}.hero-list .lead{font-size:16px}
+  .searchbar{flex-direction:column;padding:8px}.searchbar .btn{width:100%}
+  .stats{gap:20px}.stat b{font-size:22px}
+  .section{padding:40px 0}.section-head h2{font-size:23px}
+  .toolbar{grid-template-columns:1fr}
+  .job{grid-template-columns:minmax(0,1fr);gap:10px;padding:18px}.job .mono{display:none}.job .go{justify-self:start}
+  .steps{grid-template-columns:1fr}
+  .cta .box{padding:24px}
+}
+{% endblock %}
+{% block content %}
+{% if not embed %}
+<section class="hero hero-list" aria-labelledby="hero-h">
+  <div class="wrap">
+    <span class="eyebrow"><span class="dot" aria-hidden="true"></span>We're hiring · {{ stats.roles }} open role{{ stats.roles|pluralize }}</span>
+    <h1 id="hero-h">Build what's next with <em>{{ company.name }}</em></h1>
+    <p class="lead hero-muted">{% if settings.intro %}{{ settings.intro }}{% else %}Join a team that ships real products for real customers. Find a role that fits you and apply online in a few minutes.{% endif %}</p>
+    <form class="searchbar" method="get" action="/careers#roles" role="search" aria-label="Search jobs">
+      <div class="in">
+        <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="5"/><path d="M11 11l3.5 3.5"/></svg>
+        <label for="hero-q" class="sr">Search jobs</label>
+        <input id="hero-q" type="search" name="q" value="{{ q }}" placeholder="Search by job title, skill or keyword" maxlength="100">
+      </div>
+      <button class="btn" type="submit">Find jobs</button>
+    </form>
+    <div class="stats" aria-label="At a glance">
+      <div class="stat"><b>{{ stats.roles }}</b><span>Open role{{ stats.roles|pluralize }}</span></div>
+      {% if stats.departments %}<div class="stat"><b>{{ stats.departments }}</b><span>Team{{ stats.departments|pluralize }} hiring</span></div>{% endif %}
+      {% if stats.locations %}<div class="stat"><b>{{ stats.locations }}</b><span>Location{{ stats.locations|pluralize }}</span></div>{% endif %}
+    </div>
+  </div>
+</section>
+{% endif %}
+
+<section class="section" id="roles" aria-labelledby="roles-h">
+  <div class="wrap">
+    <div class="section-head">
+      <div>
+        <p class="kicker">Open positions</p>
+        <h2 id="roles-h">Find your next role</h2>
+      </div>
+    </div>
+
+    {% if dept_counts|length > 1 %}
+    <nav class="dept-pills" aria-label="Departments">
+      <a class="pill{% if not sel.department %} on{% endif %}" href="/careers{{ embed_q }}#roles"{% if not sel.department %} aria-current="true"{% endif %}>All teams <span class="n">{{ stats.roles }}</span></a>
+      {% for d in dept_counts %}
+      <a class="pill{% if d.name == sel.department %} on{% endif %}" href="/careers?department={{ d.name|urlencode }}{% if embed %}&amp;embed=1{% endif %}#roles"{% if d.name == sel.department %} aria-current="true"{% endif %}>{{ d.name }} <span class="n">{{ d.count }}</span></a>
+      {% endfor %}
+    </nav>
+    {% endif %}
+
+    <form class="toolbar card" method="get" action="/careers#roles" aria-label="Filter jobs">
+      {% if embed %}<input type="hidden" name="embed" value="1">{% endif %}
+      {% if q %}<input type="hidden" name="q" value="{{ q }}">{% endif %}
+      {% if sel.department %}<input type="hidden" name="department" value="{{ sel.department }}">{% endif %}
+      <div>
+        <label for="f-loc">Location</label>
+        <select class="ctl" id="f-loc" name="location">
+          <option value="">All locations</option>
+          {% for d in facets.locations %}<option value="{{ d }}"{% if d == sel.location %} selected{% endif %}>{{ d }}</option>{% endfor %}
+        </select>
+      </div>
+      <div>
+        <label for="f-type">Job type</label>
+        <select class="ctl" id="f-type" name="type">
+          <option value="">All types</option>
+          {% for d in facets.types %}<option value="{{ d }}"{% if d == sel.type %} selected{% endif %}>{{ d }}</option>{% endfor %}
+        </select>
+      </div>
+      <div>
+        <label for="f-remote">Work mode</label>
+        <select class="ctl" id="f-remote" name="remote">
+          <option value="">Any</option>
+          <option value="1"{% if sel.remote == "1" %} selected{% endif %}>Remote</option>
+          <option value="0"{% if sel.remote == "0" %} selected{% endif %}>On-site</option>
+        </select>
+      </div>
+      <div class="actions">
+        <button class="btn" type="submit">Apply filters</button>
+        {% if filtered %}<a class="btn btn-ghost" href="/careers{{ embed_q }}#roles">Reset</a>{% endif %}
+      </div>
+    </form>
+
+    <div class="result-line" role="status" aria-live="polite">
+      <span><b>{{ total }}</b> role{{ total|pluralize }}{% if filtered %} match{{ total|pluralize:"es," }} your search{% if q %} for “{{ q }}”{% endif %}{% endif %}</span>
+    </div>
+
+    {% if jobs %}
+    <ul class="jobs">
+      {% for j in jobs %}
+      <li class="job card">
+        <div class="mono" aria-hidden="true">{{ j.department|default:j.title|slice:":2"|upper }}</div>
+        <div>
+          <h3><a href="{{ j.url }}{{ embed_q }}">{{ j.title }}</a>{% if j.isNew %}<span class="badge-new">New</span>{% endif %}</h3>
+          <div class="meta">
+            {% if j.department %}<span><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="2" y="4.5" width="12" height="9" rx="1.5"/><path d="M5.5 4.5V3a1 1 0 011-1h3a1 1 0 011 1v1.5"/></svg>{{ j.department }}</span>{% endif %}
+            {% if j.location %}<span><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M8 14s5-4.2 5-8A5 5 0 003 6c0 3.8 5 8 5 8z"/><circle cx="8" cy="6" r="1.8"/></svg>{{ j.location }}</span>{% endif %}
+            {% if j.type %}<span><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="8" cy="8" r="6"/><path d="M8 4.5V8l2.5 1.5"/></svg>{{ j.type }}</span>{% endif %}
+            {% if j.remote %}<span class="chip remote">Remote</span>{% endif %}
+            {% if j.salary %}<span class="chip">{{ j.salary }}</span>{% endif %}
+            {% if j.ageDays is not None %}<span>{% if j.ageDays == 0 %}Posted today{% elif j.ageDays == 1 %}Posted yesterday{% elif j.ageDays < 31 %}Posted {{ j.ageDays }} days ago{% else %}Posted {{ j.postedAt }}{% endif %}</span>{% endif %}
+          </div>
+          {% if j.summary %}<p class="sum">{{ j.summary }}</p>{% endif %}
+        </div>
+        <span class="go" aria-hidden="true">View role <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h10M9 4l4 4-4 4"/></svg></span>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <div class="card empty">
+      <div class="ill" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="7" cy="7" r="5"/><path d="M11 11l3.5 3.5"/></svg></div>
+      <h3>{% if filtered %}No roles match your search{% else %}No open positions right now{% endif %}</h3>
+      <p>{% if filtered %}Try a different keyword or clear the filters.{% else %}We're not hiring for new roles at the moment. Please check back soon.{% endif %}</p>
+      {% if filtered %}<a class="btn btn-ghost" href="/careers{{ embed_q }}#roles">See all openings</a>{% endif %}
+    </div>
+    {% endif %}
+  </div>
+</section>
+
+{% if not embed %}
+<section class="section process" id="process" aria-labelledby="process-h">
+  <div class="wrap">
+    <div class="section-head">
+      <div>
+        <p class="kicker">Our hiring process</p>
+        <h2 id="process-h">How hiring works</h2>
+        <p>A clear, respectful process — you'll always know where you stand.</p>
+      </div>
+    </div>
+    <ol class="steps">
+      <li class="step"><h3>Apply online</h3><p>Upload your resume — we fill in your details from it. It takes a few minutes.</p></li>
+      <li class="step"><h3>Screening</h3><p>Our recruiting team reviews your profile against the role and reaches out.</p></li>
+      <li class="step"><h3>Interviews</h3><p>Meet the people you'd work with and show us how you approach problems.</p></li>
+      <li class="step"><h3>Offer</h3><p>We share an offer and help you get set up for a smooth first day.</p></li>
+    </ol>
+  </div>
+</section>
+<section class="cta" aria-labelledby="cta-h">
+  <div class="wrap">
+    <div class="box hero">
+      <div>
+        <h2 id="cta-h">Don't see the right role?</h2>
+        <p class="hero-muted">New positions open regularly{% if company.website %} — follow along on our website{% endif %}.</p>
+      </div>
+      {% if company.website %}<a class="btn" href="{{ company.website }}" rel="noopener">Visit {{ company.name }}</a>{% else %}<a class="btn" href="#roles">Browse open roles</a>{% endif %}
+    </div>
+  </div>
+</section>
+{% endif %}
+{% endblock %}

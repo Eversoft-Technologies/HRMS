@@ -8,7 +8,7 @@ from unittest.mock import patch
 from django.core.management import call_command
 from django.test import Client, TestCase
 
-from api.models import AppUser, AttendanceEvent, EmployeeAttendance, GeoFence, Shift, ShiftAssignment
+from api.models import AppUser, AttendanceEvent, EmployeeAttendance, GeoFence, OvertimeRecord, Shift, ShiftAssignment
 
 OFFICE = (17.4485, 78.3908)
 D = date(2026, 11, 2)
@@ -61,7 +61,10 @@ class NightTailTests(Base):
         self.check_in(D + timedelta(days=1), 2, 18)                 # 18 min after the end
         self.check_out(D + timedelta(days=1), 2, 48)
         r = self.row(D)
-        self.assertEqual((r.worked_minutes, r.overtime_minutes, r.status), (510, 30, 'present'))
+        # Overtime is now a pending OvertimeRecord; overtime_minutes holds only approved (payable) OT.
+        from api.models import OvertimeRecord
+        ot = OvertimeRecord.objects.get(email=self.email, date=D)
+        self.assertEqual((r.worked_minutes, ot.overtime_minutes, r.overtime_minutes, r.status), (510, 30, 0, 'present'))
         self.assertFalse(EmployeeAttendance.objects.filter(email=self.email, date=D + timedelta(days=1)).exists())
         # tonight's shift is judged on its own check-in
         self.check_in(D + timedelta(days=1), 17, 51)
@@ -81,7 +84,9 @@ class OnTimeWindowTests(Base):
     def test_a_check_in_long_before_the_shift_does_not_decide(self):
         self.check_in(D, 2, 18)                                     # before 05:00
         self.check_out(D, 2, 40)
-        self.assertEqual((self.row(D).status, self.row(D).late_minutes), ('present', 0))
+        # Closed after 22 minutes: below the half-day minimum (day_status.py),
+        # so the day reads absent until the shift's own sessions add up.
+        self.assertEqual((self.row(D).status, self.row(D).late_minutes), ('absent', 0))
         self.check_in(D, 9, 40)                                     # the shift's own arrival
         self.assertEqual((self.row(D).status, self.row(D).late_minutes), ('late', 40))
 
@@ -113,7 +118,9 @@ class HrEditTests(Base):
                             content_type='application/json')
         self.assertEqual(r.status_code, 200, r.content)
         row = self.row(D)
-        self.assertEqual((row.worked_minutes, row.overtime_minutes), (540, 60))   # 180 + 360
+        self.assertEqual((row.worked_minutes, row.overtime_minutes), (540, 0))    # 180 + 360; OT not approved yet
+        rec = OvertimeRecord.objects.get(email=self.email, date=D)
+        self.assertEqual((rec.status, rec.overtime_minutes), ('Pending', 60))
         ev = AttendanceEvent.objects.get(email=self.email, event='hr-edit')
         self.assertIn('hr@example.com: worked 7h 0m → 9h 0m', ev.location)
 

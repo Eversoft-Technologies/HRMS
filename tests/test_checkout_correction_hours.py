@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 from django.test import Client, TestCase
 
-from api.models import AppUser, AttendanceCorrection, EmployeeAttendance, Shift, ShiftAssignment
+from api.models import AppUser, AttendanceCorrection, EmployeeAttendance, OvertimeRecord, Shift, ShiftAssignment
 
 MON = date(2026, 11, 2)
 
@@ -47,8 +47,12 @@ class CheckoutCorrectionHoursTests(TestCase):
                        content_type='application/json')
         self.assertEqual(r.status_code, 200, r.content)
         row = EmployeeAttendance.objects.get(email=self.email, date=MON)
+        # Overtime now waits for approval: the 90 min are a pending record and
+        # nothing is payable on the day until a manager approves them.
         self.assertEqual((row.check_out, row.worked_minutes, row.overtime_minutes, row.early_exit_minutes),
-                         (datetime(2026, 11, 3, 4, 46), 570, 90, 0))
+                         (datetime(2026, 11, 3, 4, 46), 570, 0, 0))
+        rec = OvertimeRecord.objects.get(email=self.email, date=MON)
+        self.assertEqual((rec.status, rec.overtime_minutes), ('Pending', 90))
         hist = self.c.get('/api/attendance?email=' + self.email + '&from=2026-11-01&to=2026-11-04').json()[0]
         self.assertNotIn('pendingCorrection', hist)
         self.assertEqual(hist['workedMinutes'], 570)

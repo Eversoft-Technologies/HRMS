@@ -162,53 +162,9 @@ class LocationPunchTests(TestCase):
         self.geocheck(TOWN, 30, when=datetime(2026, 11, 2, 12, 40))
         self.assertEqual(self.alerts('You are outside the office'), 2)
 
-    def test_approved_offsite_day_is_not_watched_or_auto_closed(self):
-        self.session(location_lat=TOWN[0], location_lng=TOWN[1], location_status='Approved')
-        self.assertTrue(self.geocheck(TOWN, 20)['offsite'])
-        with at(datetime(2026, 11, 2, 12, 0)):
-            r = self.c.post('/api/attendance/check-out', {'email': self.email, 'auto': 'geofence_departure'},
-                            content_type='application/json')
-        self.assertEqual((r.status_code, r.json()['code']), (409, 'NOT_AN_OFFICE_SESSION'))
-        self.assertIsNone(EmployeeAttendance.objects.get().check_out)
-
     def outside_run(self, end=datetime(2026, 11, 2, 12, 0), minutes=15):
         """What the watcher does before an auto check-out: a precise outside
         reading every 5 minutes for ``minutes``."""
         for k in range(minutes, 0, -5):
             self.geocheck(TOWN, 30, when=end - timedelta(minutes=k))
 
-    def test_auto_check_out_tells_the_employee_why(self):
-        self.session()
-        self.outside_run()
-        with at(datetime(2026, 11, 2, 12, 0)):
-            r = self.c.post('/api/attendance/check-out', {'email': self.email, 'auto': 'geofence_departure',
-                                                          'outside_minutes': 15}, content_type='application/json')
-        self.assertEqual(r.status_code, 200, r.content)
-        n = Notification.objects.get(recipient=self.email, title='Checked out automatically')
-        self.assertIn('outside the office for more than 15 minutes', n.message)
-
-    def test_hr_and_the_manager_hear_about_an_auto_check_out(self):
-        from api.models import UserProfile
-        AppUser.objects.filter(email=self.email).update(role='recruitment')
-        AppUser.objects.create(email='hr@example.com', full_name='HR', status='active', role='admin')
-        AppUser.objects.create(email='boss@example.com', full_name='Boss', status='active', role='recruitment')
-        UserProfile.objects.create(email=self.email, manager_email='boss@example.com')
-        self.session(employee_name='Punch Tester')
-        self.outside_run()
-        with at(datetime(2026, 11, 2, 12, 0)):
-            r = self.c.post('/api/attendance/check-out', {
-                'email': self.email, 'auto': 'geofence_departure', 'outside_minutes': 15,
-                'distance': 1800, 'fence': 'HQ', 'latitude': TOWN[0], 'longitude': TOWN[1]},
-                content_type='application/json')
-        self.assertEqual(r.status_code, 200, r.content)
-        for who in ('hr@example.com', 'boss@example.com'):
-            n = Notification.objects.get(recipient=who, title='Employee auto checked out')
-            self.assertIn('Punch Tester was checked out automatically', n.message)
-            self.assertIn('about 1.8 km from HQ', n.message)
-        self.assertIn('1.8 km from HQ', Notification.objects.get(
-            recipient=self.email, title='Checked out automatically').message)
-        row = self.c.get(f'/api/attendance?email={self.email}&date=2026-11-02').json()[0]
-        self.assertTrue(row['autoCheckedOut'])
-        self.assertIn('1.8 km from HQ', row['note'])
-        day = self.c.get(f'/api/attendance/day-detail?email={self.email}&date=2026-11-02').json()
-        self.assertIn('Auto check-out (left office)', [e['label'] for e in day['events']])

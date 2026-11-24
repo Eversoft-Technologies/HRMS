@@ -16,10 +16,10 @@ def grant(role, *codes):
 class OrgBase(TestCase):
     def setUp(self):
         AppUser.objects.create(email='admin@x.com', full_name='Admin', password='x', role='admin')
-        self.hr_role = Role.objects.create(name='HR Manager')
-        grant(self.hr_role, 'employee.view', 'employee.edit', 'employee.create')
+        self.hr_role = Role.objects.create(name='HR Org Manager')
+        grant(self.hr_role, 'employee.view', 'employee.edit', 'employee.create', 'task.create')
         AppUser.objects.create(email='hr@x.com', full_name='HR', password='x', role='hr', role_ref=self.hr_role)
-        emp = Role.objects.create(name='Employee')
+        emp = Role.objects.create(name='Unprivileged Employee')
         self.emp_role = emp
         for email, first, last in (('anna@x.com', 'Anna', 'Lead'), ('bob@x.com', 'Bob', 'Dev'),
                                    ('cara@x.com', 'Cara', 'Dev'), ('dan@x.com', 'Dan', 'Ops')):

@@ -216,6 +216,11 @@
       '.hrms-pro-card-accent-bar { width: 3.5px; height: 14px; background: #3b82f6; border-radius: 2px; flex-shrink: 0; }',
       '.hrms-pro-pill-btn { display: inline-flex; align-items: center; justify-content: center; padding: 3px 12px; font-size: 11px; font-weight: 600; color: var(--text2); background: var(--bg3); border: 1px solid var(--border2); border-radius: 6px; text-decoration: none; cursor: pointer; transition: all 0.15s ease; white-space: nowrap; }',
       '.hrms-pro-pill-btn:hover { background: var(--surface); border-color: var(--accent); color: var(--text); transform: translateY(-1px); }',
+      '.hrms-dash-opts-btn { width: 24px; height: 24px; display: inline-grid; place-items: center; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--text3,#94a3b8); font-size: 15px; line-height: 1; cursor: pointer; padding: 0; }',
+      '.hrms-dash-opts-btn:hover, .hrms-dash-opts-btn[aria-expanded="true"] { background: var(--bg3); border-color: var(--border2,#d1d5db); color: var(--text); }',
+      '#hrms-dash-opts-menu { position: fixed; z-index: 9000; min-width: 190px; padding: 5px; border-radius: 10px; background: var(--surface,#fff); border: 1px solid var(--border2,#d1d5db); box-shadow: 0 16px 40px rgba(15,23,42,.22); }',
+      '#hrms-dash-opts-menu button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 10px; border: 0; border-radius: 7px; background: transparent; color: var(--text,#111827); font-size: 12.5px; font-weight: 500; text-align: left; cursor: pointer; }',
+      '#hrms-dash-opts-menu button:hover, #hrms-dash-opts-menu button:focus-visible { background: var(--bg3,#f3f4f6); outline: none; }',
       
       '.hrms-dept-row-item { display: flex; align-items: center; justify-content: space-between; padding: 10px 8px; border-bottom: 1px solid var(--border2); cursor: pointer; border-radius: 6px; transition: all 0.15s ease; }',
       '.hrms-dept-row-item:last-child { border-bottom: none; }',
@@ -268,13 +273,13 @@
          styles leaned on --text1 / --bg1, which the theme never defines. */
       '.hrms-dir-table { width: 100%; border-collapse: collapse; text-align: left; }',
       '.hrms-dir-table thead tr { background: var(--bg3); border-bottom: 1px solid var(--border2); }',
-      '.hrms-dir-table th { padding: 12px 10px; font-size: 11px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; color: var(--text2); white-space: nowrap; }',
+      '.hrms-dir-table th { padding: 12px 10px; font-size: 11px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; color: var(--text2); white-space: nowrap; text-align: left; }',
       '.hrms-dir-row { border-bottom: 1px solid var(--border2); cursor: pointer; transition: background 0.15s ease; }',
       '.hrms-dir-row:last-child { border-bottom: none; }',
       '.hrms-dir-row:hover { background: var(--bg3); }',
-      '.hrms-dir-row td { padding: 12px 10px; vertical-align: middle; font-size: 12px; color: var(--text2); }',
+      '.hrms-dir-row td { padding: 12px 10px; vertical-align: middle; font-size: 12px; color: var(--text2); text-align: left; }',
       '.hrms-dir-code { display: inline-block; background: rgba(79, 142, 247, 0.12); color: var(--accent); border: 1px solid rgba(79, 142, 247, 0.3); border-radius: 6px; padding: 3px 8px; font-size: 11px; font-weight: 700; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; letter-spacing: 0.5px; }',
-      '.hrms-dir-person { display: flex; align-items: center; gap: 10px; min-width: 0; }',
+      '.hrms-dir-person { display: flex; align-items: center; justify-content: flex-start; gap: 10px; min-width: 0; }',
       '.hrms-dir-avatar { width: 32px; height: 32px; border-radius: 50%; background: linear-gradient(135deg, #4f46e5, #06b6d4); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; flex-shrink: 0; box-shadow: 0 2px 5px rgba(79, 70, 229, 0.25); }',
       '.hrms-dir-name { display: inline-block; font-size: 13px; font-weight: 600; color: var(--text); line-height: 1.25; text-decoration: underline; text-decoration-color: transparent; text-underline-offset: 3px; cursor: pointer; }',
       '.hrms-dir-name:hover, .hrms-dir-name:focus-visible { color: var(--accent); text-decoration-color: currentColor; outline: none; }',
@@ -492,7 +497,7 @@
         '<td><span class="hrms-dir-badge ' + (isAct ? 'active' : 'inactive') + '">' + esc(emp.status) + '</span></td>' +
         '<td>' + esc(emp.location) + '</td>' +
         '<td class="hrms-dir-date">' + esc(emp.joinDate) + '</td>' +
-        '<td style="text-align:right;"><span class="hrms-dir-action">View \u2192</span></td>' +
+        '<td style="text-align:center;"><span class="hrms-dir-action">View \u2192</span></td>' +
       '</tr>';
     }).join('');
   }
@@ -802,7 +807,7 @@
             '</div>' +
             '<div style="display:flex;align-items:center;gap:6px;">' +
               '<span id="dash-att-rate-badge" style="font-size:11.5px;color:#10b981;font-weight:700;">' + (USA ? pct((d.usa.attendance || {}).clockedIn || 0, (d.usa.attendance || {}).total || 0) + '% Clocked In' : att.rate + '% Attendance') + '</span>' +
-              '<span style="font-size:14px;color:var(--text3,#94a3b8);cursor:pointer;padding:0 2px;" title="Options">⋮</span>' +
+              '<button type="button" id="dash-att-opts" class="hrms-dash-opts-btn" title="Options" aria-label="Attendance card options" aria-haspopup="menu" aria-expanded="false">⋮</button>' +
             '</div>' +
           '</div>' +
           '<div style="position:relative;height:165px;"><canvas id="dash-chart-attendance"></canvas></div>' +
@@ -920,7 +925,7 @@
                 '<th class="hrms-table-header-sortable" data-sort="status" data-label="STATUS">STATUS ' + (state.sortColumn === 'status' ? (state.sortAsc ? '▲' : '▼') : '') + '</th>' +
                 '<th class="hrms-table-header-sortable" data-sort="location" data-label="LOCATION">LOCATION ' + (state.sortColumn === 'location' ? (state.sortAsc ? '▲' : '▼') : '') + '</th>' +
                 '<th class="hrms-table-header-sortable" data-sort="joinDate" data-label="JOIN DATE">JOIN DATE ' + (state.sortColumn === 'joinDate' ? (state.sortAsc ? '▲' : '▼') : '') + '</th>' +
-                '<th style="text-align:right;">ACTION</th>' +
+                '<th style="text-align:center;">ACTION</th>' +
               '</tr>' +
             '</thead>' +
             '<tbody id="dash-employee-tbody">' +
@@ -1445,6 +1450,121 @@
     initAttendanceChart(d);
   }
 
+
+  /* ── Card options menu (the ⋮ on "Today's Attendance & Workforce Status").
+     Delegated on document, so it keeps working after the 15 s re-render. ── */
+  var cardMenu = null;
+  function closeCardMenu() {
+    if (!cardMenu) return;
+    if (cardMenu.btn) cardMenu.btn.setAttribute('aria-expanded', 'false');
+    if (cardMenu.el.parentNode) cardMenu.el.parentNode.removeChild(cardMenu.el);
+    cardMenu = null;
+  }
+  function todayIso() {
+    var t = new Date();
+    return t.getFullYear() + '-' + ('0' + (t.getMonth() + 1)).slice(-2) + '-' + ('0' + t.getDate()).slice(-2);
+  }
+  function downloadBlob(blob, name) {
+    var url = URL.createObjectURL(blob), a = document.createElement('a');
+    a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.parentNode.removeChild(a);
+    setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+  }
+  function attendanceCsv() {
+    var d = state.data;
+    if (!d) return null;
+    var sr = attSeries(d);
+    var rows = [['Date', todayIso()], [], ['Status', 'Employees']];
+    for (var i = 0; i < sr.labels.length; i++) rows.push([sr.labels[i], sr.data[i]]);
+    rows.push([]);
+    rows.push(['Total employees', sr.total != null ? sr.total : '']);
+    var badge = document.getElementById('dash-att-rate-badge');
+    if (badge) rows.push(['Rate', badge.textContent.trim()]);
+    return rows.map(function (r) {
+      return r.map(function (c) { var v = String(c == null ? '' : c); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }).join(',');
+    }).join('\r\n');
+  }
+  function goTo(path) {
+    closeCardMenu();
+    if (window.__reactRouterNavigate) window.__reactRouterNavigate(path);
+    else window.location.href = path;
+  }
+  function openCardMenu(btn) {
+    closeCardMenu();
+    var el = document.createElement('div');
+    el.className = 'hrms-card-menu';
+    el.setAttribute('role', 'menu');
+    var items = [
+      ['refresh', 'Refresh now'],
+      ['open', 'View attendance details'],
+      ['csv', 'Download as CSV'],
+      ['png', 'Download chart (PNG)']
+    ];
+    el.innerHTML = items.map(function (it) {
+      return '<button type="button" role="menuitem" data-dash-act="' + it[0] + '">' + it[1] + '</button>';
+    }).join('');
+    document.body.appendChild(el);
+    var r = btn.getBoundingClientRect();
+    var w = el.offsetWidth || 210;
+    el.style.top = (r.bottom + 6) + 'px';
+    el.style.left = Math.max(8, Math.min(window.innerWidth - w - 8, r.right - w)) + 'px';
+    btn.setAttribute('aria-expanded', 'true');
+    cardMenu = { el: el, btn: btn };
+    var first = el.querySelector('button'); if (first) first.focus();
+    el.addEventListener('click', function (e) {
+      var b = e.target.closest ? e.target.closest('[data-dash-act]') : null;
+      if (!b) return;
+      var act = b.getAttribute('data-dash-act');
+      if (act === 'refresh') {
+        closeCardMenu();
+        state.retryAfter = 0;
+        fetchDashboardStats();
+      } else if (act === 'open') {
+        goTo('/employees/attendance');
+      } else if (act === 'csv') {
+        var csv = attendanceCsv();
+        closeCardMenu();
+        if (csv) downloadBlob(new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' }), 'attendance_' + todayIso() + '.csv');
+      } else if (act === 'png') {
+        var cv = document.getElementById('dash-chart-attendance');
+        closeCardMenu();
+        if (cv && cv.toBlob) {
+          // Paint a solid background so the PNG is readable outside the app.
+          var out = document.createElement('canvas'); out.width = cv.width; out.height = cv.height;
+          var ctx = out.getContext('2d');
+          ctx.fillStyle = getComputedStyle(document.body).backgroundColor || '#ffffff';
+          ctx.fillRect(0, 0, out.width, out.height);
+          ctx.drawImage(cv, 0, 0);
+          out.toBlob(function (b2) { if (b2) downloadBlob(b2, 'attendance_chart_' + todayIso() + '.png'); });
+        }
+      }
+    });
+  }
+  function ensureCardMenuStyle() {
+    if (document.getElementById('hrms-card-menu-style')) return;
+    var st = document.createElement('style');
+    st.id = 'hrms-card-menu-style';
+    st.textContent =
+      '.hrms-card-menu-btn{background:none;border:0;font-size:16px;line-height:1;color:var(--text3,#94a3b8);cursor:pointer;padding:2px 6px;border-radius:6px;font-family:inherit}' +
+      '.hrms-card-menu-btn:hover,.hrms-card-menu-btn[aria-expanded="true"]{background:var(--bg3,#f1f5f9);color:var(--text,#0f172a)}' +
+      '.hrms-card-menu{position:fixed;z-index:10050;min-width:210px;padding:6px;border-radius:10px;background:var(--bg2,#fff);border:1px solid var(--border2,#e5e7eb);box-shadow:0 12px 30px rgba(15,23,42,.18)}' +
+      '.hrms-card-menu button{display:block;width:100%;text-align:left;padding:8px 10px;border:0;border-radius:7px;background:none;color:var(--text,#0f172a);font:inherit;font-size:13px;cursor:pointer}' +
+      '.hrms-card-menu button:hover,.hrms-card-menu button:focus{background:var(--bg3,#f1f5f9);outline:none}';
+    document.head.appendChild(st);
+  }
+  ensureCardMenuStyle();
+  document.addEventListener('click', function (e) {
+    var btn = e.target && e.target.closest ? e.target.closest('[data-dash-menu="attendance"]') : null;
+    if (btn) {
+      e.preventDefault(); e.stopPropagation();
+      if (cardMenu && cardMenu.btn === btn) closeCardMenu(); else openCardMenu(btn);
+      return;
+    }
+    if (cardMenu && !cardMenu.el.contains(e.target)) closeCardMenu();
+  }, true);
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && cardMenu) { var b = cardMenu.btn; closeCardMenu(); if (b) b.focus(); } });
+  window.addEventListener('resize', closeCardMenu);
+  window.addEventListener('scroll', closeCardMenu, true);
+
   function tryMount() {
     var path = window.location.pathname;
     var isDashboard = path === '/' || path === '/dashboard' || path === '' || path === '/index.html';
@@ -1471,8 +1591,93 @@
     }
   }
 
+  /* The three dots on "Today's Attendance & Workforce Status". They were only
+     drawn, with nothing behind them. They now open a small menu:
+       - Refresh now           re-reads the dashboard numbers
+       - Open Attendance       goes to the Attendance page (left out for a
+                               role that cannot open it, like "View All")
+       - Download chart        saves the bar chart as a PNG
+     One listener on the document handles it, because the dashboard redraws
+     its own HTML and a listener on the button itself would be lost. */
+  function closeAttOptions() {
+    var m = document.getElementById('hrms-dash-opts-menu');
+    if (m && m.parentNode) m.parentNode.removeChild(m);
+    var b = document.getElementById('dash-att-opts');
+    if (b) b.setAttribute('aria-expanded', 'false');
+  }
+  function openAttOptions(btn) {
+    closeAttOptions();
+    var canOpen = !(HIDE_DEAD && !usaCanOpen('/employees/attendance'));
+    var m = document.createElement('div');
+    m.id = 'hrms-dash-opts-menu';
+    m.setAttribute('role', 'menu');
+    m.innerHTML =
+      '<button type="button" role="menuitem" data-att-opt="refresh">↻ Refresh now</button>' +
+      (canOpen ? '<button type="button" role="menuitem" data-att-opt="open">→ Open Attendance</button>' : '') +
+      '<button type="button" role="menuitem" data-att-opt="png">⭳ Download chart (PNG)</button>';
+    document.body.appendChild(m);
+    var r = btn.getBoundingClientRect(), w = m.offsetWidth, h = m.offsetHeight;
+    var left = Math.max(8, Math.min(r.right - w, window.innerWidth - w - 8));
+    var top = r.bottom + 6;
+    if (top + h > window.innerHeight - 8) top = Math.max(8, r.top - h - 6);
+    m.style.left = left + 'px';
+    m.style.top = top + 'px';
+    btn.setAttribute('aria-expanded', 'true');
+    var first = m.querySelector('button');
+    if (first) first.focus();
+  }
+  function runAttOption(kind) {
+    if (kind === 'refresh') {
+      fetchDashboardStats();
+    } else if (kind === 'open') {
+      window.location.href = '/employees/attendance';
+    } else if (kind === 'png') {
+      var chart = state.charts && state.charts['attendance'];
+      var canvas = document.getElementById('dash-chart-attendance');
+      try {
+        var url = chart && chart.toBase64Image ? chart.toBase64Image('image/png', 1) : (canvas ? canvas.toDataURL('image/png') : '');
+        if (!url) return;
+        var d = new Date(), p = function (n) { return (n < 10 ? '0' : '') + n; };
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = 'attendance-today-' + d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + '.png';
+        document.body.appendChild(a); a.click(); a.parentNode.removeChild(a);
+      } catch (e) { console.error('[hrms-dashboard] chart download failed', e); }
+    }
+  }
+  function wireAttOptions() {
+    document.addEventListener('click', function (e) {
+      var t = e.target;
+      if (!t || !t.closest) return;
+      var item = t.closest('#hrms-dash-opts-menu [data-att-opt]');
+      if (item) { var kind = item.getAttribute('data-att-opt'); closeAttOptions(); runAttOption(kind); return; }
+      var btn = t.closest('#dash-att-opts');
+      if (btn) {
+        e.preventDefault();
+        if (document.getElementById('hrms-dash-opts-menu')) closeAttOptions(); else openAttOptions(btn);
+        return;
+      }
+      if (!t.closest('#hrms-dash-opts-menu')) closeAttOptions();
+    });
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && document.getElementById('hrms-dash-opts-menu')) {
+        closeAttOptions();
+        var b = document.getElementById('dash-att-opts'); if (b) b.focus();
+      }
+    });
+    // moving on (wheel, swipe, resize) closes it, like the other floating menus
+    ['wheel', 'touchmove'].forEach(function (ev) {
+      document.addEventListener(ev, function (e) {
+        if (e.target && e.target.closest && e.target.closest('#hrms-dash-opts-menu')) return;
+        closeAttOptions();
+      }, { capture: true, passive: true });
+    });
+    window.addEventListener('resize', closeAttOptions);
+  }
+
   function boot() {
     tryMount();
+    wireAttOptions();
 
     // Theme observer: update charts smoothly with zero DOM tear-down
     var themeObs = new MutationObserver(function (muts) {
