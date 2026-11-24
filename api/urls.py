@@ -449,6 +449,7 @@ urlpatterns = [
     path('onboarding/candidates/<int:pk>/work-authorization', onboarding_views.candidate_work_authorization),
     path('onboarding/candidates/<int:pk>/documents', onboarding_views.candidate_documents),
     path('onboarding/candidates/<int:pk>/documents/<int:doc_id>', onboarding_views.candidate_document_detail),
+    path('onboarding/candidates/<int:pk>/documents/<int:doc_id>/preview', onboarding_views.candidate_document_preview),
     path('onboarding/candidates/<int:pk>/document-versions/<str:doc_type>', onboarding_views.candidate_document_versions),
     path('onboarding/candidates/<int:pk>/verify', onboarding_views.candidate_verification),
     path('onboarding/candidates/<int:pk>/approve', onboarding_views.candidate_approval),

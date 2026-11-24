@@ -533,7 +533,11 @@
   function liveMinutes() {
     var rec = todayRec || {};
     var now = Date.now();
-    var checkedIn = !!rec.checkedIn && !rec.checkOut;
+    // The server's checkedIn already means "a session is open": it stays true when
+    // someone checks out and checks in again the same day, although checkOut then
+    // still holds the EARLIER session's time. Also requiring !rec.checkOut left the
+    // Working tile frozen at the stored minutes for the rest of that day.
+    var checkedIn = !!rec.checkedIn;
     var inAt = parseLocal(rec.checkIn);
     var brk = breakState();
     var onBreak = checkedIn && brk.on;
@@ -594,24 +598,12 @@
   function loadActivity() {
     var em = (actorEmail() || '').trim().toLowerCase();
     var url = em ? ('/api/attendance/events?email=' + encodeURIComponent(em)) : '/api/attendance/events';
+    // The server already filters by ?email=. When this person has no events yet
+    // (before their first check-in) the answer is simply an empty list: the old
+    // fallback asked for EVERY employee's events and filtered them here, which
+    // on a busy morning was the heaviest call on the page.
     api(url)
-      .then(function (rows) {
-        if (Array.isArray(rows) && rows.length) {
-          activityData = rows;
-        } else if (em) {
-          return api('/api/attendance/events').then(function (allRows) {
-            if (Array.isArray(allRows)) {
-              activityData = allRows.filter(function (r) {
-                return !r.email || String(r.email).toLowerCase() === em;
-              });
-            } else {
-              activityData = [];
-            }
-          }).catch(function () { activityData = []; });
-        } else {
-          activityData = Array.isArray(rows) ? rows : [];
-        }
-      })
+      .then(function (rows) { activityData = Array.isArray(rows) ? rows : []; })
       .then(function () { renderActivity(); })
       .catch(function () { var l = document.getElementById('haa-act-list'); if (l) l.innerHTML = '<div class="haa-empty">Could not load activity.</div>'; });
   }
@@ -677,8 +669,13 @@
   }
 
   var teamData = [];
-  function loadTeam() {
-    api('/api/attendance/team')
+  function loadTeam(hard) {
+    // hrms-status.js owns the one shared fetch of this list (it also needs it
+    // for the presence dots), so the two never ask separately.
+    var get = window.__hrmsTeamRows
+      ? window.__hrmsTeamRows(hard === false ? 'soft' : 'hard')
+      : api('/api/attendance/team');
+    get
       .then(function (rows) { teamData = Array.isArray(rows) ? rows : []; renderTeam(); })
       .catch(function () { var l = document.getElementById('haa-team-list'); if (l) l.innerHTML = '<div class="haa-empty">Could not load team status.</div>'; });
   }
@@ -1246,8 +1243,26 @@
     }).observe(document.body, { childList: true, subtree: true });
     window.addEventListener('popstate', tick);
     var _rz; window.addEventListener('resize', function () { clearTimeout(_rz); _rz = setTimeout(function () { if (onCheckinPage()) ensureLayout(); }, 150); });
-    window.addEventListener('hrmsAttendanceSynced', function () { loadOvertime(); loadWfh(); loadApprovals(); loadOffsite(); loadActivity(); loadTeam(); });
-    window.addEventListener('hrmsContextUpdate', function () { loadOvertime(); loadWfh(); loadApprovals(); loadOffsite(); loadActivity(); loadTeam(); });
+    // One check-in fires several events within moments of each other
+    // (hrmsCheckinToggle, hrmsAttendanceSynced, hrmsContextUpdate, the click
+    // handler below), and each used to run its own full set of requests. Collect
+    // what is wanted for 300 ms and fetch each thing once.
+    var refreshNeed = {}, refreshTimer = null;
+    function refreshSoon(parts, delay) {
+      parts.forEach(function (p) { refreshNeed[p] = true; });
+      if (refreshTimer) return;
+      refreshTimer = setTimeout(function () {
+        var n = refreshNeed; refreshNeed = {}; refreshTimer = null;
+        if (n.ot) loadOvertime();
+        if (n.wfh) loadWfh();
+        if (n.appr) loadApprovals();
+        if (n.off) loadOffsite();
+        if (n.act) loadActivity();
+        if (n.team) loadTeam();
+      }, delay || 300);
+    }
+    window.addEventListener('hrmsAttendanceSynced', function () { refreshSoon(['ot', 'wfh', 'appr', 'off', 'act', 'team']); });
+    window.addEventListener('hrmsContextUpdate', function () { refreshSoon(['ot', 'wfh', 'appr', 'off', 'act', 'team']); });
     // The app's own Switch to Remote / Switch to Office post the same
     // remote-switch event our button does, and the server refuses it without
     // an approved WFH request. That card has nowhere to print the reason, so
@@ -1258,10 +1273,10 @@
       if (onCheckinPage() && showAttMsg(msg, 'err')) e.preventDefault();
     });
     // Check-in toggled (topbar switch) → refresh totals + team status + activity.
-    window.addEventListener('hrmsCheckinToggle', function () { loadOvertime(); loadTeam(); loadActivity(); });
+    window.addEventListener('hrmsCheckinToggle', function () { refreshSoon(['ot', 'team', 'act']); });
     function refreshLive() {
       if (document.hidden || !onCheckinPage()) return;
-      if (document.getElementById(ID.team)) { loadTeam(); loadActivity(); loadOvertime(); }
+      if (document.getElementById(ID.team)) { loadTeam(false); loadActivity(); loadOvertime(); }
     }
     // Requests and approvals change when someone ELSE acts (an approver decides,
     // an employee asks). They were only fetched when the page opened, so every
@@ -1271,8 +1286,15 @@
       if (document.hidden || !onCheckinPage() || !document.getElementById(ID.wfh)) return;
       loadWfh(); loadApprovals(); loadOffsite();
     }
-    setInterval(refreshLive, 15000);
-    setInterval(refreshRequests, 5000);
+    // Every browser used to poll in step (15 s and 5 s timers), so a crowd that
+    // signed in together hit the server together. Same cadence, randomised per
+    // browser and per round; the team list comes from the shared fetch in
+    // hrms-status.js, so the 15 s round costs one cached request.
+    function every(fn, base, spread) {
+      (function loop() { setTimeout(function () { fn(); loop(); }, base + Math.random() * spread); })();
+    }
+    every(refreshLive, 15000, 6000);
+    every(refreshRequests, 10000, 4000);
     document.addEventListener('visibilitychange', function () { if (!document.hidden) { refreshRequests(); refreshLive(); } });
     window.addEventListener('focus', function () { refreshRequests(); refreshLive(); });
     // Missed punches / regularizations: re-fetch every minute (the server
@@ -1293,7 +1315,7 @@
       if (!onCheckinPage()) return;
       var btn = e.target && e.target.closest ? e.target.closest('button') : null;
       if (btn && /break|remote|office|check|clock/i.test(btn.textContent || '')) {
-        setTimeout(function () { loadOvertime(); loadActivity(); }, 1200);
+        setTimeout(function () { refreshSoon(['ot', 'act']); }, 1200);
       }
     }, true);
     startLocationTracking();

@@ -114,7 +114,19 @@
   var EVERSOFT_ASSETS = ['Laptop', 'Monitor', 'Mouse', 'Keyboard', 'Dock', 'Bag', 'Headset','Office365','Email_ID','Software License','ID_Card','Desktop','Mobile'];
   var ASSET_STATUSES = ['Assigned', 'Returned', 'Lost', 'Damaged','pending', 'Delivered'];
   var MAX_MB = 10;
-  var ALLOWED_MIME = ['application/pdf', 'image/png', 'image/jpeg'];
+  var WORD_MIMES = ['application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
+  var ALLOWED_MIME = ['application/pdf', 'image/png', 'image/jpeg'].concat(WORD_MIMES);
+  var EXT_MIME = {
+    pdf: 'application/pdf', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
+    doc: 'application/msword', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+  };
+  // The file's type if we accept it, else '' . Browsers often report NO type for
+  // Word files (and some report application/octet-stream), so the extension decides then.
+  function docMime(f) {
+    if (f && ALLOWED_MIME.indexOf(f.type) !== -1) return f.type;
+    var m = /\.([a-z0-9]+)$/i.exec((f && f.name) || '');
+    return (m && EXT_MIME[m[1].toLowerCase()]) || '';
+  }
   var PAGE_SIZES = [10, 15, 25, 50, 100];
 
   /* Which drawer tab each sidebar page lands on. */
@@ -668,60 +680,214 @@
     ['payrollPending', 'Payroll Pending'],
   ];
 
+  // base64 -> a blob: URL. A 10 MB file as a data: URL is a ~13 MB string held in the
+  // page and some browsers will not show a PDF from one; a blob URL is the file itself.
+  function b64ToBlobUrl(b64, mime) {
+    try {
+      var bin = atob(b64), n = bin.length, bytes = new Uint8Array(n);
+      for (var i = 0; i < n; i++) bytes[i] = bin.charCodeAt(i);
+      return URL.createObjectURL(new Blob([bytes], { type: mime }));
+    } catch (_) {
+      return 'data:' + mime + ';base64,' + b64;
+    }
+  }
+
+  /* The document viewer. Always inside the app, never a new browser tab (a tab
+     opened with an empty address is a blank page outside the site):
+     PDFs, images and Word files are shown in place; anything else offers Download.
+     The Download button stays at the top right of the viewer for every type.
+     d = { fileData (base64), fileMime, fileName, docType?, version?, uploadedAt?, _cid?, _did? } */
+  function showDocModal(d) {
+    if (!d || !d.fileData) { toast('Document data not available', 'warn'); return; }
+    var prev = document.getElementById('hrms-ob-doc-modal');
+    if (prev) prev.remove();
+    var modal = document.createElement('div');
+    modal.id = 'hrms-ob-doc-modal';
+    modal.className = 'ob-ov';
+    modal.style.zIndex = '99999';
+    var mime = d.fileMime || 'application/octet-stream';
+    var src = b64ToBlobUrl(d.fileData, mime);
+    var isPdf = mime === 'application/pdf' || (d.fileName || '').toLowerCase().endsWith('.pdf');
+    var isImg = mime.indexOf('image/') === 0 || /\.(png|jpg|jpeg|gif|webp|svg)$/i.test(d.fileName || '');
+
+    var isWord = WORD_MIMES.indexOf(mime) !== -1 || /\.docx?$/i.test(d.fileName || '');
+    var wordHost = isWord && d._cid && d._did;
+    var bodyContent = '';
+    if (wordHost) {
+      bodyContent = '<div id="ob-doc-word" style="min-height:40vh;display:flex;align-items:center;justify-content:center;color:var(--muted,#8a9bb8);font-size:13px">Opening document…</div>';
+    } else if (isPdf) {
+      bodyContent = '<iframe src="' + src + '" style="border:0;width:100%;height:78vh;border-radius:6px;background:#fff"></iframe>';
+    } else if (isImg) {
+      bodyContent = '<div style="text-align:center;max-height:78vh;overflow:auto;padding:12px;background:rgba(0,0,0,0.15);border-radius:8px;display:flex;align-items:center;justify-content:center">' +
+                    '<img src="' + src + '" style="max-width:100%;max-height:74vh;object-fit:contain;border-radius:6px;box-shadow:0 4px 20px rgba(0,0,0,0.3)" alt="' + esc(d.fileName || 'Screenshot') + '">' +
+                    '</div>';
+    } else {
+      bodyContent = '<div style="padding:48px 20px;text-align:center">' +
+                    '<div style="font-size:36px;margin-bottom:12px">📄</div>' +
+                    '<p style="font-size:14px;font-weight:600;margin-bottom:6px;color:var(--text,#ffffff)">' + esc(d.fileName || 'Document') + '</p>' +
+                    '<p style="font-size:12.5px;margin:0 0 16px;color:var(--muted,#8a9bb8)">This file type cannot be shown in the browser. Download it to open it.</p>' +
+                    '<a href="' + src + '" download="' + esc(d.fileName || 'document') + '" class="ob-btn primary" style="text-decoration:none">Download File</a></div>';
+    }
+
+    modal.innerHTML =
+      '<div style="position:fixed;inset:0;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box">' +
+        '<div style="background:var(--bg2,#141b26);border:1px solid var(--border,#2a3446);border-radius:14px;width:min(920px,96vw);max-height:92vh;display:flex;flex-direction:column;box-shadow:0 16px 48px rgba(0,0,0,0.55);overflow:hidden">' +
+          '<div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--border,#2a3446);gap:12px">' +
+            '<div style="flex:1;min-width:0">' +
+              '<h3 style="margin:0;font-size:15px;font-weight:700;color:var(--text,#ffffff);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(d.fileName || d.docType || 'Document Preview') + '</h3>' +
+              '<span style="font-size:11.5px;color:var(--muted,#8a9bb8)">Version ' + (d.version || 1) + (d.uploadedAt ? ' • ' + fmtDateTime(d.uploadedAt) : '') + '</span>' +
+            '</div>' +
+            '<div style="display:flex;align-items:center;gap:8px;flex-shrink:0">' +
+              '<a href="' + src + '" download="' + esc(d.fileName || 'download') + '" class="ob-btn" style="text-decoration:none;padding:5px 11px;font-size:12px">Download</a>' +
+              '<button class="ob-x" id="ob-doc-modal-close" style="font-size:22px;line-height:1;cursor:pointer;padding:0 4px" title="Close">×</button>' +
+            '</div>' +
+          '</div>' +
+          '<div style="padding:14px;overflow-y:auto;flex:1">' + bodyContent + '</div>' +
+        '</div>' +
+      '</div>';
+
+    document.body.appendChild(modal);
+    function closeModal() {
+      modal.remove();
+      if (src.indexOf('blob:') === 0) { try { URL.revokeObjectURL(src); } catch (_) {} }
+      document.removeEventListener('keydown', onKey);
+    }
+    function onKey(e) { if (e.key === 'Escape') closeModal(); }
+    document.addEventListener('keydown', onKey);
+    modal.addEventListener('click', function (e) {
+      if (e.target === modal || e.target.id === 'ob-doc-modal-close' || e.target === modal.firstChild) closeModal();
+    });
+    var closeBtn = modal.querySelector('#ob-doc-modal-close');
+    if (closeBtn) closeBtn.addEventListener('click', closeModal);
+
+    // Word files: the server turns the file into safe HTML, shown in a sandboxed frame (no scripts).
+    if (wordHost) {
+      api('/onboarding/candidates/' + d._cid + '/documents/' + d._did + '/preview').then(function (r) {
+        var host = modal.querySelector('#ob-doc-word');
+        if (!host) return;                                  // viewer was closed meanwhile
+        host.style.cssText = 'padding:0';
+        host.innerHTML = '<iframe sandbox title="' + esc(d.fileName || 'Document') + '" style="border:0;width:100%;height:78vh;border-radius:6px;background:#e6e9ef"></iframe>';
+        host.firstChild.srcdoc = r.html;
+      }).catch(function (e) {
+        var host = modal.querySelector('#ob-doc-word');
+        if (!host) return;
+        host.style.cssText = 'padding:40px 20px;text-align:center;display:block';
+        host.innerHTML = '<div style="font-size:36px;margin-bottom:12px">📄</div>' +
+          '<p style="font-size:14px;font-weight:600;margin-bottom:6px;color:var(--text,#ffffff)">' + esc(d.fileName || 'Document') + '</p>' +
+          '<p style="font-size:12.5px;margin:0;color:var(--muted,#8a9bb8)">' + esc((e && e.message) || 'This file could not be previewed.') + ' Use Download (top right) to open it.</p>';
+      });
+    }
+  }
+
+  /* A dialog in the middle of the page (never the browser's alert box, which sits
+     at the top of the window, outside the site). Returns the root element. */
+  function showInfoModal(title, subtitle, bodyHtml, wide) {
+    var prev = document.getElementById('hrms-ob-info-modal');
+    if (prev) prev.remove();
+    var modal = document.createElement('div');
+    modal.id = 'hrms-ob-info-modal';
+    modal.className = 'ob-ov';
+    modal.style.zIndex = '99990';
+    modal.innerHTML =
+      '<div data-bd style="position:fixed;inset:0;background:rgba(0,0,0,0.65);display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box">' +
+        '<div role="dialog" aria-modal="true" style="background:var(--bg2,#141b26);border:1px solid var(--border,#2a3446);border-radius:14px;width:min(' + (wide ? 880 : 640) + 'px,96vw);max-height:86vh;display:flex;flex-direction:column;box-shadow:0 16px 48px rgba(0,0,0,0.55);overflow:hidden">' +
+          '<div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--border,#2a3446);gap:12px">' +
+            '<div style="flex:1;min-width:0">' +
+              '<h3 style="margin:0;font-size:15px;font-weight:700;color:var(--text,#ffffff)">' + esc(title) + '</h3>' +
+              (subtitle ? '<span style="font-size:11.5px;color:var(--muted,#8a9bb8)">' + esc(subtitle) + '</span>' : '') +
+            '</div>' +
+            '<button class="ob-x" data-close style="font-size:22px;line-height:1;cursor:pointer;padding:0 4px" title="Close">×</button>' +
+          '</div>' +
+          '<div style="padding:14px 18px;overflow:auto;flex:1">' + bodyHtml + '</div>' +
+          '<div style="display:flex;justify-content:flex-end;padding:12px 18px;border-top:1px solid var(--border,#2a3446)">' +
+            '<button class="ob-btn primary" data-close style="padding:6px 18px">Close</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(modal);
+    function close() { modal.remove(); document.removeEventListener('keydown', onKey); }
+    function onKey(e) {
+      // the document viewer opens on top of this one: Esc closes the top-most first
+      if (e.key === 'Escape' && !document.getElementById('hrms-ob-doc-modal')) close();
+    }
+    document.addEventListener('keydown', onKey);
+    modal.addEventListener('click', function (e) {
+      if (e.target.hasAttribute('data-close') || e.target.hasAttribute('data-bd')) close();
+    });
+    return modal;
+  }
+
+  /* A yes/no question in the middle of the page, in place of the browser's confirm box
+     (which opens at the top of the window, outside the site).
+     opts: { title, yes (button text), danger (red button) }. onYes runs only on a yes. */
+  function askConfirm(message, opts, onYes) {
+    opts = opts || {};
+    var prev = document.getElementById('hrms-ob-confirm');
+    if (prev) prev.remove();
+    var box = document.createElement('div');
+    box.id = 'hrms-ob-confirm';
+    box.className = 'ob-ov';
+    box.style.zIndex = '100001';
+    box.innerHTML =
+      '<div data-bd style="position:fixed;inset:0;background:rgba(0,0,0,0.65);display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box">' +
+        '<div role="alertdialog" aria-modal="true" style="background:var(--bg2,#141b26);border:1px solid var(--border,#2a3446);border-radius:14px;width:min(440px,94vw);box-shadow:0 16px 48px rgba(0,0,0,0.55);overflow:hidden">' +
+          '<div style="padding:18px 20px 6px">' +
+            '<h3 style="margin:0 0 8px;font-size:16px;font-weight:700;color:var(--text,#ffffff)">' + esc(opts.title || 'Please confirm') + '</h3>' +
+            '<p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--text2,#c3cde0)">' + esc(message) + '</p>' +
+          '</div>' +
+          '<div style="display:flex;justify-content:flex-end;gap:10px;padding:16px 20px 18px">' +
+            '<button class="ob-btn" data-no style="padding:7px 18px">Cancel</button>' +
+            '<button class="ob-btn ' + (opts.danger ? '' : 'primary') + '" data-yes style="padding:7px 18px;' +
+              (opts.danger ? 'background:var(--danger,#f75f4f);border-color:var(--danger,#f75f4f);color:#fff;font-weight:700' : '') + '">' + esc(opts.yes || 'OK') + '</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(box);
+    function close() { box.remove(); document.removeEventListener('keydown', onKey, true); }
+    function onKey(e) {
+      if (e.key === 'Escape') { e.stopPropagation(); close(); }
+    }
+    document.addEventListener('keydown', onKey, true);       // capture: Esc answers this question first
+    box.addEventListener('click', function (e) {
+      if (e.target.hasAttribute('data-yes')) { close(); onYes(); }
+      else if (e.target.hasAttribute('data-no') || e.target.hasAttribute('data-bd')) close();
+    });
+    var yes = box.querySelector('[data-yes]');
+    if (yes) yes.focus();
+  }
+
+  // Version history of one document: every upload, newest first, each one viewable.
+  function showDocHistory(cid, docType, versions) {
+    var rows = (versions || []).map(function (v) {
+      return '<tr>' +
+        '<td style="padding:8px 10px;font-weight:700">v' + esc(v.version) + '</td>' +
+        '<td style="padding:8px 10px;word-break:break-word">' + esc(v.fileName || '—') + '</td>' +
+        '<td style="padding:8px 10px">' + (v.isActive
+          ? '<span style="color:var(--success,#22d3a5);font-weight:700">Current</span>'
+          : '<span style="color:var(--muted,#8a9bb8)">Superseded</span>') + '</td>' +
+        '<td style="padding:8px 10px;white-space:nowrap">' + esc(fmtDateTime(v.uploadedAt)) + '</td>' +
+        '<td style="padding:8px 10px;word-break:break-all">' + esc(v.uploadedBy || '—') + '</td>' +
+        '<td style="padding:8px 10px;text-align:right"><button class="ob-btn" style="padding:3px 9px" data-hv="' + esc(v.id) + '">View</button></td>' +
+      '</tr>';
+    }).join('');
+    var th = 'padding:7px 10px;text-align:left;font-size:11px;letter-spacing:.4px;text-transform:uppercase;color:var(--muted,#8a9bb8);border-bottom:1px solid var(--border,#2a3446)';
+    var body = rows
+      ? '<table style="width:100%;border-collapse:collapse;font-size:13px;color:var(--text,#fff)"><thead><tr>' +
+          '<th style="' + th + '">Version</th><th style="' + th + '">File</th><th style="' + th + '">Status</th>' +
+          '<th style="' + th + '">Uploaded</th><th style="' + th + '">By</th><th style="' + th + '"></th></tr></thead><tbody>' + rows + '</tbody></table>'
+      : '<p style="margin:8px 0;color:var(--muted,#8a9bb8)">No versions.</p>';
+    var modal = showInfoModal('Document history', (versions && versions.length ? versions.length + ' version' + (versions.length > 1 ? 's' : '') : '') , body, true);
+    modal.querySelectorAll('[data-hv]').forEach(function (b) {
+      b.addEventListener('click', function () { previewCandidateDoc(cid, b.getAttribute('data-hv')); });
+    });
+  }
+
   function previewCandidateDoc(cid, did) {
     if (!cid || !did) return;
     toast('Loading preview…', 'ok');
-    api('/onboarding/candidates/' + cid + '/documents/' + did).then(function (d) {
-      if (!d || !d.fileData) { toast('Document data not available', 'warn'); return; }
-      var prev = document.getElementById('hrms-ob-doc-modal');
-      if (prev) prev.remove();
-      var modal = document.createElement('div');
-      modal.id = 'hrms-ob-doc-modal';
-      modal.className = 'ob-ov';
-      modal.style.zIndex = '99999';
-      var mime = d.fileMime || 'application/octet-stream';
-      var src = 'data:' + mime + ';base64,' + d.fileData;
-      var isPdf = mime === 'application/pdf' || (d.fileName || '').toLowerCase().endsWith('.pdf');
-      var isImg = mime.indexOf('image/') === 0 || /\.(png|jpg|jpeg|gif|webp|svg)$/i.test(d.fileName || '');
-
-      var bodyContent = '';
-      if (isPdf) {
-        bodyContent = '<iframe src="' + src + '" style="border:0;width:100%;height:78vh;border-radius:6px;background:#fff"></iframe>';
-      } else if (isImg) {
-        bodyContent = '<div style="text-align:center;max-height:78vh;overflow:auto;padding:12px;background:rgba(0,0,0,0.15);border-radius:8px;display:flex;align-items:center;justify-content:center">' +
-                      '<img src="' + src + '" style="max-width:100%;max-height:74vh;object-fit:contain;border-radius:6px;box-shadow:0 4px 20px rgba(0,0,0,0.3)" alt="' + esc(d.fileName || 'Screenshot') + '">' +
-                      '</div>';
-      } else {
-        bodyContent = '<div style="padding:48px 20px;text-align:center">' +
-                      '<div style="font-size:36px;margin-bottom:12px">📄</div>' +
-                      '<p style="font-size:14px;font-weight:600;margin-bottom:16px;color:var(--text,#ffffff)">' + esc(d.fileName || 'Document') + '</p>' +
-                      '<a href="' + src + '" download="' + esc(d.fileName || 'document') + '" class="ob-btn primary" style="text-decoration:none">Download File</a></div>';
-      }
-
-      modal.innerHTML =
-        '<div style="position:fixed;inset:0;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box">' +
-          '<div style="background:var(--bg2,#141b26);border:1px solid var(--border,#2a3446);border-radius:14px;width:min(920px,96vw);max-height:92vh;display:flex;flex-direction:column;box-shadow:0 16px 48px rgba(0,0,0,0.55);overflow:hidden">' +
-            '<div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--border,#2a3446);gap:12px">' +
-              '<div style="flex:1;min-width:0">' +
-                '<h3 style="margin:0;font-size:15px;font-weight:700;color:var(--text,#ffffff);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(d.fileName || d.docType || 'Document Preview') + '</h3>' +
-                '<span style="font-size:11.5px;color:var(--muted,#8a9bb8)">Version ' + (d.version || 1) + (d.uploadedAt ? ' • ' + fmtDateTime(d.uploadedAt) : '') + '</span>' +
-              '</div>' +
-              '<div style="display:flex;align-items:center;gap:8px;flex-shrink:0">' +
-                '<a href="' + src + '" download="' + esc(d.fileName || 'download') + '" class="ob-btn" style="text-decoration:none;padding:5px 11px;font-size:12px">Download</a>' +
-                '<button class="ob-x" id="ob-doc-modal-close" style="font-size:22px;line-height:1;cursor:pointer;padding:0 4px" title="Close">×</button>' +
-              '</div>' +
-            '</div>' +
-            '<div style="padding:14px;overflow-y:auto;flex:1">' + bodyContent + '</div>' +
-          '</div>' +
-        '</div>';
-
-      document.body.appendChild(modal);
-      modal.addEventListener('click', function (e) {
-        if (e.target === modal || e.target.id === 'ob-doc-modal-close') modal.remove();
-      });
-      var closeBtn = modal.querySelector('#ob-doc-modal-close');
-      if (closeBtn) closeBtn.addEventListener('click', function () { modal.remove(); });
-    }).catch(function (e) { toast(e.message || 'Could not load document', 'error'); });
+    api('/onboarding/candidates/' + cid + '/documents/' + did)
+      .then(function (d) { d._cid = cid; d._did = did; showDocModal(d); })
+      .catch(function (e) { toast(e.message || 'Could not load document', 'error'); });
   }
 
   function renderRecentCandidates(list) {
@@ -1406,7 +1572,7 @@
       '<div class="ob-panel"><h3>Document Rules</h3>' + rows([
         ['Mandatory', badge('SSN', 'err') + ' ' + badge('Driver License OR State ID', 'err')],
         ['Optional', badge('Visa', 'neutral') + ' ' + badge('I-94', 'neutral')],
-        ['Allowed types', 'PDF, PNG, JPG'],
+        ['Allowed types', 'PDF, Word (DOC/DOCX), PNG, JPG'],
         ['Maximum size', MAX_MB + ' MB'],
         ['Versioning', 'Re-upload supersedes; history kept'],
       ]) + '</div>' +
@@ -1433,6 +1599,26 @@
   ];
 
 
+  /* The address bar always says what is on screen, so a refresh (F5) brings back the
+     same view instead of the bare list: the open candidate panel and its tab, the search
+     text, the page number and the two filters. replaceState: no extra Back-button steps,
+     and React Router does not observe it. Read back by readRestore() below. */
+  function syncUrl() {
+    var page = pageFor(location.pathname);
+    if (page === null) return;                       // not on one of our pages
+    var q = [];
+    function add(k, v) { q.push(k + '=' + encodeURIComponent(v)); }
+    if (state.detail) { add('candidate', state.detail.id); add('tab', state.tab); }
+    if (state.search) add('q', state.search);
+    if (state.pg > 1) add('page', state.pg);
+    if (state.filters.status) add('status', state.filters.status);
+    if (state.filters.authType) add('auth', state.filters.authType);
+    var url = BASE + page + (q.length ? '?' + q.join('&') : '');
+    if (location.pathname + location.search !== url) {
+      try { history.replaceState(history.state, '', url); } catch (_) {}
+    }
+  }
+
   function openDetail(id, tab) {
     state.tab = tab || 'overview';
     api('/onboarding/candidates/' + id).then(function (c) {
@@ -1445,6 +1631,7 @@
     var ov = document.getElementById(ID.drawer);
     if (ov) ov.remove();
     state.detail = null;
+    syncUrl();
   }
 
   function renderDrawer() {
@@ -1479,6 +1666,7 @@
       b.addEventListener('click', function () { state.tab = b.dataset.tab; renderDrawer(); });
     });
     renderTab();
+    syncUrl();
   }
 
   function tabBody() { return document.getElementById('ob-tabbody'); }
@@ -1594,11 +1782,12 @@
       var errEl = el.querySelector('#ob-e');
       if (ns === c.status) { errEl.textContent = 'That is already the current status.'; return; }
       // Confirmation dialog before a manual status change, per the workflow spec.
-      if (!confirm('Change status of ' + (c.name || c.email) + ' to "' + ns + '"?')) return;
-      sBtn.disabled = true; errEl.textContent = '';
-      api('/onboarding/candidates/' + c.id, { method: 'PATCH', body: { status: ns } })
-        .then(function () { toast('Status changed to ' + ns); refreshDetail(); })
-        .catch(function (e) { sBtn.disabled = false; errEl.textContent = e.message; });
+      askConfirm('Change status of ' + (c.name || c.email) + ' to "' + ns + '"?', { title: 'Change status', yes: 'Change status' }, function () {
+        sBtn.disabled = true; errEl.textContent = '';
+        api('/onboarding/candidates/' + c.id, { method: 'PATCH', body: { status: ns } })
+          .then(function () { toast('Status changed to ' + ns); refreshDetail(); })
+          .catch(function (e) { sBtn.disabled = false; errEl.textContent = e.message; });
+      });
     });
 
     var act = el.querySelector('#ob-activate');
@@ -1610,10 +1799,11 @@
     });
     var del = el.querySelector('#ob-del');
     if (del) del.addEventListener('click', function () {
-      if (!confirm('Delete ' + (c.name || c.email) + '? The audit trail is kept.')) return;
-      api('/onboarding/candidates/' + c.id, { method: 'DELETE' })
-        .then(function () { toast('Candidate deleted'); closeDrawer(); loadCandidates(); })
-        .catch(function (e) { toast(e.message, 'error'); });
+      askConfirm('Delete ' + (c.name || c.email) + '? The audit trail is kept.', { title: 'Delete candidate', yes: 'Delete', danger: true }, function () {
+        api('/onboarding/candidates/' + c.id, { method: 'DELETE' })
+          .then(function () { toast('Candidate deleted'); closeDrawer(); loadCandidates(); })
+          .catch(function (e) { toast(e.message, 'error'); });
+      });
     });
   }
 
@@ -2037,8 +2227,8 @@
               MAX_DOC_LABEL + '" placeholder="Name this document (e.g. Work Permit), then choose the file below">' +
             '<div class="ob-dz" id="ob-dz"><div class="big">⬆</div>' +
             '<div id="ob-dz-txt"><b>Drag &amp; drop</b> files here, or click to choose</div>' +
-            '<div class="ob-sub" style="margin:6px 0 0">PDF, PNG or JPG · max ' + MAX_MB + ' MB each</div></div>' +
-            '<input type="file" id="ob-file" accept=".pdf,.png,.jpg,.jpeg" multiple hidden>' +
+            '<div class="ob-sub" style="margin:6px 0 0">PDF, Word, PNG or JPG · max ' + MAX_MB + ' MB each</div></div>' +
+            '<input type="file" id="ob-file" accept=".pdf,.doc,.docx,.png,.jpg,.jpeg" multiple hidden>' +
             '<div class="ob-bar" id="ob-bar" style="display:none"><i></i></div>' +
             '<div class="ob-err" id="ob-de"></div>' +
           '</div>');
@@ -2059,17 +2249,19 @@
       el.querySelectorAll('[data-del-checklist-idx]').forEach(function (btn) {
         btn.addEventListener('click', function () {
           var idx = parseInt(btn.dataset.delChecklistIdx);
-          if (!confirm('Remove this document slot from the checklist? Any already uploaded file will remain in custom uploads.')) return;
-          requestedDocsList.splice(idx, 1);
+          askConfirm('Remove this document slot from the checklist? Any already uploaded file will remain in custom uploads.',
+            { title: 'Remove document slot', yes: 'Remove', danger: true }, function () {
+            requestedDocsList.splice(idx, 1);
 
-          api('/onboarding/candidates/' + c.id, {
-            method: 'PATCH',
-            body: { requestedDocs: requestedDocsList }
-          }).then(function (updatedCandidate) {
-            toast('Document slot removed');
-            c.requestedDocs = updatedCandidate.requestedDocs;
-            renderTab();
-          }).catch(function (err) { alert(err.message); });
+            api('/onboarding/candidates/' + c.id, {
+              method: 'PATCH',
+              body: { requestedDocs: requestedDocsList }
+            }).then(function (updatedCandidate) {
+              toast('Document slot removed');
+              c.requestedDocs = updatedCandidate.requestedDocs;
+              renderTab();
+            }).catch(function (err) { toast(err.message, 'error'); });
+          });
         });
       });
 
@@ -2081,7 +2273,7 @@
         }).then(function (updatedCandidate) {
           c.requestedDocs = updatedCandidate.requestedDocs;
           toast('Checklist configurations updated');
-        }).catch(function (err) { alert(err.message); });
+        }).catch(function (err) { toast(err.message, 'error'); });
       }
 
       el.querySelectorAll('.chk-send').forEach(function (chk) {
@@ -2160,36 +2352,25 @@
       });
 
       el.querySelectorAll('[data-dl]').forEach(function (b) {
-        b.addEventListener('click', function () {
-          api('/onboarding/candidates/' + c.id + '/documents/' + b.dataset.dl).then(function (d) {
-            var w = window.open('');
-            if (!w) { toast('Popup blocked — allow popups to preview', 'warn'); return; }
-            var src = 'data:' + d.fileMime + ';base64,' + d.fileData;
-            w.document.write(d.fileMime === 'application/pdf'
-              ? '<iframe src="' + src + '" style="border:0;width:100%;height:100vh"></iframe>'
-              : '<img src="' + src + '" style="max-width:100%">');
-          }).catch(function (e) { toast(e.message, 'error'); });
-        });
+        b.addEventListener('click', function () { previewCandidateDoc(c.id, b.dataset.dl); });
       });
 
       el.querySelectorAll('[data-hist]').forEach(function (b) {
         b.addEventListener('click', function () {
-          api('/onboarding/candidates/' + c.id + '/document-versions/' + b.dataset.hist).then(function (vs) {
-            alert((vs || []).map(function (v) {
-              return 'v' + v.version + ' · ' + (v.fileName || '—') + ' · ' +
-                     (v.isActive ? 'current' : 'superseded') + ' · ' + fmtDateTime(v.uploadedAt) +
-                     ' · ' + v.uploadedBy;
-            }).join('\n') || 'No versions.');
-          });
+          api('/onboarding/candidates/' + c.id + '/document-versions/' + b.dataset.hist)
+            .then(function (vs) { showDocHistory(c.id, b.dataset.hist, vs); })
+            .catch(function (e) { toast(e.message || 'Could not load the history', 'error'); });
         });
       });
 
       el.querySelectorAll('[data-rm]').forEach(function (b) {
         b.addEventListener('click', function () {
-          if (!confirm('Delete this document? The previous version is restored if there is one.')) return;
-          api('/onboarding/candidates/' + c.id + '/documents/' + b.dataset.rm, { method: 'DELETE' })
-            .then(function () { toast('Document deleted'); renderTab(); })
-            .catch(function (e) { toast(e.message, 'error'); });
+          askConfirm('Delete this document? The previous version is restored if there is one.',
+            { title: 'Delete document', yes: 'Delete', danger: true }, function () {
+            api('/onboarding/candidates/' + c.id + '/documents/' + b.dataset.rm, { method: 'DELETE' })
+              .then(function () { toast('Document deleted'); renderTab(); })
+              .catch(function (e) { toast(e.message, 'error'); });
+          });
         });
       });
 
@@ -2269,9 +2450,9 @@
             return;
           }
         }
-        var invalid = files.filter(function (f) { return ALLOWED_MIME.indexOf(f.type) === -1; });
+        var invalid = files.filter(function (f) { return !docMime(f); });
         if (invalid.length) {
-          errEl.textContent = 'Only PDF, PNG or JPG files are allowed.';
+          errEl.textContent = 'Only PDF, Word (DOC/DOCX), PNG or JPG files are allowed.';
           return;
         }
         var big = files.filter(function (f) { return f.size > MAX_MB * 1024 * 1024; });
@@ -2302,7 +2483,7 @@
                 isCustom: isCustom,
                 label: label,
                 fileName: f.name,
-                fileMime: f.type,
+                fileMime: docMime(f),
                 fileData: base64,
               },
             }).then(function () {
@@ -2821,26 +3002,19 @@
       if (isAdmin()) {
         el.querySelectorAll('[data-del-tmpl]').forEach(function (b) {
           b.addEventListener('click', function () {
-            if (!confirm('Delete this form template? Active candidates will no longer be assigned this form.')) return;
-            api('/onboarding/forms/' + b.dataset.delTmpl, { method: 'DELETE' })
-              .then(function () { toast('Template deleted'); renderTab(); })
-              .catch(function (err) { alert(err.message); });
+            askConfirm('Delete this form template? Active candidates will no longer be assigned this form.',
+              { title: 'Delete form template', yes: 'Delete', danger: true }, function () {
+              api('/onboarding/forms/' + b.dataset.delTmpl, { method: 'DELETE' })
+                .then(function () { toast('Template deleted'); renderTab(); })
+                .catch(function (err) { toast(err.message, 'error'); });
+            });
           });
         });
       }
 
       // Event handlers to view uploaded checklist documents
       el.querySelectorAll('[data-dl]').forEach(function (b) {
-        b.addEventListener('click', function () {
-          api('/onboarding/candidates/' + c.id + '/documents/' + b.dataset.dl).then(function (d) {
-            var w = window.open('');
-            if (!w) { toast('Popup blocked — allow popups to preview', 'warn'); return; }
-            var src = 'data:' + d.fileMime + ';base64,' + d.fileData;
-            w.document.write(d.fileMime === 'application/pdf'
-              ? '<iframe src="' + src + '" style="border:0;width:100%;height:100vh"></iframe>'
-              : '<img src="' + src + '" style="max-width:100%">');
-          }).catch(function (e) { toast(e.message, 'error'); });
-        });
+        b.addEventListener('click', function () { previewCandidateDoc(c.id, b.dataset.dl); });
       });
 
       // Event handlers for viewing signed PDF
@@ -2848,10 +3022,8 @@
         b.addEventListener('click', function () {
           api('/onboarding/candidates/' + c.id + '/submissions/' + b.dataset.viewPdf + '/pdf')
             .then(function (sub) {
-              var w = window.open('');
-              if (!w) { toast('Popup blocked — allow popups to preview', 'warn'); return; }
-              var src = 'data:' + sub.fileMime + ';base64,' + sub.fileData;
-              w.document.write('<iframe src="' + src + '" style="border:0;width:100%;height:100vh"></iframe>');
+              showDocModal({ fileData: sub && sub.fileData, fileMime: (sub && sub.fileMime) || 'application/pdf',
+                             fileName: (sub && sub.fileName) || 'Signed form.pdf', docType: 'Signed form' });
             }).catch(function (err) { toast(err.message, 'error'); });
         });
       });
@@ -2861,7 +3033,9 @@
         b.addEventListener('click', function () {
           var sub = subsMap[b.dataset.viewData];
           if (sub) {
-            alert('Submitted Answers:\n' + JSON.stringify(sub.filledData, null, 2));
+            showInfoModal('Submitted answers', '',
+              '<pre style="margin:0;white-space:pre-wrap;word-break:break-word;font-size:12.5px;line-height:1.55;color:var(--text,#fff)">' +
+              esc(JSON.stringify(sub.filledData, null, 2)) + '</pre>', true);
           }
         });
       });
@@ -4087,6 +4261,7 @@
     if (tt) tt.textContent = t[0];
 
     wire(root);
+    syncUrl();
   }
 
   function wire(root) {
@@ -4151,10 +4326,12 @@
         }
         if (act === 'del') {
           var r = state.rows.filter(function (x) { return x.id === id; })[0] || {};
-          if (!confirm('Delete ' + (r.name || r.email || 'this candidate') + '? The audit trail is kept.')) return;
-          api('/onboarding/candidates/' + id, { method: 'DELETE' })
-            .then(function () { toast('Candidate deleted'); loadCandidates(); })
-            .catch(function (e) { toast(e.message, 'error'); });
+          askConfirm('Delete ' + (r.name || r.email || 'this candidate') + '? The audit trail is kept.',
+            { title: 'Delete candidate', yes: 'Delete', danger: true }, function () {
+            api('/onboarding/candidates/' + id, { method: 'DELETE' })
+              .then(function () { toast('Candidate deleted'); loadCandidates(); })
+              .catch(function (e) { toast(e.message, 'error'); });
+          });
         }
       });
     });
@@ -4210,6 +4387,27 @@
   }
 
   var armed = pageFor(requestedPath());
+
+  /* What the page being reloaded was showing (see syncUrl). Taken from the originally
+     requested URL for the same reason as requestedPath(): React has already rewritten
+     location by the time this script runs. Used once, by the first ensureLayout(). */
+  function readRestore() {
+    try {
+      var nav = (performance.getEntriesByType('navigation') || [])[0];
+      var sp = new URL((nav && nav.name) || location.href, location.origin).searchParams;
+      var tab = sp.get('tab');
+      var out = {
+        candidate: parseInt(sp.get('candidate'), 10) || 0,
+        tab: TABS.some(function (t) { return t[0] === tab; }) ? tab : 'overview',
+        q: sp.get('q') || '',
+        page: parseInt(sp.get('page'), 10) || 1,
+        status: sp.get('status') || '',
+        auth: sp.get('auth') || '',
+      };
+      return (out.candidate || out.q || out.page > 1 || out.status || out.auth) ? out : null;
+    } catch (_) { return null; }
+  }
+  var pendingRestore = armed !== null ? readRestore() : null;
 
   function navigate(page) {
     armed = page;
@@ -4296,6 +4494,15 @@
     state.sortDir = 1;
     state.list = [];
     state.stageErr = '';
+    if (pendingRestore) {                       // the first load after a refresh: put the view back
+      var pr = pendingRestore;
+      pendingRestore = null;
+      state.search = pr.q;
+      state.pg = pr.page;
+      state.filters.status = pr.status;
+      state.filters.authType = pr.auth;
+      if (pr.candidate) setTimeout(function () { openDetail(pr.candidate, pr.tab); }, 0);
+    }
     if (page === '') { state.dash = null; loadDashboard(); }
     else if (page === '/settings') render();
     else if (page === '/candidates') { state.sortKey = 'createdAt'; state.sortDir = -1; loadCandidates(); }
