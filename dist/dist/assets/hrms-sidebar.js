@@ -133,8 +133,59 @@
   // router, so a stale "Leave Management" stayed lit on /onboarding/* pages
   // while the injected Onboarding links never lit at all. Keep exactly one:
   // the link with the longest href that prefixes the current path.
-  function syncActive() {
-    var path = location.pathname.replace(/\/+$/, '') || '/';
+  // Exception: the account drawer (the Settings panel opened from the sidebar
+  // "Settings" item) opens on top of the current page without changing the
+  // URL, so the rule above kept the page behind it (e.g. Candidates) lit.
+  // While the drawer is open, Settings is the one lit item; the moment it
+  // closes, the page link gets its highlight back.
+  var DRAWER_LIT = 'data-sb-drawer-lit';        // on Settings while we light it
+  var DRAWER_DIMMED = 'data-sb-drawer-dimmed';  // on links we un-lit for it
+
+  function settingsDrawerOpen() {
+    var head = document.querySelector('.hrms-drawer-head');
+    if (!head) return false;
+    var r = head.getBoundingClientRect();     // mounted but slid off-screen = closed
+    return r.width > 0 && r.height > 0 && r.right > 0 && r.left < window.innerWidth;
+  }
+  window.__hrmsSettingsDrawerOpen = settingsDrawerOpen;   // read by hrms-sidecar.js
+
+  function settingsNavItem() {
+    var items = document.querySelectorAll('.sidebar .nav-item');
+    for (var i = 0; i < items.length; i++) {
+      if (itemLabel(items[i]) === 'Settings') return items[i];
+    }
+    return null;
+  }
+
+  function lightSettings(items, settings) {
+    for (var i = 0; i < items.length; i++) {
+      if (items[i] === settings || !items[i].classList.contains('active')) continue;
+      items[i].classList.remove('active');
+      items[i].setAttribute(DRAWER_DIMMED, '1');
+    }
+    if (!settings.classList.contains('active')) settings.classList.add('active');
+    if (!settings.hasAttribute(DRAWER_LIT)) {
+      var addAria = !settings.hasAttribute('aria-current');
+      if (addAria) settings.setAttribute('aria-current', 'page');
+      settings.setAttribute(DRAWER_LIT, addAria ? 'aria' : '1');
+    }
+  }
+
+  // Undo lightSettings(); returns the links that were un-lit for the drawer.
+  function releaseSettings() {
+    var lit = document.querySelectorAll('.sidebar [' + DRAWER_LIT + ']');
+    for (var i = 0; i < lit.length; i++) {
+      if (lit[i].getAttribute(DRAWER_LIT) === 'aria') lit[i].removeAttribute('aria-current');
+      lit[i].removeAttribute(DRAWER_LIT);
+      lit[i].classList.remove('active');   // re-lit below if it is also the page's link
+    }
+    var dimmed = document.querySelectorAll('.sidebar [' + DRAWER_DIMMED + ']');
+    var out = [];
+    for (var j = 0; j < dimmed.length; j++) { dimmed[j].removeAttribute(DRAWER_DIMMED); out.push(dimmed[j]); }
+    return out;
+  }
+
+   function syncActive() {
     var items = document.querySelectorAll('.sidebar a.nav-item[href]');
     // The Access Control console is an overlay on /settings (the URL does not change),
     // so while it is open its own sidebar link is the current page, not Settings.
@@ -153,13 +204,19 @@
       var hit = href === '/' ? path === '/' : (path === href || path.indexOf(href + '/') === 0);
       if (hit && href.length > bestLen) { bestLen = href.length; best = items[i]; }
     }
-    if (!best) return;   // route with no link of its own: leave React's choice alone
+    if (!best) {
+      // Route with no link of its own: leave React's choice alone, giving back
+      // any highlight we borrowed for the drawer.
+      for (var d = 0; d < dimmed.length; d++) {
+        if (dimmed[d].isConnected && !dimmed[d].classList.contains('active')) dimmed[d].classList.add('active');
+      }
+      return;
+    }
     for (var j = 0; j < items.length; j++) {
       var want = items[j] === best;
       if (items[j].classList.contains('active') !== want) items[j].classList.toggle('active', want);
     }
   }
-
   /* ── Employee Chat icon ───────────────────────────────────────────── */
   // The bundle gives Employee Chat the same square icon as Task Tracker; use
   // a speech bubble instead, in the sidebar's own 16px stroke style.
@@ -249,10 +306,16 @@
     // Back/forward changes the URL without touching the sidebar DOM.
     window.addEventListener('popstate', function () { setTimeout(sync, 0); });
     var scheduled = false;
-    new MutationObserver(function () {
+    function queue() {
       if (scheduled) return; scheduled = true;
       requestAnimationFrame(function () { scheduled = false; sync(); });
-    }).observe(document.body, { childList: true, subtree: true });
+    }
+    new MutationObserver(queue).observe(document.body, { childList: true, subtree: true });
+    // The account drawer can open or close through a class/style change alone
+    // (no nodes added or removed), which the observer above does not see.
+    ['click', 'keyup', 'transitionend', 'animationend'].forEach(function (ev) {
+      document.addEventListener(ev, queue, true);
+    });
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start();
 })();
