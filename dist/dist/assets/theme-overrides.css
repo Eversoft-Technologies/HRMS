@@ -1093,7 +1093,7 @@ div[style*="position: fixed"][style*="bottom: 80px"][style*="right: 28px"] {
   background: linear-gradient(158deg, color-mix(in srgb, var(--accent2) 9%, var(--bg2)), var(--bg2) 62%);
 }
 .hrms-dash .stat-card:hover {
-  transform: translateY(-3px);
+  transform: none !important;
   box-shadow: 0 10px 26px rgba(12, 20, 40, .12);
   border-color: color-mix(in srgb, var(--accent) 26%, var(--border2));
 }
@@ -1111,7 +1111,7 @@ div[style*="position: fixed"][style*="bottom: 80px"][style*="right: 28px"] {
    important only for the pro card, whose resting shadow is set inline. */
 .hrms-dash .card:hover,
 .hrms-dash .hrms-dash-pro-card:hover {
-  transform: translateY(-2px);
+  transform: none !important;
   box-shadow: 0 10px 26px rgba(12, 20, 40, .10);
   border-color: color-mix(in srgb, var(--accent) 20%, var(--border2));
 }
@@ -1122,7 +1122,7 @@ div[style*="position: fixed"][style*="bottom: 80px"][style*="right: 28px"] {
    showed; only its border changed. This gives it the same hover as the four
    cards above. */
 .hrms-dash .hrms-dash-charts > .card:hover {
-  transform: translateY(-2px) !important;
+  transform: none !important;
   box-shadow: 0 10px 26px rgba(12, 20, 40, .10) !important;
   border-color: color-mix(in srgb, var(--accent) 20%, var(--border2));
 }
@@ -3394,6 +3394,12 @@ body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"])):not(:has(#
   border-color: color-mix(in srgb, var(--accent) 62%, var(--border2)) !important;
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 34%, transparent),
               0 10px 30px color-mix(in srgb, var(--accent) 20%, transparent) !important;
+}
+
+/* Recruit cards keep their hover highlights without lifting. */
+body:has(.sidebar a.nav-item.active[href^="/recruit"]) :is(.content, .main > :not(.topbar):not(.content)) :is(.kanban-col, .kanban-card, .stat-card, .hram-card, .hrms-iv-status-card, .ob-card, .ob-panel, .card):hover,
+body:has(.sidebar a.nav-item.active[href^="/recruit"]) #hrms-kpi-overlay :is(.kanban-col, .kanban-card, .stat-card, .hram-card, .hrms-iv-status-card, .ob-card, .ob-panel, .card):hover {
+  transform: none !important;
 }
 
 /* Recruit toolbar (Filters, KPI Dashboard): an older rule with a higher rank
