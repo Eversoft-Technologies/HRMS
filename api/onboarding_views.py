@@ -1405,6 +1405,27 @@ def candidate_document_detail(request, pk, doc_id):
 
 @api_view(['GET'])
 @require_perm('onboarding.view')
+def candidate_document_preview(request, pk, doc_id):
+    """A Word document as safe HTML, so the app can show it in place (see word_preview)."""
+    from . import word_preview
+    candidate = get_candidate(pk)
+    doc = candidate.documents.filter(pk=doc_id).first() if candidate else None
+    if not doc:
+        return err('Document not found', 404)
+    if doc.file_mime not in WORD_DOC_MIMES:
+        return err('Only Word documents have an HTML preview', 400)
+    try:
+        raw = base64.b64decode(doc.file_data or '', validate=False)
+        return Response({'html': word_preview.word_to_html(raw, doc.file_mime, doc.file_name)})
+    except word_preview.PreviewError as e:
+        return err(str(e), 422)
+    except Exception:
+        # A damaged or unusual file must never turn into a server error: the download still works.
+        return err('This Word file cannot be previewed. You can still download it.', 422)
+
+
+@api_view(['GET'])
+@require_perm('onboarding.view')
 def candidate_document_versions(request, pk, doc_type):
     candidate = get_candidate(pk)
     if not candidate:

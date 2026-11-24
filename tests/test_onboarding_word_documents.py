@@ -113,3 +113,111 @@ class WordWorksForEveryDocumentTypeTests(TestCase):
         versions = list(CandidateDocument.objects.filter(candidate=self.cand, doc_type='visa')
                         .order_by('version').values_list('version', 'file_mime', 'is_active'))
         self.assertEqual(versions, [(1, 'application/pdf', False), (2, DOCX, True)])
+
+
+class WordPreviewTests(TestCase):
+    """A Word document is turned into safe HTML so it can be shown in the app."""
+
+    def setUp(self):
+        AppUser.objects.create(email='hr.prev@example.com', full_name='HR', password='x', role='admin', status='active')
+        self.hr = Client(HTTP_X_USER_EMAIL='hr.prev@example.com')
+        self.cand = OnboardingCandidate.objects.create(
+            first_name='Cand', last_name='Prev', email='cand.prev@example.com', portal_token='tok-prev')
+
+    def docx(self, document_xml):
+        import io, zipfile
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, 'w') as z:
+            z.writestr('word/document.xml',
+                       '<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+                       '<w:body>' + document_xml + '</w:body></w:document>')
+        return buf.getvalue()
+
+    def store(self, raw, name='a.docx', mime=DOCX):
+        return CandidateDocument.objects.create(
+            candidate=self.cand, doc_type='ssn', file_name=name, file_mime=mime, file_size=len(raw),
+            file_data=base64.b64encode(raw).decode())
+
+    def preview(self, doc):
+        return self.hr.get(f'/api/onboarding/candidates/{self.cand.id}/documents/{doc.id}/preview')
+
+    def test_text_formatting_lists_and_tables_come_through(self):
+        raw = self.docx(
+            '<w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t>Offer Letter</w:t></w:r></w:p>'
+            '<w:p><w:r><w:t>Plain line</w:t></w:r></w:p>'
+            '<w:tbl><w:tr><w:tc><w:p><w:r><w:t>Cell A</w:t></w:r></w:p></w:tc>'
+            '<w:tc><w:p><w:r><w:t>Cell B</w:t></w:r></w:p></w:tc></w:tr></w:tbl>')
+        r = self.preview(self.store(raw))
+        self.assertEqual(r.status_code, 200, r.content)
+        page = r.json()['html']
+        for needle in ('<b>Offer Letter</b>', 'text-align:center', 'Plain line', '<table>', 'Cell A', 'Cell B'):
+            self.assertIn(needle, page)
+
+    def test_markup_in_the_file_is_escaped_never_run(self):
+        raw = self.docx('<w:p><w:r><w:t>&lt;script&gt;alert(1)&lt;/script&gt;&lt;img src=x onerror=alert(2)&gt;</w:t></w:r></w:p>')
+        page = self.preview(self.store(raw)).json()['html']
+        self.assertNotIn('<script>', page)
+        self.assertNotIn('<img src=x', page)
+        self.assertIn('&lt;script&gt;', page)
+
+    def test_a_file_with_entity_tricks_is_refused_not_expanded(self):
+        raw = self.docx('<w:p/>').replace(b'<w:document', b'<!DOCTYPE x [<!ENTITY a "boom">]><w:document')
+        self.assertEqual(self.preview(self.store(raw)).status_code, 422)
+
+    def test_damaged_and_fake_files_give_a_clear_message_not_a_server_error(self):
+        for raw, name, mime in ((b'PK\x03\x04 not really a zip', 'a.docx', DOCX),
+                                (b'\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1' + b'\x00' * 600, 'a.doc', DOC),
+                                (b'just text', 'b.doc', DOC)):
+            r = self.preview(self.store(raw, name, mime))
+            self.assertEqual(r.status_code, 422, (name, r.content))
+            self.assertTrue(r.json()['message'])
+
+    def test_only_word_documents_have_a_preview(self):
+        pdf = self.store(b'%PDF-1.4 x', 'a.pdf', 'application/pdf')
+        self.assertEqual(self.preview(pdf).status_code, 400)
+        self.assertEqual(self.hr.get(f'/api/onboarding/candidates/{self.cand.id}/documents/99999/preview').status_code, 404)
+
+
+class OldDocFormatReaderTests(TestCase):
+    """The pieces the .doc (Word 97-2003) reader is built from."""
+
+    def test_property_lists_are_split_by_operand_size(self):
+        from api import word_preview as wp
+        import struct
+        grp = (struct.pack('<HB', 0x0835, 1)                    # bold on (1-byte operand)
+               + struct.pack('<HH', 0x4A43, 44)                 # size 22pt (2-byte operand)
+               + struct.pack('<H', 0x6870) + bytes([255, 0, 0, 0]))   # colour red (4-byte operand)
+        props = wp._apply_char({}, grp)
+        self.assertEqual((props['b'], props['size'], props['color']), (True, 22.0, '#ff0000'))
+
+    def test_bold_toggle_values_follow_the_style(self):
+        from api import word_preview as wp
+        import struct
+        on, flip, keep = (struct.pack('<HB', 0x0835, v) for v in (1, 0x81, 0x80))
+        self.assertFalse(wp._apply_char({'b': True}, flip)['b'])     # 0x81: the opposite of the style
+        self.assertTrue(wp._apply_char({'b': True}, keep)['b'])      # 0x80: same as the style
+        self.assertTrue(wp._apply_char({}, on)['b'])
+
+    def test_paragraph_alignment_and_indent(self):
+        from api import word_preview as wp
+        import struct
+        grp = struct.pack('<HB', 0x2461, 1) + struct.pack('<Hh', 0x845E, 720)
+        props = wp._apply_para({}, grp)
+        self.assertEqual((props['jc'], props['left']), ('center', 720))
+
+    def test_an_embedded_png_is_found_inside_the_picture_record(self):
+        from api import word_preview as wp
+        import struct
+        png = b'\x89PNG\r\n\x1a\n' + b'x' * 40
+        blip = struct.pack('<HHI', 0x6E0 << 4, 0xF01E, 17 + len(png)) + b'u' * 16 + b'\xff' + png
+        fbse = struct.pack('<HHI', 0x62 << 4, 0xF007, 36 + len(blip)) + b'\x06\x06' + b'u' * 16 + b'\x00' * 2 + \
+            struct.pack('<IIIBBBB', len(blip), 1, 0, 0, 0, 0, 0) + blip
+        doc = wp._Doc.__new__(wp._Doc)
+        mime, raw = doc._find_blip(fbse, 0, len(fbse), 0)
+        self.assertEqual((mime, raw), ('image/png', png))
+
+    def test_a_record_that_is_not_a_picture_shows_nothing(self):
+        from api import word_preview as wp
+        doc = wp._Doc.__new__(wp._Doc)
+        doc.data = b'\x00' * 400
+        self.assertEqual(doc.picture(0), '')
