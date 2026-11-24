@@ -5,7 +5,7 @@
 
    Strategy
    - Layout uses stable semantic classes (.app/.sidebar/.main/
-     .content/.topbar/.stat-grid/.grid-*/.kanban/...) which we
+     .content/.topbar/.stat-grid/.grid-.kanban/...) which we
      target directly.
    - The sidebar is already position:fixed, so on phones it
      becomes a slide-in drawer toggled by body.sidebar-open
@@ -925,73 +925,19 @@
 }
 
 /* ============================================================
-   HRIS employee list on a phone: a compact contact-style list
-   instead of the 7-column table (which had to be swiped
-   sideways). One slim row per employee, hairline between rows:
-
-     (av) Name                         [L4] [Low]  >
-          Engineering · Mgr — · New
-
-   Level and attrition risk stay as badges on the right; dept,
-   manager and tenure share the small second line. Salary band
-   is left for the profile page. Rows keep their own click
-   (opens the profile).
+   HRIS employee list on a phone: keep the full table and allow
+   horizontal swiping, like the dashboard employee directory.
    ============================================================ */
+body:has(.sidebar a.nav-item.active[href="/hr/hris"]) #root .content .card .table-wrap th {
+  text-align: left !important;
+}
+
 @media (max-width: 600px) {
   body:has(.sidebar a.nav-item.active[href="/hr/hris"]) #root .content .card > .sec-head ~ .table-wrap {
-    overflow: hidden !important;
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch;
     border: 1px solid var(--border2); border-radius: 14px; background: var(--bg2);
   }
-  body:has(.sidebar a.nav-item.active[href="/hr/hris"]) #root .content .card > .sec-head ~ .table-wrap > table {
-    display: block !important; width: 100% !important; min-width: 0 !important;
-  }
-  body:has(.sidebar a.nav-item.active[href="/hr/hris"]) #root .content .card > .sec-head ~ .table-wrap thead { display: none !important; }
-  body:has(.sidebar a.nav-item.active[href="/hr/hris"]) #root .content .card > .sec-head ~ .table-wrap tbody { display: block !important; }
-
-  body:has(.sidebar a.nav-item.active[href="/hr/hris"]) #root .content .card > .sec-head ~ .table-wrap tbody > tr:has(> td:nth-child(7)):not([data-hp-off]) {
-    display: grid !important;
-    grid-template-columns: fit-content(48%) fit-content(30%) minmax(0, 1fr) auto auto 14px;
-    grid-template-areas:
-      "emp  emp emp    level risk chev"
-      "dept mgr tenure tenure tenure chev";
-    column-gap: 6px; row-gap: 0; align-items: center;
-    padding: 9px 10px 9px 12px !important; margin: 0 !important;
-    border: 0 !important; border-bottom: 1px solid var(--border2) !important;
-    border-radius: 0 !important; background: transparent !important; box-shadow: none !important;
-  }
-  body:has(.sidebar a.nav-item.active[href="/hr/hris"]) #root .content .card > .sec-head ~ .table-wrap tbody > tr:has(> td:nth-child(7)):not([data-hp-off]):last-child { border-bottom: 0 !important; }
-  body:has(.sidebar a.nav-item.active[href="/hr/hris"]) #root .content .card > .sec-head ~ .table-wrap tbody > tr:has(> td:nth-child(7)):not([data-hp-off]):active { background: var(--bg3) !important; }
-  body:has(.sidebar a.nav-item.active[href="/hr/hris"]) #root .content .card > .sec-head ~ .table-wrap tbody > tr:has(> td:nth-child(7)):not([data-hp-off])::after {
-    content: "›"; grid-area: chev; justify-self: end;
-    font-size: 20px; line-height: 1; color: var(--text3);
-  }
-  body:has(.sidebar a.nav-item.active[href="/hr/hris"]) #root .content .card > .sec-head ~ .table-wrap tbody > tr:has(> td:nth-child(7)):not([data-hp-off]) > td {
-    display: block !important; padding: 0 !important; border: 0 !important;
-    min-width: 0; white-space: nowrap !important; overflow: hidden; text-overflow: ellipsis;
-  }
-  body:has(.sidebar a.nav-item.active[href="/hr/hris"]) #root .content .card > .sec-head ~ .table-wrap tbody > tr:has(> td:nth-child(7)):not([data-hp-off]) > td:nth-child(1) { grid-area: emp; overflow: visible; }
-  body:has(.sidebar a.nav-item.active[href="/hr/hris"]) #root .content .card > .sec-head ~ .table-wrap tbody > tr:has(> td:nth-child(7)):not([data-hp-off]) > td:nth-child(1) .av-row { min-width: 0; }
-  body:has(.sidebar a.nav-item.active[href="/hr/hris"]) #root .content .card > .sec-head ~ .table-wrap tbody > tr:has(> td:nth-child(7)):not([data-hp-off]) > td:nth-child(2),
-  body:has(.sidebar a.nav-item.active[href="/hr/hris"]) #root .content .card > .sec-head ~ .table-wrap tbody > tr:has(> td:nth-child(7)):not([data-hp-off]) > td:nth-child(3),
-  body:has(.sidebar a.nav-item.active[href="/hr/hris"]) #root .content .card > .sec-head ~ .table-wrap tbody > tr:has(> td:nth-child(7)):not([data-hp-off]) > td:nth-child(6) { margin-top: -7px; }
-  body:has(.sidebar a.nav-item.active[href="/hr/hris"]) #root .content .card > .sec-head ~ .table-wrap tbody > tr:has(> td:nth-child(7)):not([data-hp-off]) > td:nth-child(1) span {
-    font-size: 14px !important; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  }
-  body:has(.sidebar a.nav-item.active[href="/hr/hris"]) #root .content .card > .sec-head ~ .table-wrap tbody > tr:has(> td:nth-child(7)):not([data-hp-off]) > td:nth-child(4) { grid-area: level; overflow: visible; }
-  body:has(.sidebar a.nav-item.active[href="/hr/hris"]) #root .content .card > .sec-head ~ .table-wrap tbody > tr:has(> td:nth-child(7)):not([data-hp-off]) > td:nth-child(7) { grid-area: risk; overflow: visible; }
-  body:has(.sidebar a.nav-item.active[href="/hr/hris"]) #root .content .card > .sec-head ~ .table-wrap tbody > tr:has(> td:nth-child(7)):not([data-hp-off]) > td:nth-child(5) { display: none !important; }
-
-  /* second line: dept · Mgr x · tenure, indented under the name */
-  body:has(.sidebar a.nav-item.active[href="/hr/hris"]) #root .content .card > .sec-head ~ .table-wrap tbody > tr:has(> td:nth-child(7)):not([data-hp-off]) > td:nth-child(2),
-  body:has(.sidebar a.nav-item.active[href="/hr/hris"]) #root .content .card > .sec-head ~ .table-wrap tbody > tr:has(> td:nth-child(7)):not([data-hp-off]) > td:nth-child(3),
-  body:has(.sidebar a.nav-item.active[href="/hr/hris"]) #root .content .card > .sec-head ~ .table-wrap tbody > tr:has(> td:nth-child(7)):not([data-hp-off]) > td:nth-child(6) {
-    font-size: 12px !important; color: var(--text3) !important;
-  }
-  body:has(.sidebar a.nav-item.active[href="/hr/hris"]) #root .content .card > .sec-head ~ .table-wrap tbody > tr:has(> td:nth-child(7)):not([data-hp-off]) > td:nth-child(2) { grid-area: dept; padding-left: 38px !important; }
-  body:has(.sidebar a.nav-item.active[href="/hr/hris"]) #root .content .card > .sec-head ~ .table-wrap tbody > tr:has(> td:nth-child(7)):not([data-hp-off]) > td:nth-child(3) { grid-area: mgr; }
-  body:has(.sidebar a.nav-item.active[href="/hr/hris"]) #root .content .card > .sec-head ~ .table-wrap tbody > tr:has(> td:nth-child(7)):not([data-hp-off]) > td:nth-child(6) { grid-area: tenure; }
-  body:has(.sidebar a.nav-item.active[href="/hr/hris"]) #root .content .card > .sec-head ~ .table-wrap tbody > tr:has(> td:nth-child(7)):not([data-hp-off]) > td:nth-child(3)::before { content: "·  Mgr "; }
-  body:has(.sidebar a.nav-item.active[href="/hr/hris"]) #root .content .card > .sec-head ~ .table-wrap tbody > tr:has(> td:nth-child(7)):not([data-hp-off]) > td:nth-child(6)::before { content: "·  "; }
   /* --- the Employee Records header, a size down for phones ----------
      Title and Add Employee share one row; the department chips stay
      on ONE row that swipes sideways instead of wrapping to two. */

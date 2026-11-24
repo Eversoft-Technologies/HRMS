@@ -274,7 +274,7 @@
       '.ob-table{width:100%;border-collapse:collapse;font-size:13px}',
       '.ob-table th{text-align:left;padding:11px 14px;font-size:11px;letter-spacing:.04em;text-transform:uppercase;',
       'color:var(--muted,#8a9bb8);border-bottom:1px solid var(--border,#2a3446);white-space:nowrap;cursor:pointer;user-select:none}',
-      '.ob-table td{padding:11px 14px;border-bottom:1px solid var(--border2,#1d2634);white-space:nowrap}',
+      '.ob-table td{padding:11px 14px;border-bottom:1px solid var(--border2,#1d2634);white-space:nowrap;text-align:left}',
       '.ob-table tbody tr{cursor:pointer}',
       '.ob-table tbody tr:hover{background:var(--bg3,#1c2433)}',
       '.ob-table tbody tr:last-child td{border-bottom:none}',
@@ -521,7 +521,7 @@
 
      The server caps pageSize at 200, so page through until the whole roster is
      collected (bounded by a safety cap so a huge table can't spin forever). */
-  var LOAD_PS = 200, LOAD_MAX_PAGES = 100;
+  var LOAD_PS = 200, LOAD_MAX_PAGES = Infinity;   // no ceiling: every candidate is loaded, however many pages that takes
   function loadCandidates(quiet) {
     if (!quiet) {
       state.loading = true;

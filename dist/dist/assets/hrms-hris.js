@@ -1413,6 +1413,9 @@
   function decorateList() {
     var table = document.querySelector('.content table');
     if (!table) return;
+    table.querySelectorAll('thead th').forEach(function (th) {
+      th.style.textAlign = 'center';
+    });
     var rows = table.querySelectorAll('tbody tr');
     if (!rows.length) return;
     ensureStyle();

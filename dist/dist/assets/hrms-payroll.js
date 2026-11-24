@@ -459,7 +459,7 @@
 
     return '<div class="pr-card">' +
       '<div class="pr-toolbar">' +
-      '  <input type="text" class="pr-search" id="pr-search-payslips" placeholder="Search employee name, email, code..." value="' + (state.searchQuery || '') + '">' +
+      '  <input type="text" class="pr-search" id="pr-search-payslips" placeholder="Search employee name, email, code..." value="' + String(state.searchQuery || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;') + '">' +
       '  <select class="pr-select" id="pr-filter-period">' + periodOptions + '</select>' +
       '</div>' +
       '<div class="pr-table-wrap">' +
@@ -656,7 +656,16 @@
       searchInput.addEventListener('input', function (e) {
         state.searchQuery = e.target.value;
         state.pages.payslips = 1;
+        // render() rebuilds the whole tab, so the box being typed in is thrown
+        // away and replaced by a new one. Without putting the cursor back, the
+        // box lost focus after every letter and had to be clicked again.
+        var start = e.target.selectionStart, end = e.target.selectionEnd;
         render();
+        var fresh = document.getElementById('pr-search-payslips');
+        if (fresh) {
+          fresh.focus();
+          try { fresh.setSelectionRange(start, end); } catch (_) {}
+        }
       });
     }
 
