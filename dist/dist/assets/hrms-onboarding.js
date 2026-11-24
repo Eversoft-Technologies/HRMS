@@ -114,7 +114,19 @@
   var EVERSOFT_ASSETS = ['Laptop', 'Monitor', 'Mouse', 'Keyboard', 'Dock', 'Bag', 'Headset','Office365','Email_ID','Software License','ID_Card','Desktop','Mobile'];
   var ASSET_STATUSES = ['Assigned', 'Returned', 'Lost', 'Damaged','pending', 'Delivered'];
   var MAX_MB = 10;
-  var ALLOWED_MIME = ['application/pdf', 'image/png', 'image/jpeg'];
+  var WORD_MIMES = ['application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
+  var ALLOWED_MIME = ['application/pdf', 'image/png', 'image/jpeg'].concat(WORD_MIMES);
+  var EXT_MIME = {
+    pdf: 'application/pdf', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
+    doc: 'application/msword', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+  };
+  // The file's type if we accept it, else '' . Browsers often report NO type for
+  // Word files (and some report application/octet-stream), so the extension decides then.
+  function docMime(f) {
+    if (f && ALLOWED_MIME.indexOf(f.type) !== -1) return f.type;
+    var m = /\.([a-z0-9]+)$/i.exec((f && f.name) || '');
+    return (m && EXT_MIME[m[1].toLowerCase()]) || '';
+  }
   var PAGE_SIZES = [10, 15, 25, 50, 100];
 
   /* Which drawer tab each sidebar page lands on. */
@@ -235,11 +247,18 @@
       '.ob-search{max-width:280px}',
       '.ob-search{max-width:280px}',
       /* cards */
-      '.ob-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;margin-bottom:22px;width:100%;box-sizing:border-box}',
-      '.ob-card{background:var(--bg2,#141b26);border:1px solid var(--border,#2a3446);border-radius:12px;padding:16px;box-sizing:border-box;transition:border-color .15s}',
-      '.ob-card:hover{border-color:var(--accent,#4f8ef7)}',
-      '.ob-card .n{font-size:26px;font-weight:800;line-height:1.1;color:var(--text,#e6edf7)}',
-      '.ob-card .l{color:var(--muted,#8a9bb8);font-size:12px;margin-top:6px;font-weight:500}',
+      '.ob-cards{display:grid;grid-template-columns:repeat(8,1fr);gap:14px;margin-bottom:22px;width:100%;box-sizing:border-box}',
+      '.ob-card{background:var(--bg2,#141b26);border:1px solid var(--border,#2a3446);border-radius:12px;padding:16px 14px;box-sizing:border-box;position:relative;overflow:hidden;min-width:0;transition:transform .2s cubic-bezier(.22,1,.36,1),box-shadow .2s ease,border-color .2s ease}',
+      '.ob-card:before{content:"";position:absolute;top:0;left:0;right:0;height:2px;background:var(--accent,#4f8ef7)}',
+      '.ob-card.blue:before{background:var(--accent,#4f8ef7)}',
+      '.ob-card.purple:before{background:var(--accent2,#7c5cfc)}',
+      '.ob-card.green:before{background:var(--accent3,#22d3a5)}',
+      '.ob-card.orange:before{background:var(--accent4,#f7954f)}',
+      '.ob-card:hover{border-color:color-mix(in srgb, var(--accent,#4f8ef7) 26%, var(--border,#2a3446));transform:translateY(-3px);box-shadow:0 10px 26px rgba(0,0,0,.28)}',
+      '@media (hover:none){.ob-card:hover{transform:none;box-shadow:none}}',
+      '@media (prefers-reduced-motion: reduce){.ob-card{transition:none}}',
+      '.ob-card .l{color:var(--muted,#8a9bb8);font-size:10px;font-weight:600;letter-spacing:.5px;text-transform:uppercase;margin-bottom:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
+      '.ob-card .n{font-family:var(--font-d,inherit);font-size:22px;font-weight:800;line-height:1;color:var(--text,#e6edf7)}',
       /* panels & grids */
       '.ob-grid1{display:grid;grid-template-columns:1fr;gap:16px;margin-bottom:22px;width:100%;box-sizing:border-box}',
       '.ob-grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;margin-bottom:22px;width:100%;box-sizing:border-box}',
@@ -255,7 +274,7 @@
       '.ob-table{width:100%;border-collapse:collapse;font-size:13px}',
       '.ob-table th{text-align:left;padding:11px 14px;font-size:11px;letter-spacing:.04em;text-transform:uppercase;',
       'color:var(--muted,#8a9bb8);border-bottom:1px solid var(--border,#2a3446);white-space:nowrap;cursor:pointer;user-select:none}',
-      '.ob-table td{padding:11px 14px;border-bottom:1px solid var(--border2,#1d2634);white-space:nowrap}',
+      '.ob-table td{padding:11px 14px;border-bottom:1px solid var(--border2,#1d2634);white-space:nowrap;text-align:left}',
       '.ob-table tbody tr{cursor:pointer}',
       '.ob-table tbody tr:hover{background:var(--bg3,#1c2433)}',
       '.ob-table tbody tr:last-child td{border-bottom:none}',
@@ -380,6 +399,10 @@
       '.ob-fd-cf select,.ob-fd-cf input{flex:1;min-width:0;background:var(--bg2,#141b26);border:1px solid var(--border,#2a3446);',
       'border-radius:7px;color:var(--text,#e6edf7);font:inherit;font-size:12px;padding:7px 8px}',
       '.ob-fd-cfx{flex:0 0 auto;width:30px;background:var(--bg2,#141b26);border:1px solid var(--border,#2a3446);border-radius:7px;color:#ef4444;cursor:pointer}',
+      /* responsive tablet styles */
+      '@media (max-width: 1100px) and (min-width: 641px){',
+      '  .ob-cards{grid-template-columns:repeat(4,1fr)!important;gap:10px!important}',
+      '}',
       /* responsive mobile styles */
       '@media (max-width: 640px){',
       '  #' + ID.root + '{padding:14px 12px!important;width:100%!important;max-width:100vw!important;box-sizing:border-box!important}',
@@ -498,7 +521,7 @@
 
      The server caps pageSize at 200, so page through until the whole roster is
      collected (bounded by a safety cap so a huge table can't spin forever). */
-  var LOAD_PS = 200, LOAD_MAX_PAGES = 100;
+  var LOAD_PS = 200, LOAD_MAX_PAGES = Infinity;   // no ceiling: every candidate is loaded, however many pages that takes
   function loadCandidates(quiet) {
     if (!quiet) {
       state.loading = true;
@@ -657,60 +680,214 @@
     ['payrollPending', 'Payroll Pending'],
   ];
 
+  // base64 -> a blob: URL. A 10 MB file as a data: URL is a ~13 MB string held in the
+  // page and some browsers will not show a PDF from one; a blob URL is the file itself.
+  function b64ToBlobUrl(b64, mime) {
+    try {
+      var bin = atob(b64), n = bin.length, bytes = new Uint8Array(n);
+      for (var i = 0; i < n; i++) bytes[i] = bin.charCodeAt(i);
+      return URL.createObjectURL(new Blob([bytes], { type: mime }));
+    } catch (_) {
+      return 'data:' + mime + ';base64,' + b64;
+    }
+  }
+
+  /* The document viewer. Always inside the app, never a new browser tab (a tab
+     opened with an empty address is a blank page outside the site):
+     PDFs, images and Word files are shown in place; anything else offers Download.
+     The Download button stays at the top right of the viewer for every type.
+     d = { fileData (base64), fileMime, fileName, docType?, version?, uploadedAt?, _cid?, _did? } */
+  function showDocModal(d) {
+    if (!d || !d.fileData) { toast('Document data not available', 'warn'); return; }
+    var prev = document.getElementById('hrms-ob-doc-modal');
+    if (prev) prev.remove();
+    var modal = document.createElement('div');
+    modal.id = 'hrms-ob-doc-modal';
+    modal.className = 'ob-ov';
+    modal.style.zIndex = '99999';
+    var mime = d.fileMime || 'application/octet-stream';
+    var src = b64ToBlobUrl(d.fileData, mime);
+    var isPdf = mime === 'application/pdf' || (d.fileName || '').toLowerCase().endsWith('.pdf');
+    var isImg = mime.indexOf('image/') === 0 || /\.(png|jpg|jpeg|gif|webp|svg)$/i.test(d.fileName || '');
+
+    var isWord = WORD_MIMES.indexOf(mime) !== -1 || /\.docx?$/i.test(d.fileName || '');
+    var wordHost = isWord && d._cid && d._did;
+    var bodyContent = '';
+    if (wordHost) {
+      bodyContent = '<div id="ob-doc-word" style="min-height:40vh;display:flex;align-items:center;justify-content:center;color:var(--muted,#8a9bb8);font-size:13px">Opening document…</div>';
+    } else if (isPdf) {
+      bodyContent = '<iframe src="' + src + '" style="border:0;width:100%;height:78vh;border-radius:6px;background:#fff"></iframe>';
+    } else if (isImg) {
+      bodyContent = '<div style="text-align:center;max-height:78vh;overflow:auto;padding:12px;background:rgba(0,0,0,0.15);border-radius:8px;display:flex;align-items:center;justify-content:center">' +
+                    '<img src="' + src + '" style="max-width:100%;max-height:74vh;object-fit:contain;border-radius:6px;box-shadow:0 4px 20px rgba(0,0,0,0.3)" alt="' + esc(d.fileName || 'Screenshot') + '">' +
+                    '</div>';
+    } else {
+      bodyContent = '<div style="padding:48px 20px;text-align:center">' +
+                    '<div style="font-size:36px;margin-bottom:12px">📄</div>' +
+                    '<p style="font-size:14px;font-weight:600;margin-bottom:6px;color:var(--text,#ffffff)">' + esc(d.fileName || 'Document') + '</p>' +
+                    '<p style="font-size:12.5px;margin:0 0 16px;color:var(--muted,#8a9bb8)">This file type cannot be shown in the browser. Download it to open it.</p>' +
+                    '<a href="' + src + '" download="' + esc(d.fileName || 'document') + '" class="ob-btn primary" style="text-decoration:none">Download File</a></div>';
+    }
+
+    modal.innerHTML =
+      '<div style="position:fixed;inset:0;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box">' +
+        '<div style="background:var(--bg2,#141b26);border:1px solid var(--border,#2a3446);border-radius:14px;width:min(920px,96vw);max-height:92vh;display:flex;flex-direction:column;box-shadow:0 16px 48px rgba(0,0,0,0.55);overflow:hidden">' +
+          '<div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--border,#2a3446);gap:12px">' +
+            '<div style="flex:1;min-width:0">' +
+              '<h3 style="margin:0;font-size:15px;font-weight:700;color:var(--text,#ffffff);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(d.fileName || d.docType || 'Document Preview') + '</h3>' +
+              '<span style="font-size:11.5px;color:var(--muted,#8a9bb8)">Version ' + (d.version || 1) + (d.uploadedAt ? ' • ' + fmtDateTime(d.uploadedAt) : '') + '</span>' +
+            '</div>' +
+            '<div style="display:flex;align-items:center;gap:8px;flex-shrink:0">' +
+              '<a href="' + src + '" download="' + esc(d.fileName || 'download') + '" class="ob-btn" style="text-decoration:none;padding:5px 11px;font-size:12px">Download</a>' +
+              '<button class="ob-x" id="ob-doc-modal-close" style="font-size:22px;line-height:1;cursor:pointer;padding:0 4px" title="Close">×</button>' +
+            '</div>' +
+          '</div>' +
+          '<div style="padding:14px;overflow-y:auto;flex:1">' + bodyContent + '</div>' +
+        '</div>' +
+      '</div>';
+
+    document.body.appendChild(modal);
+    function closeModal() {
+      modal.remove();
+      if (src.indexOf('blob:') === 0) { try { URL.revokeObjectURL(src); } catch (_) {} }
+      document.removeEventListener('keydown', onKey);
+    }
+    function onKey(e) { if (e.key === 'Escape') closeModal(); }
+    document.addEventListener('keydown', onKey);
+    modal.addEventListener('click', function (e) {
+      if (e.target === modal || e.target.id === 'ob-doc-modal-close' || e.target === modal.firstChild) closeModal();
+    });
+    var closeBtn = modal.querySelector('#ob-doc-modal-close');
+    if (closeBtn) closeBtn.addEventListener('click', closeModal);
+
+    // Word files: the server turns the file into safe HTML, shown in a sandboxed frame (no scripts).
+    if (wordHost) {
+      api('/onboarding/candidates/' + d._cid + '/documents/' + d._did + '/preview').then(function (r) {
+        var host = modal.querySelector('#ob-doc-word');
+        if (!host) return;                                  // viewer was closed meanwhile
+        host.style.cssText = 'padding:0';
+        host.innerHTML = '<iframe sandbox title="' + esc(d.fileName || 'Document') + '" style="border:0;width:100%;height:78vh;border-radius:6px;background:#e6e9ef"></iframe>';
+        host.firstChild.srcdoc = r.html;
+      }).catch(function (e) {
+        var host = modal.querySelector('#ob-doc-word');
+        if (!host) return;
+        host.style.cssText = 'padding:40px 20px;text-align:center;display:block';
+        host.innerHTML = '<div style="font-size:36px;margin-bottom:12px">📄</div>' +
+          '<p style="font-size:14px;font-weight:600;margin-bottom:6px;color:var(--text,#ffffff)">' + esc(d.fileName || 'Document') + '</p>' +
+          '<p style="font-size:12.5px;margin:0;color:var(--muted,#8a9bb8)">' + esc((e && e.message) || 'This file could not be previewed.') + ' Use Download (top right) to open it.</p>';
+      });
+    }
+  }
+
+  /* A dialog in the middle of the page (never the browser's alert box, which sits
+     at the top of the window, outside the site). Returns the root element. */
+  function showInfoModal(title, subtitle, bodyHtml, wide) {
+    var prev = document.getElementById('hrms-ob-info-modal');
+    if (prev) prev.remove();
+    var modal = document.createElement('div');
+    modal.id = 'hrms-ob-info-modal';
+    modal.className = 'ob-ov';
+    modal.style.zIndex = '99990';
+    modal.innerHTML =
+      '<div data-bd style="position:fixed;inset:0;background:rgba(0,0,0,0.65);display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box">' +
+        '<div role="dialog" aria-modal="true" style="background:var(--bg2,#141b26);border:1px solid var(--border,#2a3446);border-radius:14px;width:min(' + (wide ? 880 : 640) + 'px,96vw);max-height:86vh;display:flex;flex-direction:column;box-shadow:0 16px 48px rgba(0,0,0,0.55);overflow:hidden">' +
+          '<div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--border,#2a3446);gap:12px">' +
+            '<div style="flex:1;min-width:0">' +
+              '<h3 style="margin:0;font-size:15px;font-weight:700;color:var(--text,#ffffff)">' + esc(title) + '</h3>' +
+              (subtitle ? '<span style="font-size:11.5px;color:var(--muted,#8a9bb8)">' + esc(subtitle) + '</span>' : '') +
+            '</div>' +
+            '<button class="ob-x" data-close style="font-size:22px;line-height:1;cursor:pointer;padding:0 4px" title="Close">×</button>' +
+          '</div>' +
+          '<div style="padding:14px 18px;overflow:auto;flex:1">' + bodyHtml + '</div>' +
+          '<div style="display:flex;justify-content:flex-end;padding:12px 18px;border-top:1px solid var(--border,#2a3446)">' +
+            '<button class="ob-btn primary" data-close style="padding:6px 18px">Close</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(modal);
+    function close() { modal.remove(); document.removeEventListener('keydown', onKey); }
+    function onKey(e) {
+      // the document viewer opens on top of this one: Esc closes the top-most first
+      if (e.key === 'Escape' && !document.getElementById('hrms-ob-doc-modal')) close();
+    }
+    document.addEventListener('keydown', onKey);
+    modal.addEventListener('click', function (e) {
+      if (e.target.hasAttribute('data-close') || e.target.hasAttribute('data-bd')) close();
+    });
+    return modal;
+  }
+
+  /* A yes/no question in the middle of the page, in place of the browser's confirm box
+     (which opens at the top of the window, outside the site).
+     opts: { title, yes (button text), danger (red button) }. onYes runs only on a yes. */
+  function askConfirm(message, opts, onYes) {
+    opts = opts || {};
+    var prev = document.getElementById('hrms-ob-confirm');
+    if (prev) prev.remove();
+    var box = document.createElement('div');
+    box.id = 'hrms-ob-confirm';
+    box.className = 'ob-ov';
+    box.style.zIndex = '100001';
+    box.innerHTML =
+      '<div data-bd style="position:fixed;inset:0;background:rgba(0,0,0,0.65);display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box">' +
+        '<div role="alertdialog" aria-modal="true" style="background:var(--bg2,#141b26);border:1px solid var(--border,#2a3446);border-radius:14px;width:min(440px,94vw);box-shadow:0 16px 48px rgba(0,0,0,0.55);overflow:hidden">' +
+          '<div style="padding:18px 20px 6px">' +
+            '<h3 style="margin:0 0 8px;font-size:16px;font-weight:700;color:var(--text,#ffffff)">' + esc(opts.title || 'Please confirm') + '</h3>' +
+            '<p style="margin:0;font-size:13.5px;line-height:1.55;color:var(--text2,#c3cde0)">' + esc(message) + '</p>' +
+          '</div>' +
+          '<div style="display:flex;justify-content:flex-end;gap:10px;padding:16px 20px 18px">' +
+            '<button class="ob-btn" data-no style="padding:7px 18px">Cancel</button>' +
+            '<button class="ob-btn ' + (opts.danger ? '' : 'primary') + '" data-yes style="padding:7px 18px;' +
+              (opts.danger ? 'background:var(--danger,#f75f4f);border-color:var(--danger,#f75f4f);color:#fff;font-weight:700' : '') + '">' + esc(opts.yes || 'OK') + '</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(box);
+    function close() { box.remove(); document.removeEventListener('keydown', onKey, true); }
+    function onKey(e) {
+      if (e.key === 'Escape') { e.stopPropagation(); close(); }
+    }
+    document.addEventListener('keydown', onKey, true);       // capture: Esc answers this question first
+    box.addEventListener('click', function (e) {
+      if (e.target.hasAttribute('data-yes')) { close(); onYes(); }
+      else if (e.target.hasAttribute('data-no') || e.target.hasAttribute('data-bd')) close();
+    });
+    var yes = box.querySelector('[data-yes]');
+    if (yes) yes.focus();
+  }
+
+  // Version history of one document: every upload, newest first, each one viewable.
+  function showDocHistory(cid, docType, versions) {
+    var rows = (versions || []).map(function (v) {
+      return '<tr>' +
+        '<td style="padding:8px 10px;font-weight:700">v' + esc(v.version) + '</td>' +
+        '<td style="padding:8px 10px;word-break:break-word">' + esc(v.fileName || '—') + '</td>' +
+        '<td style="padding:8px 10px">' + (v.isActive
+          ? '<span style="color:var(--success,#22d3a5);font-weight:700">Current</span>'
+          : '<span style="color:var(--muted,#8a9bb8)">Superseded</span>') + '</td>' +
+        '<td style="padding:8px 10px;white-space:nowrap">' + esc(fmtDateTime(v.uploadedAt)) + '</td>' +
+        '<td style="padding:8px 10px;word-break:break-all">' + esc(v.uploadedBy || '—') + '</td>' +
+        '<td style="padding:8px 10px;text-align:right"><button class="ob-btn" style="padding:3px 9px" data-hv="' + esc(v.id) + '">View</button></td>' +
+      '</tr>';
+    }).join('');
+    var th = 'padding:7px 10px;text-align:left;font-size:11px;letter-spacing:.4px;text-transform:uppercase;color:var(--muted,#8a9bb8);border-bottom:1px solid var(--border,#2a3446)';
+    var body = rows
+      ? '<table style="width:100%;border-collapse:collapse;font-size:13px;color:var(--text,#fff)"><thead><tr>' +
+          '<th style="' + th + '">Version</th><th style="' + th + '">File</th><th style="' + th + '">Status</th>' +
+          '<th style="' + th + '">Uploaded</th><th style="' + th + '">By</th><th style="' + th + '"></th></tr></thead><tbody>' + rows + '</tbody></table>'
+      : '<p style="margin:8px 0;color:var(--muted,#8a9bb8)">No versions.</p>';
+    var modal = showInfoModal('Document history', (versions && versions.length ? versions.length + ' version' + (versions.length > 1 ? 's' : '') : '') , body, true);
+    modal.querySelectorAll('[data-hv]').forEach(function (b) {
+      b.addEventListener('click', function () { previewCandidateDoc(cid, b.getAttribute('data-hv')); });
+    });
+  }
+
   function previewCandidateDoc(cid, did) {
     if (!cid || !did) return;
     toast('Loading preview…', 'ok');
-    api('/onboarding/candidates/' + cid + '/documents/' + did).then(function (d) {
-      if (!d || !d.fileData) { toast('Document data not available', 'warn'); return; }
-      var prev = document.getElementById('hrms-ob-doc-modal');
-      if (prev) prev.remove();
-      var modal = document.createElement('div');
-      modal.id = 'hrms-ob-doc-modal';
-      modal.className = 'ob-ov';
-      modal.style.zIndex = '99999';
-      var mime = d.fileMime || 'application/octet-stream';
-      var src = 'data:' + mime + ';base64,' + d.fileData;
-      var isPdf = mime === 'application/pdf' || (d.fileName || '').toLowerCase().endsWith('.pdf');
-      var isImg = mime.indexOf('image/') === 0 || /\.(png|jpg|jpeg|gif|webp|svg)$/i.test(d.fileName || '');
-
-      var bodyContent = '';
-      if (isPdf) {
-        bodyContent = '<iframe src="' + src + '" style="border:0;width:100%;height:78vh;border-radius:6px;background:#fff"></iframe>';
-      } else if (isImg) {
-        bodyContent = '<div style="text-align:center;max-height:78vh;overflow:auto;padding:12px;background:rgba(0,0,0,0.15);border-radius:8px;display:flex;align-items:center;justify-content:center">' +
-                      '<img src="' + src + '" style="max-width:100%;max-height:74vh;object-fit:contain;border-radius:6px;box-shadow:0 4px 20px rgba(0,0,0,0.3)" alt="' + esc(d.fileName || 'Screenshot') + '">' +
-                      '</div>';
-      } else {
-        bodyContent = '<div style="padding:48px 20px;text-align:center">' +
-                      '<div style="font-size:36px;margin-bottom:12px">📄</div>' +
-                      '<p style="font-size:14px;font-weight:600;margin-bottom:16px;color:var(--text,#ffffff)">' + esc(d.fileName || 'Document') + '</p>' +
-                      '<a href="' + src + '" download="' + esc(d.fileName || 'document') + '" class="ob-btn primary" style="text-decoration:none">Download File</a></div>';
-      }
-
-      modal.innerHTML =
-        '<div style="position:fixed;inset:0;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box">' +
-          '<div style="background:var(--bg2,#141b26);border:1px solid var(--border,#2a3446);border-radius:14px;width:min(920px,96vw);max-height:92vh;display:flex;flex-direction:column;box-shadow:0 16px 48px rgba(0,0,0,0.55);overflow:hidden">' +
-            '<div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--border,#2a3446);gap:12px">' +
-              '<div style="flex:1;min-width:0">' +
-                '<h3 style="margin:0;font-size:15px;font-weight:700;color:var(--text,#ffffff);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(d.fileName || d.docType || 'Document Preview') + '</h3>' +
-                '<span style="font-size:11.5px;color:var(--muted,#8a9bb8)">Version ' + (d.version || 1) + (d.uploadedAt ? ' • ' + fmtDateTime(d.uploadedAt) : '') + '</span>' +
-              '</div>' +
-              '<div style="display:flex;align-items:center;gap:8px;flex-shrink:0">' +
-                '<a href="' + src + '" download="' + esc(d.fileName || 'download') + '" class="ob-btn" style="text-decoration:none;padding:5px 11px;font-size:12px">Download</a>' +
-                '<button class="ob-x" id="ob-doc-modal-close" style="font-size:22px;line-height:1;cursor:pointer;padding:0 4px" title="Close">×</button>' +
-              '</div>' +
-            '</div>' +
-            '<div style="padding:14px;overflow-y:auto;flex:1">' + bodyContent + '</div>' +
-          '</div>' +
-        '</div>';
-
-      document.body.appendChild(modal);
-      modal.addEventListener('click', function (e) {
-        if (e.target === modal || e.target.id === 'ob-doc-modal-close') modal.remove();
-      });
-      var closeBtn = modal.querySelector('#ob-doc-modal-close');
-      if (closeBtn) closeBtn.addEventListener('click', function () { modal.remove(); });
-    }).catch(function (e) { toast(e.message || 'Could not load document', 'error'); });
+    api('/onboarding/candidates/' + cid + '/documents/' + did)
+      .then(function (d) { d._cid = cid; d._did = did; showDocModal(d); })
+      .catch(function (e) { toast(e.message || 'Could not load document', 'error'); });
   }
 
   function renderRecentCandidates(list) {
@@ -767,10 +944,12 @@
       }).join('') + '</div>';
     }
     var d = state.dash;
-    var cards = CARDS.map(function (c) {
+    var CARD_COLORS = ['blue', 'purple', 'green', 'orange'];
+    var cards = CARDS.map(function (c, i) {
       var n = d.cards[c[0]] || 0;
-      return '<div class="ob-card"><div class="n">' + n + '</div>' +
-             '<div class="l">' + c[1] + '</div></div>';
+      return '<div class="ob-card ' + CARD_COLORS[i % CARD_COLORS.length] + '">' +
+             '<div class="l">' + c[1] + '</div>' +
+             '<div class="n">' + n + '</div></div>';
     }).join('');
 
     var alerts = state.alerts.length
@@ -1393,7 +1572,7 @@
       '<div class="ob-panel"><h3>Document Rules</h3>' + rows([
         ['Mandatory', badge('SSN', 'err') + ' ' + badge('Driver License OR State ID', 'err')],
         ['Optional', badge('Visa', 'neutral') + ' ' + badge('I-94', 'neutral')],
-        ['Allowed types', 'PDF, PNG, JPG'],
+        ['Allowed types', 'PDF, Word (DOC/DOCX), PNG, JPG'],
         ['Maximum size', MAX_MB + ' MB'],
         ['Versioning', 'Re-upload supersedes; history kept'],
       ]) + '</div>' +
@@ -1420,6 +1599,26 @@
   ];
 
 
+  /* The address bar always says what is on screen, so a refresh (F5) brings back the
+     same view instead of the bare list: the open candidate panel and its tab, the search
+     text, the page number and the two filters. replaceState: no extra Back-button steps,
+     and React Router does not observe it. Read back by readRestore() below. */
+  function syncUrl() {
+    var page = pageFor(location.pathname);
+    if (page === null) return;                       // not on one of our pages
+    var q = [];
+    function add(k, v) { q.push(k + '=' + encodeURIComponent(v)); }
+    if (state.detail) { add('candidate', state.detail.id); add('tab', state.tab); }
+    if (state.search) add('q', state.search);
+    if (state.pg > 1) add('page', state.pg);
+    if (state.filters.status) add('status', state.filters.status);
+    if (state.filters.authType) add('auth', state.filters.authType);
+    var url = BASE + page + (q.length ? '?' + q.join('&') : '');
+    if (location.pathname + location.search !== url) {
+      try { history.replaceState(history.state, '', url); } catch (_) {}
+    }
+  }
+
   function openDetail(id, tab) {
     state.tab = tab || 'overview';
     api('/onboarding/candidates/' + id).then(function (c) {
@@ -1432,6 +1631,7 @@
     var ov = document.getElementById(ID.drawer);
     if (ov) ov.remove();
     state.detail = null;
+    syncUrl();
   }
 
   function renderDrawer() {
@@ -1466,6 +1666,7 @@
       b.addEventListener('click', function () { state.tab = b.dataset.tab; renderDrawer(); });
     });
     renderTab();
+    syncUrl();
   }
 
   function tabBody() { return document.getElementById('ob-tabbody'); }
@@ -1581,11 +1782,12 @@
       var errEl = el.querySelector('#ob-e');
       if (ns === c.status) { errEl.textContent = 'That is already the current status.'; return; }
       // Confirmation dialog before a manual status change, per the workflow spec.
-      if (!confirm('Change status of ' + (c.name || c.email) + ' to "' + ns + '"?')) return;
-      sBtn.disabled = true; errEl.textContent = '';
-      api('/onboarding/candidates/' + c.id, { method: 'PATCH', body: { status: ns } })
-        .then(function () { toast('Status changed to ' + ns); refreshDetail(); })
-        .catch(function (e) { sBtn.disabled = false; errEl.textContent = e.message; });
+      askConfirm('Change status of ' + (c.name || c.email) + ' to "' + ns + '"?', { title: 'Change status', yes: 'Change status' }, function () {
+        sBtn.disabled = true; errEl.textContent = '';
+        api('/onboarding/candidates/' + c.id, { method: 'PATCH', body: { status: ns } })
+          .then(function () { toast('Status changed to ' + ns); refreshDetail(); })
+          .catch(function (e) { sBtn.disabled = false; errEl.textContent = e.message; });
+      });
     });
 
     var act = el.querySelector('#ob-activate');
@@ -1597,10 +1799,11 @@
     });
     var del = el.querySelector('#ob-del');
     if (del) del.addEventListener('click', function () {
-      if (!confirm('Delete ' + (c.name || c.email) + '? The audit trail is kept.')) return;
-      api('/onboarding/candidates/' + c.id, { method: 'DELETE' })
-        .then(function () { toast('Candidate deleted'); closeDrawer(); loadCandidates(); })
-        .catch(function (e) { toast(e.message, 'error'); });
+      askConfirm('Delete ' + (c.name || c.email) + '? The audit trail is kept.', { title: 'Delete candidate', yes: 'Delete', danger: true }, function () {
+        api('/onboarding/candidates/' + c.id, { method: 'DELETE' })
+          .then(function () { toast('Candidate deleted'); closeDrawer(); loadCandidates(); })
+          .catch(function (e) { toast(e.message, 'error'); });
+      });
     });
   }
 
@@ -1967,7 +2170,7 @@
              ' <button class="ob-btn" style="padding:3px 9px" data-hist="' + esc(d.docType) + '">History</button>' +
              (ro ? '' : ' <button class="ob-btn" style="padding:3px 9px" data-quick-upload="' + item.type + '" title="Upload new version">⬆ Replace</button>') +
              (ro ? '' : ' <button class="ob-btn danger" style="padding:3px 9px" data-rm="' + d.id + '">Delete</button>'))
-          : (ro ? '<span class="ob-empty-val">-</span>' : '<button class="ob-btn primary" style="padding:3px 10px;font-size:12px" data-quick-upload="' + item.type + '">⬆ Upload ' + esc(item.label) + '</button>');
+             : (ro ? '<span class="ob-empty-val">-</span>' : '<button class="ob-btn primary" style="padding:3px 10px;font-size:12px" data-quick-upload="' + item.type + '" title="Upload ' + esc(item.label) + '">⬆ Upload File</button>');
 
         return '<tr>' +
           '<td style="vertical-align:middle">' +
@@ -2024,8 +2227,8 @@
               MAX_DOC_LABEL + '" placeholder="Name this document (e.g. Work Permit), then choose the file below">' +
             '<div class="ob-dz" id="ob-dz"><div class="big">⬆</div>' +
             '<div id="ob-dz-txt"><b>Drag &amp; drop</b> files here, or click to choose</div>' +
-            '<div class="ob-sub" style="margin:6px 0 0">PDF, PNG or JPG · max ' + MAX_MB + ' MB each</div></div>' +
-            '<input type="file" id="ob-file" accept=".pdf,.png,.jpg,.jpeg" multiple hidden>' +
+            '<div class="ob-sub" style="margin:6px 0 0">PDF, Word, PNG or JPG · max ' + MAX_MB + ' MB each</div></div>' +
+            '<input type="file" id="ob-file" accept=".pdf,.doc,.docx,.png,.jpg,.jpeg" multiple hidden>' +
             '<div class="ob-bar" id="ob-bar" style="display:none"><i></i></div>' +
             '<div class="ob-err" id="ob-de"></div>' +
           '</div>');
@@ -2046,17 +2249,19 @@
       el.querySelectorAll('[data-del-checklist-idx]').forEach(function (btn) {
         btn.addEventListener('click', function () {
           var idx = parseInt(btn.dataset.delChecklistIdx);
-          if (!confirm('Remove this document slot from the checklist? Any already uploaded file will remain in custom uploads.')) return;
-          requestedDocsList.splice(idx, 1);
+          askConfirm('Remove this document slot from the checklist? Any already uploaded file will remain in custom uploads.',
+            { title: 'Remove document slot', yes: 'Remove', danger: true }, function () {
+            requestedDocsList.splice(idx, 1);
 
-          api('/onboarding/candidates/' + c.id, {
-            method: 'PATCH',
-            body: { requestedDocs: requestedDocsList }
-          }).then(function (updatedCandidate) {
-            toast('Document slot removed');
-            c.requestedDocs = updatedCandidate.requestedDocs;
-            renderTab();
-          }).catch(function (err) { alert(err.message); });
+            api('/onboarding/candidates/' + c.id, {
+              method: 'PATCH',
+              body: { requestedDocs: requestedDocsList }
+            }).then(function (updatedCandidate) {
+              toast('Document slot removed');
+              c.requestedDocs = updatedCandidate.requestedDocs;
+              renderTab();
+            }).catch(function (err) { toast(err.message, 'error'); });
+          });
         });
       });
 
@@ -2068,7 +2273,7 @@
         }).then(function (updatedCandidate) {
           c.requestedDocs = updatedCandidate.requestedDocs;
           toast('Checklist configurations updated');
-        }).catch(function (err) { alert(err.message); });
+        }).catch(function (err) { toast(err.message, 'error'); });
       }
 
       el.querySelectorAll('.chk-send').forEach(function (chk) {
@@ -2147,36 +2352,25 @@
       });
 
       el.querySelectorAll('[data-dl]').forEach(function (b) {
-        b.addEventListener('click', function () {
-          api('/onboarding/candidates/' + c.id + '/documents/' + b.dataset.dl).then(function (d) {
-            var w = window.open('');
-            if (!w) { toast('Popup blocked — allow popups to preview', 'warn'); return; }
-            var src = 'data:' + d.fileMime + ';base64,' + d.fileData;
-            w.document.write(d.fileMime === 'application/pdf'
-              ? '<iframe src="' + src + '" style="border:0;width:100%;height:100vh"></iframe>'
-              : '<img src="' + src + '" style="max-width:100%">');
-          }).catch(function (e) { toast(e.message, 'error'); });
-        });
+        b.addEventListener('click', function () { previewCandidateDoc(c.id, b.dataset.dl); });
       });
 
       el.querySelectorAll('[data-hist]').forEach(function (b) {
         b.addEventListener('click', function () {
-          api('/onboarding/candidates/' + c.id + '/document-versions/' + b.dataset.hist).then(function (vs) {
-            alert((vs || []).map(function (v) {
-              return 'v' + v.version + ' · ' + (v.fileName || '—') + ' · ' +
-                     (v.isActive ? 'current' : 'superseded') + ' · ' + fmtDateTime(v.uploadedAt) +
-                     ' · ' + v.uploadedBy;
-            }).join('\n') || 'No versions.');
-          });
+          api('/onboarding/candidates/' + c.id + '/document-versions/' + b.dataset.hist)
+            .then(function (vs) { showDocHistory(c.id, b.dataset.hist, vs); })
+            .catch(function (e) { toast(e.message || 'Could not load the history', 'error'); });
         });
       });
 
       el.querySelectorAll('[data-rm]').forEach(function (b) {
         b.addEventListener('click', function () {
-          if (!confirm('Delete this document? The previous version is restored if there is one.')) return;
-          api('/onboarding/candidates/' + c.id + '/documents/' + b.dataset.rm, { method: 'DELETE' })
-            .then(function () { toast('Document deleted'); renderTab(); })
-            .catch(function (e) { toast(e.message, 'error'); });
+          askConfirm('Delete this document? The previous version is restored if there is one.',
+            { title: 'Delete document', yes: 'Delete', danger: true }, function () {
+            api('/onboarding/candidates/' + c.id + '/documents/' + b.dataset.rm, { method: 'DELETE' })
+              .then(function () { toast('Document deleted'); renderTab(); })
+              .catch(function (e) { toast(e.message, 'error'); });
+          });
         });
       });
 
@@ -2256,9 +2450,9 @@
             return;
           }
         }
-        var invalid = files.filter(function (f) { return ALLOWED_MIME.indexOf(f.type) === -1; });
+        var invalid = files.filter(function (f) { return !docMime(f); });
         if (invalid.length) {
-          errEl.textContent = 'Only PDF, PNG or JPG files are allowed.';
+          errEl.textContent = 'Only PDF, Word (DOC/DOCX), PNG or JPG files are allowed.';
           return;
         }
         var big = files.filter(function (f) { return f.size > MAX_MB * 1024 * 1024; });
@@ -2289,7 +2483,7 @@
                 isCustom: isCustom,
                 label: label,
                 fileName: f.name,
-                fileMime: f.type,
+                fileMime: docMime(f),
                 fileData: base64,
               },
             }).then(function () {
@@ -2444,6 +2638,7 @@
         ? list.map(function (a) {
             return '<div class="ob-row"><span class="k">' +
               badge(a.assetSource, 'neutral') + ' ' + esc((a.assets || []).join(', ') || a.assetId || '—') +
+              ((a.assets || []).length && a.assetId ? ' <span style="font-size:11px;font-family:ui-monospace,Menlo,Consolas,monospace">' + esc(a.assetId) + '</span>' : '') +
               (a.clientName ? '<br><span style="font-size:11px">' + esc(a.clientName) + '</span>' : '') +
               '</span><span class="v">' + badge(a.status, statusKind(a.status)) +
               (ro ? '' : ' <button class="ob-btn danger" style="padding:3px 9px" data-rma="' + a.id + '">Remove</button>') +
@@ -2465,13 +2660,18 @@
             ASSET_STATUSES.map(function (s) { return '<option>' + s + '</option>'; }).join('') + '</select></div>' +
           '<div id="as-clientwrap" style="display:none"><label class="ob-lb">Client Name <span class="req">*</span></label>' +
             '<input class="ob-in" id="as-client"></div>' +
-          '<div><label class="ob-lb">Asset ID</label><input class="ob-in" id="as-id" placeholder="EVS-1042"></div>' +
+          '<div><label class="ob-lb">Asset Tag(s)</label><input class="ob-in" id="as-id" maxlength="120" placeholder="Pick from stock below, or type EVS-1042, EVS-1043"></div>' +
           '<div><label class="ob-lb">Issued Date</label><input type="date" class="ob-in" id="as-date"></div>' +
           '<div class="full" id="as-items"><label class="ob-lb">Assets</label>' +
             EVERSOFT_ASSETS.map(function (a) {
               return '<label class="ob-chk" style="display:inline-flex;margin-right:16px">' +
                      '<input type="checkbox" data-a="' + a + '"> ' + a + '</label>';
             }).join('') + '</div>' +
+          // In-stock picker: what HR hands over is taken from (and recorded in) the IT asset register.
+          '<div class="full" id="as-stockwrap" style="display:none"><label class="ob-lb">Pick from IT asset stock</label>' +
+            '<input class="ob-in" id="as-stockq" placeholder="Search in-stock assets by tag, name or serial">' +
+            '<div id="as-stock" style="margin-top:6px;max-height:190px;overflow:auto;border:1px solid var(--border2);border-radius:8px"></div>' +
+            '<div style="font-size:11px;color:var(--text3);margin-top:4px">Picked assets are assigned to this candidate in IT Assets; tags not in the register are added to it.</div></div>' +
         '</div>' +
         '<div class="ob-act"><button class="ob-btn primary" id="as-save">Allocate</button></div>' +
         '<div class="ob-err" id="as-e"></div>';
@@ -2484,6 +2684,44 @@
         el.querySelector('#as-clientwrap').style.display = isClient ? '' : 'none';
         el.querySelector('#as-items').style.display = isClient ? 'none' : '';
       });
+
+      var picked = [];
+      var CAT_ITEM = { laptop: 'Laptop', desktop: 'Desktop', monitor: 'Monitor', phone: 'Mobile', access_card: 'ID_Card', license: 'Software License' };
+      var stockBox = el.querySelector('#as-stock'), stockQ = el.querySelector('#as-stockq'), stockTimer = null;
+      function idTags() { return el.querySelector('#as-id').value.split(/[,;]+/).map(function (t) { return t.trim(); }).filter(Boolean); }
+      function loadStock() {
+        api('/assets/stock?q=' + encodeURIComponent(stockQ.value.trim())).then(function (d) {
+          el.querySelector('#as-stockwrap').style.display = '';
+          var rows = (d && d.assets) || [];
+          var have = idTags().map(function (t) { return t.toLowerCase(); });
+          stockBox.innerHTML = rows.length ? rows.map(function (a) {
+            var on = have.indexOf(String(a.assetTag).toLowerCase()) !== -1;
+            return '<button type="button" data-stk="' + esc(a.assetTag) + '" data-cat="' + esc(a.category) + '" style="display:flex;justify-content:space-between;gap:8px;width:100%;text-align:left;' +
+              'background:' + (on ? 'var(--bg3)' : 'none') + ';border:none;border-bottom:1px solid var(--border);padding:7px 10px;color:var(--text);cursor:pointer;font:inherit;font-size:12.5px">' +
+              '<span><b>' + esc(a.assetTag) + '</b> ' + esc(a.label) + (a.serialNumber ? ' <span style="color:var(--text3)">S/N ' + esc(a.serialNumber) + '</span>' : '') + '</span>' +
+              '<span style="color:' + (on ? 'var(--success)' : 'var(--text3)') + '">' + (on ? 'Picked ✓' : esc(a.category.replace('_', ' '))) + '</span></button>';
+          }).join('') : '<div style="padding:10px;font-size:12px;color:var(--text3)">No in-stock assets match.</div>';
+          stockBox.querySelectorAll('[data-stk]').forEach(function (b) {
+            b.addEventListener('click', function () {
+              var tag = b.getAttribute('data-stk'), tags = idTags();
+              var i = tags.map(function (t) { return t.toLowerCase(); }).indexOf(tag.toLowerCase());
+              if (i === -1) {
+                tags.push(tag); picked.push(tag);
+                var item = CAT_ITEM[b.getAttribute('data-cat')];
+                var box = item && el.querySelector('[data-a="' + item + '"]');
+                if (box) box.checked = true;
+              } else {
+                tags.splice(i, 1);
+                picked = picked.filter(function (t) { return t.toLowerCase() !== tag.toLowerCase(); });
+              }
+              el.querySelector('#as-id').value = tags.join(', ');
+              loadStock();
+            });
+          });
+        }).catch(function () { el.querySelector('#as-stockwrap').style.display = 'none'; });   // no register access: free text only
+      }
+      stockQ.addEventListener('input', function () { clearTimeout(stockTimer); stockTimer = setTimeout(loadStock, 250); });
+      loadStock();
 
       el.querySelectorAll('[data-rma]').forEach(function (b) {
         b.addEventListener('click', function () {
@@ -2503,6 +2741,7 @@
             clientName: el.querySelector('#as-client').value,
             assets: src.value === 'Client' ? [] : assets,
             assetId: el.querySelector('#as-id').value,
+            assetTags: picked.filter(function (t) { return idTags().indexOf(t) !== -1; }),
             issuedDate: el.querySelector('#as-date').value || null,
             status: el.querySelector('#as-status').value,
           },
@@ -2763,26 +3002,19 @@
       if (isAdmin()) {
         el.querySelectorAll('[data-del-tmpl]').forEach(function (b) {
           b.addEventListener('click', function () {
-            if (!confirm('Delete this form template? Active candidates will no longer be assigned this form.')) return;
-            api('/onboarding/forms/' + b.dataset.delTmpl, { method: 'DELETE' })
-              .then(function () { toast('Template deleted'); renderTab(); })
-              .catch(function (err) { alert(err.message); });
+            askConfirm('Delete this form template? Active candidates will no longer be assigned this form.',
+              { title: 'Delete form template', yes: 'Delete', danger: true }, function () {
+              api('/onboarding/forms/' + b.dataset.delTmpl, { method: 'DELETE' })
+                .then(function () { toast('Template deleted'); renderTab(); })
+                .catch(function (err) { toast(err.message, 'error'); });
+            });
           });
         });
       }
 
       // Event handlers to view uploaded checklist documents
       el.querySelectorAll('[data-dl]').forEach(function (b) {
-        b.addEventListener('click', function () {
-          api('/onboarding/candidates/' + c.id + '/documents/' + b.dataset.dl).then(function (d) {
-            var w = window.open('');
-            if (!w) { toast('Popup blocked — allow popups to preview', 'warn'); return; }
-            var src = 'data:' + d.fileMime + ';base64,' + d.fileData;
-            w.document.write(d.fileMime === 'application/pdf'
-              ? '<iframe src="' + src + '" style="border:0;width:100%;height:100vh"></iframe>'
-              : '<img src="' + src + '" style="max-width:100%">');
-          }).catch(function (e) { toast(e.message, 'error'); });
-        });
+        b.addEventListener('click', function () { previewCandidateDoc(c.id, b.dataset.dl); });
       });
 
       // Event handlers for viewing signed PDF
@@ -2790,10 +3022,8 @@
         b.addEventListener('click', function () {
           api('/onboarding/candidates/' + c.id + '/submissions/' + b.dataset.viewPdf + '/pdf')
             .then(function (sub) {
-              var w = window.open('');
-              if (!w) { toast('Popup blocked — allow popups to preview', 'warn'); return; }
-              var src = 'data:' + sub.fileMime + ';base64,' + sub.fileData;
-              w.document.write('<iframe src="' + src + '" style="border:0;width:100%;height:100vh"></iframe>');
+              showDocModal({ fileData: sub && sub.fileData, fileMime: (sub && sub.fileMime) || 'application/pdf',
+                             fileName: (sub && sub.fileName) || 'Signed form.pdf', docType: 'Signed form' });
             }).catch(function (err) { toast(err.message, 'error'); });
         });
       });
@@ -2803,7 +3033,9 @@
         b.addEventListener('click', function () {
           var sub = subsMap[b.dataset.viewData];
           if (sub) {
-            alert('Submitted Answers:\n' + JSON.stringify(sub.filledData, null, 2));
+            showInfoModal('Submitted answers', '',
+              '<pre style="margin:0;white-space:pre-wrap;word-break:break-word;font-size:12.5px;line-height:1.55;color:var(--text,#fff)">' +
+              esc(JSON.stringify(sub.filledData, null, 2)) + '</pre>', true);
           }
         });
       });
@@ -4029,6 +4261,7 @@
     if (tt) tt.textContent = t[0];
 
     wire(root);
+    syncUrl();
   }
 
   function wire(root) {
@@ -4093,10 +4326,12 @@
         }
         if (act === 'del') {
           var r = state.rows.filter(function (x) { return x.id === id; })[0] || {};
-          if (!confirm('Delete ' + (r.name || r.email || 'this candidate') + '? The audit trail is kept.')) return;
-          api('/onboarding/candidates/' + id, { method: 'DELETE' })
-            .then(function () { toast('Candidate deleted'); loadCandidates(); })
-            .catch(function (e) { toast(e.message, 'error'); });
+          askConfirm('Delete ' + (r.name || r.email || 'this candidate') + '? The audit trail is kept.',
+            { title: 'Delete candidate', yes: 'Delete', danger: true }, function () {
+            api('/onboarding/candidates/' + id, { method: 'DELETE' })
+              .then(function () { toast('Candidate deleted'); loadCandidates(); })
+              .catch(function (e) { toast(e.message, 'error'); });
+          });
         }
       });
     });
@@ -4152,6 +4387,27 @@
   }
 
   var armed = pageFor(requestedPath());
+
+  /* What the page being reloaded was showing (see syncUrl). Taken from the originally
+     requested URL for the same reason as requestedPath(): React has already rewritten
+     location by the time this script runs. Used once, by the first ensureLayout(). */
+  function readRestore() {
+    try {
+      var nav = (performance.getEntriesByType('navigation') || [])[0];
+      var sp = new URL((nav && nav.name) || location.href, location.origin).searchParams;
+      var tab = sp.get('tab');
+      var out = {
+        candidate: parseInt(sp.get('candidate'), 10) || 0,
+        tab: TABS.some(function (t) { return t[0] === tab; }) ? tab : 'overview',
+        q: sp.get('q') || '',
+        page: parseInt(sp.get('page'), 10) || 1,
+        status: sp.get('status') || '',
+        auth: sp.get('auth') || '',
+      };
+      return (out.candidate || out.q || out.page > 1 || out.status || out.auth) ? out : null;
+    } catch (_) { return null; }
+  }
+  var pendingRestore = armed !== null ? readRestore() : null;
 
   function navigate(page) {
     armed = page;
@@ -4238,6 +4494,15 @@
     state.sortDir = 1;
     state.list = [];
     state.stageErr = '';
+    if (pendingRestore) {                       // the first load after a refresh: put the view back
+      var pr = pendingRestore;
+      pendingRestore = null;
+      state.search = pr.q;
+      state.pg = pr.page;
+      state.filters.status = pr.status;
+      state.filters.authType = pr.auth;
+      if (pr.candidate) setTimeout(function () { openDetail(pr.candidate, pr.tab); }, 0);
+    }
     if (page === '') { state.dash = null; loadDashboard(); }
     else if (page === '/settings') render();
     else if (page === '/candidates') { state.sortKey = 'createdAt'; state.sortDir = -1; loadCandidates(); }

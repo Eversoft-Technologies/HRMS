@@ -20,6 +20,8 @@ import logging
 import os
 import re
 import secrets
+import threading
+import time as _time_mod
 from datetime import datetime, time, timedelta
 from pathlib import Path
 from urllib.parse import urlencode
@@ -2574,14 +2576,18 @@ def employees(request):
         for item in data:
             comp = EmployeeCompensation.objects.filter(email__iexact=item.get('email', '')).order_by('-effective_from').first()
             if comp:
+                # Identifiers are masked on the server; the full value only via
+                # the audited POST /api/sensitive/compensation/<id>/reveal.
+                from .sensitive import mask as _mask
                 item['compensation'] = {
+                    'id': comp.id,
                     'annualCtc': float(comp.annual_ctc),
                     'baseAmount': float(comp.base_amount),
-                    'panNumber': comp.pan_number,
-                    'uanNumber': comp.uan_number,
-                    'pfAccountNumber': comp.pf_account_number,
+                    'panNumber': _mask(comp.pan_number, 'pan'),
+                    'uanNumber': _mask(comp.uan_number, 'uan'),
+                    'pfAccountNumber': _mask(comp.pf_account_number, 'pf'),
                     'bankName': comp.bank_name,
-                    'bankAccountNumber': comp.bank_account_number,
+                    'bankAccountNumber': _mask(comp.bank_account_number, 'account'),
                 }
         return Response(data)
 
@@ -2618,16 +2624,28 @@ def employees(request):
 
     # Automatically generate Indian Payroll Compensation record
     from api.services.payroll_service import sync_employee_compensation
+    from .sensitive import clean_incoming
+    # A masked value (e.g. a form re-submitting what it was shown) keeps the
+    # identifier already on file instead of storing the mask.
+    _prev = (EmployeeCompensation.objects.filter(email__iexact=email)
+             .order_by('-effective_from', '-id').first())
+    try:
+        _ids = {f: clean_incoming(body.get(k), getattr(_prev, f, '') if _prev else '', f)
+                for k, f in (('panNumber', 'pan_number'), ('uanNumber', 'uan_number'),
+                             ('pfAccountNumber', 'pf_account_number'), ('bankAccountNumber', 'bank_account_number'))}
+    except Exception as e:
+        detail = getattr(e, 'detail', None)
+        return err(str(detail[0] if isinstance(detail, list) and detail else e))
     sync_employee_compensation(
         email=email,
         annual_ctc=body.get('annualCtc', body.get('salary')),
         employee_code=data.get('employeeId', ''),
         start_date=data.get('startDate'),
-        pan_number=body.get('panNumber', ''),
-        uan_number=body.get('uanNumber', ''),
-        pf_account_number=body.get('pfAccountNumber', ''),
+        pan_number=_ids['pan_number'],
+        uan_number=_ids['uan_number'],
+        pf_account_number=_ids['pf_account_number'],
         bank_name=body.get('bankName', ''),
-        bank_account_number=body.get('bankAccountNumber', ''),
+        bank_account_number=_ids['bank_account_number'],
         designation=data.get('designation', ''),
         department=data.get('department', '')
     )
@@ -3197,8 +3215,12 @@ def _leave_policy():
     opts = obj.options if obj else None
     if not isinstance(opts, dict) or not isinstance(opts.get('types'), list) or not opts['types']:
         return _default_leave_policy()
-    return {'types': [{'name': t['name'], 'days': t.get('days')} for t in opts['types']
-                      if isinstance(t, dict) and t.get('name')],
+    from .attendance_ext.leave_accrual import ACCRUAL_KEYS
+    # Optional accrual settings (attendance_ext/leave_accrual.py) ride along
+    # only when set, so a legacy policy reads back exactly as before.
+    return {'types': [dict({'name': t['name'], 'days': t.get('days')},
+                           **{k: t[k] for k in ACCRUAL_KEYS if k in t})
+                      for t in opts['types'] if isinstance(t, dict) and t.get('name')],
             'enforceBalance': bool(opts.get('enforceBalance', True))}
 
 
@@ -3311,9 +3333,18 @@ def _recompute_worked(att):
     earlier = _earlier_sessions(att)
     if earlier is None:
         return None
+    # Sessions after an automatic check-out whose re-check-in the manager has
+    # not approved (Pending) or refused (Rejected) do not count.
+    uncounted_from = (att.recheckin_at if (att.recheckin_status in ('Pending', 'Rejected') and att.recheckin_at)
+                      else None)
+
+    def counted(start):
+        return uncounted_from is None or start < uncounted_from
+
     total = sum(max(int((o - i).total_seconds() // 60) - _break_minutes_between(att, i, o), 0)
-                for i, o in earlier)
-    last = max(int((att.check_out - att.check_in).total_seconds() // 60) - _session_breaks(att), 0)
+                for i, o in earlier if counted(i))
+    last = (max(int((att.check_out - att.check_in).total_seconds() // 60) - _session_breaks(att), 0)
+            if counted(att.check_in) else 0)
     return total + last
 
 
@@ -3773,7 +3804,35 @@ def _open_attendance_session(email, today):
     if not previous or not _is_checked_in(previous) or not previous.shift_id:
         return None
     shift = Shift.objects.filter(pk=previous.shift_id, is_night_shift=True).first()
-    return previous if shift else None
+    if not shift:
+        return None
+    # A night shift left open stays closable (someone working late gets all
+    # their time) until the NEXT shift's check-in window opens (next start −
+    # SHIFT_EARLY_WINDOW). After that — automatic check-out being removed —
+    # it is a forgotten check-out: it must not block the next check-in, and a
+    # plain check-out must not stamp it "now" (~40 h). It is regularized.
+    if _night_session_expired(previous, shift):
+        return None
+    return previous
+
+
+def _night_session_expired(att, shift, now=None):
+    """True once the next shift's check-in window has opened (and never
+    before the shift end + NIGHT_SHIFT_TAIL)."""
+    next_start = datetime.combine(att.date + timedelta(days=1), shift.start_time)
+    end = max(next_start - SHIFT_EARLY_WINDOW, _shift_end_dt(shift, att.date) + NIGHT_SHIFT_TAIL)
+    return (now or local_now()) >= end
+
+
+def _stale_open_session(email, now):
+    """A session from an earlier day that was never checked out and can no
+    longer be closed normally (newest first), or None."""
+    for att in (EmployeeAttendance.objects
+                .filter(email=email, check_in__isnull=False, check_out__isnull=True,
+                        date__lt=now.date(), date__gte=now.date() - timedelta(days=7))
+                .order_by('-date')[:1]):
+        return att
+    return None
 
 
 def _any_open_session(email, now):
@@ -3791,6 +3850,204 @@ def _any_open_session(email, now):
         if _is_checked_in(att):
             return att
     return None
+
+
+def _recheckin_gate(obj, body):
+    """Checking in again on a day that was closed by an automatic (left the
+    office) check-out. Returns None (an ordinary check-in), 'pending' (the
+    day's re-check-in is still awaiting the manager: this session joins it),
+    ('new', reason) (start one), or a refusal Response.
+
+    Without a reason: 409 RECHECKIN_APPROVAL_REQUIRED. A rejection is binding
+    for that automatic check-out: 403 RECHECKIN_REJECTED."""
+    if not obj.auto_checkout_at or not obj.check_out or _is_checked_in(obj):
+        return None
+    pol = _departure_policy_values()
+    if not pol['recheckin_requires_approval']:
+        return None
+    status = obj.recheckin_status or ''
+    if status == 'Pending':
+        return 'pending'
+    answered = obj.recheckin_after is not None and obj.recheckin_after == obj.auto_checkout_at
+    if answered and status == 'Approved':
+        return None
+    if answered and status == 'Rejected':
+        return Response({
+            'message': ('Your manager did not approve checking in again after today\'s automatic check-out'
+                        + (f' ({obj.recheckin_review_note})' if obj.recheckin_review_note else '')
+                        + '. Speak to your manager if you are back at work.'),
+            'code': 'RECHECKIN_REJECTED', 'checkedIn': False,
+            'reviewer': obj.recheckin_reviewer or '',
+        }, status=403)
+    reason = str(body.get('recheckinReason') or body.get('recheckin_reason') or body.get('reason') or '').strip()
+    if len(reason) < 3:
+        from . import org_views
+        mgr = org_views.approver_for(obj.email)
+        return Response({
+            'message': (f'You were checked out automatically at {_fmt_ampm(obj.auto_checkout_at)} for leaving '
+                        f'the office. Checking in again needs your manager\'s approval.'),
+            'code': 'RECHECKIN_APPROVAL_REQUIRED',
+            'needsReason': True,
+            'checkedIn': False,
+            'autoCheckoutAt': obj.auto_checkout_at.strftime('%Y-%m-%d %H:%M:%S'),
+            'autoCheckoutTime': obj.auto_checkout_at.strftime('%H:%M'),
+            'leftAt': obj.check_out.strftime('%H:%M') if obj.check_out else None,
+            'approver': mgr,
+        }, status=409)
+    return ('new', reason[:1000])
+
+
+def _ask_manager_recheckin(obj, now):
+    """The employee's manager (or, with no manager, whoever holds
+    attendance.edit) is asked to approve a check-in after an automatic one."""
+    from . import org_views
+    who = obj.employee_name or obj.email
+    title = 'Check-in after automatic check-out needs approval'
+    msg = (f'{who} was checked out automatically at {_fmt_ampm(obj.auto_checkout_at)} for leaving the office '
+           f'and checked in again at {_fmt_ampm(now)}. Reason: "{obj.recheckin_reason}". The time counts '
+           f'once you approve it.')
+    link = '/my-team?tab=approvals'
+    mgr = org_views.approver_for(obj.email)
+    if mgr:
+        create_notification(mgr, title, msg, 'warning', link)
+    else:
+        notify_approvers('attendance.edit', title, msg, link)
+
+
+def _recheckin_dto(att):
+    return {
+        'id': att.id, 'email': att.email, 'employee': att.employee_name or att.email,
+        'date': att.date.strftime('%Y-%m-%d'),
+        'status': att.recheckin_status or '',
+        'reason': att.recheckin_reason or '',
+        'autoCheckoutAt': att.auto_checkout_at.strftime('%Y-%m-%d %H:%M:%S') if att.auto_checkout_at else None,
+        'recheckinAt': att.recheckin_at.strftime('%Y-%m-%d %H:%M:%S') if att.recheckin_at else None,
+        'checkedIn': _is_checked_in(att),
+        'heldMinutes': att.recheckin_held_minutes or 0,
+        'workedMinutes': att.worked_minutes or 0,
+        'reviewer': att.recheckin_reviewer or '',
+        'reviewedAt': att.recheckin_reviewed_at.strftime('%Y-%m-%d %H:%M:%S') if att.recheckin_reviewed_at else None,
+        'reviewNote': att.recheckin_review_note or '',
+    }
+
+
+def _recheckin_can_decide(request, att):
+    """(allowed, caller, error Response). The employee's manager or anyone
+    with attendance.edit — never the employee themselves."""
+    from . import org_views
+    allowed, caller, user = check_perm(request, 'attendance.edit')
+    caller = norm_email(caller)
+    if not caller or not user:
+        return False, caller, Response({'message': 'Authentication required. Please sign in again.'}, status=401)
+    if caller == norm_email(att.email):
+        return False, caller, Response({'message': 'You cannot approve or reject your own check-in.',
+                                        'code': 'SELF_APPROVAL'}, status=403)
+    if allowed or org_views.is_manager_of(caller, att.email):
+        return True, caller, None
+    return False, caller, Response({'message': 'Only the employee\'s manager or HR can decide this.'}, status=403)
+
+
+@api_view(['GET'])
+def attendance_recheckin_requests(request):
+    """Check-ins after an automatic check-out. ``?mine=1`` → the caller's
+    own (any status, last 30 days); otherwise the ones the caller may decide
+    (``?status=`` Pending by default; all with attendance.edit, else their
+    direct reports)."""
+    from . import org_views
+    allowed, caller, user = check_perm(request, 'attendance.edit')
+    caller = norm_email(caller)
+    if not caller or not user:
+        return Response({'message': 'Authentication required. Please sign in again.'}, status=401)
+    since = local_today() - timedelta(days=30)
+    if str(request.GET.get('mine') or '') in ('1', 'true'):
+        qs = EmployeeAttendance.objects.filter(email__iexact=caller, date__gte=since).exclude(recheckin_status='')
+        return Response([_recheckin_dto(a) for a in qs.order_by('-date')[:50]])
+    status = str(request.GET.get('status') or 'Pending').strip().capitalize()
+    qs = EmployeeAttendance.objects.exclude(email__iexact=caller)
+    qs = qs.filter(recheckin_status=status) if status != 'All' else qs.exclude(recheckin_status='')
+    if not allowed:
+        qs = qs.filter(email__in=[norm_email(e) for e in org_views.reports_of(caller)])
+    return Response([_recheckin_dto(a) for a in qs.order_by('-date', '-id')[:200]])
+
+
+@api_view(['POST'])
+def attendance_recheckin_decide(request, pk):
+    """Approve / reject a check-in made after an automatic check-out.
+
+    approve: the held time (closed sessions since the re-check-in) is added
+      to worked_minutes; an open session simply counts when it closes.
+    reject:  the held time is dropped; an open session is closed now and not
+      counted. Binding for that automatic check-out (RECHECKIN_REJECTED).
+    Either way the day's status / overtime / penalties follow the hours
+    (day_events.after_day_changed) and the change is audited."""
+    from .timesheets import audit_snapshot as _ts_snap, log_attendance_change as _ts_log
+    body = request.data if isinstance(request.data, dict) else {}
+    action = str(body.get('action') or body.get('decision') or '').strip().lower()
+    action = {'approved': 'approve', 'rejected': 'reject'}.get(action, action)
+    if action not in ('approve', 'reject'):
+        return err('action must be approve or reject.')
+    note = str(body.get('note') or body.get('reviewerNote') or '').strip()[:1000]
+    att = EmployeeAttendance.objects.filter(pk=pk).first()
+    if att is None:
+        return err('Request not found.', 404)
+    ok, caller, refusal = _recheckin_can_decide(request, att)
+    if not ok:
+        return refusal
+    now = local_now()
+    with transaction.atomic():
+        att = EmployeeAttendance.objects.select_for_update().get(pk=pk)
+        if att.recheckin_status != 'Pending':
+            return Response({'message': f'This request is already {(att.recheckin_status or "closed").lower()}.',
+                             'code': 'NOT_PENDING'}, status=409)
+        before = _ts_snap(att)
+        att.recheckin_reviewer = caller
+        att.recheckin_reviewed_at = now
+        att.recheckin_review_note = note
+        held = att.recheckin_held_minutes or 0
+        closed_now = False
+        if action == 'approve':
+            att.recheckin_status = 'Approved'
+            att.worked_minutes = (att.worked_minutes or 0) + held
+        else:
+            att.recheckin_status = 'Rejected'
+            if _is_checked_in(att):
+                # Close the open session; its time is not counted.
+                att.check_out = now
+                att.presence = ''
+                att.presence_at = now
+                att.outside_since = att.outside_last_at = None
+                closed_now = True
+        att.recheckin_held_minutes = 0
+        if not _is_checked_in(att):
+            shift = (Shift.objects.filter(pk=att.shift_id).first() if att.shift_id else None) \
+                or _get_active_shift(att.email, att.date)
+            att.overtime_minutes = _overtime_for(att.worked_minutes or 0, shift)
+        att.save()
+        if closed_now:
+            AttendanceEvent.objects.create(
+                email=att.email, employee_name=att.employee_name, date=att.date, event='check-out',
+                location='Closed: check-in after auto check-out not approved', at=now)
+    _ts_log(att, before, 'recheckin', caller,
+            ('Approved' if action == 'approve' else 'Rejected') + ' check-in after automatic check-out'
+            + (f': {note}' if note else ''))
+    if not _is_checked_in(att):
+        from .attendance_ext.day_events import after_day_changed
+        after_day_changed(att, actor=caller, source='recheckin')
+        att.refresh_from_db()
+    if action == 'approve':
+        create_notification(
+            att.email, 'Check-in approved',
+            f'Your manager approved your check-in after the automatic check-out on {att.date:%d %b}. '
+            + (f'{_fmt_dur(held)} has been added to your hours.' if held else 'Your time counts as normal.'),
+            'success', '/employees/attendance')
+    else:
+        create_notification(
+            att.email, 'Check-in not approved',
+            f'Your manager did not approve your check-in after the automatic check-out on {att.date:%d %b}'
+            + (f' ({note})' if note else '') + '. That time is not counted'
+            + ('; your session has been closed.' if closed_now else '.'),
+            'warning', '/employees/attendance')
+    return Response({**_recheckin_dto(att), 'message': 'Approved.' if action == 'approve' else 'Rejected.'})
 
 
 @api_view(['POST'])
@@ -3815,6 +4072,11 @@ def attendance_check_in(request):
         }, status=409)
     work_date = _work_date_for(email, now)
     obj, created = EmployeeAttendance.objects.get_or_create(email=email, date=work_date)
+    # Checked out automatically for leaving the office earlier today: coming
+    # back needs the manager's approval (policy recheckin_requires_approval).
+    recheckin = _recheckin_gate(obj, body)
+    if isinstance(recheckin, Response):
+        return recheckin
     name = body.get('employee') or body.get('name') or ''
     if name:
         obj.employee_name = name
@@ -3873,7 +4135,13 @@ def attendance_check_in(request):
     except (ValueError, TypeError):
         accuracy = None
 
-    if lat is None or lng is None:
+    # The office's own network (attendance_ext/networks.py): a request from it
+    # is at that office whatever indoor GPS says. Office check-ins only — an
+    # office IP proves nothing about a work-from-home day.
+    from .attendance_ext import networks as _office_net
+    net_match = None if is_wfh else _office_net.office_network_match(request)
+
+    if (lat is None or lng is None) and net_match is None:
         # Every mode of work is location-verified: onsite against an office
         # fence, work-from-home against the employee's approved home fence.
         return Response({
@@ -3884,6 +4152,7 @@ def attendance_check_in(request):
         }, status=400)
 
     fence_obj = None
+    verified_by_network = False
     reason = str(body.get('locationReason') or body.get('reason') or '').strip()
     needs_review = False
     # Geofencing cannot be switched off from the client by anyone. The old
@@ -3995,6 +4264,11 @@ def attendance_check_in(request):
         loc_desc = 'Office'
     else:
         is_inside, fence_obj, nearest, distance = _locate_against_fences(lat, lng, accuracy)
+        if not is_inside and net_match is not None:
+            # GPS missing, approximate or drifting outside — but the request
+            # comes from this office's network: verified, no off-site approval.
+            is_inside, fence_obj = True, net_match['fence']
+            verified_by_network = True
         if lat is not None and lng is not None:
             obj.location_lat, obj.location_lng = lat, lng
         else:
@@ -4011,6 +4285,9 @@ def attendance_check_in(request):
             if obj.location_status not in ('Approved', 'Rejected'):
                 obj.location_status = ''
             loc_desc = fence_obj.name
+            if verified_by_network:
+                # How it was verified, on the timeline: "HQ — Verified by office network (Main Wi-Fi)".
+                loc_desc = f'{fence_obj.name} — {_office_net.describe(net_match)}'[:120]
         elif obj.location_status == 'Approved':
             # HR already cleared today's off-site check-in. Keep the verified
             # flag their approval set — the line above reset it from the raw
@@ -4132,7 +4409,25 @@ def attendance_check_in(request):
     # have pre-stamped (notably on a flexible shift, whose status is only set
     # when the row is first created).
     if obj.status == 'absent' or not obj.status:
-        obj.status = 'present'
+        obj.status = 'late' if (obj.check_out and (obj.late_minutes or 0) > 0) else 'present'
+    elif obj.status == 'half-day' and obj.check_out:
+        # Re-opening a day closed short (attendance_ext/day_status.py): the
+        # status is provisional again until this session's check-out.
+        obj.status = 'late' if (obj.late_minutes or 0) > 0 else 'present'
+
+    new_recheckin = isinstance(recheckin, tuple)
+    if new_recheckin:
+        # Starts now, but its time counts only once the manager approves.
+        obj.recheckin_status = 'Pending'
+        obj.recheckin_reason = recheckin[1]
+        obj.recheckin_at = now
+        obj.recheckin_held_minutes = 0
+        obj.recheckin_reviewer = ''
+        obj.recheckin_reviewed_at = None
+        obj.recheckin_review_note = ''
+    if recheckin is not None:
+        obj.recheckin_after = obj.auto_checkout_at
+        loc_desc = f'{loc_desc} (needs manager approval)'[:120]
 
     # Start a new session
     obj.check_in = now
@@ -4157,14 +4452,34 @@ def attendance_check_in(request):
             '/employees/checkin?admin=reviews',
         )
 
-    create_notification(
-        email,
-        'Checked in',
-        f'You have successfully checked in for today at {loc_desc}.',
-        'success',
-        '/employees/attendance',
-    )
+    if recheckin is not None:
+        if new_recheckin:
+            _ask_manager_recheckin(obj, now)
+        create_notification(
+            email,
+            'Checked in — waiting for manager approval',
+            f'You checked in again at {_fmt_ampm(now)} after the automatic check-out at '
+            f'{_fmt_ampm(obj.auto_checkout_at)}. The time from now counts once your manager approves it.',
+            'info',
+            '/employees/attendance',
+        )
+    else:
+        create_notification(
+            email,
+            'Checked in',
+            f'You have successfully checked in for today at {loc_desc}.',
+            'success',
+            '/employees/attendance',
+        )
     payload = EmployeeAttendanceSerializer(obj).data
+    if verified_by_network:
+        payload['verifiedBy'] = 'office_network'
+        payload['network'] = _office_net.match_json(net_match)
+        payload['locationMessage'] = (f'Checked in at {fence_obj.name} — verified by office Wi-Fi'
+                                      + (f' ({net_match["label"]})' if net_match.get('label') else '') + '.')
+    if recheckin is not None:
+        payload['message'] = ('Checked in. Because you were checked out automatically today, this time '
+                              'counts once your manager approves it.')
     # A work-from-home day that nothing could be checked against. The client
     # uses this to offer registering a home address, at the one moment the
     # employee is provably standing in it. Sent on the SUCCESS response
@@ -4191,6 +4506,17 @@ def attendance_check_out(request):
     now = local_now()
     obj = _open_attendance_session(email, now.date())
     if not obj or not _is_checked_in(obj):
+        stale = _stale_open_session(email, now)
+        if stale is not None:
+            return Response({
+                'message': (f'Your session from {stale.date:%d %b} was not checked out before your shift ended, '
+                            'so it cannot be closed now. Please submit a Missed punch / Regularize request with '
+                            'the time you actually left — your manager approves it and your hours are recalculated.'),
+                'code': 'SESSION_EXPIRED',
+                'checkedIn': False,
+                'date': stale.date.strftime('%Y-%m-%d'),
+                'regularizeUrl': f'/employees/checkin?regularize={stale.date:%Y-%m-%d}',
+            }, status=409)
         # Both cases are "there is no open session to close", and they must be
         # refused identically. Only the missing-row case used to be caught, so
         # a row with check_in still NULL — exactly what a geofence-refused
@@ -4205,25 +4531,43 @@ def attendance_check_out(request):
             'checkedIn': False,
         }, status=409)
 
-    # Automatic close on leaving the office: only for a session that started
-    # at the office. An approved off-site / WFH day has no office to leave.
-    is_auto = str(body.get('auto') or '').lower() in ('geofence', 'geofence_departure')
-    if is_auto and _session_is_offsite(obj):
-        return Response({'message': 'This session did not start at the office, so it is not '
-                                    'closed automatically when you are away from it.',
-                         'code': 'NOT_AN_OFFICE_SESSION', 'checkedIn': True}, status=409)
+    # Automatic check-out on leaving the office (the browser watcher posts it
+    # after its warning countdown). Only a session that started AT the office
+    # can leave it — an approved off-site / WFH day never is. And the
+    # browser's word is not enough: a throttled or sleeping tab, a network
+    # reconnect or a second tab can all think time passed. Only the server's
+    # own record of an unbroken, fresh run of precise outside readings counts
+    # (geofence-check → _note_outside). A generic truthy 'auto' value is an
+    # ordinary check-out.
+    is_auto = str(body.get('auto') or '').strip().lower() in ('geofence', 'geofence_departure')
     outside_mins = None
+    close_at = now          # when the session's worked time ends
     if is_auto:
-        # The browser's word is not enough: a throttled or sleeping tab, a
-        # network reconnect or a second tab can all think time passed. Only the
-        # server's own record of an unbroken outside run counts.
+        if _session_is_offsite(obj):
+            return Response({'message': 'This session did not start at the office, so it is not '
+                                        'closed automatically when you are away from it.',
+                             'code': 'NOT_AN_OFFICE_SESSION', 'checkedIn': True}, status=409)
+        from .attendance_ext import networks as _office_net
+        on_office_net = _office_net.office_network_match(request)
+        if on_office_net is not None:
+            # The check-out itself came from the office's own network: they are
+            # in the office, whatever the GPS run says. Start the run again.
+            _note_outside(obj, now, 'inside')
+            return Response({'message': 'Not checked out: this request came from the office network '
+                                        f'({on_office_net["fence"].name}), so you are at the office.',
+                             'code': 'AUTO_CHECKOUT_UNCONFIRMED', 'checkedIn': True, 'outsideMinutes': None,
+                             'network': _office_net.match_json(on_office_net)}, status=409)
         pol = _departure_policy_values()
         outside_mins = _outside_run_minutes(obj, now)
-        need = max(int(pol.get('timeout_minutes') or 15) - 1, 1)
-        if not pol.get('enabled', True) or outside_mins is None or outside_mins < need:
+        if not pol['enabled'] or outside_mins is None or outside_mins < _departure_need_minutes(pol):
             return Response({'message': 'Not checked out: you have not been outside the office long enough.',
                              'code': 'AUTO_CHECKOUT_UNCONFIRMED', 'checkedIn': True,
                              'outsideMinutes': outside_mins}, status=409)
+        # Worked time ends when they LEFT — the first reading of the unbroken
+        # outside run — not when the timeout ran out: the 10+ minutes spent
+        # outside the office are not work. The action itself is stamped at
+        # ``now`` (auto_checkout_at).
+        close_at = max(obj.outside_since, obj.check_in) if obj.outside_since else now
 
     # GPS check for event
     lat = body.get('latitude')
@@ -4244,41 +4588,63 @@ def attendance_check_out(request):
             loc_desc = fence_obj.name if fence_obj else 'Unverified Location'
         else:
             loc_desc = 'Office'
+        if fence_obj is None:
+            # Indoor GPS outside the circle (or no GPS), but the request comes
+            # from an office network: label it with that office.
+            from .attendance_ext import networks as _office_net
+            _nm = _office_net.office_network_match(request)
+            if _nm is not None:
+                fence_obj = _nm['fence']
+                loc_desc = f'{fence_obj.name} — {_office_net.describe(_nm)}'[:120]
 
     from .timesheets import audit_snapshot as _ts_snap, log_attendance_change as _ts_log
     _ts_before = _ts_snap(obj) if is_auto else None   # audit trail (never raises)
     # Close session
     if _is_checked_in(obj):
-        session = max(int((now - obj.check_in).total_seconds() // 60), 0)
+        session = max(int((close_at - obj.check_in).total_seconds() // 60), 0)
 
     # Checking out mid-break → close the open break and accrue its time.
     if _is_break_label(obj.presence):
         last_start = AttendanceEvent.objects.filter(
             email=email, date=obj.date, event='break-start'
         ).order_by('-at').first()
+        brk_end = close_at
         if last_start:
-            brk_min = int((now - last_start.at).total_seconds() // 60)
+            brk_end = max(close_at, last_start.at)
+            brk_min = int((brk_end - last_start.at).total_seconds() // 60)
             obj.break_minutes = (obj.break_minutes or 0) + max(brk_min, 0)
         AttendanceEvent.objects.create(
             email=email, employee_name=obj.employee_name, date=obj.date,
-            event='break-end', location=loc_desc, at=now,
+            event='break-end', location=loc_desc, at=brk_end,
         )
 
+    held_session = False
     if _is_checked_in(obj):
         # Earlier sessions today + this one minus only ITS breaks. Replacing
         # the total here lost every earlier session (in 9–12, out, in 13–18
         # counted 13–18 only) and took all of the day's breaks off this one.
-        obj.worked_minutes = (obj.worked_minutes or 0) + max(session - _session_breaks(obj), 0)
+        this_session = max(session - _session_breaks(obj), 0)
+        if obj.recheckin_status == 'Pending':
+            # Checked in again after an automatic check-out and the manager
+            # has not decided yet: the time is held, not counted
+            # (attendance_recheckin_decide adds or drops it).
+            obj.recheckin_held_minutes = (obj.recheckin_held_minutes or 0) + this_session
+            held_session = True
+        else:
+            obj.worked_minutes = (obj.worked_minutes or 0) + this_session
 
-    obj.check_out = now
+    obj.check_out = close_at
     obj.presence = ''
     obj.presence_at = now
     # The browser can close a session when the employee leaves the geofence.
     # Stamping it keeps an auto-closed day distinguishable from one the person
     # ended themselves, which matters if they dispute the hours.
+    left_at = obj.outside_since
     obj.outside_since = obj.outside_last_at = None
+    where_txt = ''
     if is_auto:
         obj.auto_checkout_at = now
+        obj.is_auto_checked_out = True
         mins = outside_mins
         try:
             away_m = float(body.get('distance')) if body.get('distance') is not None else None
@@ -4305,8 +4671,8 @@ def attendance_check_out(request):
         shift_end = datetime.combine(obj.date, shift.end_time)
         if shift.is_night_shift and shift_end <= shift_start:
             shift_end += timedelta(days=1)
-        if now < shift_end:
-            obj.early_exit_minutes = int((shift_end - now).total_seconds() // 60)
+        if close_at < shift_end:
+            obj.early_exit_minutes = int((shift_end - close_at).total_seconds() // 60)
         else:
             obj.early_exit_minutes = 0
 
@@ -4315,38 +4681,62 @@ def attendance_check_out(request):
         else:
             obj.overtime_minutes = 0
 
-    # A day the employee checked in is never 'absent' once closed: keep 'late'
-    # if they arrived late, otherwise 'present'. (Absent stays reserved for a
-    # day with no check-in at all.)
-    if obj.check_in and obj.status in ('', 'absent', None):
+    # Day status from the hours worked, now that the day is closed
+    # (attendance_ext/day_status.py, the employee's attendance policy):
+    # absent / half-day below the profile's thresholds, else late / present.
+    # Should that fail, the old rule: a checked-in day is late or present.
+    _day_classified = False
+    try:
+        from .attendance_ext import day_status as _ds
+        _day_classified = _ds.apply(obj, shift) is not None
+    except Exception:
+        logger.exception('day status classification failed for %s %s', email, obj.date)
+    if not _day_classified and obj.check_in and obj.status in ('', 'absent', None):
         obj.status = 'late' if (obj.late_minutes or 0) > 0 else 'present'
 
     obj.save()
+    if _day_classified:                      # late / early-out allowance for the month (never raises)
+        from .attendance_ext.penalties import evaluate_for_day as _eval_penalties
+        _eval_penalties(email, obj.date)
+    from .attendance_ext.overtime import on_day_closed   # Workstream O: overtime record + payable OT (never raises)
+    on_day_closed(obj)
     if is_auto:
         _ts_log(obj, _ts_before, 'auto_checkout', 'system', obj.note or 'Left the office geofence')
+    if obj.punch_issue:                     # a flagged night shift closed late: re-check the flag
+        from .attendance_ext.missed_punch import refresh_row
+        refresh_row(obj, now)
 
-    evt_name = 'auto-checkout-departure' if str(body.get('auto') or '').lower() in ('geofence', 'geofence_departure') else 'check-out'
+    evt_name = 'auto-checkout-departure' if is_auto else 'check-out'
     AttendanceEvent.objects.create(
         email=email, employee_name=obj.employee_name, date=obj.date,
         event=evt_name, location=loc_desc,
         latitude=lat, longitude=lng,
         geo_fence_id=fence_obj.id if fence_obj else None,
-        at=now,
+        at=close_at,
     )
 
+    if is_auto:
+        again = (' Checking in again today needs your manager\'s approval.'
+                 if _departure_policy_values()['recheckin_requires_approval'] else
+                 ' If you are back at work, check in again.')
+        msg = (f'You were outside the office for {outside_mins} minutes'
+               f'{" (" + where_txt.strip() + ")" if where_txt else ""}, so you were checked out '
+               f'automatically at {_fmt_ampm(now)}. Your hours count until you left, at '
+               f'{_fmt_ampm(close_at)}.{again} If this is wrong, raise an attendance correction.')
+    elif held_session:
+        msg = ('Your work session has been closed. Its time counts once your manager approves '
+               'your check-in after the automatic check-out.')
+    else:
+        msg = 'Your work session has been closed for today.'
     create_notification(
         email,
         'Checked out automatically' if is_auto else 'Checked out',
-        (f'You were outside the office for more than {body.get("outside_minutes") or 15} minutes'
-         f'{" (" + where_txt.strip() + ")" if where_txt else ""}, '
-         f'so your session was closed at {_fmt_ampm(now)}. If you were still at work, check in '
-         f'again or raise an attendance correction.') if is_auto
-        else 'Your work session has been closed for today.',
-        'info',
+        msg,
+        'warning' if is_auto else 'info',
         '/employees/attendance',
     )
     if is_auto:
-        _tell_hr_auto_checkout(obj, now, outside_mins, where_txt)
+        _tell_hr_auto_checkout(obj, now, outside_mins, where_txt, left_at=close_at)
     _maybe_send_long_day_alert(obj, shift)
     return Response(EmployeeAttendanceSerializer(obj).data)
 
@@ -4413,11 +4803,17 @@ def attendance_geofence_check(request):
     or someone at their desk gets checked out by a bad WiFi reading.
     """
     email = norm_email(request.GET.get('email') or _resolve_recipient_email(request, ''))
+    # On the office's own network (attendance_ext/networks.py) = inside that
+    # office, whatever indoor GPS says — for office sessions, never for WFH.
+    from .attendance_ext import networks as _office_net
+    net_match = _office_net.office_network_match(request)
     try:
         lat = float(request.GET.get('latitude'))
         lng = float(request.GET.get('longitude'))
     except (TypeError, ValueError):
-        return Response({'enforced': _geofencing_enabled(), 'uncertain': True})
+        if net_match is None:
+            return Response({'enforced': _geofencing_enabled(), 'uncertain': True})
+        lat = lng = None
     try:
         accuracy = float(request.GET.get('accuracy'))
     except (TypeError, ValueError):
@@ -4443,7 +4839,14 @@ def attendance_geofence_check(request):
         return Response({'enforced': True, 'offsite': True, 'wfh': False,
                          'inside': True, 'uncertain': False})
 
+    on_office_net = net_match is not None and not wfh
+    if not on_office_net and (lat is None or lng is None):
+        return Response({'enforced': True, 'uncertain': True})
     inside, fence, nearest, distance = _locate_against_fences(lat, lng, accuracy)
+    if on_office_net and not inside:
+        # Office Wi-Fi: inside. Clears any outside run below, so the automatic
+        # check-out can never fire while the device is on the office network.
+        inside, fence, nearest, distance = True, net_match['fence'], net_match['fence'], None
     # A reading whose error bar is wider than how far outside they appear tells
     # us nothing. Report it as uncertain rather than "outside". An IP-level fix
     # (tens of km) is uncertain by definition, however far away it claims to be:
@@ -4475,7 +4878,7 @@ def attendance_geofence_check(request):
                 f'outside {nearest.name}.{auto} If you are still at the office, turn on precise '
                 f'location for this site.',
                 'warning', tag)
-    return Response({
+    out = {
         'enforced': True,
         'wfh': wfh,
         'inside': inside,
@@ -4483,7 +4886,33 @@ def attendance_geofence_check(request):
         'distance': round(distance) if distance is not None else None,
         'fence': (fence or nearest).name if (fence or nearest) else None,
         'accuracy': accuracy,
-    })
+        'network': _office_net.match_json(net_match if on_office_net else None),
+    }
+    if att is not None and not wfh:
+        # The auto check-out decision is the server's: the watcher shows its
+        # warning only when departureDue, and the check-out itself re-checks
+        # the same run (attendance_check_out).
+        pol = _departure_policy_values()
+        run = _outside_run_minutes(att, now)
+        out.update({
+            'autoCheckout': bool(pol['enabled']),
+            'outsideMinutes': run,
+            'outsideSince': att.outside_since.strftime('%Y-%m-%d %H:%M:%S') if (run is not None and att.outside_since) else None,
+            'timeoutMinutes': pol['timeout_minutes'],
+            'warningSeconds': pol['warning_seconds'],
+            'warningSound': bool(pol['warning_sound']),
+            'recheckinRequiresApproval': bool(pol['recheckin_requires_approval']),
+            'departureDue': bool(pol['enabled'] and not inside and not uncertain and run is not None
+                                 and run >= _departure_need_minutes(pol)),
+        })
+    return Response(out)
+
+
+def _departure_need_minutes(pol):
+    """Minutes of unbroken outside run that make an auto check-out due. One
+    minute of slack: the run is measured from the first outside reading, and
+    the browser's own clock and the sampling tick never line up exactly."""
+    return max(int(pol.get('timeout_minutes') or DEPARTURE_POLICY_DEFAULTS['timeout_minutes']) - 1, 1)
 
 
 @api_view(['GET', 'POST'])
@@ -4688,6 +5117,10 @@ def attendance_detail(request, pk):
         location=(f'{actor or "HR"}: worked {_fmt_dur(before[3] or 0)} → {_fmt_dur(obj.worked_minutes or 0)}')[:120],
         at=local_now())
     _ts_log(obj, _ts_before, 'edit', actor or '', str(data.get('reason') or data.get('auditReason') or ''))
+    # Status, overtime and penalties follow the edited hours (policy engine).
+    from .attendance_ext.day_events import after_day_changed
+    after_day_changed(obj, actor=actor or '', source='edit', keep_status='status' in data)
+    obj.refresh_from_db()
     return Response(EmployeeAttendanceSerializer(obj).data)
 
 
@@ -5372,6 +5805,11 @@ def attendance_events(request):
                                  'code': 'NO_OFFICE_FENCE'}, status=403)
             ok, fence_obj, nearest, dist = _locate_against_fences(lat, lng, acc)
             if not ok:
+                from .attendance_ext import networks as _office_net
+                _nm = _office_net.office_network_match(request)
+                if _nm is not None:              # on the office network: at that office
+                    ok, fence_obj = True, _nm['fence']
+            if not ok:
                 return Response({'message': f'You appear to be about {round(dist or 0)} m from '
                                             f'{nearest.name if nearest else "the office"}, so you cannot switch '
                                             f'to the office here.',
@@ -5539,30 +5977,97 @@ def _team_status(event, att):
     return ('Remote' if (att.is_wfh or att.device == 'mobile') else 'In Office'), att.check_in
 
 
-@api_view(['GET'])
-def attendance_team(request):
-    """Live presence snapshot for the whole team (Team Status Now panel).
-    Status per person comes from their latest activity event today, else from
-    their attendance record; everyone else is shown as Absent.
+# ---------------------------------------------------------------------------
+# Team Status snapshot
+# ---------------------------------------------------------------------------
+# Every signed-in browser asks for this list every 15-30 s (the presence dots on
+# every page, plus the Check In/Out page's own panel) and again after each
+# check-in. Rebuilding it per request meant that when many people logged in at
+# the same moment the server spent all its workers on identical work, and each
+# person's own check-in / Today's Activity Log calls queued behind it. The
+# answer is the same for everybody, so it is built once and shared:
+#
+#   * the snapshot is reused until something is written (an attendance row or
+#     event is saved) or it is TEAM_SNAPSHOT_TTL old, so a person's own change
+#     is in the very next answer;
+#   * only one thread rebuilds at a time: requests that arrive mid-rebuild get
+#     the previous snapshot instead of piling on, so the work is bounded by one
+#     rebuild at a time however many people ask;
+#   * a rebuild costs a fixed handful of queries however many people there are.
+#
+# The snapshot lives in this process, so with several workers each keeps its
+# own; a change is visible everywhere within TEAM_SNAPSHOT_TTL at most.
+TEAM_SNAPSHOT_MIN_INTERVAL = 0.0    # seconds a snapshot is reused even after a write (0 = rebuild on the next request)
+TEAM_SNAPSHOT_TTL = 4.0             # seconds: rebuild at least this often
+_TEAM_SNAPSHOT = {'at': 0.0, 'body': None, 'dirty': True}
+_TEAM_SNAPSHOT_LOCK = threading.Lock()
 
-    Intentionally ungated: every employee may see their team's presence on the
-    Check In/Out page (it exposes only name + coarse status + since-time, no
-    sensitive data), so the attendance.view permission is not required here."""
+
+def _team_snapshot_reset():
+    """Forget the snapshot (tests; also what a deploy does by restarting)."""
+    _TEAM_SNAPSHOT.update(at=0.0, body=None, dirty=True)
+
+
+def _team_snapshot_mark_dirty(**_kwargs):
+    _TEAM_SNAPSHOT['dirty'] = True
+
+
+# Any save/delete of an attendance row or event means the picture changed.
+from django.db.models.signals import post_delete as _post_delete, post_save as _post_save  # noqa: E402
+for _model in (EmployeeAttendance, AttendanceEvent):
+    _post_save.connect(_team_snapshot_mark_dirty, sender=_model, dispatch_uid='team_snapshot_save_' + _model.__name__)
+    _post_delete.connect(_team_snapshot_mark_dirty, sender=_model, dispatch_uid='team_snapshot_delete_' + _model.__name__)
+
+
+def _team_snapshot_usable():
+    body = _TEAM_SNAPSHOT['body']
+    if body is None:
+        return False
+    age = _time_mod.monotonic() - _TEAM_SNAPSHOT['at']
+    return age < TEAM_SNAPSHOT_MIN_INTERVAL or (age < TEAM_SNAPSHOT_TTL and not _TEAM_SNAPSHOT['dirty'])
+
+
+def _team_snapshot_body():
+    if _team_snapshot_usable():
+        return _TEAM_SNAPSHOT['body']
+    # First ever build: wait for it. Afterwards a request that finds a rebuild
+    # already running just takes the previous snapshot.
+    if not _TEAM_SNAPSHOT_LOCK.acquire(blocking=_TEAM_SNAPSHOT['body'] is None):
+        return _TEAM_SNAPSHOT['body']
+    try:
+        if _team_snapshot_usable():            # built while this request waited
+            return _TEAM_SNAPSHOT['body']
+        _TEAM_SNAPSHOT['dirty'] = False        # a write during the build re-dirties it
+        body = json.dumps(_build_team_rows()).encode('utf-8')
+        _TEAM_SNAPSHOT['body'] = body
+        _TEAM_SNAPSHOT['at'] = _time_mod.monotonic()
+        return body
+    finally:
+        _TEAM_SNAPSHOT_LOCK.release()
+
+
+def _build_team_rows():
     today = local_now().date()
 
     today_att = {a.email: a for a in EmployeeAttendance.objects.filter(date=today)}
-    # After midnight a night shift's open session is still yesterday's row.
+    # After midnight a night shift's open session is still yesterday's row. Which
+    # of those count is decided from one shared lookup of the night shifts, not a
+    # query per person (that was ~3 queries for each person still checked in).
+    night_shift_ids = set(Shift.objects.filter(is_night_shift=True).values_list('id', flat=True))
     for a in EmployeeAttendance.objects.filter(date=today - timedelta(days=1), check_in__isnull=False,
                                                check_out__isnull=True):
         cur = today_att.get(a.email)
-        if (cur is None or not _is_checked_in(cur)) and _open_attendance_session(a.email, today) == a:
+        if (cur is None or not _is_checked_in(cur)) and _is_checked_in(a) and a.shift_id in night_shift_ids:
             today_att[a.email] = a
 
     # Latest event per email for the session shown (queryset is ordered by
     # ``at`` ascending, so the last write wins) + the best name seen for them.
     latest_event = {}
     event_name = {}
-    for ev in AttendanceEvent.objects.filter(date__gte=today - timedelta(days=1)).order_by('at'):
+    events = (AttendanceEvent.objects.filter(date__gte=today - timedelta(days=1))
+              .only('email', 'date', 'event', 'location', 'at', 'employee_name')
+              .order_by('at'))
+    for ev in events:
         att = today_att.get(ev.email)
         if ev.date == today or (att is not None and att.date == ev.date):
             if att is None or att.date == ev.date:
@@ -5571,7 +6076,7 @@ def attendance_team(request):
             event_name[ev.email] = ev.employee_name
 
     # Roster = all app users, plus any email that has activity but no login row.
-    roster = [(u.email, u.full_name) for u in AppUser.objects.all()]
+    roster = list(AppUser.objects.values_list('email', 'full_name'))
     known = {e for e, _ in roster}
     for email in set(list(latest_event.keys()) + list(today_att.keys())):
         if email not in known:
@@ -5594,7 +6099,22 @@ def attendance_team(request):
             'since': since_dt.strftime('%I:%M %p') if since_dt else '—',
         })
     rows.sort(key=lambda r: (priority.get(r['status'], 9), r['name'].lower()))
-    return Response(rows)
+    return rows
+
+
+@api_view(['GET'])
+def attendance_team(request):
+    """Live presence snapshot for the whole team (Team Status Now panel).
+    Status per person comes from their latest activity event today, else from
+    their attendance record; everyone else is shown as Absent.
+
+    Intentionally ungated: every employee may see their team's presence on the
+    Check In/Out page (it exposes only name + coarse status + since-time, no
+    sensitive data), so the attendance.view permission is not required here.
+
+    Served from a shared snapshot (see above), so it costs the same whether one
+    person or a thousand are asking."""
+    return HttpResponse(_team_snapshot_body(), content_type='application/json')
 
 
 #: Heatmap periods the map offers (days, including today).
@@ -5937,48 +6457,38 @@ def attendance_remind(request):
 
 @api_view(['GET', 'POST'])
 def attendance_departure_policy(request):
-    """Configuration for Auto Check-Out on Geofence Departure."""
-    KEY = 'attendance_departure_policy'
-    default_policy = {
-        'enabled': True,
-        'timeout_minutes': 15,
-        'warning_minutes': 5,
-        'notify_employee': True,
-    }
-    try:
-        if request.method == 'GET':
-            obj = MasterDataSet.objects.filter(key=KEY).first()
-            if not obj or not obj.options:
-                return Response(default_policy)
-            opts = obj.options
-            if isinstance(opts, str):
-                try:
-                    import json
-                    opts = json.loads(opts)
-                except Exception:
-                    opts = {}
-            if not isinstance(opts, dict):
-                opts = {}
-            return Response({**default_policy, **opts})
+    """Auto check-out on leaving the office geofence.
 
-        # POST
-        data = request.data or {}
-        obj, _ = MasterDataSet.objects.get_or_create(
-            key=KEY,
-            defaults={'label': 'Attendance Departure Policy', 'options': default_policy}
-        )
-        new_policy = {
-            'enabled': bool(data.get('enabled', True)),
-            'timeout_minutes': int(data.get('timeout_minutes', 15) or 15),
-            'warning_minutes': int(data.get('warning_minutes', 5) or 5),
-            'notify_employee': bool(data.get('notify_employee', True)),
-        }
-        obj.options = new_policy
-        obj.save()
-        return Response(new_policy)
-    except Exception as exc:
-        logger.exception("Error in attendance_departure_policy: %s", exc)
-        return Response(default_policy)
+    GET (any signed-in user — the browser watcher reads it):
+        {enabled, timeout_minutes, warning_seconds, warning_sound,
+         recheckin_requires_approval}
+    POST (settings.manage): any of those keys; values are validated
+    (timeout 1-240 min, warning 5-120 s, booleans) and a bad value is a 400
+    naming the field — nothing is saved."""
+    KEY = 'attendance_departure_policy'
+    if request.method == 'GET':
+        caller_email, user = _get_caller(request)
+        if not caller_email or not user:
+            return Response({'message': 'Authentication required. Please sign in again.'}, status=401)
+        return Response(_departure_policy_values())
+    allowed, caller_email, user = check_perm(request, 'settings.manage')
+    if not caller_email or not user:
+        return Response({'message': 'Authentication required. Please sign in again.'}, status=401)
+    if not allowed:
+        return Response({'message': 'Permission denied: settings.manage'}, status=403)
+    data = request.data if isinstance(request.data, dict) else {}
+    current = _departure_policy_values()
+    merged = {**current, **{k: v for k, v in data.items() if k in DEPARTURE_POLICY_DEFAULTS}}
+    pol, errors = _clean_departure_policy(merged, strict=True)
+    if errors:
+        first = next(iter(errors.items()))
+        return Response({'message': f'{first[0].replace("_", " ").capitalize()}: {first[1]}',
+                         'errors': errors, 'code': 'INVALID_POLICY'}, status=400)
+    obj, _ = MasterDataSet.objects.get_or_create(
+        key=KEY, defaults={'label': 'Attendance Departure Policy', 'options': pol})
+    obj.options = pol
+    obj.save()
+    return Response(pol)
 
 
 # --- Leave Management ------------------------------------------------------
@@ -6036,12 +6546,18 @@ def leave(request):
         return err('Choose one of the leave types set by your admin: '
                    + ', '.join(t['name'] for t in policy['types']) + '.')
     if rule['days'] is not None and policy['enforceBalance']:
-        approved, pending = _leave_usage(email, vd['from_date'].year)
-        left = rule['days'] - approved.get(rule['name'], 0) - pending.get(rule['name'], 0)
+        # Ledger balance: credited (accrued / prorated / carried forward /
+        # adjusted) by the leave's start date, less approved and pending
+        # leave, plus the type's allowNegative advance.
+        from .attendance_ext import leave_accrual as la
+        lrule = la.rule_of(rule)
+        left, waiting = la.available_for(email, lrule, vd['from_date'], today=local_today())
+        left, waiting = la.num(left), la.num(waiting)
         if vd.get('days', 1) > left:
-            waiting = pending.get(rule['name'], 0)
+            monthly = lrule.get('accrual') == 'monthly'
             return err(f'You have {max(left, 0)} day{"" if left == 1 else "s"} of {rule["name"]} left in '
-                       f'{vd["from_date"].year}' + (f' ({waiting} already requested and waiting)' if waiting else '')
+                       f'{vd["from_date"].year}' + (f' (accrued by {vd["from_date"].isoformat()})' if monthly else '')
+                       + (f' ({waiting} already requested and waiting)' if waiting else '')
                        + f', and this request is for {vd.get("days", 1)}. Shorten it or choose another leave type.')
     inst = serializer.save(approver_email=approver_email, type=rule['name'])
     create_notification(
@@ -6169,23 +6685,19 @@ def holidays(request):
 @require_perm('leave.view', or_self=True)
 def leave_balance(request):
     """Per-type leave balance for ?email= this calendar year, for every type in
-    the admin's leave policy: allowance − approved days (pending shown apart).
-    A type with no limit has allowance/remaining None."""
+    the admin's leave policy, from the leave ledger (attendance_ext/
+    leave_accrual.py): allowance = days credited so far (the full grant for a
+    plain annual type), remaining = allowance − approved days (pending shown
+    apart). Extra fields: accrued, carriedForward, adjusted, balance,
+    canApply, nextAccrual {date, days}, accrual mode. A type with no limit has
+    allowance/remaining None."""
+    from .attendance_ext import leave_accrual as la
     email = norm_email(request.GET.get('email'))
     if not email:
         return err('email is required')
-    year = local_today().year
-    approved, pending = _leave_usage(email, year)
-    policy = _leave_policy()
-    balances = []
-    for t in policy['types']:
-        typ, allowance = t['name'], t['days']
-        used = approved.get(typ, 0)
-        balances.append({
-            'type': typ, 'allowance': allowance, 'unlimited': allowance is None,
-            'used': used, 'pending': pending.get(typ, 0),
-            'remaining': None if allowance is None else max(allowance - used, 0),
-        })
+    today = local_today()
+    year = today.year
+    policy, balances = la.balances(email, year, today=today)
     return Response({'email': email, 'year': year, 'balances': balances,
                      'enforceBalance': policy['enforceBalance']})
 
@@ -6225,7 +6737,11 @@ def leave_policy(request):
             if days != int(days) or not 0 <= days <= LEAVE_DAYS_MAX:
                 return err(f'Days for "{name}" must be a whole number from 0 to {LEAVE_DAYS_MAX}.')
             days = int(days)
-        types.append({'name': name, 'days': days})
+        from .attendance_ext.leave_accrual import validate_type_settings
+        extra, problem = validate_type_settings(name, days, t)
+        if problem:
+            return err(problem)
+        types.append(dict({'name': name, 'days': days}, **extra))
     policy = {'types': types, 'enforceBalance': bool(body.get('enforceBalance', True))}
     MasterDataSet.objects.update_or_create(
         key=LEAVE_POLICY_KEY, defaults={'label': 'Leave policy', 'options': policy})
@@ -6413,6 +6929,8 @@ def _checkout_reminders(email, now=None):
             missing_tag = f'/employees/attendance?checkout-missing={row.pk}'
             if Notification.objects.filter(recipient=email, link=missing_tag).exists():
                 continue
+            if row.punch_issue_notified_at:
+                continue          # the missed-punch detector already told them (attendance_ext)
             create_notification(
                 email, CHECKOUT_MISSING_TITLE,
                 f'You checked in on {row.date:%d %b} at {row.check_in:%I:%M %p} and did not check out. '
@@ -6431,6 +6949,9 @@ def notifications(request):
         _checkout_reminders(email)
     except Exception:
         logger.exception('attendance reminders failed for %s', email)
+    # Missed-punch detection for this one employee (throttled; works without cron).
+    from .attendance_ext.missed_punch import detect_for_employee
+    detect_for_employee(email, local_now())
     qs = Notification.objects.filter(recipient=email)
     unread_only = str(request.GET.get('unreadOnly') or request.GET.get('unread') or '').strip().lower()
     if unread_only in {'1', 'true', 'yes', 'on'}:
@@ -6600,11 +7121,71 @@ def _resolve_name_once(text):
     return hits[0] if len(hits) == 1 else ''
 
 
+_STAGE_LABEL = {'todo': 'To Do', 'inprogress': 'In Progress', 'review': 'In Review', 'done': 'Done'}
+
+
+def _task_list_context(ids):
+    """Bulk data for a list of tasks, so the serializer needs no per-row
+    queries: {parent_id: (done, total)} for sub-issue progress and
+    {task_id: {field_id: value}} for project-field values."""
+    from .models import TaskFieldValue
+    sub, values = {}, {}
+    for i in range(0, len(ids), 500):
+        chunk = ids[i:i + 500]
+        for r in (EmployeeTask.objects.filter(parent_id__in=chunk).order_by().values('parent_id')
+                  .annotate(total=Count('id'), done=Count('id', filter=Q(stage__in=EmployeeTask.DONE_STAGES)))):
+            sub[r['parent_id']] = (r['done'], r['total'])
+        for task_id, field_id, value in (TaskFieldValue.objects.filter(task_id__in=chunk)
+                                         .values_list('task_id', 'field_id', 'value')):
+            values.setdefault(task_id, {})[str(field_id)] = value
+    return {'sub_counts': sub, 'field_values': values}
+
+
+def _parent_problem(task_id, parent_id):
+    """'' when ``parent_id`` may be the parent of task ``task_id`` (None for a
+    new task), else why not: unknown issue, itself, or a cycle."""
+    if parent_id in (None, ''):
+        return ''
+    try:
+        pid = int(parent_id)
+    except (TypeError, ValueError):
+        return 'parentId must be an issue number.'
+    if task_id is not None and pid == task_id:
+        return 'An issue cannot be its own parent.'
+    if not EmployeeTask.objects.filter(pk=pid).exists():
+        return f'Parent issue #{pid} was not found.'
+    cur, seen = pid, set()
+    while cur and cur not in seen and len(seen) < 100:
+        if task_id is not None and cur == task_id:
+            return 'That would make the issue a sub-issue of itself.'
+        seen.add(cur)
+        cur = EmployeeTask.objects.filter(pk=cur).values_list('parent_id', flat=True).first()
+    return ''
+
+
+def _task_event(request, task, text):
+    """Record a timeline event (e.g. a status change) on a task. Events are
+    TaskComment rows with comment_type='event'; they are not counted as comments."""
+    try:
+        from .models import TaskComment
+        from .permissions import _get_caller
+        email, user = _get_caller(request)
+        email = norm_email(email)
+        TaskComment.objects.create(task=task, author_email=email or 'system',
+                                   author_name=(user.full_name if user else '') or email or 'System',
+                                   comment_type='event', body=text)
+    except Exception:
+        pass   # the timeline is a nicety; never fail the update because of it
+
+
 @api_view(['GET', 'POST'])
-@require_perm({'GET': 'employee.view', 'POST': 'employee.create'}, or_self=True)
+@require_perm({'GET': 'employee.view', 'POST': 'task.create'}, or_self=True)
 def tasks(request):
     if request.method == 'GET':
-        qs = EmployeeTask.objects.all()
+        qs = (EmployeeTask.objects.all()
+              .select_related('team', 'project', 'milestone', 'review_team', 'parent')
+              .prefetch_related('blocked_by')
+              .annotate(comment_count=Count('comments', filter=Q(comments__comment_type='comment'))))
         assignee = request.GET.get('assignee')
         if assignee:
             qs = qs.filter(assignee=assignee)
@@ -6616,10 +7197,17 @@ def tasks(request):
             qs = qs.filter(stage=stage)
         if request.GET.get('teamId'):
             qs = qs.filter(team_id=request.GET.get('teamId'))
+        if request.GET.get('projectId'):
+            qs = qs.filter(project_id=request.GET.get('projectId'))
+        if request.GET.get('milestoneId'):
+            qs = qs.filter(milestone_id=request.GET.get('milestoneId'))
+        if request.GET.get('issueType'):
+            qs = qs.filter(issue_type=str(request.GET.get('issueType')).strip().lower())
         lead = norm_email(request.GET.get('teamLeadEmail'))
         if lead:
             qs = qs.filter(team_lead_email=lead)
-        return Response(EmployeeTaskSerializer(qs, many=True).data)
+        rows = list(qs)
+        return Response(EmployeeTaskSerializer(rows, many=True, context=_task_list_context([t.id for t in rows])).data)
 
     body = request.data
     if not body.get('title'):
@@ -6650,20 +7238,18 @@ def tasks(request):
         from . import org_views
         card = org_views.person_card(team.lead_email)
         body = {**body, 'teamLead': card['name'] if card else team.lead_email}
+    why = _parent_problem(None, body.get('parentId'))
+    if why:
+        return err(why)
     serializer = EmployeeTaskSerializer(data=body)
     if not serializer.is_valid():
         return serializer_err(serializer)
-    serializer.save(team=team, team_lead_email=lead_email)
-    assignee_email = norm_email(body.get('assigneeEmail') or body.get('assignee') or '')
-    if assignee_email:
-        create_notification(
-            assignee_email,
-            'New task assigned',
-            f"You have been assigned a new task: {body.get('title', 'Task')}",
-            'info',
-            focus_link('/employees/tasks', body.get('title')),
-        )
-    return Response(serializer.data, status=201)
+    obj = serializer.save(team=team, team_lead_email=lead_email)
+    # Assignee + @mentions in the title/description: in-app and email, once
+    # per person (api/task_notify.py).
+    from . import task_notify
+    task_notify.task_created(request, obj)
+    return Response(EmployeeTaskSerializer(obj).data, status=201)
 
 
 @api_view(['PUT', 'DELETE'])
@@ -6722,11 +7308,39 @@ def task_detail(request, pk):
                 or norm_email(obj.team.lead_email) == assignee_after):
             return err(f'{assignee_after} is not a member of the team "{obj.team.name}". '
                        'Choose another assignee or change the team.')
+    if 'parentId' in body:
+        why = _parent_problem(obj.id, body.get('parentId'))
+        if why:
+            return err(why)
     serializer = EmployeeTaskSerializer(obj, data=body, partial=True)
     if not serializer.is_valid():
         return serializer_err(serializer)
+    old_stage = obj.stage
+    from . import task_notify
+    before = task_notify.snapshot(obj)
     serializer.save(**save_kw)
-    return Response(serializer.data)
+    if 'projectId' in body:
+        # Project fields belong to one project: values of the old one go.
+        from .models import TaskFieldValue
+        TaskFieldValue.objects.filter(task=obj).exclude(field__project_id=obj.project_id).delete()
+    task_notify.task_updated(request, obj, before)
+    if 'stage' in body and (body.get('stage') or '') != (old_stage or ''):
+        _task_event(request, obj, f'moved this from {_STAGE_LABEL.get(old_stage, old_stage)} '
+                                  f'to {_STAGE_LABEL.get(obj.stage, obj.stage)}')
+    if 'blockedByIds' in body and isinstance(body['blockedByIds'], list):
+        obj.blocked_by.set(body['blockedByIds'])
+    new_stage = body.get('stage', old_stage)
+    if new_stage in ('done', 'complete', 'completed') and old_stage not in ('done', 'complete', 'completed'):
+        for blocked_task in obj.blocking.all():
+            if blocked_task.assignee_email:
+                create_notification(
+                    blocked_task.assignee_email,
+                    'Dependency Resolved',
+                    f'Task "{obj.title}" was completed! Your task "{blocked_task.title}" is now unblocked.',
+                    'success',
+                    focus_link('/employees/tasks', blocked_task.title),
+                )
+    return Response(EmployeeTaskSerializer(obj).data)
 
 
 # --- Work Submissions ------------------------------------------------------
@@ -7147,11 +7761,19 @@ def bench_sales_profiles(request):
         qs = _bench_sales_profile_qs()
         search = request.query_params.get('search')
         if search:
-            qs = qs.filter(
-                Q(name__icontains=search) | Q(tech_stack__icontains=search) |
-                Q(email__icontains=search) | Q(contact_no__icontains=search) |
-                Q(passport_no__icontains=search)
-            )
+            # passport_no is encrypted: it matches on the exact number through
+            # its blind index (no partial match on an encrypted value).
+            cond = (Q(name__icontains=search) | Q(tech_stack__icontains=search) |
+                    Q(email__icontains=search) | Q(contact_no__icontains=search))
+            from .fields import blind_index
+            from .secret_box import SecretsNotConfigured
+            try:
+                digest = blind_index(search)
+            except SecretsNotConfigured:
+                digest = ''
+            if digest:
+                cond |= Q(passport_no_hash=digest)
+            qs = qs.filter(cond)
         return Response(BenchSalesProfileSerializer(qs, many=True).data)
 
     body = dict(request.data or {})
@@ -7848,6 +8470,9 @@ def _usa_dashboard_extras(email, today, now, payroll_value, on_pto_count, remote
             Q(effective_to__isnull=True) | Q(effective_to__gte=today)).select_related('shift'):
         shifts.setdefault(sa.email, sa.shift)
     default_end = time(18, 0)
+    # Holiday calendars: someone on their own regional holiday is off, not absent.
+    from .attendance_ext.holidays import HolidayResolver
+    hols = HolidayResolver()
 
     clocked_in = clocked_out = not_yet = absent = on_pto = 0
     for em in active:
@@ -7856,7 +8481,7 @@ def _usa_dashboard_extras(email, today, now, payroll_value, on_pto_count, remote
             clocked_in += 1
             if row.check_out:
                 clocked_out += 1
-        elif em in pto:
+        elif em in pto or hols.is_holiday(em, today):
             on_pto += 1
         else:
             sh = shifts.get(em)
@@ -9412,7 +10037,14 @@ def attendance_corrections(request):
                        f'For a night shift, choose a time after midnight on the next day.')
         if req_out > local_now() + timedelta(minutes=5):
             return err('The clock-out time is in the future.')
-    inst = ser.save(reviewer_email=routed_to)
+    # Optional structured reason (required on the forgot-punch / regularization paths).
+    from .attendance_ext.regularization import Invalid as _RegInvalid, clean_reason as _clean_reason
+    try:
+        _code, _txt = _clean_reason(body.get('reasonCode') or body.get('reason_code'), body.get('reason'),
+                                    require_code=False)
+    except _RegInvalid as e:
+        return err(str(e))
+    inst = ser.save(reviewer_email=routed_to, reason_code=_code)
     if routed_to:
         org_views.notify(routed_to, 'New attendance correction to approve',
                          f"{inst.employee_name or email} sent a attendance correction for your approval.", '/employees/leave')
@@ -9489,6 +10121,10 @@ def attendance_correction_detail(request, pk):
                         att.overtime_minutes = 0
             att.save()
             _ts_log(att, _ts_before, 'correction', _who or '', inst.reason or '')
+            from .attendance_ext.missed_punch import mark_resolved
+            mark_resolved(att)
+            from .attendance_ext.day_events import after_day_changed
+            after_day_changed(att, actor=_who or '', source='correction')
 
             create_notification(
                 obj.email,
@@ -9529,7 +10165,13 @@ def attendance_overtime(request):
 @api_view(['POST'])
 @require_perm('settings.manage')
 def attendance_auto_correct(request):
-    """Scan all active users, identify missing checkout for past dates and auto checkout at shift end."""
+    """Removed: closing missing check-outs automatically at shift end is an
+    automatic check-out. Missing punches are flagged and regularized instead
+    (api/attendance_ext/missed_punch.py)."""
+    return Response({'ok': False, 'correctedCount': 0, 'code': 'AUTO_CHECKOUT_REMOVED',
+                     'message': 'Automatic check-out has been removed. Missing check-outs are flagged for '
+                                'the employee to regularize.'}, status=410)
+    """Former implementation kept below for reference (unreachable)."""
     today = local_now().date()
 
     updated_count = 0
@@ -10869,10 +11511,14 @@ def chat_translate(request):
 # check out (noticed before midnight) raises a ticket with a reason and a photo
 # of the attendance sheet. An approver (attendance.approve_wfh, same as WFH)
 # approves, which stamps that day's check-in/out to the office shift times.
-# Reuses the AttendanceCorrection table; ticket rows carry kind in
-# forgot_checkin|forgot_checkout so the monthly limit ignores legacy rows.
+# Reuses the AttendanceCorrection table.
+# MERGED into regularization (attendance_ext/regularization.py): the POST is
+# filed as a regularization (same record, rules, monthly limit, deadline,
+# queue and approval/recalculation code); the old kind=forgot_* rows that
+# already exist are decided through the same path. These endpoints stay for
+# compatibility; the UI uses /api/attendance/regularization*.
 # ===========================================================================
-ATT_TICKET_LIMIT = 3
+ATT_TICKET_LIMIT = 3            # default only — the live value is the missed-punch policy's monthly_limit
 _TICKET_KINDS = ('forgot_checkin', 'forgot_checkout')
 
 
@@ -10886,19 +11532,8 @@ def _ticket_is_approver(request):
 
 
 def _ticket_dto(c, include_proof=False):
-    d = {
-        'id': c.id,
-        'email': c.email,
-        'employee': c.employee_name or c.email,
-        'date': c.attendance_date.isoformat() if c.attendance_date else None,
-        'kind': c.kind or '',
-        'reason': c.reason or '',
-        'status': c.status or 'Pending',
-        'reviewer': c.reviewer or '',
-        'reviewerNote': c.reviewer_note or '',
-        'createdAt': dt(c.created_at),
-        'hasProof': bool(c.proof_image),
-    }
+    from .attendance_ext.regularization import dto as _reg_dto   # one DTO for every kind
+    d = _reg_dto(c)
     if include_proof:
         d['proofImage'] = c.proof_image or ''
     return d
@@ -10918,45 +11553,46 @@ def attendance_punch_ticket(request):
         end_time = shift.end_time if shift else time(18, 0)
         start_time = shift.start_time if shift else time(9, 0)
         now = local_now()
-        _pend = AttendanceCorrection.objects.filter(
-            email=email, attendance_date=today, status='Pending', kind__in=_TICKET_KINDS)
-        pend_in = _pend.filter(kind='forgot_checkin').exists()
-        pend_out = _pend.filter(kind='forgot_checkout').exists()
+        # Unified with regularization: any pending request for today blocks,
+        # and the monthly limit is the missed-punch policy's (every kind).
+        from .attendance_ext import regularization as _reg
+        pending_today = AttendanceCorrection.objects.filter(
+            email=email, attendance_date=today, status='Pending').exists()
+        pend_in = pend_out = pending_today
         # Late = checked in, but after the office start time.
         is_late = bool(has_in and rec and rec.check_in and rec.check_in.time() > start_time)
         # A check-in ticket (missed OR late) can only be raised once the day has
         # a check-out.
         can_checkin = has_out and ((not has_in) or is_late) and not pend_in
         can_checkout = has_in and (not has_out) and not pend_out
-        used = AttendanceCorrection.objects.filter(
-            email=email, kind__in=_TICKET_KINDS,
-            created_at__year=now.year, created_at__month=now.month).count()
+        used, limit = _reg.month_usage(email, today)
         block = ''
         if not can_checkin and not can_checkout:
             if pend_in or pend_out:
-                block = 'You already have a pending ticket for today — please wait for it to be reviewed.'
+                block = 'You already have a pending request for today — please wait for it to be reviewed.'
             elif has_in and has_out:
                 block = 'Your check-in is on time and you have checked out — nothing to correct.'
             elif (not has_in) and (not has_out):
                 block = 'You can raise a check-in ticket only after you have checked out for the day.'
             else:
                 block = 'Nothing to correct for today.'
-        tickets = AttendanceCorrection.objects.filter(
-            email=email, kind__in=_TICKET_KINDS).order_by('-id')[:8]
+        tickets = AttendanceCorrection.objects.filter(email=email).order_by('-id')[:8]
         return Response({
             'today': {'date': today.isoformat(), 'hasCheckIn': has_in, 'hasCheckOut': has_out},
             'canRaiseCheckin': can_checkin,
             'canRaiseCheckout': can_checkout,
             'blockReason': block,
             'usedThisMonth': used,
-            'limit': ATT_TICKET_LIMIT,
-            'remaining': max(0, ATT_TICKET_LIMIT - used),
+            'limit': limit,
+            'remaining': max(0, limit - used) if limit else None,
             'officeStart': start_time.strftime('%H:%M'),
             'officeEnd': end_time.strftime('%H:%M'),
             'tickets': [_ticket_dto(c) for c in tickets],
         })
 
-    # POST — raise a ticket
+    # POST — filed as a regularization (attendance_ext/regularization.submit_ticket):
+    # same record, monthly limit, deadline / late flag, reason code rule; the
+    # proof photo is optional, as for every missed-punch request.
     body = request.data
     email = norm_email(body.get('email'))
     if not email:
@@ -10964,63 +11600,28 @@ def attendance_punch_ticket(request):
     caller = _ticket_caller(request)
     if caller and email != caller:
         return err('You can only raise a ticket for your own attendance.', 403)
-    kind = (body.get('kind') or '').strip()
-    if kind not in _TICKET_KINDS:
-        return err('kind must be forgot_checkin or forgot_checkout')
-    reason = (body.get('reason') or '').strip()
-    if not reason:
-        return err('A reason is required (why you forgot to punch).')
-    proof = body.get('proofImage') or ''
-    if not proof:
-        return err('Please attach a photo of the attendance sheet as proof.')
-    if len(proof) > 8 * 1024 * 1024:
-        return err('The proof image is too large. Please use a smaller photo.')
-
-    now = local_now()
-    used = AttendanceCorrection.objects.filter(
-        email=email, kind__in=_TICKET_KINDS,
-        created_at__year=now.year, created_at__month=now.month).count()
-    if used >= ATT_TICKET_LIMIT:
-        return err('You have reached the limit of %d attendance tickets this month.' % ATT_TICKET_LIMIT, 403)
-
-    today = local_today()
-    rec = EmployeeAttendance.objects.filter(email=email, date=today).first()
-    has_in = bool(rec and rec.check_in)
-    has_out = bool(rec and rec.check_out)
-    shift = _get_active_shift(email, today)
-    start_time = shift.start_time if shift else time(9, 0)
-    end_time = shift.end_time if shift else time(18, 0)
-    if kind == 'forgot_checkin':
-        if not has_out:
-            return err('You can raise a check-in ticket only after you have checked out for the day.')
-        if has_in and not (rec.check_in and rec.check_in.time() > start_time):
-            return err('Your check-in is already on time — there is nothing to correct.')
-    else:  # forgot_checkout
-        if not has_in:
-            return err('You have no check-in today, so raise a check-in ticket instead.')
-        if has_out:
-            return err('You already have a check-out recorded for today.')
-
-    if AttendanceCorrection.objects.filter(
-            email=email, attendance_date=today, kind=kind, status='Pending').exists():
-        return err('You already have a pending ticket for this. Please wait for it to be reviewed.')
-
-    name = (rec.employee_name if rec and rec.employee_name else '') or (body.get('employeeName') or email.split('@')[0])
-    c = AttendanceCorrection.objects.create(
-        email=email, employee_name=name, attendance_date=today,
-        kind=kind, reason=reason, proof_image=proof, status='Pending')
-    return Response({'success': True, 'id': c.id, 'message': 'Ticket submitted for approval.'})
+    from .attendance_ext import regularization as _reg
+    try:
+        c = _reg.submit_ticket(email, body, local_now())
+    except _reg.Invalid as e:
+        return err(str(e), e.status)
+    d = _ticket_dto(c)
+    d.update({'success': True, 'message': 'Request sent for approval.'})
+    return Response(d)
 
 
 @api_view(['GET'])
 def attendance_punch_ticket_pending(request):
+    """Every pending missed-punch request (regularizations, old tickets, old
+    clock-out corrections) the caller may decide — their reports' as a
+    manager, all as HR / attendance.approve_wfh. Never the caller's own."""
+    from .attendance_ext import regularization as _reg
+    rows = _reg.queue_rows(request)          # (also resets the per-request permission cache)
     allowed, caller = _ticket_is_approver(request)
     if not caller:
         return err('Authentication required. Please sign in again.', 401)
-    if not allowed:
+    if not (allowed or _reg.is_reviewer(request)) and not rows:
         return err('You do not have permission to review attendance tickets.', 403)
-    rows = AttendanceCorrection.objects.filter(
-        kind__in=_TICKET_KINDS, status='Pending').order_by('-id')[:100]
     return Response([_ticket_dto(c) for c in rows])
 
 
@@ -11029,71 +11630,26 @@ def attendance_punch_ticket_proof(request, pk):
     c = AttendanceCorrection.objects.filter(id=pk).first()
     if not c:
         return err('Ticket not found.', 404)
+    from . import org_views
+    from .attendance_ext import regularization as _reg
     allowed, _caller = _ticket_is_approver(request)
     caller = _ticket_caller(request)
-    if not allowed and caller != norm_email(c.email):
+    if not (allowed or caller == norm_email(c.email) or _reg.is_reviewer(request)
+            or (caller and (caller == norm_email(c.reviewer_email) or org_views.is_manager_of(caller, c.email)))):
         return err('You are not allowed to view this proof.', 403)
     return Response({'id': c.id, 'proofImage': c.proof_image or ''})
 
 
 @api_view(['POST'])
 def attendance_punch_ticket_decide(request, pk):
-    allowed, caller = _ticket_is_approver(request)
-    if not caller:
-        return err('Authentication required. Please sign in again.', 401)
-    if not allowed:
-        return err('You do not have permission to review attendance tickets.', 403)
-    c = AttendanceCorrection.objects.filter(id=pk, kind__in=_TICKET_KINDS).first()
-    if not c:
+    """One approval path for every kind (regularization.decide → approve →
+    recalculate). An old ticket without times gets the shift start / end it
+    always meant (regularization.legacy_times)."""
+    c = AttendanceCorrection.objects.filter(id=pk).first()
+    if c is None:
         return err('Ticket not found.', 404)
-    action = (request.data.get('action') or '').strip().lower()
-    note = (request.data.get('reviewerNote') or '').strip()
-    if action not in ('approve', 'reject'):
-        return err('action must be approve or reject')
-    if c.status != 'Pending':
-        return err('This ticket has already been %s.' % (c.status or '').lower())
-
-    if action == 'reject':
-        c.status = 'Rejected'
-        c.reviewer = caller
-        c.reviewer_note = note
-        c.reviewed_at = local_now()
-        c.save(update_fields=['status', 'reviewer', 'reviewer_note', 'reviewed_at'])
-        return Response({'success': True, 'message': 'Ticket rejected.'})
-
-    # approve → stamp the office (shift) times onto that day's attendance
-    shift = _get_active_shift(c.email, c.attendance_date)
-    start_t = shift.start_time if shift else time(9, 0)
-    end_t = shift.end_time if shift else time(18, 0)
-    rec = EmployeeAttendance.objects.filter(email=c.email, date=c.attendance_date).first()
-    if not rec:
-        rec = EmployeeAttendance(email=c.email,
-                                 employee_name=c.employee_name or c.email,
-                                 date=c.attendance_date, status='present')
-    from .timesheets import audit_snapshot as _ts_snap, log_attendance_change as _ts_log
-    _ts_before = _ts_snap(rec)   # None for a new row; audit trail (never raises)
-    if c.kind == 'forgot_checkin' or not rec.check_in:
-        rec.check_in = datetime.combine(c.attendance_date, start_t)
-        rec.late_minutes = 0
-        if (rec.status or '') == 'late':
-            rec.status = 'present'
-    if c.kind == 'forgot_checkout' or not rec.check_out:
-        rec.check_out = datetime.combine(c.attendance_date, end_t)
-    if rec.check_in and rec.check_out:
-        worked = int((rec.check_out - rec.check_in).total_seconds() // 60) - (rec.break_minutes or 0)
-        rec.worked_minutes = max(0, worked)
-    rec.is_auto_checked_out = False
-    if not rec.shift_id and shift:
-        rec.shift_id = shift.id
-    rec.save()
-    _ts_log(rec, _ts_before, 'punch_ticket', caller or '', (c.reason or c.kind or '') + (f' — {note}' if note else ''))
-
-    c.status = 'Approved'
-    c.reviewer = caller
-    c.reviewer_note = note
-    c.reviewed_at = local_now()
-    c.save(update_fields=['status', 'reviewer', 'reviewer_note', 'reviewed_at'])
-    return Response({'success': True, 'message': 'Ticket approved — attendance updated to office hours.'})
+    from .attendance_ext.regularization import decide as _reg_decide
+    return _reg_decide(request, c)
 
 
 # ===========================================================================
@@ -11201,7 +11757,7 @@ def attendance_day_detail(request):
     })
 
 
-def _tell_hr_auto_checkout(att, now, minutes, where_txt=''):
+def _tell_hr_auto_checkout(att, now, minutes, where_txt='', left_at=None):
     """HR (whoever reviews off-site check-ins) and the employee's manager hear
     about an automatic check-out — it ends someone's paid time without them
     pressing anything, so it must never be silent."""
@@ -11209,8 +11765,9 @@ def _tell_hr_auto_checkout(att, now, minutes, where_txt=''):
     who = att.employee_name or att.email
     title = 'Employee auto checked out'
     msg = (f'{who} was checked out automatically at {_fmt_ampm(now)} on {att.date:%d %b} after '
-           f'more than {minutes} minutes outside the office'
+           f'{minutes} minutes outside the office'
            + (f' ({where_txt.strip()})' if where_txt else '')
+           + (f'; hours counted until they left at {_fmt_ampm(left_at)}' if left_at else '')
            + f'. Worked {_fmt_dur(att.worked_minutes or 0)}. Check with them if this looks wrong.')
     link = f'/employees/attendance?auto-checkout={att.pk}'
     notify_approvers('attendance.approve_offsite', title, msg, link)
@@ -11251,19 +11808,73 @@ def _outside_run_minutes(att, now):
     return int((now - att.outside_since).total_seconds() // 60)
 
 
+#: Auto check-out on leaving the office (MasterDataSet 'attendance_departure_policy').
+DEPARTURE_POLICY_DEFAULTS = {
+    'enabled': True,                       # watch office sessions at all
+    'timeout_minutes': 10,                 # unbroken minutes outside before the warning
+    'warning_seconds': 10,                 # warning countdown before the check-out
+    'warning_sound': True,                 # beep with the warning
+    'recheckin_requires_approval': True,   # checking in again that day needs the manager
+}
+DEPARTURE_TIMEOUT_RANGE = (1, 240)
+DEPARTURE_WARNING_RANGE = (5, 120)
+
+
+def _policy_bool(v, default):
+    if isinstance(v, bool):
+        return v
+    if v is None or v == '':
+        return default
+    s = str(v).strip().lower()
+    if s in ('1', 'true', 'yes', 'on'):
+        return True
+    if s in ('0', 'false', 'no', 'off'):
+        return False
+    return default
+
+
+def _clean_departure_policy(raw, strict=False):
+    """Defaults + ``raw``, coerced. ``strict``: (policy, errors) — a value out
+    of range is an error rather than being replaced by the default."""
+    pol = dict(DEPARTURE_POLICY_DEFAULTS)
+    errors = {}
+    raw = raw if isinstance(raw, dict) else {}
+    for key in ('enabled', 'warning_sound', 'recheckin_requires_approval'):
+        if key in raw:
+            v = raw[key]
+            ok = isinstance(v, bool) or str(v).strip().lower() in ('1', '0', 'true', 'false', 'yes', 'no', 'on', 'off')
+            if strict and not ok:
+                errors[key] = 'Must be true or false.'
+            pol[key] = _policy_bool(v, pol[key])
+    for key, (lo, hi), label in (('timeout_minutes', DEPARTURE_TIMEOUT_RANGE, 'minutes'),
+                                 ('warning_seconds', DEPARTURE_WARNING_RANGE, 'seconds')):
+        if key not in raw or raw[key] in (None, ''):
+            continue
+        try:
+            n = int(str(raw[key]).strip())
+        except (TypeError, ValueError):
+            errors[key] = f'Enter a whole number of {label}.'
+            continue
+        if not lo <= n <= hi:
+            errors[key] = f'Must be between {lo} and {hi} {label}.'
+            continue
+        pol[key] = n
+    return (pol, errors) if strict else pol
+
+
 def _departure_policy_values():
-    pol = {'enabled': True, 'timeout_minutes': 15, 'warning_minutes': 5}
+    """The auto check-out policy, always complete and valid (defaults fill
+    anything missing; a broken stored value never disables safety checks)."""
+    raw = None
     try:
         obj = MasterDataSet.objects.filter(key='attendance_departure_policy').first()
-        opts = obj.options if obj else None
-        if isinstance(opts, str):
+        raw = obj.options if obj else None
+        if isinstance(raw, str):
             import json
-            opts = json.loads(opts)
-        if isinstance(opts, dict):
-            pol.update(opts)
+            raw = json.loads(raw)
     except Exception:
-        pass
-    return pol
+        raw = None
+    return _clean_departure_policy(raw)
 
 
 @api_view(['GET', 'POST'])
@@ -11338,6 +11949,12 @@ def attendance_location_punch(request):
         email=email, employee_name=name, date=rec.date, captured_at=now,
         latitude=lat, longitude=lng, accuracy=acc, label=label, source='web')
     where = _where_vs_session(rec, lat, lng, acc)
+    if where['state'] == 'away' and not rec.is_wfh and not _session_is_offsite(rec):
+        # An office session on the office's own network is at the office:
+        # indoor GPS drift must not tell them they "appear to be elsewhere".
+        from .attendance_ext import networks as _office_net
+        if _office_net.office_network_match(request) is not None:
+            where['state'] = 'ok'
     out = {'stored': True, 'id': p.id, 'time': _fmt_ampm(now), 'state': where['state'],
            'approximate': acc is None or acc > LOCATION_PRECISE_M}
     if where['state'] == 'away' and prev_state != 'away':

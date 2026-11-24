@@ -8,6 +8,7 @@ from decimal import Decimal
 from django.db import models
 from django.utils import timezone
 
+from .fields import EncryptedCharField
 from .timeutil import local_now
 
 
@@ -574,6 +575,27 @@ class EmployeeAttendance(models.Model):
     # throttled tab or a network blip can never close a session by itself.
     outside_since = models.DateTimeField(null=True, blank=True)
     outside_last_at = models.DateTimeField(null=True, blank=True)
+    # Missed-punch detection (api/attendance_ext/missed_punch.py): '' when the
+    # day is complete, else missing_checkout | missing_checkin | early_exit.
+    # regularize_by is the deadline to file a regularization (default 48 h).
+    punch_issue = models.CharField(max_length=20, default='', blank=True, db_index=True)
+    punch_issue_at = models.DateTimeField(null=True, blank=True)
+    regularize_by = models.DateTimeField(null=True, blank=True)
+    punch_issue_notified_at = models.DateTimeField(null=True, blank=True)
+    # Checking in again after an automatic (left-the-office) check-out on the
+    # same day needs the manager's approval (views._recheckin_gate). The time
+    # worked from ``recheckin_at`` counts only once approved: while Pending,
+    # closed sessions collect in ``recheckin_held_minutes`` instead of
+    # worked_minutes; Approved adds them, Rejected drops them and closes any
+    # open session. ``recheckin_after`` = the auto_checkout_at it answers.
+    recheckin_status = models.CharField(max_length=20, default='', blank=True, db_index=True)  # ''|Pending|Approved|Rejected
+    recheckin_reason = models.TextField(default='', blank=True)
+    recheckin_at = models.DateTimeField(null=True, blank=True)
+    recheckin_after = models.DateTimeField(null=True, blank=True)
+    recheckin_held_minutes = models.IntegerField(default=0)
+    recheckin_reviewer = models.CharField(max_length=255, default='', blank=True)
+    recheckin_reviewed_at = models.DateTimeField(null=True, blank=True)
+    recheckin_review_note = models.TextField(default='', blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -619,6 +641,15 @@ class EmployeeTask(models.Model):
     team = models.ForeignKey('Team', null=True, blank=True, on_delete=models.SET_NULL,
                              related_name='tasks', db_column='team_id')
     department = models.CharField(max_length=120, default='', blank=True)
+    project = models.ForeignKey('Project', null=True, blank=True, on_delete=models.SET_NULL,
+                                related_name='tasks', db_column='project_id')
+    milestone = models.ForeignKey('ProjectMilestone', null=True, blank=True, on_delete=models.SET_NULL,
+                                  related_name='tasks', db_column='milestone_id')
+    review_team = models.ForeignKey('Team', null=True, blank=True, on_delete=models.SET_NULL,
+                                    related_name='review_tasks', db_column='review_team_id')
+    reviewer_email = models.CharField(max_length=255, default='', blank=True)
+    watchers = models.TextField(default='[]', blank=True)
+    blocked_by = models.ManyToManyField('self', symmetrical=False, related_name='blocking', blank=True)
     estimated_hours = models.FloatField(null=True, blank=True)
     progress = models.IntegerField(default=0)   # 0-100
     # Attachments are stored as full `data:<mime>;base64,<data>` URLs (house style — no file
@@ -633,13 +664,53 @@ class EmployeeTask(models.Model):
     # value is the "rejected" signal (no separate stage — the task stays put so
     # the reviewer can see and act on the reason).
     reject_reason = models.TextField(default='', blank=True)
+    labels = models.CharField(max_length=500, default='[]', blank=True)
+    # GitHub-style "Issue type": task | bug | feature | improvement.
+    issue_type = models.CharField(max_length=20, default='task', blank=True, db_index=True)
+    # GitHub Projects-style issue fields (Task Tracker table / roadmap).
+    start_date = models.DateField(null=True, blank=True)
+    target_date = models.DateField(null=True, blank=True)
+    effort = models.FloatField(null=True, blank=True)
+    parent = models.ForeignKey('self', null=True, blank=True, on_delete=models.SET_NULL,
+                               related_name='sub_issues')
+    # Stamped when the stage becomes done, cleared when it leaves done (save()).
+    closed_at = models.DateTimeField(null=True, blank=True)
     created_by = models.CharField(max_length=255, default='', blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    DONE_STAGES = ('done', 'complete', 'completed', 'closed')
+
     class Meta:
         db_table = 'employee_tasks'
         ordering = ['-id']
+
+    def save(self, *args, **kwargs):
+        done = str(self.stage or '').strip().lower() in self.DONE_STAGES
+        if done and self.closed_at is None:
+            from django.utils import timezone
+            self.closed_at = timezone.now()
+        elif not done and self.closed_at is not None:
+            self.closed_at = None
+        uf = kwargs.get('update_fields')
+        if uf is not None and 'stage' in uf and 'closed_at' not in uf:
+            kwargs['update_fields'] = list(uf) + ['closed_at']
+        super().save(*args, **kwargs)
+
+
+class TaskComment(models.Model):
+    """GitHub-style threaded comments and activity timeline events on an issue/task."""
+    task = models.ForeignKey(EmployeeTask, on_delete=models.CASCADE, related_name='comments')
+    author_email = models.CharField(max_length=255, db_index=True)
+    author_name = models.CharField(max_length=255, default='', blank=True)
+    comment_type = models.CharField(max_length=20, default='comment')   # comment | event
+    body = models.TextField()
+    reactions = models.CharField(max_length=500, default='{}', blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'task_comments'
+        ordering = ['created_at', 'id']
 
 
 class Team(models.Model):
@@ -673,6 +744,120 @@ class TeamMembership(models.Model):
         db_table = 'team_memberships'
         ordering = ['id']
         unique_together = (('team', 'email'),)
+
+
+class Project(models.Model):
+    """An initiative or deliverable spanning one or more teams."""
+    project_code = models.CharField(max_length=40, unique=True)
+    name = models.CharField(max_length=200)
+    description = models.TextField(default='', blank=True)
+    # Markdown, stored raw; rendered (escaped first) in the browser only.
+    readme = models.TextField(default='', blank=True)
+    status = models.CharField(max_length=30, default='active', db_index=True)  # planning | active | on_hold | completed
+    project_manager = models.CharField(max_length=255, default='', blank=True)
+    start_date = models.DateField(null=True, blank=True)
+    target_end_date = models.DateField(null=True, blank=True)
+    allocated_hours = models.DecimalField(max_digits=7, decimal_places=2, default=Decimal('0'))
+    contributing_teams = models.ManyToManyField(Team, related_name='projects', blank=True)
+    # Archived projects are hidden from the picker (GET /api/projects) unless
+    # ?archived=all|only is asked for; they keep their issues and views.
+    archived_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    created_by = models.CharField(max_length=255, default='', blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'projects'
+        ordering = ['-id']
+
+
+class ProjectView(models.Model):
+    """A saved Task Tracker view of a project (GitHub Projects "views"):
+    layout plus a JSON config (visible fields and their order, sort, group-by,
+    filter query, column widths, roadmap zoom). Shared by everyone who can
+    see the project."""
+    LAYOUTS = ('table', 'board', 'roadmap')
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='views')
+    name = models.CharField(max_length=100)
+    layout = models.CharField(max_length=20, default='table')
+    config = models.JSONField(default=dict, blank=True)
+    position = models.IntegerField(default=0)
+    created_by = models.CharField(max_length=255, default='', blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'project_views'
+        ordering = ['position', 'id']
+
+
+class ProjectField(models.Model):
+    """A custom field of one project (GitHub "project field"). ``options``:
+    single_select -> {"choices": [{"id", "name", "color"}]};
+    iteration -> {"weeks": n, "start": "YYYY-MM-DD", "count": n}."""
+    TYPES = ('text', 'number', 'date', 'single_select', 'iteration')
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='fields')
+    name = models.CharField(max_length=100)
+    field_type = models.CharField(max_length=20, default='text')
+    options = models.JSONField(default=dict, blank=True)
+    position = models.IntegerField(default=0)
+    created_by = models.CharField(max_length=255, default='', blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'project_fields'
+        ordering = ['position', 'id']
+
+
+class TaskFieldValue(models.Model):
+    """The value of one project field on one issue (JSON: str / number /
+    'YYYY-MM-DD' / option id / iteration start date)."""
+    task = models.ForeignKey(EmployeeTask, on_delete=models.CASCADE, related_name='field_values')
+    field = models.ForeignKey(ProjectField, on_delete=models.CASCADE, related_name='values')
+    value = models.JSONField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'task_field_values'
+        unique_together = (('task', 'field'),)
+
+
+class ProjectMilestone(models.Model):
+    """A sprint, phase or milestone within a project."""
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='milestones')
+    title = models.CharField(max_length=150)
+    due_date = models.DateField(null=True, blank=True)
+    is_completed = models.BooleanField(default=False)
+    sort_order = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'project_milestones'
+        ordering = ['sort_order', 'id']
+
+
+class ProjectStatusUpdate(models.Model):
+    """A GitHub-style project status update: a health flag, dates and a markdown note."""
+    STATUS_CHOICES = (
+        ('on_track', 'On track'),
+        ('at_risk', 'At risk'),
+        ('off_track', 'Off track'),
+        ('complete', 'Complete'),
+        ('inactive', 'Inactive'),
+    )
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='status_updates')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='on_track')
+    start_date = models.DateField(null=True, blank=True)
+    target_date = models.DateField(null=True, blank=True)
+    body = models.TextField(default='', blank=True)   # markdown, stored raw
+    author_email = models.CharField(max_length=255, default='', blank=True, db_index=True)
+    author_name = models.CharField(max_length=255, default='', blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'project_status_updates'
+        ordering = ['-created_at', '-id']
 
 
 class WorkSubmission(models.Model):
@@ -816,7 +1001,10 @@ class BenchSalesProfile(models.Model):
     email = models.CharField(max_length=255, default='', blank=True)
     contact_no = models.CharField(max_length=60, default='', blank=True)
     date_of_birth = models.DateField(null=True, blank=True)
-    passport_no = models.CharField(max_length=40, default='', blank=True)
+    # Encrypted at rest (api/fields.py); passport_no_hash is its blind index so
+    # the roster search can still find a profile by its exact passport number.
+    passport_no = EncryptedCharField(max_length=512, default='', blank=True)
+    passport_no_hash = models.CharField(max_length=64, default='', blank=True, db_index=True)
     work_authorization = models.CharField(max_length=40, default='', blank=True)
 
     resume_file_name = models.CharField(max_length=255, default='', blank=True)
@@ -839,6 +1027,17 @@ class BenchSalesProfile(models.Model):
     created_by = models.CharField(max_length=255, default='', blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    def save(self, *args, **kwargs):
+        # Keep the passport blind index in step with the (encrypted) value.
+        from .fields import blind_index, is_locked
+        update_fields = kwargs.get('update_fields')
+        if update_fields is None or 'passport_no' in update_fields:
+            if not is_locked(self.passport_no):
+                self.passport_no_hash = blind_index(self.passport_no) if self.passport_no else ''
+                if update_fields is not None:
+                    kwargs['update_fields'] = set(update_fields) | {'passport_no_hash'}
+        super().save(*args, **kwargs)
 
     class Meta:
         db_table = 'bench_sales_profiles'
@@ -887,6 +1086,9 @@ class AttendanceEvent(models.Model):
     class Meta:
         db_table = 'attendance_events'
         ordering = ['at', 'id']
+        # Today's Activity Log asks for one person's events on one day, from every
+        # open Check In/Out page: that pair needs its own index.
+        indexes = [models.Index(fields=['email', 'date'], name='att_event_email_date_idx')]
 
 
 # ===========================================================================
@@ -959,6 +1161,9 @@ class AttendanceCorrection(models.Model):
     # 3-per-month limit only counts these tickets, not older corrections.
     kind = models.CharField(max_length=20, default='', blank=True)  # ''|forgot_checkin|forgot_checkout
     proof_image = models.TextField(null=True, blank=True)           # base64 data URL
+    # Regularization: client_meeting | forgot_badge | network_issue | field_work
+    # | system_issue | other. Free text stays in `reason`.
+    reason_code = models.CharField(max_length=30, default='', blank=True)
 
     class Meta:
         db_table = 'attendance_corrections'
@@ -1032,6 +1237,12 @@ class GeoFence(models.Model):
     # 'gps' when captured on the device, 'manual' when the employee typed the
     # coordinates (their device could not get a precise fix). HR sees which.
     capture_method = models.CharField(max_length=10, default='gps', blank=True)
+    # Company locations only: the office's own networks, as
+    # [{"cidr": "203.0.113.10/32", "label": "Main Wi-Fi"}]. A request whose
+    # client IP falls in one of them counts as "at this location" even when
+    # indoor GPS drifts outside the circle. Never consulted for a home fence.
+    # See api/attendance_ext/networks.py.
+    office_networks = models.JSONField(default=list, blank=True)
 
     class Meta:
         db_table = 'attendance_geofences'
@@ -1660,7 +1871,7 @@ class PayrollInformation(models.Model):
         related_name='payroll', db_column='candidate_id',
     )
     bank_name = models.CharField(max_length=255, default='', blank=True)
-    account_number = models.CharField(max_length=64, default='', blank=True)
+    account_number = EncryptedCharField(max_length=512, default='', blank=True)   # encrypted at rest
     routing_number = models.CharField(max_length=64, default='', blank=True)
     tax_state = models.CharField(max_length=64, default='', blank=True)
     direct_deposit = models.BooleanField(default=False)
@@ -1833,9 +2044,29 @@ class EmailTemplate(models.Model):
 # Core Payroll Module Models
 # ===========================================================================
 
+class SalaryStructure(models.Model):
+    """Configurable salary structure templates (e.g. Standard Full-time, Tech Lead, Executive)."""
+    name = models.CharField(max_length=120, unique=True)
+    code = models.CharField(max_length=50, unique=True, default='')
+    description = models.TextField(blank=True, default='')
+    currency = models.CharField(max_length=10, default='INR')
+    is_active = models.BooleanField(default=True)
+    created_by = models.CharField(max_length=255, default='', blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'salary_structures'
+        ordering = ['name']
+
+
 class EmployeeCompensation(models.Model):
     """Effective-dated compensation records per employee (identified by email)."""
     email = models.CharField(max_length=255, db_index=True)
+    salary_structure = models.ForeignKey(
+        SalaryStructure, null=True, blank=True, on_delete=models.SET_NULL,
+        related_name='employee_compensations'
+    )
     pay_type = models.CharField(max_length=20, default='salaried')  # salaried | hourly
     pay_frequency = models.CharField(max_length=20, default='monthly')  # monthly | semimonthly | biweekly | weekly
     base_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
@@ -1844,14 +2075,18 @@ class EmployeeCompensation(models.Model):
     effective_from = models.DateField(default=timezone.now)
     effective_to = models.DateField(null=True, blank=True)
     status = models.CharField(max_length=20, default='active')  # active | inactive
+    revision_reason = models.CharField(max_length=255, default='', blank=True)
+    revised_by = models.CharField(max_length=255, default='', blank=True)
     notes = models.TextField(default='', blank=True)
     # Indian statutory fields for payslip generation
     employee_code = models.CharField(max_length=40, default='', blank=True)
-    pan_number = models.CharField(max_length=20, default='', blank=True)
-    uan_number = models.CharField(max_length=20, default='', blank=True)
-    pf_account_number = models.CharField(max_length=60, default='', blank=True)
-    bank_account_number = models.CharField(max_length=40, default='', blank=True)
+    # Encrypted at rest (api/fields.py); APIs return them masked (api/sensitive.py).
+    pan_number = EncryptedCharField(max_length=512, default='', blank=True)
+    uan_number = EncryptedCharField(max_length=512, default='', blank=True)
+    pf_account_number = EncryptedCharField(max_length=512, default='', blank=True)
+    bank_account_number = EncryptedCharField(max_length=512, default='', blank=True)
     bank_name = models.CharField(max_length=100, default='', blank=True)
+    ifsc_code = models.CharField(max_length=40, default='', blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -1880,6 +2115,22 @@ class PayComponent(models.Model):
         ordering = ['component_type', 'display_order', 'code']
 
 
+class SalaryStructureComponent(models.Model):
+    """Association between a SalaryStructure and PayComponent with percentage / fixed overrides."""
+    structure = models.ForeignKey(SalaryStructure, on_delete=models.CASCADE, related_name='components')
+    component = models.ForeignKey(PayComponent, on_delete=models.CASCADE, related_name='structure_assignments')
+    calc_type = models.CharField(max_length=30, default='percent_of_base')  # fixed | percent_of_base | percent_of_gross | formula
+    rate = models.DecimalField(max_digits=8, decimal_places=4, default=Decimal('0.0000'))
+    amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    formula = models.CharField(max_length=255, default='', blank=True)
+    display_order = models.IntegerField(default=0)
+
+    class Meta:
+        db_table = 'salary_structure_components'
+        unique_together = ['structure', 'component']
+        ordering = ['display_order', 'id']
+
+
 class EmployeePayComponent(models.Model):
     """Per-employee pay component overrides."""
     email = models.CharField(max_length=255, db_index=True)
@@ -1896,14 +2147,32 @@ class EmployeePayComponent(models.Model):
         ordering = ['-effective_from']
 
 
+class PayrollPeriod(models.Model):
+    """Specific calendar payroll processing period."""
+    label = models.CharField(max_length=30, unique=True)  # e.g. '2026-11'
+    start_date = models.DateField()
+    end_date = models.DateField()
+    pay_date = models.DateField(null=True, blank=True)
+    status = models.CharField(max_length=30, default='open')  # open | processing | completed | locked
+    notes = models.TextField(blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'payroll_periods'
+        ordering = ['-start_date']
+
+
 class PayrollRun(models.Model):
     """Batch pay period run engine record."""
     period_label = models.CharField(max_length=20, db_index=True)  # e.g., '2026-06'
+    period = models.ForeignKey(PayrollPeriod, null=True, blank=True, on_delete=models.SET_NULL, related_name='runs')
     period_start = models.DateField()
     period_end = models.DateField()
     pay_date = models.DateField(null=True, blank=True)
     frequency = models.CharField(max_length=20, default='monthly')
     status = models.CharField(max_length=30, default='draft')  # draft | processing | pending_approval | approved | paid | cancelled
+    stage = models.IntegerField(default=1)  # 1 to 8 guided workflow step
     created_by = models.CharField(max_length=255, default='', blank=True)
     approved_by = models.CharField(max_length=255, default='', blank=True)
     approved_at = models.DateTimeField(null=True, blank=True)
@@ -1918,6 +2187,113 @@ class PayrollRun(models.Model):
     class Meta:
         db_table = 'payroll_runs'
         ordering = ['-period_start']
+
+
+class PayrollEntry(models.Model):
+    """Individual employee line item in a PayrollRun."""
+    run = models.ForeignKey(PayrollRun, on_delete=models.CASCADE, related_name='entries')
+    email = models.CharField(max_length=255, db_index=True)
+    employee_name = models.CharField(max_length=255, default='', blank=True)
+    employee_id = models.CharField(max_length=40, default='', blank=True)
+    department = models.CharField(max_length=120, default='', blank=True)
+    designation = models.CharField(max_length=120, default='', blank=True)
+    currency = models.CharField(max_length=10, default='INR')
+    worked_days = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0.00'))
+    paid_days = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0.00'))
+    lop_days = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0.00'))
+    overtime_hours = models.DecimalField(max_digits=6, decimal_places=2, default=Decimal('0.00'))
+    base_salary = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    gross_earnings = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    total_deductions = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    net_pay = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    employer_contribution = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    total_ctc = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    earnings_data = models.JSONField(default=list, blank=True)
+    deductions_data = models.JSONField(default=list, blank=True)
+    employer_data = models.JSONField(default=list, blank=True)
+    status = models.CharField(max_length=30, default='draft')  # draft | validated | approved | paid | on_hold
+    payment_status = models.CharField(max_length=30, default='unpaid')  # unpaid | processing | paid | failed
+    payment_reference = models.CharField(max_length=100, default='', blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'payroll_entries'
+        unique_together = ['run', 'email']
+        ordering = ['employee_name', 'email']
+
+
+class PayrollAdjustment(models.Model):
+    """Ad-hoc bonus, incentive, reimbursement, or manual deduction for a specific pay run."""
+    run = models.ForeignKey(PayrollRun, on_delete=models.CASCADE, related_name='adjustments')
+    email = models.CharField(max_length=255, db_index=True)
+    adjustment_type = models.CharField(max_length=30, default='bonus')  # bonus | incentive | arrear | reimbursement | deduction | lop_override
+    amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    description = models.CharField(max_length=255, default='', blank=True)
+    approved_by = models.CharField(max_length=255, default='', blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'payroll_adjustments'
+        ordering = ['-id']
+
+
+class PayrollApproval(models.Model):
+    """Multi-tier sign-off records for a PayrollRun."""
+    run = models.ForeignKey(PayrollRun, on_delete=models.CASCADE, related_name='approvals')
+    level = models.CharField(max_length=50)  # payroll_executive | hr_manager | finance_manager | super_admin
+    role_name = models.CharField(max_length=100, default='', blank=True)
+    approver_email = models.CharField(max_length=255)
+    approver_name = models.CharField(max_length=255, default='', blank=True)
+    action = models.CharField(max_length=30)  # approve | reject | request_corrections
+    comments = models.TextField(blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'payroll_approvals'
+        ordering = ['-created_at']
+
+
+class PayrollPayment(models.Model):
+    """Payment disbursement record tracking bank transfer status."""
+    run = models.ForeignKey(PayrollRun, on_delete=models.CASCADE, related_name='payments')
+    entry = models.ForeignKey(PayrollEntry, null=True, blank=True, on_delete=models.SET_NULL, related_name='payment_records')
+    email = models.CharField(max_length=255, db_index=True)
+    employee_name = models.CharField(max_length=255, default='', blank=True)
+    amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    currency = models.CharField(max_length=10, default='INR')
+    payment_method = models.CharField(max_length=30, default='bank_transfer')  # bank_transfer | direct_deposit | check | cash
+    bank_name = models.CharField(max_length=100, default='', blank=True)
+    account_number = EncryptedCharField(max_length=512, default='', blank=True)   # encrypted at rest
+    ifsc_or_routing = models.CharField(max_length=40, default='', blank=True)
+    status = models.CharField(max_length=30, default='pending')  # pending | processing | successful | failed
+    reference_number = models.CharField(max_length=100, default='', blank=True)
+    failure_reason = models.TextField(blank=True, default='')
+    disbursed_at = models.DateTimeField(null=True, blank=True)
+    disbursed_by = models.CharField(max_length=255, default='', blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'payroll_payments'
+        ordering = ['-created_at']
+
+
+class PayrollAuditLog(models.Model):
+    """Audit trail for all sensitive salary and payroll actions."""
+    action = models.CharField(max_length=60, db_index=True)
+    entity_type = models.CharField(max_length=60, db_index=True)
+    entity_id = models.CharField(max_length=60, default='', blank=True)
+    actor_email = models.CharField(max_length=255, db_index=True)
+    actor_name = models.CharField(max_length=255, default='', blank=True)
+    ip_address = models.CharField(max_length=60, default='', blank=True)
+    changes = models.JSONField(default=dict, blank=True)
+    notes = models.TextField(blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'payroll_audit_logs'
+        ordering = ['-created_at']
 
 
 class Payslip(models.Model):
@@ -1942,10 +2318,11 @@ class Payslip(models.Model):
     employer_contributions_data = models.JSONField(default=list, blank=True)
     # Snapshot of employee statutory info at payslip generation time
     employee_code = models.CharField(max_length=40, default='', blank=True)
-    pan_number = models.CharField(max_length=20, default='', blank=True)
-    uan_number = models.CharField(max_length=20, default='', blank=True)
-    pf_account_number = models.CharField(max_length=60, default='', blank=True)
-    bank_account_number = models.CharField(max_length=40, default='', blank=True)
+    # Encrypted at rest (api/fields.py); APIs return them masked (api/sensitive.py).
+    pan_number = EncryptedCharField(max_length=512, default='', blank=True)
+    uan_number = EncryptedCharField(max_length=512, default='', blank=True)
+    pf_account_number = EncryptedCharField(max_length=512, default='', blank=True)
+    bank_account_number = EncryptedCharField(max_length=512, default='', blank=True)
     bank_name = models.CharField(max_length=100, default='', blank=True)
     designation = models.CharField(max_length=120, default='', blank=True)
     doj = models.DateField(null=True, blank=True)  # Date of Joining
@@ -2270,3 +2647,604 @@ class AttendanceAuditLog(models.Model):
     class Meta:
         db_table = 'attendance_audit_log'
         ordering = ['-at', '-id']
+
+
+# ===========================================================================
+# Payroll extensions (tax, statutory, banking, US, ESS, F&F, alerts).
+# Logic lives in api/payroll_ext/*. Existing payroll tables are referenced,
+# never changed.
+# ===========================================================================
+class PayrollTaxTable(models.Model):
+    """A versioned tax rule set, editable per year by Payroll Admin.
+
+    India: country='IN', period='2026-27', kind='regime_new' | 'regime_old'
+      data = {slabs:[{upto, rate}], standard_deduction, rebate_limit,
+              rebate_max, cess_pct, surcharge:[{above, rate}],
+              section_limits:{"80C":150000, ...}}
+    US: country='US', period='2026', kind='federal' | 'fica' | 'futa' |
+      'state' (region=state code) | 'suta' (region=state code)."""
+    country = models.CharField(max_length=4, default='IN', db_index=True)
+    period = models.CharField(max_length=10, db_index=True)        # FY '2026-27' or year '2026'
+    kind = models.CharField(max_length=30, db_index=True)
+    region = models.CharField(max_length=10, default='', blank=True, db_index=True)
+    data = models.JSONField(default=dict, blank=True)
+    notes = models.TextField(default='', blank=True)
+    updated_by = models.CharField(max_length=255, default='', blank=True)
+    updated_at = models.DateTimeField(default=local_now)
+
+    class Meta:
+        db_table = 'payroll_tax_tables'
+        unique_together = (('country', 'period', 'kind', 'region'),)
+        ordering = ['country', '-period', 'kind', 'region']
+
+
+class EmployeeTaxDeclaration(models.Model):
+    """An employee's regime choice + investment / HRA declaration for one FY."""
+    email = models.CharField(max_length=255, db_index=True)
+    fy = models.CharField(max_length=10, db_index=True)            # '2026-27'
+    regime = models.CharField(max_length=10, default='new')        # new | old
+    regime_locked = models.BooleanField(default=False)
+    status = models.CharField(max_length=20, default='draft', db_index=True)   # draft | submitted | verified | rejected | locked
+    items = models.JSONField(default=list, blank=True)             # [{id, section, description, declared, verified}]
+    hra = models.JSONField(default=dict, blank=True)               # {monthly_rent, metro, landlord_name, landlord_pan(masked view), from, to, verified}
+    landlord_pan_enc = models.TextField(default='', blank=True)    # full PAN, encrypted (secret_box)
+    submitted_at = models.DateTimeField(null=True, blank=True)
+    verified_by = models.CharField(max_length=255, default='', blank=True)
+    verified_at = models.DateTimeField(null=True, blank=True)
+    reviewer_note = models.TextField(default='', blank=True)
+    updated_at = models.DateTimeField(default=local_now)
+
+    class Meta:
+        db_table = 'employee_tax_declarations'
+        unique_together = (('email', 'fy'),)
+        ordering = ['-fy', 'email']
+
+
+class TaxProofDocument(models.Model):
+    """Proof file for one declared item (rent receipt, 80C receipt …)."""
+    declaration = models.ForeignKey(EmployeeTaxDeclaration, on_delete=models.CASCADE, related_name='proofs')
+    item_id = models.CharField(max_length=40, default='', blank=True)          # declaration.items[].id or 'hra'
+    section = models.CharField(max_length=20, default='', blank=True)
+    file_name = models.CharField(max_length=255, default='', blank=True)
+    file_mime = models.CharField(max_length=100, default='', blank=True)
+    file_size = models.IntegerField(default=0)
+    sha256 = models.CharField(max_length=64, default='', blank=True)
+    file_data = models.TextField(default='', blank=True)                       # base64
+    status = models.CharField(max_length=20, default='pending')               # pending | accepted | rejected
+    reviewer_note = models.CharField(max_length=255, default='', blank=True)
+    uploaded_at = models.DateTimeField(default=local_now)
+
+    class Meta:
+        db_table = 'tax_proof_documents'
+        ordering = ['uploaded_at', 'id']
+
+
+class StatutoryFiling(models.Model):
+    """Every generated government file (ECR, ESIC, 24Q, Form 16 …), kept for audit."""
+    kind = models.CharField(max_length=20, db_index=True)          # ECR | ESIC | 24Q | FORM16 | W2 | 1099NEC
+    period = models.CharField(max_length=20, db_index=True)        # '2026-11', 'Q3-2026-27', '2026'
+    run_id = models.IntegerField(null=True, blank=True)
+    email = models.CharField(max_length=255, default='', blank=True)          # per-employee forms
+    file_name = models.CharField(max_length=255, default='', blank=True)
+    file_mime = models.CharField(max_length=100, default='text/plain', blank=True)
+    content = models.TextField(default='', blank=True)             # text, or base64 for PDFs
+    sha256 = models.CharField(max_length=64, default='', blank=True)
+    row_count = models.IntegerField(default=0)
+    generated_by = models.CharField(max_length=255, default='', blank=True)
+    generated_at = models.DateTimeField(default=local_now)
+
+    class Meta:
+        db_table = 'statutory_filings'
+        ordering = ['-generated_at', '-id']
+
+
+class IntegrationSecret(models.Model):
+    """Credentials for an external provider (icici, hdfc, twilio, slack …),
+    stored only encrypted (secret_box) and never returned by any API."""
+    provider = models.CharField(max_length=30, unique=True)
+    mode = models.CharField(max_length=10, default='test')         # test | live
+    enabled = models.BooleanField(default=False)
+    encrypted_config = models.TextField(default='', blank=True)
+    fingerprint = models.CharField(max_length=16, default='', blank=True)
+    public_config = models.JSONField(default=dict, blank=True)     # non-secret settings (base URL, sender id …)
+    validated_at = models.DateTimeField(null=True, blank=True)
+    updated_by = models.CharField(max_length=255, default='', blank=True)
+    updated_at = models.DateTimeField(default=local_now)
+
+    class Meta:
+        db_table = 'integration_secrets'
+
+
+class ActionOtp(models.Model):
+    """One-time code that authorises a sensitive action (salary payout …)."""
+    email = models.CharField(max_length=255, db_index=True)
+    purpose = models.CharField(max_length=40, db_index=True)       # payout_release …
+    ref = models.CharField(max_length=60, default='', blank=True)  # e.g. batch id
+    code_hash = models.CharField(max_length=128)
+    salt = models.CharField(max_length=32)
+    attempts = models.IntegerField(default=0)
+    consumed = models.BooleanField(default=False)
+    expires_at = models.DateTimeField()
+    created_at = models.DateTimeField(default=local_now)
+
+    class Meta:
+        db_table = 'action_otps'
+        ordering = ['-id']
+
+
+class PayoutBatch(models.Model):
+    """A salary payout sent through a bank API. Maker-checker: the person who
+    prepares it cannot release it; release needs a fresh sign-in + OTP."""
+    run_id = models.IntegerField(db_index=True)
+    provider = models.CharField(max_length=20, default='icici')    # icici | hdfc | simulated
+    mode = models.CharField(max_length=10, default='test')
+    status = models.CharField(max_length=20, default='draft', db_index=True)   # draft | awaiting_release | submitted | partially_paid | paid | failed | cancelled
+    total_amount = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0'))
+    item_count = models.IntegerField(default=0)
+    idempotency_key = models.CharField(max_length=64, unique=True)
+    created_by = models.CharField(max_length=255, default='', blank=True)
+    released_by = models.CharField(max_length=255, default='', blank=True)
+    released_at = models.DateTimeField(null=True, blank=True)
+    provider_batch_ref = models.CharField(max_length=100, default='', blank=True)
+    created_at = models.DateTimeField(default=local_now)
+    updated_at = models.DateTimeField(default=local_now)
+
+    class Meta:
+        db_table = 'payout_batches'
+        ordering = ['-id']
+
+
+class PayoutTransaction(models.Model):
+    """One employee's transfer inside a batch (re-queued failures get a new row)."""
+    batch = models.ForeignKey(PayoutBatch, on_delete=models.CASCADE, related_name='transactions')
+    payment_id = models.IntegerField(null=True, blank=True, db_index=True)    # PayrollPayment
+    email = models.CharField(max_length=255, db_index=True)
+    employee_name = models.CharField(max_length=255, default='', blank=True)
+    amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0'))
+    account_enc = models.TextField(default='', blank=True)         # encrypted account number
+    account_last4 = models.CharField(max_length=4, default='', blank=True)
+    ifsc = models.CharField(max_length=20, default='', blank=True)
+    mode = models.CharField(max_length=10, default='NEFT')         # NEFT | RTGS | IMPS
+    client_ref = models.CharField(max_length=64, unique=True)      # our id sent to the bank
+    provider_ref = models.CharField(max_length=100, default='', blank=True)
+    utr = models.CharField(max_length=40, default='', blank=True, db_index=True)
+    status = models.CharField(max_length=20, default='queued', db_index=True)  # queued | sent | success | failed | requeued
+    failure_code = models.CharField(max_length=40, default='', blank=True)
+    failure_reason = models.CharField(max_length=255, default='', blank=True)
+    attempt = models.IntegerField(default=1)
+    debited_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(default=local_now)
+    updated_at = models.DateTimeField(default=local_now)
+
+    class Meta:
+        db_table = 'payout_transactions'
+        ordering = ['id']
+
+
+class WebhookEvent(models.Model):
+    """Every inbound provider callback, for replay protection and audit."""
+    provider = models.CharField(max_length=20, db_index=True)
+    event_id = models.CharField(max_length=120)
+    signature_ok = models.BooleanField(default=False)
+    payload = models.JSONField(default=dict, blank=True)
+    processed = models.BooleanField(default=False)
+    error = models.CharField(max_length=255, default='', blank=True)
+    received_at = models.DateTimeField(default=local_now)
+
+    class Meta:
+        db_table = 'webhook_events'
+        unique_together = (('provider', 'event_id'),)
+        ordering = ['-id']
+
+
+class UsW4Declaration(models.Model):
+    """Form W-4 (2020+ layout) plus the state withholding certificate inputs."""
+    email = models.CharField(max_length=255, db_index=True)
+    year = models.IntegerField(db_index=True)
+    filing_status = models.CharField(max_length=30, default='single')   # single | married_jointly | head_of_household
+    multiple_jobs = models.BooleanField(default=False)                  # step 2(c)
+    dependents_amount = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0'))   # step 3
+    other_income = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0'))        # step 4(a)
+    deductions = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0'))          # step 4(b)
+    extra_withholding = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0'))   # step 4(c) per period
+    exempt = models.BooleanField(default=False)
+    work_state = models.CharField(max_length=2, default='', blank=True)
+    state_allowances = models.IntegerField(default=0)
+    state_extra_withholding = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0'))
+    ssn_enc = models.TextField(default='', blank=True)                   # encrypted SSN
+    ssn_last4 = models.CharField(max_length=4, default='', blank=True)
+    signed_at = models.DateTimeField(null=True, blank=True)
+    updated_at = models.DateTimeField(default=local_now)
+
+    class Meta:
+        db_table = 'us_w4_declarations'
+        unique_together = (('email', 'year'),)
+
+
+class ContractorPayment(models.Model):
+    """A payment to a US 1099 contractor (no withholding)."""
+    payee_name = models.CharField(max_length=255)
+    payee_email = models.CharField(max_length=255, default='', blank=True, db_index=True)
+    tin_enc = models.TextField(default='', blank=True)
+    tin_last4 = models.CharField(max_length=4, default='', blank=True)
+    address = models.TextField(default='', blank=True)
+    amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0'))
+    paid_on = models.DateField(db_index=True)
+    description = models.CharField(max_length=255, default='', blank=True)
+    created_by = models.CharField(max_length=255, default='', blank=True)
+    created_at = models.DateTimeField(default=local_now)
+
+    class Meta:
+        db_table = 'contractor_payments'
+        ordering = ['-paid_on', '-id']
+
+
+class ExchangeRate(models.Model):
+    """Rate to convert 1 unit of ``currency`` into the reporting currency."""
+    currency = models.CharField(max_length=10, db_index=True)
+    reporting_currency = models.CharField(max_length=10, default='INR')
+    rate = models.DecimalField(max_digits=16, decimal_places=6)
+    as_of = models.DateField(db_index=True)
+    source = models.CharField(max_length=40, default='manual', blank=True)
+    updated_by = models.CharField(max_length=255, default='', blank=True)
+
+    class Meta:
+        db_table = 'exchange_rates'
+        unique_together = (('currency', 'reporting_currency', 'as_of'),)
+        ordering = ['-as_of', 'currency']
+
+
+class ExpenseClaim(models.Model):
+    """Reimbursement claim; approved claims are paid through the next payroll run."""
+    email = models.CharField(max_length=255, db_index=True)
+    employee_name = models.CharField(max_length=255, default='', blank=True)
+    category = models.CharField(max_length=30, default='travel')   # travel | client_entertainment | internet | phone | meals | other
+    amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0'))
+    currency = models.CharField(max_length=10, default='INR')
+    expense_date = models.DateField()
+    description = models.TextField(default='', blank=True)
+    receipt_name = models.CharField(max_length=255, default='', blank=True)
+    receipt_mime = models.CharField(max_length=100, default='', blank=True)
+    receipt_data = models.TextField(default='', blank=True)          # base64
+    taxable = models.BooleanField(default=False)
+    status = models.CharField(max_length=20, default='submitted', db_index=True)   # submitted | approved | rejected | paid
+    approver_email = models.CharField(max_length=255, default='', blank=True)
+    decided_by = models.CharField(max_length=255, default='', blank=True)
+    decided_at = models.DateTimeField(null=True, blank=True)
+    decision_note = models.CharField(max_length=255, default='', blank=True)
+    paid_run_id = models.IntegerField(null=True, blank=True)
+    created_at = models.DateTimeField(default=local_now)
+
+    class Meta:
+        db_table = 'expense_claims'
+        ordering = ['-created_at', '-id']
+
+
+class EmployeeLoan(models.Model):
+    """Salary advance or loan, repaid by EMI deductions in payroll."""
+    email = models.CharField(max_length=255, db_index=True)
+    employee_name = models.CharField(max_length=255, default='', blank=True)
+    kind = models.CharField(max_length=20, default='advance')       # advance | loan
+    principal = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0'))
+    interest_rate = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0'))   # annual %
+    tenure_months = models.IntegerField(default=1)
+    emi = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0'))
+    reason = models.TextField(default='', blank=True)
+    status = models.CharField(max_length=20, default='requested', db_index=True)   # requested | approved | rejected | active | closed
+    approver_email = models.CharField(max_length=255, default='', blank=True)
+    decided_by = models.CharField(max_length=255, default='', blank=True)
+    decided_at = models.DateTimeField(null=True, blank=True)
+    decision_note = models.CharField(max_length=255, default='', blank=True)
+    disbursed_at = models.DateTimeField(null=True, blank=True)
+    first_emi_period = models.CharField(max_length=7, default='', blank=True)   # 'YYYY-MM'
+    outstanding = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0'))
+    created_at = models.DateTimeField(default=local_now)
+
+    class Meta:
+        db_table = 'employee_loans'
+        ordering = ['-created_at', '-id']
+
+
+class LoanInstallment(models.Model):
+    loan = models.ForeignKey(EmployeeLoan, on_delete=models.CASCADE, related_name='installments')
+    seq = models.IntegerField(default=1)
+    period = models.CharField(max_length=7, db_index=True)          # 'YYYY-MM'
+    principal_part = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0'))
+    interest_part = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0'))
+    amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0'))
+    status = models.CharField(max_length=20, default='scheduled')  # scheduled | deducted | skipped | waived
+    run_id = models.IntegerField(null=True, blank=True)
+
+    class Meta:
+        db_table = 'loan_installments'
+        ordering = ['loan_id', 'seq']
+
+
+class Separation(models.Model):
+    """An exit: resignation / termination, clearance and Full & Final."""
+    email = models.CharField(max_length=255, db_index=True)
+    employee_name = models.CharField(max_length=255, default='', blank=True)
+    separation_type = models.CharField(max_length=20, default='resignation')   # resignation | termination | retirement | death | other
+    resignation_date = models.DateField()
+    last_working_day = models.DateField()
+    notice_days_required = models.IntegerField(default=30)
+    notice_days_served = models.IntegerField(default=0)
+    notice_buyout = models.BooleanField(default=False)           # employer waives / employee buys out
+    reason = models.TextField(default='', blank=True)
+    status = models.CharField(max_length=20, default='initiated', db_index=True)   # initiated | clearance | computed | approved | paid | cancelled
+    computation = models.JSONField(default=dict, blank=True)
+    net_payable = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0'))
+    statement_html = models.TextField(default='', blank=True)
+    created_by = models.CharField(max_length=255, default='', blank=True)
+    approved_by = models.CharField(max_length=255, default='', blank=True)
+    approved_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(default=local_now)
+
+    class Meta:
+        db_table = 'separations'
+        ordering = ['-created_at', '-id']
+
+
+class ClearanceItem(models.Model):
+    separation = models.ForeignKey(Separation, on_delete=models.CASCADE, related_name='clearances')
+    department = models.CharField(max_length=30)                  # IT | Finance | HR | Admin | Manager
+    item = models.CharField(max_length=255)
+    status = models.CharField(max_length=20, default='pending')   # pending | cleared | waived
+    recovery_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0'))
+    cleared_by = models.CharField(max_length=255, default='', blank=True)
+    cleared_at = models.DateTimeField(null=True, blank=True)
+    note = models.CharField(max_length=255, default='', blank=True)
+
+    class Meta:
+        db_table = 'separation_clearances'
+        ordering = ['separation_id', 'id']
+
+
+class ChannelDelivery(models.Model):
+    """Log of an outbound SMS / WhatsApp / Slack message (no message secrets)."""
+    channel = models.CharField(max_length=20, db_index=True)       # sms | whatsapp | slack
+    recipient = models.CharField(max_length=255, default='', blank=True)   # masked phone / slack id
+    email = models.CharField(max_length=255, default='', blank=True, db_index=True)
+    purpose = models.CharField(max_length=40, default='', blank=True)      # salary_credit | payrun_approval …
+    ref = models.CharField(max_length=60, default='', blank=True)
+    status = models.CharField(max_length=20, default='queued')    # queued | sent | failed | simulated
+    provider_ref = models.CharField(max_length=100, default='', blank=True)
+    error = models.CharField(max_length=255, default='', blank=True)
+    created_at = models.DateTimeField(default=local_now)
+
+    class Meta:
+        db_table = 'channel_deliveries'
+        ordering = ['-id']
+
+
+# ---------------------------------------------------------------------------
+# Attendance & leave, phase 1: leave accrual ledger, regional holiday calendars
+# ---------------------------------------------------------------------------
+class LeaveLedgerEntry(models.Model):
+    """Every change to a leave balance, as an append-only ledger.
+
+    Balance for (email, leave_type, year) = sum(days) of its entries minus
+    approved LeaveRequest days. Accrual / rollover jobs are idempotent through
+    the unique (email, leave_type, year, kind, period) key: re-running the
+    November accrual never credits twice.
+    kind: opening | accrual | prorate | carry_forward | lapse | encash | adjust | comp_off
+    period: 'YYYY-MM' for monthly kinds, 'YYYY' for yearly ones, free for adjust.
+    days is signed (lapse / encash are negative)."""
+    email = models.CharField(max_length=255, db_index=True)
+    leave_type = models.CharField(max_length=60)
+    year = models.IntegerField(db_index=True)
+    kind = models.CharField(max_length=20)
+    period = models.CharField(max_length=20, default='', blank=True)
+    days = models.DecimalField(max_digits=7, decimal_places=2)
+    effective_date = models.DateField()
+    note = models.CharField(max_length=255, default='', blank=True)
+    # Encashment: amount once priced, and the pay run that paid it.
+    amount = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
+    paid_run_id = models.IntegerField(null=True, blank=True, db_index=True)
+    created_by = models.CharField(max_length=255, default='system', blank=True)
+    created_at = models.DateTimeField(default=local_now)
+
+    class Meta:
+        db_table = 'leave_ledger'
+        ordering = ['effective_date', 'id']
+        indexes = [models.Index(fields=['email', 'year', 'leave_type'])]
+        constraints = [models.UniqueConstraint(fields=['email', 'leave_type', 'year', 'kind', 'period'],
+                                               name='uniq_leave_ledger_period')]
+
+
+class HolidayCalendar(models.Model):
+    """A regional holiday list (e.g. 'Hyderabad Tech Hub', 'California Office').
+
+    include_national: also apply the computed India / US national holidays of
+    `country` (api/holiday_calendar.py). locations: UserProfile.location
+    values (case-insensitive) that map to this calendar automatically; an
+    explicit HolidayCalendarAssignment wins over a location match, and the
+    is_default calendar applies to everyone else."""
+    name = models.CharField(max_length=120, unique=True)
+    country = models.CharField(max_length=2, default='IN')       # IN | US | other ISO code
+    region = models.CharField(max_length=120, default='', blank=True)
+    include_national = models.BooleanField(default=True)
+    locations = models.JSONField(default=list, blank=True)
+    is_default = models.BooleanField(default=False)
+    is_active = models.BooleanField(default=True)
+    created_by = models.CharField(max_length=255, default='', blank=True)
+    created_at = models.DateTimeField(default=local_now)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'holiday_calendars'
+        ordering = ['name']
+
+
+class HolidayCalendarDay(models.Model):
+    """One holiday on a calendar. optional=True is a restricted / floating
+    holiday (taken on request, not a day off for everyone).
+    exclude=True suppresses a national holiday on this calendar."""
+    calendar = models.ForeignKey(HolidayCalendar, on_delete=models.CASCADE, related_name='days')
+    date = models.DateField(db_index=True)
+    name = models.CharField(max_length=160)
+    optional = models.BooleanField(default=False)
+    exclude = models.BooleanField(default=False)
+    created_at = models.DateTimeField(default=local_now)
+
+    class Meta:
+        db_table = 'holiday_calendar_days'
+        ordering = ['date']
+        unique_together = (('calendar', 'date', 'name'),)
+
+
+class HolidayCalendarAssignment(models.Model):
+    """Explicit employee -> calendar mapping (overrides the location match)."""
+    email = models.CharField(max_length=255, unique=True)
+    calendar = models.ForeignKey(HolidayCalendar, on_delete=models.CASCADE, related_name='assignments')
+    assigned_by = models.CharField(max_length=255, default='', blank=True)
+    assigned_at = models.DateTimeField(default=local_now)
+
+    class Meta:
+        db_table = 'holiday_calendar_assignments'
+
+
+# ---------------------------------------------------------------------------
+# Attendance policy engine: profiles, penalties, short leave, overtime/comp-off
+# ---------------------------------------------------------------------------
+class AttendancePolicyProfile(models.Model):
+    """A named set of attendance rules (e.g. "Standard Corporate", "Field
+    Sales", "24/7 Operations"). Resolution for an employee, most specific
+    first: individual assignment > department match > location match >
+    the default profile > built-in defaults (api/attendance_ext/policy.py).
+    departments / locations hold UserProfile.department / .location values
+    (case-insensitive)."""
+    name = models.CharField(max_length=100, unique=True)
+    description = models.TextField(default='', blank=True)
+    is_default = models.BooleanField(default=False)
+    is_active = models.BooleanField(default=True)
+    priority = models.IntegerField(default=0)            # tie-break between two matching profiles (higher wins)
+    departments = models.JSONField(default=list, blank=True)
+    locations = models.JSONField(default=list, blank=True)
+
+    # Hours & day-status thresholds (worked = active minutes, breaks excluded)
+    use_shift_hours = models.BooleanField(default=False)  # full day = shift length - break
+    full_day_minutes = models.PositiveIntegerField(default=480)
+    half_day_minutes = models.PositiveIntegerField(default=270)   # below this = absent
+    # Punctuality
+    grace_checkin_minutes = models.PositiveIntegerField(default=15)
+    grace_early_out_minutes = models.PositiveIntegerField(default=10)
+    late_half_day_after_minutes = models.PositiveIntegerField(default=0)  # 0 = off; later than this = half-day
+    # Penalties
+    free_lates_per_month = models.PositiveIntegerField(default=3)
+    count_early_outs = models.BooleanField(default=False)
+    penalty_action = models.CharField(max_length=20, default='half_day_leave')  # half_day_leave | lop_half_day | warning
+    penalty_leave_types = models.JSONField(default=list, blank=True)  # deduct from these, in order (default: Casual Leave)
+    # Short leave (permission)
+    short_leaves_per_month = models.PositiveIntegerField(default=2)
+    short_leave_max_minutes = models.PositiveIntegerField(default=120)
+    # Regularization
+    regularize_within_days = models.PositiveIntegerField(default=3)
+    # Overtime & comp-off
+    overtime_after_minutes = models.PositiveIntegerField(null=True, blank=True)   # null = shift setting
+    overtime_daily_cap_minutes = models.PositiveIntegerField(default=240)
+    overtime_weekly_cap_minutes = models.PositiveIntegerField(default=720)
+    overtime_requires_approval = models.BooleanField(default=True)
+    comp_off_enabled = models.BooleanField(default=True)
+    comp_off_half_day_minutes = models.PositiveIntegerField(default=240)
+    comp_off_full_day_minutes = models.PositiveIntegerField(default=480)
+    comp_off_leave_type = models.CharField(max_length=60, default='Comp Off')
+    comp_off_expiry_days = models.PositiveIntegerField(default=60)
+
+    created_by = models.CharField(max_length=255, default='', blank=True)
+    created_at = models.DateTimeField(default=local_now)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'attendance_policy_profiles'
+        ordering = ['-is_default', 'name']
+
+
+class AttendancePolicyAssignment(models.Model):
+    """Individual override: this employee follows this profile."""
+    email = models.CharField(max_length=255, unique=True)
+    profile = models.ForeignKey(AttendancePolicyProfile, on_delete=models.CASCADE, related_name='assignments')
+    assigned_by = models.CharField(max_length=255, default='', blank=True)
+    assigned_at = models.DateTimeField(default=local_now)
+
+    class Meta:
+        db_table = 'attendance_policy_assignments'
+
+
+class AttendancePenalty(models.Model):
+    """One late / early-out occurrence beyond the monthly free allowance and
+    what was done about it. One row per (email, date, kind)."""
+    email = models.CharField(max_length=255, db_index=True)
+    date = models.DateField(db_index=True)
+    period = models.CharField(max_length=7, db_index=True)            # YYYY-MM
+    kind = models.CharField(max_length=20)                            # late | early_out
+    occurrence = models.PositiveIntegerField(default=0)               # nth in the month
+    action = models.CharField(max_length=20)                          # half_day_leave | lop_half_day | warning
+    days = models.DecimalField(max_digits=4, decimal_places=2, default=0)
+    leave_type = models.CharField(max_length=60, default='', blank=True)
+    status = models.CharField(max_length=20, default='applied', db_index=True)  # applied | lop | warned | waived
+    ledger_entry_id = models.IntegerField(null=True, blank=True)
+    paid_run_id = models.IntegerField(null=True, blank=True)          # payroll run that deducted the LOP
+    profile_id = models.IntegerField(null=True, blank=True)
+    waived_by = models.CharField(max_length=255, default='', blank=True)
+    waived_at = models.DateTimeField(null=True, blank=True)
+    note = models.CharField(max_length=255, default='', blank=True)
+    created_at = models.DateTimeField(default=local_now)
+
+    class Meta:
+        db_table = 'attendance_penalties'
+        ordering = ['-date', '-id']
+        unique_together = (('email', 'date', 'kind'),)
+
+
+class ShortLeaveRequest(models.Model):
+    """Permission to arrive late / leave early for up to a couple of hours,
+    approved by the manager; it does not count as late / half-day."""
+    email = models.CharField(max_length=255, db_index=True)
+    employee_name = models.CharField(max_length=255, default='', blank=True)
+    date = models.DateField(db_index=True)
+    kind = models.CharField(max_length=20, default='early_out')       # late_in | early_out | middle
+    from_time = models.TimeField(null=True, blank=True)
+    to_time = models.TimeField(null=True, blank=True)
+    minutes = models.PositiveIntegerField(default=0)
+    reason = models.TextField(default='', blank=True)
+    status = models.CharField(max_length=20, default='Pending', db_index=True)  # Pending | Approved | Rejected | Cancelled
+    approver_email = models.CharField(max_length=255, default='', blank=True, db_index=True)
+    decided_by = models.CharField(max_length=255, default='', blank=True)
+    decided_at = models.DateTimeField(null=True, blank=True)
+    reviewer_note = models.TextField(default='', blank=True)
+    created_at = models.DateTimeField(default=local_now)
+
+    class Meta:
+        db_table = 'short_leave_requests'
+        ordering = ['-date', '-id']
+
+
+class OvertimeRecord(models.Model):
+    """Overtime worked on one day (after the policy threshold, capped), its
+    approval, and the comp-off it earned (weekly off / holiday work)."""
+    email = models.CharField(max_length=255, db_index=True)
+    employee_name = models.CharField(max_length=255, default='', blank=True)
+    date = models.DateField(db_index=True)
+    attendance_id = models.IntegerField(null=True, blank=True)
+    worked_minutes = models.PositiveIntegerField(default=0)
+    overtime_minutes = models.PositiveIntegerField(default=0)          # as computed (after daily cap)
+    capped_minutes = models.PositiveIntegerField(default=0)            # cut by daily / weekly caps
+    day_type = models.CharField(max_length=20, default='working')      # working | weekend | holiday
+    status = models.CharField(max_length=20, default='Pending', db_index=True)  # Pending | Approved | Rejected | Auto
+    approved_minutes = models.PositiveIntegerField(default=0)
+    comp_off_days = models.DecimalField(max_digits=4, decimal_places=2, default=0)
+    comp_off_ledger_id = models.IntegerField(null=True, blank=True)
+    comp_off_expires = models.DateField(null=True, blank=True)
+    approver_email = models.CharField(max_length=255, default='', blank=True, db_index=True)
+    decided_by = models.CharField(max_length=255, default='', blank=True)
+    decided_at = models.DateTimeField(null=True, blank=True)
+    note = models.TextField(default='', blank=True)
+    profile_id = models.IntegerField(null=True, blank=True)
+    created_at = models.DateTimeField(default=local_now)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'overtime_records'
+        ordering = ['-date', '-id']
+        unique_together = (('email', 'date'),)

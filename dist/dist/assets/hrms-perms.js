@@ -77,6 +77,7 @@
     ['/employees/leave',       'leave.view'],
     ['/employees/chat',        'employee.view'],
     ['/employees/work',        'employee.view'],
+    ['/settings/attendance-policies', 'attendance.policy.view'],
     ['/settings/users',        'settings.manage'],
     ['/settings/email',        'settings.manage'],
     ['/settings',              'settings.view'],
@@ -292,6 +293,64 @@
         { href: '/tickets',                 label: 'Help Desk Tickets',   icon: ICON.task },
         { href: '/timesheets',              label: 'Timesheets',          icon: ICON.clock },
         { href: '/org-chart',               label: 'Org Chart',           icon: ICON.users },
+        { href: '/my-pay',                  label: 'My Pay & Loans',      icon: ICON.card },
+        { href: '/my-pay/tax',              label: 'Tax Declaration',     icon: ICON.file },
+        { href: '/my-pay/w4',               label: 'W-4 (US)',            icon: ICON.file },
+        { href: '/my-assets',               label: 'My Assets',           icon: ICON.laptop },
+        { href: '/attendance/overtime',     label: 'Overtime & Comp-off', icon: ICON.clock },
+        { href: '/help/guides',             label: 'Help & Guides',       icon: ICON.file },
+      ]
+    },
+    {
+      // Regional holiday calendars (hrms-holidays.js), shown right under
+      // Settings in the Account section.
+      perm: 'settings.view',
+      permAny: ['settings.view', 'settings.manage'],
+      id: 'holiday-calendars',
+      section: 'Account',
+      continues: 'Account',
+      after: ['Account'],
+      items: [
+        { href: '/settings/holidays',       label: 'Holiday Calendars',   icon: ICON.calendar },
+      ]
+    },
+    {
+      // Attendance policy profiles, thresholds and penalties
+      // (hrms-att-policy.js), under Settings in the Account section.
+      perm: 'attendance.policy.view',
+      permAny: ['attendance.policy.view', 'attendance.policy.manage'],
+      id: 'attendance-policies',
+      section: 'Account',
+      continues: 'Account',
+      after: ['Account'],
+      items: [
+        { href: '/settings/attendance-policies', label: 'Attendance Policies', icon: ICON.clock },
+      ]
+    },
+    {
+      // Applications from the public careers page (hrms-careers.js), as the
+      // tail of the Recruit section whether React or this file rendered it.
+      perm: 'recruitment.view',
+      id: 'job-applications',
+      section: 'Recruit',
+      continues: 'Recruit',
+      after: ['Recruit'],
+      items: [
+        { href: '/recruit/applications',    label: 'Job Applications',    icon: ICON.resume },
+      ]
+    },
+    {
+      // IT asset register (hrms-assets.js): the tail of Onboarding (next to
+      // "IT Asset Allocation"); roles without Onboarding (IT Admin) get it
+      // under its own "IT" heading.
+      perm: 'assets.view',
+      permAny: ['assets.view', 'assets.manage'],
+      id: 'it-assets',
+      section: 'IT',
+      continues: 'Onboarding',
+      after: ['Onboarding', 'Employees', 'HR Management', 'Overview'],
+      items: [
+        { href: '/it-assets',               label: 'IT Assets',           icon: ICON.laptop },
       ]
     }
   ];
@@ -338,10 +397,25 @@
       var sec = document.createElement('div');
       sec.className = 'nav-section';
       sec.id = syntheticId;
-      var labelEl = document.createElement('div');
-      labelEl.className = 'nav-label';
-      labelEl.textContent = def.section;
-      sec.appendChild(labelEl);
+      var contSec = null;
+      if (def.continues) {
+        var allSecs = sidebar.querySelectorAll('.nav-section');
+        for (var cs = 0; cs < allSecs.length && !contSec; cs++) {
+          var cl = allSecs[cs].querySelector('.nav-label');
+          if (cl && (cl.textContent || '').trim().toLowerCase() === def.continues.toLowerCase()) contSec = allSecs[cs];
+        }
+      }
+      if (contSec) {
+        // Visually part of the section above: no heading, no top gap.
+        sec.style.paddingTop = '0';
+        sec.setAttribute('data-continues', def.continues);
+        contSec.style.paddingBottom = '0';
+      } else {
+        var labelEl = document.createElement('div');
+        labelEl.className = 'nav-label';
+        labelEl.textContent = def.section;
+        sec.appendChild(labelEl);
+      }
       for (var ji = 0; ji < def.items.length; ji++) {
         var item = def.items[ji];
         var a = document.createElement('a');
@@ -424,10 +498,63 @@
       delete el.dataset[flag];
     }
   }
+  /* "My Team" (hrms-myteam.js) is for people who manage someone, which no
+     permission expresses — /api/my-team/summary decides (`show`) and gives
+     the pending-approvals count for the badge. Shown first in Workspace. */
+  var myTeam = { show: false, pending: 0, at: 0 };
+  function loadMyTeam(force) {
+    var em = sessionEmail();
+    if (!em) { myTeam.show = false; return; }
+    if (!force && Date.now() - myTeam.at < 110000) return;
+    myTeam.at = Date.now();
+    fetch('/api/my-team/summary', { headers: { 'X-User-Email': em } })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) {
+        if (!d) return;
+        myTeam.show = !!d.show;
+        myTeam.pending = +d.pending || 0;
+        ensureMyTeamLink();
+      })
+      .catch(function () {});
+  }
+  function ensureMyTeamLink() {
+    var sec = document.getElementById('hrms-injected-nav-workspace');
+    var link = document.getElementById('hrms-nav-myteam');
+    if (!myTeam.show || !sec) { if (link && link.parentNode) link.parentNode.removeChild(link); return; }
+    if (!link) {
+      link = document.createElement('a');
+      link.id = 'hrms-nav-myteam';
+      link.className = 'nav-item';
+      link.href = '/my-team';
+      var ic = document.createElement('span');
+      ic.className = 'nav-icon';
+      ic.innerHTML = ICON.users;
+      link.appendChild(ic);
+      link.appendChild(document.createTextNode('My Team'));
+      var badge = document.createElement('span');
+      badge.className = 'hrms-myteam-badge';
+      badge.style.cssText = 'margin-left:auto;min-width:18px;height:18px;padding:0 6px;border-radius:9px;' +
+        'background:var(--danger,#ef4444);color:#fff;font-size:11px;font-weight:700;line-height:18px;text-align:center;display:none';
+      link.appendChild(badge);
+      link.addEventListener('click', function (ev) { ev.preventDefault(); navTo('/my-team'); });
+    }
+    var label = sec.querySelector('.nav-label');
+    var first = label ? label.nextSibling : sec.firstChild;
+    if (link.parentNode !== sec || (first !== link)) sec.insertBefore(link, first);
+    var bd = link.querySelector('.hrms-myteam-badge');
+    var txt = myTeam.pending > 99 ? '99+' : String(myTeam.pending);
+    if (bd.textContent !== txt) bd.textContent = txt;
+    var disp = myTeam.pending > 0 ? 'inline-block' : 'none';
+    if (bd.style.display !== disp) bd.style.display = disp;
+    link.title = myTeam.pending ? myTeam.pending + ' approval' + (myTeam.pending === 1 ? '' : 's') + ' waiting' : 'My Team';
+  }
+
   function applyNav() {
     if (!known) return;                 // don't restrict until we know the role's perms
     // First ensure any missing nav sections are injected for permitted modules
     injectMissingNavSections();
+    loadMyTeam(false);
+    ensureMyTeamLink();
     var items = document.querySelectorAll('.nav-item');
     for (var i = 0; i < items.length; i++) {
       var a = items[i];
@@ -448,6 +575,8 @@
   }
 
   function applyActiveNav() {
+    // hrms-sidebar.js lights "Settings" while the account drawer is open; leave the sidebar alone.
+    if (window.__hrmsSettingsDrawerOpen && window.__hrmsSettingsDrawerOpen()) return;
     var currentPath = (location.pathname || '/').replace(/\/+$/, '') || '/';
     var items = document.querySelectorAll('.nav-item[href]');
     var paths = [];
@@ -480,8 +609,15 @@
      with an "Access denied" overlay. Fail-open: only enforces once `known`. */
   var GUARD_ID = 'hrms-access-denied';
   function navTo(href) {
+    // A page drawn by an overlay (hrms-sidecar.js) would otherwise restore its
+    // own URL right after React navigates away, and the button looked dead.
+    try { if (window.HRMSSidecar && window.HRMSSidecar.release) window.HRMSSidecar.release(); } catch (_) {}
     if (window.__reactRouterNavigate) { window.__reactRouterNavigate(href); }
     else { window.location.href = href; }
+    setTimeout(function () {
+      if ((location.pathname || '/') !== href) { window.location.href = href; return; }   // last resort: a real load
+      applyRouteGuard();
+    }, 400);
   }
   /* The first route the user IS allowed to open — used as the overlay's landing
      target so we never bounce them to a page they also can't see. Dashboard is

@@ -175,7 +175,10 @@ I9_DOC_TYPES = {
     'i20':                     ('Form I-20', 'Other'),
     'ds2019':                  ('Form DS-2019', 'Other'),
     'i9_form':                 ('Form I-9 (completed)', 'Other'),
+    'i9':                      ('Form I-9', 'Other'),
     'e_verify_case':           ('E-Verify Case Result', 'Other'),
+    'everify':                 ('E-Verify', 'Other'),
+    'e_verify':                ('E-Verify', 'Other'),
 }
 LEGACY_DOC_LABELS = {
     'ssn': 'SSN', 'driver_license': 'Driver License', 'state_id': 'State ID',
@@ -198,6 +201,15 @@ ALLOWED_DOC_MIMES = {
     'image/jpg': 'jpg',
 }
 MAX_DOC_BYTES = 10 * 1024 * 1024  # 10 MB decoded
+
+# A candidate's own documents (the Work Authorization panel and the candidate
+# portal) may also be Word files. Form and payroll templates stay PDF/image only.
+WORD_DOC_MIMES = {
+    'application/msword': 'doc',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+}
+CANDIDATE_DOC_MIMES = {**ALLOWED_DOC_MIMES, **WORD_DOC_MIMES}
+CANDIDATE_DOC_ERROR = 'Only PDF, Word (DOC/DOCX), PNG and JPG files are allowed'
 
 VERIFICATION_STATUSES = ['Pending', 'Approved', 'Rejected']
 APPROVAL_ACTIONS = ['Approved', 'Rejected', 'Returned']
@@ -343,16 +355,17 @@ def get_candidate(pk):
     return OnboardingCandidate.objects.filter(pk=pk, is_deleted=False).first()
 
 
-def decode_document(file_data, file_mime):
+def decode_document(file_data, file_mime, allowed=None, error=None):
     """Validate an uploaded base64 document.
 
     Returns ``(size_bytes, cleaned_base64, error_message)``. Enforces the MIME
-    allowlist and the 10 MB cap on the *decoded* bytes — base64 inflates by ~33%,
-    so checking the encoded length would reject legitimate ~7.5 MB files.
+    allowlist (``allowed``, default PDF/PNG/JPG) and the 10 MB cap on the
+    *decoded* bytes — base64 inflates by ~33%, so checking the encoded length
+    would reject legitimate ~7.5 MB files.
     """
     mime = (file_mime or '').strip().lower()
-    if mime not in ALLOWED_DOC_MIMES:
-        return 0, '', 'Only PDF, PNG and JPG files are allowed'
+    if mime not in (ALLOWED_DOC_MIMES if allowed is None else allowed):
+        return 0, '', error or 'Only PDF, PNG and JPG files are allowed'
 
     raw = str(file_data or '').strip()
     if not raw:
@@ -1319,7 +1332,8 @@ def candidate_documents(request, pk):
     if error:
         return err(error)
 
-    size, cleaned, error = decode_document(body.get('fileData'), body.get('fileMime'))
+    size, cleaned, error = decode_document(body.get('fileData'), body.get('fileMime'),
+                                           allowed=CANDIDATE_DOC_MIMES, error=CANDIDATE_DOC_ERROR)
     if error:
         return err(error)
 
@@ -1390,6 +1404,27 @@ def candidate_document_detail(request, pk, doc_id):
             old_value={'docType': doc_type, 'version': version},
         )
     return Response({'ok': True})
+
+
+@api_view(['GET'])
+@require_perm('onboarding.view')
+def candidate_document_preview(request, pk, doc_id):
+    """A Word document as safe HTML, so the app can show it in place (see word_preview)."""
+    from . import word_preview
+    candidate = get_candidate(pk)
+    doc = candidate.documents.filter(pk=doc_id).first() if candidate else None
+    if not doc:
+        return err('Document not found', 404)
+    if doc.file_mime not in WORD_DOC_MIMES:
+        return err('Only Word documents have an HTML preview', 400)
+    try:
+        raw = base64.b64decode(doc.file_data or '', validate=False)
+        return Response({'html': word_preview.word_to_html(raw, doc.file_mime, doc.file_name)})
+    except word_preview.PreviewError as e:
+        return err(str(e), 422)
+    except Exception:
+        # A damaged or unusual file must never turn into a server error: the download still works.
+        return err('This Word file cannot be previewed. You can still download it.', 422)
 
 
 @api_view(['GET'])
@@ -1642,6 +1677,23 @@ def candidate_approval(request, pk):
 # ---------------------------------------------------------------------------
 # IT asset allocation
 # ---------------------------------------------------------------------------
+def _asset_register(name, *args):
+    """Mirror the allocation into the IT asset register (hrms_plus/assets_links):
+    the picked tags become register assignments for the candidate's email, which
+    is the employee login after activation. Never blocks onboarding."""
+    try:
+        from hrms_plus import assets_links
+    except Exception:
+        return None
+    try:
+        with transaction.atomic():
+            return getattr(assets_links, name)(*args)
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception('IT asset register sync (%s) failed', name)
+        return None
+
+
 @api_view(['GET', 'POST'])
 @require_perm({'GET': 'onboarding.view', 'POST': 'onboarding.assets'})
 def candidate_assets(request, pk):
@@ -1701,6 +1753,16 @@ def candidate_assets(request, pk):
     if not serializer.is_valid():
         return serializer_err(serializer)
 
+    # Tags picked from stock (or typed) must still be free to hand over.
+    try:
+        from hrms_plus.assets_links import precheck_allocation, split_tags
+        picked = body.get('assetTags') if isinstance(body.get('assetTags'), list) else []
+        clash = precheck_allocation(split_tags(body.get('assetId')) + [str(t) for t in picked], candidate.email)
+    except ImportError:
+        clash = None
+    if clash:
+        return err(clash, 409)
+
     with transaction.atomic():
         allocation = serializer.save(candidate=candidate, allocated_by=actor)
         set_stage(candidate, 'it_assets', 'Completed', actor)
@@ -1710,7 +1772,11 @@ def candidate_assets(request, pk):
             comments=f"{source}: {', '.join(assets) or allocation.asset_id or '-'}",
             new_value=ItAssetAllocationSerializer(allocation).data,
         )
-    return Response(ItAssetAllocationSerializer(allocation).data, status=201)
+        register = _asset_register('sync_allocation', allocation, actor)
+    data = ItAssetAllocationSerializer(allocation).data
+    if register is not None:
+        data['register'] = register
+    return Response(data, status=201)
 
 
 @api_view(['PATCH', 'DELETE'])
@@ -1731,6 +1797,7 @@ def candidate_asset_detail(request, pk, asset_id):
                 candidate, 'IT Asset Allocation Removed', actor,
                 old_value=ItAssetAllocationSerializer(allocation).data,
             )
+            _asset_register('on_allocation_deleted', allocation, actor)
             allocation.delete()
         return Response({'ok': True})
 
@@ -1750,6 +1817,8 @@ def candidate_asset_detail(request, pk, asset_id):
             comments=f'status: {allocation.status}',
             old_value=before, new_value=ItAssetAllocationSerializer(allocation).data,
         )
+        _asset_register('sync_allocation', allocation, actor)   # new tags / Returned / Lost / Damaged
+        allocation.refresh_from_db()
     return Response(ItAssetAllocationSerializer(allocation).data)
 
 
@@ -1760,6 +1829,9 @@ def candidate_asset_detail(request, pk, asset_id):
 # are the one part of a candidate's record that a Manager or an IT Admin has no
 # business reading, and this is what enforces that.
 # ---------------------------------------------------------------------------
+from .sensitive import mask as mask_identifier  # noqa: E402
+
+
 @api_view(['GET', 'PUT'])
 @require_perm('onboarding.payroll')
 def candidate_payroll(request, pk):
@@ -1778,9 +1850,15 @@ def candidate_payroll(request, pk):
         return err(f"status must be one of: {', '.join(PAYROLL_STATUSES)}")
 
     if status_val == 'Completed':
+        from .sensitive import is_masked_input
         for field, label in (('bankName', 'bankName'), ('accountNumber', 'accountNumber'),
                              ('routingNumber', 'routingNumber'), ('taxState', 'taxState')):
-            if not (body.get(field) or '').strip():
+            sent = (body.get(field) or '').strip()
+            # The form only ever sees the account number masked: sending the
+            # mask back means "keep the number on file".
+            if field == 'accountNumber' and is_masked_input(sent) and payroll and payroll.account_number:
+                continue
+            if not sent:
                 return err(f'{label} is required to complete payroll')
 
     actor = _actor(request)
@@ -2179,11 +2257,11 @@ def payroll_list(request):
     out = []
     for c in _live().select_related('payroll'):
         p = getattr(c, 'payroll', None)
-        acct = (p.account_number or '').strip() if p else ''
+        acct = (p.account_number or '') if p else ''
         row = _who(c)
         row.update({
             'bankName': (p.bank_name or '') if p else '',
-            'accountNumberMasked': ('*' * max(0, len(acct) - 4)) + acct[-4:] if acct else '',
+            'accountNumberMasked': mask_identifier(acct, 'account'),
             'routingNumber': (p.routing_number or '') if p else '',
             'taxState': (p.tax_state or '') if p else '',
             'directDeposit': bool(p.direct_deposit) if p else False,
@@ -2532,7 +2610,8 @@ def public_upload_document(request):
     if error:
         return err(error)
 
-    size, cleaned, error = decode_document(body.get('fileData'), body.get('fileMime'))
+    size, cleaned, error = decode_document(body.get('fileData'), body.get('fileMime'),
+                                           allowed=CANDIDATE_DOC_MIMES, error=CANDIDATE_DOC_ERROR)
     if error:
         return err(error)
 

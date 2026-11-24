@@ -450,12 +450,17 @@ class AttendanceService:
             date__gte=from_date,
             date__lte=to_date
         )
+        # Holiday calendars (api/attendance_ext/holidays.py): the employee's
+        # own holidays are days off -- an 'absent' row on one (e.g. stamped by
+        # the late sweep) is not an absence. Empty when no calendar applies.
+        from api.attendance_ext.holidays import holiday_dates
+        hols = holiday_dates(email, from_date, to_date)
 
         summary = {
             'total_days': (to_date - from_date).days + 1,
             'present': attendances.filter(status='present').count(),
             'late': attendances.filter(status='late').count(),
-            'absent': attendances.filter(status='absent').count(),
+            'absent': attendances.filter(status='absent').exclude(date__in=list(hols)).count(),
             'half_day': attendances.filter(status='half-day').count(),
             'total_worked_minutes': attendances.aggregate(total=Sum('worked_minutes'))['total'] or 0,
             'total_break_minutes': attendances.aggregate(total=Sum('break_minutes'))['total'] or 0,
@@ -466,11 +471,12 @@ class AttendanceService:
         # leave date in the range (Mon-Fri, not past today, and not a day that
         # already has an attendance row -- that row's status counts it once)
         # so it shows as Leave and lowers the rate.
-        summary['leave'] = AttendanceService._leave_days(email, from_date, to_date, attendances)
+        summary['leave'] = AttendanceService._leave_days(email, from_date, to_date, attendances, hols)
+        summary['holiday'] = len([d for d in hols if d <= min(to_date, date.today())])
         return summary
 
     @staticmethod
-    def _leave_days(email, from_date, to_date, attendances):
+    def _leave_days(email, from_date, to_date, attendances, holidays=()):
         from api.models import LeaveRequest
         last = min(to_date, date.today())
         if last < from_date:
@@ -482,7 +488,7 @@ class AttendanceService:
             d = max(lv.from_date, from_date)
             end = min(lv.to_date, last)
             while d <= end:
-                if d.weekday() < 5 and d not in worked:
+                if d.weekday() < 5 and d not in worked and d not in holidays:
                     days.add(d)
                 d += timedelta(days=1)
         return len(days)

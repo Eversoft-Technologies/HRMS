@@ -85,7 +85,9 @@ class BenchSalesUploadApiTests(TestCase):
                                   content_type='application/json')
         self.assertEqual(updated.status_code, 200)
         self.assertEqual(updated.json()['dateOfBirth'], '1990-04-15')
-        self.assertEqual(updated.json()['passportNo'], 'N1234567')
+        # Passport numbers are encrypted at rest and returned masked (api/sensitive.py);
+        # the exact number still finds the profile through its blind index.
+        self.assertEqual(updated.json()['passportNo'], '••••567')
         found = self.client.get('/api/recruit/bench-sales?search=N1234567')
         self.assertEqual([p['id'] for p in found.json()], [self.pk])
         # An existing profile without the new fields still serialises.

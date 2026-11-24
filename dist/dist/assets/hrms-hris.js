@@ -110,6 +110,29 @@
       });
     });
   }
+  /* The payslip endpoint needs the identity headers that hrms-actor.js adds to
+     fetch() only, so a bare window.open(url) is refused. Open the tab inside the
+     click (popup blockers), fetch the HTML, then point the tab at a Blob URL. */
+  function openPayslip(id) {
+    var w = window.open('', '_blank');
+    if (w) { try { w.document.write('<p style="font-family:sans-serif;color:#64748b">Loading payslip…</p>'); } catch (_) {} }
+    fetch('/api/payroll/payslips/' + encodeURIComponent(id) + '/pdf').then(function (r) {
+      if (!r.ok) {
+        return r.text().then(function (t) {
+          var d = null; try { d = JSON.parse(t); } catch (_) {}
+          throw new Error((d && (d.message || d.error)) || ('Could not open the payslip (' + r.status + ')'));
+        });
+      }
+      return r.blob().then(function (b) {
+        var u = URL.createObjectURL(b);
+        if (w) w.location.href = u; else window.location.assign(u);
+        setTimeout(function () { URL.revokeObjectURL(u); }, 60000);
+      });
+    }).catch(function (e) {
+      if (w) { try { w.close(); } catch (_) {} }
+      window.alert(e.message);
+    });
+  }
   function listOf(r) { return Array.isArray(r) ? r : ((r && Array.isArray(r.results)) ? r.results : []); }
   // Currency and date format come from Settings > General (hrms-company.js).
   function money(n) {
@@ -876,7 +899,10 @@
       body.innerHTML = '<div class="hp-loading">Loading payroll…</div>';
       var err = null;
       function grab(p) { return api(p).then(listOf).catch(function (e) { err = err || e; return []; }); }
-      Promise.all([grab('/api/payroll/compensations?email=' + enc), grab('/api/payroll/payslips?email=' + enc), grab('/api/payroll/runs')])
+      // runs is optional (period labels): an employee without payroll.view gets 403
+      // there, which must not hide their own compensation / payslips.
+      Promise.all([grab('/api/payroll/compensations?email=' + enc), grab('/api/payroll/payslips?email=' + enc),
+                   api('/api/payroll/runs').then(listOf).catch(function () { return []; })])
         .then(function (r) {
           var runs = {};
           r[2].forEach(function (run) { runs[run.id] = run.period_label || ''; });
@@ -1170,7 +1196,7 @@
     else if (act === 'person') { var k = el.getAttribute('data-key'); if (k) { e.preventDefault(); navTo(profileUrl(k)); } }
     else if (act === 'message') { e.preventDefault(); navTo('/employees/chat'); }
     else if (act === 'edit') { openEdit(); }
-    else if (act === 'payslip') { window.open('/api/payroll/payslips/' + encodeURIComponent(el.getAttribute('data-id')) + '/pdf', '_blank'); }
+    else if (act === 'payslip') { openPayslip(el.getAttribute('data-id')); }
     else if (act === 'doc') { openDocument(el.getAttribute('data-type'), el.getAttribute('data-name')); }
     else if (act === 'reload') { load(state.key); }
     else if (act === 'ws-home') { e.preventDefault(); state.wsForm = el.getAttribute('data-mode'); renderTab(); }
@@ -1413,29 +1439,28 @@
   function decorateList() {
     var table = document.querySelector('.content table');
     if (!table) return;
+    table.querySelectorAll('thead th').forEach(function (th) {
+      th.style.textAlign = 'center';
+    });
     var rows = table.querySelectorAll('tbody tr');
     if (!rows.length) return;
     ensureStyle();
     loadListPermissions();
     var unmatched = false;
     rows.forEach(function (tr) {
-      if (tr.hasAttribute('data-hris-skip')) return;
-      var email = tr.getAttribute('data-hris-email');
-      if (!email) {
-        var nameEl = tr.querySelector('td .av-row span') || tr.querySelector('td');
-        var name = nameEl ? listNameKey(nameEl.textContent) : '';
-        if (!name || tr.children.length < 3) { tr.setAttribute('data-hris-skip', '1'); return; }   // the "no employees" placeholder row
-        email = listCache && listCache[name];
-        if (!email) { unmatched = true; return; }
-        tr.setAttribute('data-hris-email', email);
-        tr.style.cursor = 'pointer';
-        tr.title = 'Open employee profile';
-        tr.addEventListener('click', function (ev) {
-          if (ev.target.closest('a, button, input, select')) return;
-          navTo(profileUrl(email));
-        });
-      }
-      if (listCanDelete) addDeleteAction(table, tr);
+      if (tr.hasAttribute('data-hris-email') || tr.hasAttribute('data-hris-skip')) return;
+      var nameEl = tr.querySelector('td .av-row span') || tr.querySelector('td');
+      var name = nameEl ? (nameEl.textContent || '').trim().toLowerCase() : '';
+      if (!name || tr.children.length < 3) { tr.setAttribute('data-hris-skip', '1'); return; }   // the "no employees" placeholder row
+      var email = listCache && listCache[name];
+      if (!email) { unmatched = true; return; }
+      tr.setAttribute('data-hris-email', email);
+      tr.style.cursor = 'pointer';
+      tr.title = 'Open employee profile';
+      tr.addEventListener('click', function (ev) {
+        if (ev.target.closest('a, button, input, select')) return;
+        navTo(profileUrl(email));
+      });
     });
     if ((!listCache || unmatched) && !listLoading && Date.now() - listFetchedAt > 5000) {
       listLoading = true;

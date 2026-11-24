@@ -143,4 +143,19 @@
       run(1);
     });
   };
+
+  // Count uploads in flight, so leaving the interview page (Back) can wait until the
+  // video is safely on the server instead of cutting it off.
+  (function () {
+    var inner = window.__hrmsIvUpload;
+    window.__hrmsIvUploads = 0;
+    window.__hrmsIvUpload = function (id, blob) {
+      window.__hrmsIvUploads++;
+      window.__hrmsIvUploadStarted = true;
+      var p = inner(id, blob);
+      var done = function () { window.__hrmsIvUploads = Math.max(0, window.__hrmsIvUploads - 1); };
+      p.then(done, done);
+      return p;
+    };
+  })();
 })();

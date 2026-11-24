@@ -163,6 +163,41 @@
      it on its own schedule, so any snapshot we take goes stale — new nodes
      would appear alongside the panel, and restoring a stale list left the real
      page blank. A class covers whatever .content holds, whenever it holds it. */
+  /* The console is an overlay on /settings, so React shows "Settings" in the top
+     bar, and the Onboarding module (which also answers to a /settings page of its
+     own) sometimes writes "Onboarding Settings" there. While the console is open
+     the title must read "Access Control": set it, and put it back if anything
+     else rewrites it. Only the text node's value is changed, so React's own
+     updates keep working (see the same note in hrms-hris.js). */
+  var TITLE = 'Access Control';
+  var titleObs = null, titleEl = null;
+  function writeTitle(tt, text) {
+    var n = tt.firstChild;
+    if (n && n.nodeType === 3 && tt.childNodes.length === 1) n.nodeValue = text;
+    else tt.textContent = text;
+  }
+  function applyTitle() {
+    if (!document.getElementById(PAGE_ID)) return;
+    var tt = document.querySelector('.topbar-title');
+    if (tt && tt.textContent !== TITLE) writeTitle(tt, TITLE);
+  }
+  function holdTitle() {
+    var tt = document.querySelector('.topbar-title');
+    if (!tt) return;
+    applyTitle();
+    if (titleObs && titleEl === tt) return;
+    if (titleObs) titleObs.disconnect();
+    titleEl = tt;
+    titleObs = new MutationObserver(applyTitle);
+    titleObs.observe(tt, { childList: true, characterData: true, subtree: true });
+  }
+  function releaseTitle() {
+    if (titleObs) { titleObs.disconnect(); titleObs = null; titleEl = null; }
+    var tt = document.querySelector('.topbar-title');
+    // Back on Settings (or about to be replaced by React on a route change).
+    if (tt && tt.textContent === TITLE && isSettingsRoute()) writeTitle(tt, 'Settings');
+  }
+
   function open() {
     if (document.getElementById(PAGE_ID)) return;
     injectStyle();
@@ -177,10 +212,12 @@
     document.addEventListener('keydown', onKey);
     buildSkeleton();
     render();
+    holdTitle();
   }
   function close() {
     var page = document.getElementById(PAGE_ID);
     if (page && page.parentNode) page.parentNode.removeChild(page);
+    releaseTitle();
     // Clear the flag wherever it landed — .content may have been swapped out.
     Array.prototype.forEach.call(
       document.querySelectorAll('.' + ACTIVE_CLS),
@@ -279,6 +316,7 @@
     var body = page.querySelector('.hrms-rbac-body');
     if (!body) { buildSkeleton(); body = page.querySelector('.hrms-rbac-body'); }
     if (body) body.innerHTML = bodyHtml;
+    holdTitle();
     var tabs = page.querySelectorAll('.hrms-rbac-tab');
     for (var i = 0; i < tabs.length; i++) {
       var active = tabs[i].getAttribute('data-tab') === state.tab && !state.sub;

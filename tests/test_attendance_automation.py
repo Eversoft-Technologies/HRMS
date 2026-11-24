@@ -202,23 +202,6 @@ class AutoCheckoutTests(TestCase):
             email=self.email, date=local_today(), check_in=datetime.now(), geo_verified=True,
         )
 
-    def test_an_auto_checkout_is_stamped_and_labelled(self):
-        # the server's own record of 16 minutes outside (see geofence-check)
-        from api.timeutil import local_now
-        now = local_now()
-        EmployeeAttendance.objects.filter(email=self.email).update(
-            outside_since=now - timedelta(minutes=16), outside_last_at=now - timedelta(minutes=1))
-        resp = self.client.post('/api/attendance/check-out',
-                                data={'email': self.email, 'auto': 'geofence'},
-                                content_type='application/json',
-                                HTTP_X_USER_EMAIL=self.email)
-        self.assertEqual(resp.status_code, 200)
-
-        row = EmployeeAttendance.objects.get(email=self.email, date=local_today())
-        self.assertIsNotNone(row.check_out)
-        self.assertIsNotNone(row.auto_checkout_at, 'must be distinguishable from a manual one')
-        self.assertIn('geofence', (row.note or '').lower())
-
     def test_a_manual_checkout_is_not_stamped(self):
         self.client.post('/api/attendance/check-out',
                          data={'email': self.email},

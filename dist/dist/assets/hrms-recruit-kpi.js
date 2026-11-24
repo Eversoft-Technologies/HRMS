@@ -241,7 +241,8 @@
       /* cards grid */
       '.kpi-cards{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));column-gap:16px;row-gap:16px;margin-bottom:20px}',
       '.kpi-card{min-width:0;background:var(--bg2,#f8fafc);border:1.5px solid var(--border,#e5e7eb);border-radius:12px;padding:14px 16px;position:relative;overflow:hidden;transition:transform .2s, box-shadow .2s, border-color .2s;box-sizing:border-box}',
-      '.kpi-card:hover{transform:translateY(-2px);border-color:var(--accent,#6366f1);box-shadow:0 6px 18px rgba(99,102,241,0.18)}',
+      '.kpi-card:hover{transform:none!important;border-color:var(--accent,#4f8ef7)!important;box-shadow:0 6px 16px rgba(79,142,247,.22)!important}',
+      '#hrms-kpi-overlay .kpi-card:hover{background:var(--bg,#f8fafc)!important}',
       '.kpi-card::before{content:"";position:absolute;top:0;left:0;right:0;height:4px}',
       '.kpi-card.c-green::before{background:linear-gradient(90deg,#10b981,#34d399)}',
       '.kpi-card.c-blue::before{background:linear-gradient(90deg,#6366f1,#818cf8)}',
@@ -251,6 +252,13 @@
       '.kpi-card.c-cyan::before{background:linear-gradient(90deg,#06b6d4,#22d3ee)}',
       '.kpi-card.c-indigo::before{background:linear-gradient(90deg,#4f46e5,#6366f1)}',
       '.kpi-card.c-pink::before{background:linear-gradient(90deg,#ec4899,#f472b6)}',
+      /* Recruitment pipeline board: highlight the entire stage column and
+         candidate card on hover, not only the card border. */
+      '.kanban-col{border:1px solid transparent;transition:border-color .15s ease;}',
+      '.kanban-col:hover{transform:none!important;border-color:var(--accent,#4f8ef7)!important;}',
+      '.kanban-card{transition:border-color .15s ease;}',
+      '.kanban-card:hover{transform:none!important;border-color:var(--accent,#4f8ef7)!important;box-shadow:none!important;background:var(--bg2,#141b26)!important;}',
+      'body:has(.sidebar a.nav-item.active[href^="/recruit"]) #root .kanban-card:hover{transform:none!important;border-color:var(--accent,#4f8ef7)!important;box-shadow:none!important;background:var(--bg2,#141b26)!important}',
       '.kpi-card-val{font-size:26px;font-weight:700;color:var(--text1,#111);line-height:1.1;margin-top:6px;font-family:var(--font-d, "DM Sans", sans-serif)}',
       '.kpi-card-lbl{font-size:11px;font-weight:700;color:var(--text3,#888);text-transform:uppercase;letter-spacing:.5px}',
       '.kpi-card-sub{font-size:11px;color:var(--text3,#888);margin-top:4px}',

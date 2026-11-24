@@ -41,9 +41,15 @@ function load(script, opts) {
   const ctx = { Math, Number, isFinite, Promise, Error, console, setTimeout, clearTimeout };
   ctx.globalThis = ctx;
   const geo = makeGeo(script);
-  ctx.navigator = (opts && opts.noGeo) ? {} : { geolocation: geo.api };
+  ctx.navigator = (opts && opts.noGeo) ? {} : {
+    geolocation: geo.api,
+    permissions: { query: () => Promise.resolve({ state: (opts && opts.prompt) ? 'prompt' : 'granted' }) }
+  };
+  ctx.getActor = () => ({ email: 'a@x.com' });
   vm.createContext(ctx);
-  vm.runInContext(src.slice(start, end) +
+  vm.runInContext('var isCheckedIn = false;\n' + src.slice(start, end) +
+    '\nglobalThis.__warm = warmGeo;' +
+    '\nglobalThis.__setChecked = function (v) { isCheckedIn = v; };' +
     '\nglobalThis.__get = getPosition;' +
     '\nglobalThis.__checkin = GEO_WAIT_CHECKIN_MS;' +
     '\nglobalThis.__sample = GEO_WAIT_SAMPLE_MS;', ctx);
@@ -136,6 +142,67 @@ function load(script, opts) {
       ctx.__sample < ctx.__checkin, `${ctx.__sample} vs ${ctx.__checkin}`);
     check('check-in does not hang a person indefinitely',
       ctx.__checkin > 0 && ctx.__checkin <= 20000, `${ctx.__checkin} ms`);
+  }
+
+  // 8. The "outside the office" box used to appear ~15 s after the click,
+  //    because a desktop browser's 60-150 m WiFi fix never reaches the 50 m
+  //    the old rule waited for. The interactive path now relaxes with time.
+  const timed = async (p) => { const t = Date.now(); const r = await p; return { ms: Date.now() - t, pos: r }; };
+  {
+    const { ctx } = load([{ at: 300, lat: 13.4, lng: 79.7, acc: 92 }]);
+    const r = await timed(ctx.__get(undefined, undefined, { fast: true }));
+    check('a 92 m fix is accepted after about a second, not the full wait',
+      r.pos && r.pos.accuracy === 92 && r.ms < 2000, `${r.ms} ms`);
+  }
+  {
+    const { ctx } = load([{ at: 150, lat: 13.4, lng: 79.7, acc: 30 }]);
+    const r = await timed(ctx.__get(undefined, undefined, { fast: true }));
+    check('a fix within 50 m is accepted at once', r.pos && r.ms < 600, `${r.ms} ms`);
+  }
+  {
+    const { ctx } = load([{ at: 300, lat: 12.9, lng: 77.5, acc: 5000 }]);
+    const r = await timed(ctx.__get(undefined, undefined, { fast: true }));
+    check('even a coarse fix is sent after ~3.5 s, with its accuracy',
+      r.pos && r.pos.accuracy === 5000 && r.ms >= 3000 && r.ms < 5000, `${r.ms} ms`);
+  }
+  {
+    const { ctx } = load([
+      { at: 200, lat: 12.9, lng: 77.5, acc: 4000 },
+      { at: 800, lat: 13.4, lng: 79.7, acc: 40 }
+    ]);
+    const r = await timed(ctx.__get(undefined, undefined, { fast: true }));
+    check('a better fix that lands within the window still wins',
+      r.pos && r.pos.accuracy === 40, `${r.pos && r.pos.accuracy}`);
+  }
+  {
+    const { ctx } = load([{ at: 300, lat: 13.4, lng: 79.7, acc: 92 }]);
+    const r = await timed(ctx.__get(2000));
+    check('the background/standard path is unchanged: it still waits for a better fix',
+      r.pos && r.ms >= 2000, `${r.ms} ms`);
+  }
+
+  // 9. Warm-up: measured before the click, only if location is already allowed.
+  {
+    const { geo, ctx } = load([{ at: 200, lat: 13.4, lng: 79.7, acc: 92 }]);
+    ctx.__warm();
+    await new Promise((r) => setTimeout(r, 1500));
+    const r = await timed(ctx.__get(undefined, undefined, { fast: true }));
+    check('a warmed-up fix answers the click with no wait', r.pos && r.pos.accuracy === 92 && r.ms < 200, `${r.ms} ms`);
+    check('the warm-up watch is stopped once used', geo.cleared > 0, 'still watching');
+  }
+  {
+    const { geo, ctx } = load([{ at: 100, lat: 13.4, lng: 79.7, acc: 20 }], { prompt: true });
+    ctx.__warm();
+    await new Promise((r) => setTimeout(r, 300));
+    check('never starts measuring (and so never prompts) when permission is not granted',
+      geo.watches === 0, `${geo.watches} watches`);
+  }
+  {
+    const { geo, ctx } = load([{ at: 100, lat: 13.4, lng: 79.7, acc: 20 }]);
+    ctx.__setChecked(true);
+    ctx.__warm();
+    await new Promise((r) => setTimeout(r, 300));
+    check('does not warm up for someone who is already checked in', geo.watches === 0, `${geo.watches} watches`);
   }
 
   console.log(`\n${pass} passed, ${fail} failed`);
