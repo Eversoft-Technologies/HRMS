@@ -512,7 +512,11 @@
   function liveMinutes() {
     var rec = todayRec || {};
     var now = Date.now();
-    var checkedIn = !!rec.checkedIn && !rec.checkOut;
+    // The server's checkedIn already means "a session is open": it stays true when
+    // someone checks out and checks in again the same day, although checkOut then
+    // still holds the EARLIER session's time. Also requiring !rec.checkOut left the
+    // Working tile frozen at the stored minutes for the rest of that day.
+    var checkedIn = !!rec.checkedIn;
     var inAt = parseLocal(rec.checkIn);
     var brk = breakState();
     var onBreak = checkedIn && brk.on;
