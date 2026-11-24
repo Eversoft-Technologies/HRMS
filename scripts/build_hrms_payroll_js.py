@@ -792,7 +792,7 @@ payroll_js_content = r'''/**
 
     out.push('<div class="pr-card">');
     out.push('  <div class="pr-toolbar">');
-    out.push('    <input type="text" class="pr-search" id="pr-comp-search" placeholder="Search employee name, email..." value="' + state.searchQuery + '">');
+    out.push('    <input type="text" class="pr-search" id="pr-comp-search" placeholder="Search employee name, email..." value="' + String(state.searchQuery || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;') + '">');
     out.push('    <div style="font-size:12px; color:var(--text2);">Total Staff: <b>' + state.compensations.length + '</b></div>');
     out.push('  </div>');
     out.push('  <div class="pr-table-wrap"><table class="pr-table"><thead><tr>');
@@ -1486,7 +1486,16 @@ payroll_js_content = r'''/**
       compSearch.addEventListener('input', function () {
         state.searchQuery = compSearch.value;
         state.pages.compensations = 1;
+        // render() rebuilds the whole tab, so the box being typed in is thrown
+        // away and replaced by a new one. Without putting the cursor back, the
+        // box lost focus after every letter and had to be clicked again.
+        var start = compSearch.selectionStart, end = compSearch.selectionEnd;
         render();
+        var fresh = document.getElementById('pr-comp-search');
+        if (fresh) {
+          fresh.focus();
+          try { fresh.setSelectionRange(start, end); } catch (_) {}
+        }
       });
     }
   }

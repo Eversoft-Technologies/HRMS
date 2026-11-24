@@ -56,6 +56,14 @@
        bare row id, and a correction id can collide with a leave id, which
        would expand a row in the other list at the same time. */
     const[isAp,sIsAp]=g.useState(!1),[cflt,scflt]=g.useState("Pending"),[crj,scrj]=g.useState(null),[crn,scrn]=g.useState(""),[cre,scre]=g.useState(""),[cexp,scexp]=g.useState(null);
+    /* Our overlay panels live in empty divs this component renders and never
+       re-renders children into: regRef = the ONE missed-punch / regularize
+       panel (hrms-regularize.js, the same one Check In / Out shows), ledRef =
+       the leave balance card that expands into the ledger (hrms-leave-ledger.js).
+       hmeta = /api/holidays?meta=1 (the calendar this list is from, admin
+       switcher); hsel = the calendar id an admin chose to view ("" = own). */
+    const regRef=g.useRef(null),ledRef=g.useRef(null);
+    const[hmeta,shmeta]=g.useState(null),[hsel,shsel]=g.useState("");
   /* pm — the caller's leave-relevant permission flags, null until
      /api/me/permissions resolves: {sa: superAdmin, act: leave.action}.
      Everything role-scoped on this page derives from it: act (or sa) means
@@ -536,7 +544,10 @@
                               n.jsx("label",{children:n.jsx("select",{value:lps,"aria-label":"Requests per page",onChange:function(e){slps(Number(e.target.value));slp(1)},style:{height:36,minWidth:112,color:"var(--text2)",background:"var(--bg2)",border:"1px solid var(--border2)",borderRadius:10,padding:"0 12px",font:"inherit",fontWeight:600,cursor:"pointer"},children:[10,25,50].map(function(size){return n.jsx("option",{value:size,children:size+" / page"},size)})})}),
                               n.jsx("button",{type:"button",disabled:leavePage<=1,"aria-label":"Previous page",onClick:function(){sexp(null);slp(leavePage-1)},style:{height:36,minWidth:64,color:"var(--text2)",background:"var(--bg2)",border:"1px solid var(--border2)",borderRadius:10,padding:"0 12px",font:"inherit",fontWeight:600,cursor:leavePage<=1?"not-allowed":"pointer",opacity:leavePage<=1?0.45:1},children:"Prev"}),
                               n.jsx("span",{"aria-current":"page",style:{display:"inline-flex",alignItems:"center",justifyContent:"center",minWidth:40,height:36,boxSizing:"border-box",padding:"0 12px",borderRadius:10,background:"#315eea",color:"#fff",fontSize:13,fontWeight:700},children:leavePage}),
-                              n.jsx("button",{type:"button",disabled:leavePage>=leavePageCount,"aria-label":"Next page",onClick:function(){sexp(null);slp(leavePage+1)},style:{height:36,minWidth:64,color:"var(--text2)",background:"var(--bg2)",border:"1px solid var(--border2)",borderRadius:10,padding:"0 12px",font:"inherit",fontWeight:600,cursor:leavePage>=leavePageCount?"not-allowed":"pointer",opacity:leavePage>=leavePageCount?0.45:1},children:"Next"})]})}):null]}),cor.length?
+                              n.jsx("button",{type:"button",disabled:leavePage>=leavePageCount,"aria-label":"Next page",onClick:function(){sexp(null);slp(leavePage+1)},style:{height:36,minWidth:64,color:"var(--text2)",background:"var(--bg2)",border:"1px solid var(--border2)",borderRadius:10,padding:"0 12px",font:"inherit",fontWeight:600,cursor:leavePage>=leavePageCount?"not-allowed":"pointer",opacity:leavePage>=leavePageCount?0.45:1},children:"Next"})]})}):null]}),
+            /* Missed punch / Regularize — the same panel as Check In / Out:
+               flagged days, my requests (every kind), the approval queue. */
+            n.jsx("div",{className:"card",style:{marginTop:16},"data-hrms-regz-card":"1",children:n.jsx("div",{ref:regRef})}),cor.length?
             /* Deliberately NOT a <table>: hrms-perms.js locates the Leave
                action column by scanning every <table> on this route, so a
                second one here would risk it gating the wrong cells. */

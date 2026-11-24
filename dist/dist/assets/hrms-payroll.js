@@ -112,7 +112,7 @@
       'body[data-payroll-active="1"] .main > .content { display: none !important; }',
       '#' + ID.root + ' { padding: 24px 32px 64px; color: var(--text, #e8edf7); font-family: "DM Sans", -apple-system, sans-serif; }',
       '#' + ID.root + ' * { box-sizing: border-box; }',
-      '.pr-header { display: flex; justify-content: space-between; *: flex-start; margin-bottom: 24px; flex-wrap: wrap; gap: 16px; }',
+      '.pr-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 24px; flex-wrap: wrap; gap: 16px; }',
       '.pr-title-group h2 { margin: 0 0 6px 0; font-size: 24px; font-weight: 700; font-family: "Syne", sans-serif; color: var(--text, #fff); display: flex; align-items: center; gap: 10px; }',
       '.pr-title-group p { margin: 0; font-size: 13.5px; color: var(--text2, #8a9bb8); }',
       '.pr-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }',
@@ -481,227 +481,343 @@
     return out.join('\n');
   }
 
-  function render() {
-    var root = document.getElementById(ID.root);
-    if (!root) return;
+  function initDashboardCharts() {
+    if (typeof Chart === 'undefined') return;
 
-    // Redrawing replaces the tab row, which would snap a scrolled row back to
-    // its start (on a phone the selected tab then slides out of view).
-    var oldTabs = root.querySelector('.pr-tabs');
-    var tabsScroll = oldTabs ? oldTabs.scrollLeft : 0;
+    var trendsCanvas = document.getElementById('pr-trends-canvas');
+    if (trendsCanvas) {
+      var trendsData = (state.dashboard && state.dashboard.monthly_trends) ? state.dashboard.monthly_trends : [];
+      if (!trendsData.length) {
+        trendsData = [
+          { label: '2026-03', gross: 240000, net: 215000, deductions: 25000 },
+          { label: '2026-04', gross: 260000, net: 232000, deductions: 28000 },
+          { label: '2026-05', gross: 280000, net: 250000, deductions: 30000 },
+          { label: '2026-06', gross: 310000, net: 275000, deductions: 35000 },
+          { label: '2026-07', gross: 335000, net: 298000, deductions: 37000 },
+          { label: '2026-08', gross: 350000, net: 312000, deductions: 38000 },
+        ];
+      }
+      new Chart(trendsCanvas, {
+        type: 'bar',
+        data: {
+          labels: trendsData.map(function(t) { return t.label; }),
+          datasets: [
+            { label: 'Gross Salary', data: trendsData.map(function(t) { return t.gross; }), backgroundColor: '#4f8ef7', borderRadius: 4 },
+            { label: 'Net Disbursed', data: trendsData.map(function(t) { return t.net; }), backgroundColor: '#10b981', borderRadius: 4 },
+            { label: 'Deductions', data: trendsData.map(function(t) { return t.deductions; }), backgroundColor: '#f59e0b', borderRadius: 4 }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: { legend: { labels: { color: '#8a9bb8', font: { size: 11 } } } },
+          scales: {
+            x: { ticks: { color: '#8a9bb8' }, grid: { color: 'rgba(255,255,255,0.05)' } },
+            y: { ticks: { color: '#8a9bb8', callback: function(v){ return '₹' + (v/1000) + 'k'; } }, grid: { color: 'rgba(255,255,255,0.05)' } }
+          }
+        }
+      });
+    }
 
-    var totalGross = state.runs.reduce(function (acc, r) { return acc + (parseFloat(r.total_gross) || 0); }, 0);
-    var totalNet = state.runs.reduce(function (acc, r) { return acc + (parseFloat(r.total_net) || 0); }, 0);
-    var totalEmps = state.compensations.length || 1;
+    var deptCanvas = document.getElementById('pr-dept-canvas');
+    if (deptCanvas) {
+      var deptData = (state.dashboard && state.dashboard.department_distribution) ? state.dashboard.department_distribution : [];
+      if (!deptData.length) {
+        deptData = [
+          { department: 'Engineering', gross_salary: 180000 },
+          { department: 'Sales', gross_salary: 95000 },
+          { department: 'Operations', gross_salary: 45000 },
+          { department: 'HR', gross_salary: 30000 },
+        ];
+      }
+      new Chart(deptCanvas, {
+        type: 'doughnut',
+        data: {
+          labels: deptData.map(function(d) { return d.department; }),
+          datasets: [{
+            data: deptData.map(function(d) { return d.gross_salary; }),
+            backgroundColor: ['#4f8ef7', '#10b981', '#f59e0b', '#ec4899', '#8b5cf6'],
+            borderWidth: 0
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: { legend: { position: 'bottom', labels: { color: '#8a9bb8', font: { size: 10 } } } }
+        }
+      });
+    }
+  }
 
-    var html = [
-      '<div class="pr-header">',
-      '  <div class="pr-title-group">',
-      '    <h2>💳 Payroll & Compensation</h2>',
-      '    <p>Manage monthly Indian payroll runs, statutory pay components, and employee payslips.</p>',
-      '  </div>',
-      '  <div class="pr-actions">',
-      '    <button class="pr-btn pr-btn-secondary" id="pr-btn-refresh">↻ Refresh</button>',
-      '    <button class="pr-btn pr-btn-primary" id="pr-btn-new-run">+ Generate Pay Run</button>',
-      '  </div>',
-      '</div>',
+  /* ── TAB 2: GUIDED 8-STEP PAYROLL WIZARD ── */
+  function renderWizardTab() {
+    var step = state.wizardStep;
+    var out = [];
 
-      /* Stat Cards */
-      '<div class="pr-stats">',
-      '  <div class="pr-stat-card">',
-      '    <span class="pr-stat-label">Total Pay Runs</span>',
-      '    <span class="pr-stat-val">' + state.runs.length + '</span>',
-      '    <span class="pr-stat-sub">Generated batches</span>',
-      '  </div>',
-      '  <div class="pr-stat-card">',
-      '    <span class="pr-stat-label">Total Gross Payroll</span>',
-      '    <span class="pr-stat-val">' + formatCurrency(totalGross) + '</span>',
-      '    <span class="pr-stat-sub">All-time earnings calculated</span>',
-      '  </div>',
-      '  <div class="pr-stat-card">',
-      '    <span class="pr-stat-label">Net Disbursed</span>',
-      '    <span class="pr-stat-val" style="color:#10b981;">' + formatCurrency(totalNet) + '</span>',
-      '    <span class="pr-stat-sub">Net employee payout</span>',
-      '  </div>',
-      '  <div class="pr-stat-card">',
-      '    <span class="pr-stat-label">Active Employees</span>',
-      '    <span class="pr-stat-val">' + totalEmps + '</span>',
-      '    <span class="pr-stat-sub">On compensation roll</span>',
-      '  </div>',
-      '</div>',
-
-      /* Tabs */
-      '<div class="pr-tabs">',
-      '  <div class="pr-tab ' + (state.activeTab === 'runs' ? 'active' : '') + '" data-tab="runs">Pay Runs <span class="pr-tab-badge">' + state.runs.length + '</span></div>',
-      '  <div class="pr-tab ' + (state.activeTab === 'payslips' ? 'active' : '') + '" data-tab="payslips">Employee Payslips <span class="pr-tab-badge">' + state.payslips.length + '</span></div>',
-      '  <div class="pr-tab ' + (state.activeTab === 'compensation' ? 'active' : '') + '" data-tab="compensation">Compensation Roll <span class="pr-tab-badge">' + state.compensations.length + '</span></div>',
-      '  <div class="pr-tab ' + (state.activeTab === 'components' ? 'active' : '') + '" data-tab="components">Salary Components <span class="pr-tab-badge">' + state.components.length + '</span></div>',
-      '</div>'
+    // Stepper header
+    var stepTitles = [
+      '1. Select Period',
+      '2. Attendance',
+      '3. LOP & Overtime',
+      '4. Calculate',
+      '5. Validate',
+      '6. Review',
+      '7. Submit',
+      '8. Approve & Release'
     ];
 
-    /* Tab Content */
-    if (state.activeTab === 'runs') {
-      html.push(renderRunsTab());
-    } else if (state.activeTab === 'payslips') {
-      html.push(renderPayslipsTab());
-    } else if (state.activeTab === 'compensation') {
-      html.push(renderCompensationTab());
-    } else if (state.activeTab === 'components') {
-      html.push(renderComponentsTab());
-    }
-
-    /* Modal (if open) */
-    if (state.modalOpen && state.modalType === 'newRun') {
-      html.push(renderNewRunModal());
-    }
-
-    root.innerHTML = html.join('\n');
-    attachEvents();
-    labelCells();
-
-    // Put the tab row back where it was, then make sure the selected tab is
-    // fully visible (only the row moves; the page itself does not jump).
-    var tabs = root.querySelector('.pr-tabs');
-    if (tabs) {
-      tabs.scrollLeft = tabsScroll;
-      var active = tabs.querySelector('.pr-tab.active');
-      if (active) {
-        var left = active.offsetLeft - tabs.offsetLeft;
-        var right = left + active.offsetWidth;
-        if (left < tabs.scrollLeft) tabs.scrollLeft = left;
-        else if (right > tabs.scrollLeft + tabs.clientWidth) tabs.scrollLeft = right - tabs.clientWidth;
+    out.push('<div class="pr-card" style="margin-bottom:16px;">');
+    out.push('  <div class="pr-stepper">');
+    stepTitles.forEach(function (title, idx) {
+      var n = idx + 1;
+      var cls = 'pr-step-item' + (n === step ? ' active' : (n < step ? ' done' : ''));
+      out.push('<div class="' + cls + '" data-goto-step="' + n + '"><span class="pr-step-num">' + (n < step ? '✓' : n) + '</span> ' + title + '</div>');
+      if (idx < stepTitles.length - 1) {
+        out.push('<div class="pr-step-sep"></div>');
       }
-    }
-  }
-
-  function renderRunsTab() {
-    if (!state.runs.length) {
-      return '<div class="pr-card" style="padding: 48px; text-align: center; color: var(--text2);">' +
-        '<div style="font-size: 32px; margin-bottom: 8px;">💳</div>' +
-        '<h3>No pay runs created yet</h3>' +
-        '<p style="font-size: 13px; margin-bottom: 20px;">Click "+ Generate Pay Run" above to calculate and generate payslips for all active employees.</p>' +
-        '<button class="pr-btn pr-btn-primary" id="pr-btn-new-run-empty">+ Generate Pay Run</button>' +
-        '</div>';
-    }
-
-    var pg = pageOf('runs', state.runs);
-    var rows = pg.items.map(function (r) {
-      var badgeCls = 'pr-badge-' + (r.status || 'draft').toLowerCase();
-      return '<tr>' +
-        '<td style="font-weight: 700; color: var(--accent, #4f8ef7);">' + r.period_label + '</td>' +
-        '<td>' + fmtDate(r.period_start) + ' to ' + fmtDate(r.period_end) + '</td>' +
-        '<td>' + (r.employee_count || 1) + ' Employees</td>' +
-        '<td style="font-weight: 600;">' + formatCurrency(r.total_gross) + '</td>' +
-        '<td style="color: #ef4444;">' + formatCurrency(r.total_deductions) + '</td>' +
-        '<td style="font-weight: 700; color: #10b981;">' + formatCurrency(r.total_net) + '</td>' +
-        '<td><span class="pr-badge ' + badgeCls + '">' + r.status + '</span></td>' +
-        '<td>' +
-        '  <div style="display:flex; gap:6px;">' +
-        '    <button class="pr-btn pr-btn-secondary pr-btn-sm btn-filter-payslips" data-period="' + r.period_label + '">View Payslips</button>' +
-        (r.status === 'draft' ? '    <button class="pr-btn pr-btn-success pr-btn-sm btn-approve-run" data-id="' + r.id + '">Approve</button>' : '') +
-        '    <a href="/api/payroll/runs/' + r.id + '/export-bank-file" target="_blank" class="pr-btn pr-btn-secondary pr-btn-sm">Bank CSV</a>' +
-        '  </div>' +
-        '</td>' +
-        '</tr>';
-    }).join('');
-
-    return '<div class="pr-card">' +
-      '<div class="pr-table-wrap">' +
-      '<table class="pr-table">' +
-      '<thead><tr>' +
-      '  <th>Pay Period</th><th>Dates</th><th>Employees</th><th>Gross Total</th><th>Deductions</th><th>Net Disbursed</th><th>Status</th><th>Actions</th>' +
-      '</tr></thead>' +
-      '<tbody>' + rows + '</tbody>' +
-      '</table></div>' + pagerHtml('runs', pg, 'pay runs') + '</div>';
-  }
-
-  /* The pay period a payslip belongs to. The API sends only the run's id, so
-     the label is looked up in the loaded runs. (It used to be read from fields
-     the API never sends, so the period filter and "View Payslips" matched
-     nothing and every row showed the same fixed period.) */
-  function periodOfPayslip(p) {
-    if (p.run_period) return p.run_period;
-    if (p.run && p.run.period_label) return p.run.period_label;
-    for (var i = 0; i < state.runs.length; i++) {
-      if (String(state.runs[i].id) === String(p.run)) return state.runs[i].period_label || '';
-    }
-    return '';
-  }
-
-  function renderPayslipsTab() {
-    var filtered = state.payslips.filter(function (p) {
-      var matchPeriod = !state.selectedPeriodFilter || periodOfPayslip(p) === state.selectedPeriodFilter;
-      var q = state.searchQuery.toLowerCase();
-      var matchSearch = !q || (p.employee_name && p.employee_name.toLowerCase().indexOf(q) !== -1) || (p.email && p.email.toLowerCase().indexOf(q) !== -1);
-      return matchPeriod && matchSearch;
     });
+    out.push('  </div>');
+    out.push('</div>');
 
-    // Extract unique periods for filter dropdown
-    var periods = [];
-    state.runs.forEach(function (r) { if (periods.indexOf(r.period_label) === -1) periods.push(r.period_label); });
+    // Step Body
+    out.push('<div class="pr-card">');
+    out.push('  <div class="pr-toolbar"><div style="font-weight:700; font-size:14px;">Step ' + step + ': ' + stepTitles[step - 1] + '</div></div>');
+    out.push('  <div style="padding:24px;">');
 
-    var periodOptions = '<option value="">All Pay Periods</option>' + periods.map(function (p) {
-      return '<option value="' + p + '"' + (state.selectedPeriodFilter === p ? ' selected' : '') + '>' + p + '</option>';
-    }).join('');
+    if (step === 1) {
+      out.push('<p style="color:var(--text2); margin-top:0;">Select or specify the payroll execution period and scheduled pay date:</p>');
+      out.push('<div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:16px; max-width:750px;">');
+      out.push('  <div class="pr-form-group"><label>Period Label (YYYY-MM):</label><input type="text" id="wz-period-label" value="' + state.wizardForm.period_label + '"></div>');
+      out.push('  <div class="pr-form-group"><label>Period Start Date:</label><input type="date" id="wz-period-start" value="' + state.wizardForm.period_start + '"></div>');
+      out.push('  <div class="pr-form-group"><label>Period End Date:</label><input type="date" id="wz-period-end" value="' + state.wizardForm.period_end + '"></div>');
+      out.push('  <div class="pr-form-group"><label>Scheduled Pay Date:</label><input type="date" id="wz-pay-date" value="' + state.wizardForm.pay_date + '"></div>');
+      out.push('</div>');
+      out.push('<div style="margin-top:20px;"><button class="pr-btn pr-btn-primary" id="wz-btn-step1-next">Continue to Fetch Attendance →</button></div>');
 
-    var pg = pageOf('payslips', filtered);
-    var rows = pg.items.map(function (p) {
-      var period = periodOfPayslip(p) || '-';
-      var badgeCls = 'pr-badge-' + (p.status || 'draft').toLowerCase();
-      return '<tr>' +
-        '<td>' +
-        '  <div style="font-weight:600; color:var(--text, #fff);">' + (p.employee_name || p.email) + '</div>' +
-        '  <div style="font-size:11px; color:var(--text3, #8a9bb8);">' + (p.employee_code ? p.employee_code + ' • ' : '') + p.email + '</div>' +
-        '</td>' +
-        '<td style="font-weight:600; color:var(--accent, #4f8ef7);">' + period + '</td>' +
-        '<td>' + (p.paid_days !== undefined ? p.paid_days : 30) + ' / ' + (p.month_days || 30) + '</td>' +
-        '<td style="font-weight:600;">' + formatCurrency(p.gross_earnings) + '</td>' +
-        '<td style="color:#ef4444;">' + formatCurrency(p.total_deductions) + '</td>' +
-        '<td style="font-weight:700; color:#10b981;">' + formatCurrency(p.net_pay) + '</td>' +
-        '<td><span class="pr-badge ' + badgeCls + '">' + p.status + '</span></td>' +
-        '<td>' +
-        '  <button class="pr-btn pr-btn-primary pr-btn-sm btn-view-pdf" data-id="' + p.id + '" style="background:#0e7490; border-color:#0891b2;">' +
-        '    📄 View / Print Payslip' +
-        '  </button>' +
-        '</td>' +
-        '</tr>';
-    }).join('');
+    } else if (step === 2 || step === 3) {
+      out.push('<p style="color:var(--text2); margin-top:0;">Employee attendance, paid days, approved leaves, and overtime hours fetched from attendance system:</p>');
+      out.push('<div class="pr-table-wrap"><table class="pr-table"><thead><tr>');
+      out.push('<th>Employee</th><th>Department</th><th>Total Days</th><th>Worked</th><th>WFH</th><th>Paid Leaves</th><th>LOP Days</th><th>Overtime</th>');
+      out.push('</tr></thead><tbody>');
+      if (!state.attendanceSummary.length) {
+        out.push('<tr><td colspan="8" style="text-align:center; padding:20px;">Fetching attendance data...</td></tr>');
+      } else {
+        state.attendanceSummary.forEach(function (att) {
+          out.push('<tr>');
+          out.push('<td><b>' + att.employee_name + '</b><br><small style="color:var(--text2);">' + att.email + '</small></td>');
+          out.push('<td>' + (att.department || 'General') + '</td>');
+          out.push('<td>' + att.total_days + '</td>');
+          out.push('<td>' + att.worked_days + '</td>');
+          out.push('<td>' + att.wfh_days + '</td>');
+          out.push('<td>' + att.leave_days + '</td>');
+          out.push('<td style="color:' + (att.lop_days > 0 ? '#f87171' : '#8a9bb8') + '; font-weight:' + (att.lop_days > 0 ? '700' : 'normal') + ';">' + att.lop_days + '</td>');
+          out.push('<td style="color:#10b981; font-weight:700;">' + att.overtime_hours + ' hrs</td>');
+          out.push('</tr>');
+        });
+      }
+      out.push('</tbody></table></div>');
+      out.push('<div style="margin-top:20px; display:flex; gap:10px;">');
+      out.push('  <button class="pr-btn pr-btn-secondary" id="wz-btn-back">← Back</button>');
+      out.push('  <button class="pr-btn pr-btn-primary" id="wz-btn-step3-calc">Calculate Earnings & Deductions →</button>');
+      out.push('</div>');
 
-    if (!rows) {
-      rows = '<tr><td colspan="8" style="text-align:center; padding:36px; color:var(--text3);">No payslips match your search or filter.</td></tr>';
+    } else if (step === 4) {
+      out.push('<div style="text-align:center; padding:32px 0;">');
+      out.push('  <div style="font-size:36px; margin-bottom:12px;">⚙️</div>');
+      out.push('  <h3 style="margin:0 0 8px 0; color:var(--text);">Calculating Indian Payroll Components</h3>');
+      out.push('  <p style="color:var(--text2); max-width:480px; margin:0 auto 24px auto;">Evaluating Basic, HRA, Allowances, PF (12%), ESI (0.75%), PT (₹200), TDS, LOP deductions, and CTC employer contributions across ' + state.compensations.length + ' staff records.</p>');
+      out.push('  <button class="pr-btn pr-btn-primary" id="wz-btn-execute-calc">Execute Batch Payroll Calculation</button>');
+      out.push('</div>');
+
+    } else if (step === 5) {
+      var v = state.selectedRunValidation || { is_valid: true, blocking_count: 0, warning_count: 0, checks: [] };
+      out.push('<div style="margin-bottom:16px;">');
+      if (v.blocking_count === 0) {
+        out.push('<div style="padding:12px 18px; border-radius:8px; background:rgba(16,185,129,0.12); border:1px solid #10b981; color:#059669; font-weight:600; margin-bottom:16px;">✓ Payroll Validation Passed: No blocking calculation or banking errors identified. Ready for executive review.</div>');
+      } else {
+        out.push('<div style="padding:12px 18px; border-radius:8px; background:rgba(239,68,68,0.12); border:1px solid #ef4444; color:#dc2626; font-weight:600; margin-bottom:16px;">⚠️ Validation identified ' + v.blocking_count + ' blocking issues. Review issues below.</div>');
+      }
+      out.push('</div>');
+
+      out.push('<div class="pr-table-wrap"><table class="pr-table"><thead><tr><th>Severity</th><th>Employee</th><th>Validation Issue</th><th>Status</th></tr></thead><tbody>');
+      if (!v.checks || !v.checks.length) {
+        out.push('<tr><td colspan="4" style="text-align:center; padding:18px; color:#10b981;">✓ All employee records verified successfully.</td></tr>');
+      } else {
+        v.checks.forEach(function (chk) {
+          var isErr = chk.type === 'error';
+          out.push('<tr>');
+          out.push('<td><span class="pr-badge ' + (isErr ? 'pr-badge-rejected' : 'pr-badge-pending_approval') + '">' + chk.type + '</span></td>');
+          out.push('<td><b>' + (chk.employee_name || 'Staff') + '</b><br><small style="color:var(--text2);">' + (chk.email || '') + '</small></td>');
+          out.push('<td>' + chk.message + '</td>');
+          out.push('<td>' + (isErr ? '❌ Action Required' : '⚠️ Warning Only') + '</td>');
+          out.push('</tr>');
+        });
+      }
+      out.push('</tbody></table></div>');
+
+      out.push('<div style="margin-top:20px; display:flex; gap:10px;">');
+      out.push('  <button class="pr-btn pr-btn-secondary" id="wz-btn-back">← Back</button>');
+      out.push('  <button class="pr-btn pr-btn-primary" id="wz-btn-step5-next">Proceed to Employee-Wise Review →</button>');
+      out.push('</div>');
+
+    } else if (step === 6) {
+      out.push('<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; flex-wrap:wrap; gap:10px;">');
+      out.push('  <div style="color:var(--text2);">Review individual salary breakdowns and append any one-off performance incentives, arrears, or deductions:</div>');
+      out.push('  <button class="pr-btn pr-btn-secondary pr-btn-sm" id="wz-btn-add-adj">+ Add Payroll Adjustment</button>');
+      out.push('</div>');
+
+      out.push('<div class="pr-table-wrap"><table class="pr-table"><thead><tr>');
+      out.push('<th>Employee</th><th>Department</th><th>Worked / Paid</th><th>Basic Pay</th><th>Gross Earnings</th><th>Total Deductions</th><th>Net Pay</th><th>Adjustments</th>');
+      out.push('</tr></thead><tbody>');
+      if (!state.selectedRunEntries.length) {
+        out.push('<tr><td colspan="8" style="text-align:center; padding:20px;">No entries calculated for this run.</td></tr>');
+      } else {
+        state.selectedRunEntries.forEach(function (e) {
+          out.push('<tr>');
+          out.push('<td><b>' + e.employee_name + '</b><br><small style="color:var(--text2);">' + e.email + '</small></td>');
+          out.push('<td>' + (e.department || 'General') + '</td>');
+          out.push('<td>' + e.worked_days + ' / ' + e.paid_days + '</td>');
+          out.push('<td>' + formatCurrency(e.basic_pay) + '</td>');
+          out.push('<td>' + formatCurrency(e.gross_earnings) + '</td>');
+          out.push('<td style="color:#f59e0b;">' + formatCurrency(e.total_deductions) + '</td>');
+          out.push('<td style="color:#10b981; font-weight:700;">' + formatCurrency(e.net_pay) + '</td>');
+          out.push('<td>' + ((e.adjustments && e.adjustments.length) ? ('<span class="pr-badge pr-badge-processing">' + e.adjustments.length + ' Applied</span>') : '—') + '</td>');
+          out.push('</tr>');
+        });
+      }
+      out.push('</tbody></table></div>');
+
+      out.push('<div style="margin-top:20px; display:flex; gap:10px;">');
+      out.push('  <button class="pr-btn pr-btn-secondary" id="wz-btn-back">← Back</button>');
+      out.push('  <button class="pr-btn pr-btn-primary" id="wz-btn-step6-next">Submit for Multi-Level Approval →</button>');
+      out.push('</div>');
+
+    } else if (step === 7) {
+      out.push('<div style="max-width:600px;">');
+      out.push('  <h3 style="margin-top:0; color:var(--text);">Submit Pay Run for Executive & Finance Sign-Off</h3>');
+      out.push('  <p style="color:var(--text2);">This will advance the payroll run to <b>Stage 7 (Pending Approval)</b> and alert HR and Finance Managers in the approval pipeline.</p>');
+      out.push('  <div class="pr-form-group"><label>Submitter Name:</label><input type="text" id="wz-submitter-name" value="' + getLoggedInUser().name + '"></div>');
+      out.push('  <div class="pr-form-group"><label>Executive Comments / Run Notes:</label><textarea id="wz-submitter-comments" rows="3" placeholder="e.g. Regular monthly payroll run. All attendance records verified."></textarea></div>');
+      out.push('  <div style="margin-top:20px; display:flex; gap:10px;">');
+      out.push('    <button class="pr-btn pr-btn-secondary" id="wz-btn-back">← Back</button>');
+      out.push('    <button class="pr-btn pr-btn-primary" id="wz-btn-do-submit">Submit to Approval Pipeline →</button>');
+      out.push('  </div>');
+      out.push('</div>');
+
+    } else if (step === 8) {
+      var r = state.selectedRun || {};
+      out.push('<div style="text-align:center; padding:24px 0;">');
+      out.push('  <div style="font-size:38px; margin-bottom:12px;">🛡️</div>');
+      out.push('  <h3 style="margin:0 0 8px 0; color:var(--text);">Approval & Payout Release Pipeline</h3>');
+      out.push('  <p style="color:var(--text2); max-width:540px; margin:0 auto 20px auto;">Current Status: <span class="pr-badge pr-badge-' + (r.status || 'pending_approval') + '">' + (r.status || 'Pending Approval') + '</span></p>');
+
+      // Approval Hierarchy Badges
+      out.push('  <div style="display:flex; justify-content:center; gap:12px; margin-bottom:28px; flex-wrap:wrap;">');
+      out.push('    <div style="padding:10px 16px; border-radius:8px; background:rgba(16,185,129,0.1); border:1px solid #10b981; color:#059669; font-size:12px; font-weight:600;">✓ 1. Payroll Executive</div>');
+      out.push('    <div style="padding:10px 16px; border-radius:8px; background:rgba(79,142,247,0.1); border:1px solid #4f8ef7; color:#2563eb; font-size:12px; font-weight:600;">2. HR Manager</div>');
+      out.push('    <div style="padding:10px 16px; border-radius:8px; background:rgba(245,158,11,0.1); border:1px solid #f59e0b; color:#d97706; font-size:12px; font-weight:600;">3. Finance Manager</div>');
+      out.push('    <div style="padding:10px 16px; border-radius:8px; background:rgba(156,163,175,0.1); border:1px solid #9ca3af; color:var(--text2); font-size:12px; font-weight:600;">4. Super Admin</div>');
+      out.push('  </div>');
+
+      out.push('  <div style="display:flex; justify-content:center; gap:12px; flex-wrap:wrap;">');
+      out.push('    <button class="pr-btn pr-btn-success" id="wz-btn-approve-run">✓ Approve & Release Payroll</button>');
+      out.push('    <button class="pr-btn pr-btn-warning" id="wz-btn-correct-run">⚠️ Request Corrections</button>');
+      out.push('    <button class="pr-btn pr-btn-danger" id="wz-btn-reject-run">✕ Reject Run</button>');
+      out.push('  </div>');
+      out.push('</div>');
     }
 
-    return '<div class="pr-card">' +
-      '<div class="pr-toolbar">' +
-      '  <input type="text" class="pr-search" id="pr-search-payslips" placeholder="Search employee name, email, code..." value="' + String(state.searchQuery || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;') + '">' +
-      '  <select class="pr-select" id="pr-filter-period">' + periodOptions + '</select>' +
-      '</div>' +
-      '<div class="pr-table-wrap">' +
-      '<table class="pr-table">' +
-      '<thead><tr>' +
-      '  <th>Employee</th><th>Period</th><th>Paid Days</th><th>Gross Earnings</th><th>Total Deductions</th><th>Net Pay</th><th>Status</th><th>Eversoft Payslip</th>' +
-      '</tr></thead>' +
-      '<tbody>' + rows + '</tbody>' +
-      '</table></div>' + pagerHtml('payslips', pg, 'payslips') + '</div>';
+    out.push('  </div>');
+    out.push('</div>');
+    return out.join('\n');
   }
 
-  function renderCompensationTab() {
-    var pg = pageOf('compensation', state.compensations);
-    var rows = pg.items.map(function (c) {
-      return '<tr>' +
-        '<td>' +
-        '  <div style="font-weight:600;">' + c.email + '</div>' +
-        '  <div style="font-size:11px; color:var(--text3);">' + (c.employee_code || 'Code Pending') + '</div>' +
-        '</td>' +
-        '<td style="font-weight:700; color:#10b981;">' + formatCurrency(c.base_amount) + '</td>' +
-        '<td style="font-weight:600;">' + formatCurrency(c.annual_ctc) + '</td>' +
-        '<td>' + (c.pan_number || '-') + '</td>' +
-        '<td>' + (c.uan_number || '-') + '</td>' +
-        '<td>' + (c.pf_account_number || '-') + '</td>' +
-        '<td>' + (c.bank_name ? c.bank_name + ' (' + c.bank_account_number + ')' : '-') + '</td>' +
-        '<td><span class="pr-badge pr-badge-approved">Active</span></td>' +
-        '</tr>';
-    }).join('');
+  /* ── TAB 3: PAY RUNS ── */
+  function renderRunsTab() {
+    var pg = pageOf('runs', state.runs);
+    var out = [];
+    out.push('<div class="pr-card">');
+    out.push('  <div class="pr-toolbar">');
+    out.push('    <div style="font-weight:700; font-size:14px;">All Payroll Runs</div>');
+    out.push('    <div style="display:flex; gap:8px;">');
+    out.push('      <button class="pr-btn pr-btn-primary pr-btn-sm" id="pr-btn-new-run">+ New Pay Run</button>');
+    out.push('    </div>');
+    out.push('  </div>');
+    out.push('  <div class="pr-table-wrap"><table class="pr-table"><thead><tr>');
+    out.push('<th>Period</th><th>Status</th><th>Stage</th><th>Employees</th><th>Total Gross</th><th>Total Deductions</th><th>Net Pay</th><th>Created By</th><th>Actions</th>');
+    out.push('</tr></thead><tbody>');
+
+    if (!pg.items.length) {
+      out.push('<tr><td colspan="9" style="text-align:center; padding:24px;">No pay runs found. Click "+ New Pay Run" to begin.</td></tr>');
+    } else {
+      pg.items.forEach(function (r) {
+        var badgeCls = 'pr-badge-' + (r.status || 'draft');
+        out.push('<tr>');
+        out.push('<td><b>' + r.period_label + '</b></td>');
+        out.push('<td><span class="pr-badge ' + badgeCls + '">' + r.status + '</span></td>');
+        out.push('<td>Step ' + (r.stage || 1) + '/8</td>');
+        out.push('<td>' + (r.employee_count || 0) + '</td>');
+        out.push('<td>' + formatCurrency(r.total_gross) + '</td>');
+        out.push('<td style="color:#f59e0b;">' + formatCurrency(r.total_deductions) + '</td>');
+        out.push('<td style="color:#10b981; font-weight:700;">' + formatCurrency(r.total_net) + '</td>');
+        out.push('<td>' + (r.created_by || 'Admin') + '</td>');
+        out.push('<td>');
+        out.push('  <button class="pr-btn pr-btn-secondary pr-btn-sm pr-inspect-run" data-run-id="' + r.id + '">View</button> ');
+        out.push('  <button class="pr-btn pr-btn-secondary pr-btn-sm pr-dl-neft" data-run-id="' + r.id + '">NEFT CSV</button>');
+        out.push('</td>');
+        out.push('</tr>');
+      });
+    }
+    out.push('  </tbody></table></div>');
+    out.push(pagerHtml('runs', pg, 'runs'));
+    out.push('</div>');
+    return out.join('\n');
+  }
+
+  /* ── TAB 4: EMPLOYEE SALARIES ── */
+  function renderCompensationsTab() {
+    var items = state.compensations;
+    if (state.searchQuery) {
+      var s = state.searchQuery.toLowerCase();
+      items = items.filter(function (c) {
+        return (c.employee_name && c.employee_name.toLowerCase().indexOf(s) >= 0) ||
+               (c.email && c.email.toLowerCase().indexOf(s) >= 0) ||
+               (c.department && c.department.toLowerCase().indexOf(s) >= 0);
+      });
+    }
+    var pg = pageOf('compensations', items);
+    var out = [];
+
+    out.push('<div class="pr-card">');
+    out.push('  <div class="pr-toolbar">');
+    out.push('    <input type="text" class="pr-search" id="pr-comp-search" placeholder="Search employee name, email..." value="' + String(state.searchQuery || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;') + '">');
+    out.push('    <div style="font-size:12px; color:var(--text2);">Total Staff: <b>' + state.compensations.length + '</b></div>');
+    out.push('  </div>');
+    out.push('  <div class="pr-table-wrap"><table class="pr-table"><thead><tr>');
+    out.push('<th>Employee</th><th>Department & Designation</th><th>Structure</th><th>Monthly Base</th><th>Annual CTC</th><th>Bank Details</th><th>Status</th><th>Action</th>');
+    out.push('</tr></thead><tbody>');
+
+    if (!pg.items.length) {
+      out.push('<tr><td colspan="8" style="text-align:center; padding:24px;">No employee compensations found.</td></tr>');
+    } else {
+      pg.items.forEach(function (c) {
+        out.push('<tr>');
+        out.push('<td><b>' + (c.employee_name || c.email.split('@')[0]) + '</b><br><small style="color:var(--text2);">' + c.email + '</small></td>');
+        out.push('<td>' + (c.department || 'General') + '<br><small style="color:var(--text2);">' + (c.designation || 'Staff') + '</small></td>');
+        out.push('<td><span class="pr-badge pr-badge-processing">' + (c.structure_name || 'Standard IT') + '</span></td>');
+        out.push('<td><b>' + formatCurrency(c.base_amount) + '</b></td>');
+        out.push('<td>' + formatCurrency(c.annual_ctc) + '</td>');
+        out.push('<td>' + (c.bank_name ? (c.bank_name + ' •••' + (c.bank_account_no ? c.bank_account_no.slice(-4) : '')) : '<span style="color:#dc2626;">Missing</span>') + '</td>');
+        out.push('<td><span class="pr-badge ' + (c.status === 'active' ? 'pr-badge-approved' : 'pr-badge-draft') + '">' + (c.status || 'active') + '</span></td>');
+        out.push('<td><button class="pr-btn pr-btn-secondary pr-btn-sm pr-revise-btn" data-comp-id="' + c.id + '">Revise CTC</button></td>');
+        out.push('</tr>');
+      });
+    }
+    out.push('  </tbody></table></div>');
+    out.push(pagerHtml('compensations', pg, 'employees'));
+    out.push('</div>');
+    return out.join('\n');
+  }
 
   /* ── TAB 5: SALARY STRUCTURES ── */
   function renderStructuresTab() {
@@ -1033,24 +1149,21 @@
         state.wizardStep = 7;
         render();
       });
-    });
+    }
 
-    // Search & Filter
-    var searchInput = root.querySelector('#pr-search-payslips');
-    if (searchInput) {
-      searchInput.addEventListener('input', function (e) {
-        state.searchQuery = e.target.value;
-        state.pages.payslips = 1;
-        // render() rebuilds the whole tab, so the box being typed in is thrown
-        // away and replaced by a new one. Without putting the cursor back, the
-        // box lost focus after every letter and had to be clicked again.
-        var start = e.target.selectionStart, end = e.target.selectionEnd;
-        render();
-        var fresh = document.getElementById('pr-search-payslips');
-        if (fresh) {
-          fresh.focus();
-          try { fresh.setSelectionRange(start, end); } catch (_) {}
-        }
+    var wzDoSubmit = root.querySelector('#wz-btn-do-submit');
+    if (wzDoSubmit) {
+      wzDoSubmit.addEventListener('click', function () {
+        var subName = (document.getElementById('wz-submitter-name').value || '').trim();
+        var subComm = (document.getElementById('wz-submitter-comments').value || '').trim();
+        call('/api/payroll/runs/' + state.selectedRunId + '/submit-approval', {
+          method: 'POST', body: { submitted_by: subName, comments: subComm }
+        }).then(function (run) {
+            state.selectedRun = run;
+            state.wizardStep = 8;
+            showToast('✓ Submitted to Approval Pipeline!');
+            render();
+          }).catch(fail);
       });
     }
 
@@ -1371,7 +1484,16 @@
       compSearch.addEventListener('input', function () {
         state.searchQuery = compSearch.value;
         state.pages.compensations = 1;
+        // render() rebuilds the whole tab, so the box being typed in is thrown
+        // away and replaced by a new one. Without putting the cursor back, the
+        // box lost focus after every letter and had to be clicked again.
+        var start = compSearch.selectionStart, end = compSearch.selectionEnd;
         render();
+        var fresh = document.getElementById('pr-comp-search');
+        if (fresh) {
+          fresh.focus();
+          try { fresh.setSelectionRange(start, end); } catch (_) {}
+        }
       });
     }
   }
