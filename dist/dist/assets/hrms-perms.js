@@ -575,6 +575,8 @@
   }
 
   function applyActiveNav() {
+    // hrms-sidebar.js lights "Settings" while the account drawer is open; leave the sidebar alone.
+    if (window.__hrmsSettingsDrawerOpen && window.__hrmsSettingsDrawerOpen()) return;
     var currentPath = (location.pathname || '/').replace(/\/+$/, '') || '/';
     var items = document.querySelectorAll('.nav-item[href]');
     var paths = [];
