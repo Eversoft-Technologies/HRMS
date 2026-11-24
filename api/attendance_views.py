@@ -247,12 +247,14 @@ class BreakViewSet(viewsets.ViewSet):
         email = request.data.get('email')
         break_id = request.data.get('breakId')
 
-        if not email or not break_id:
+        if not email:
             return Response(
-                {'error': 'Email and breakId are required'},
+                {'error': 'Email is required'},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        # breakId is optional: end_break falls back to the caller's active
+        # break when it is missing, so a lost id never strands an open break.
         result = AttendanceService.end_break(email, break_id)
         return Response(result)
 
@@ -555,11 +557,14 @@ class AttendanceCorrectionViewSet(viewsets.ViewSet):
             ).first()
 
             if attendance:
+                from api.timesheets import audit_snapshot as _ts_snap, log_attendance_change as _ts_log
+                _ts_before = _ts_snap(attendance)   # audit trail (never raises)
                 if correction.requested_check_in:
                     attendance.check_in = correction.requested_check_in
                 if correction.requested_check_out:
                     attendance.check_out = correction.requested_check_out
                 attendance.save()
+                _ts_log(attendance, _ts_before, 'correction', reviewer_email or '', correction.reason or '')
 
             # Send notification
             NotificationService.send_attendance_correction_notification(
@@ -769,6 +774,24 @@ class WFHRequestViewSet(viewsets.ViewSet):
                 )
                 attendance.is_wfh = True
                 attendance.save()
+                # If the approved day is today and the employee is already
+                # checked in, log a Remote Switch on their activity timeline so
+                # the approval visibly moves them from Office to Remote. Clear a
+                # stale non-break presence so Team Status reflects it at once.
+                if (current_date == local_now().date()
+                        and attendance.check_in and not attendance.check_out):
+                    AttendanceEvent.objects.create(
+                        email=wfh_request.email,
+                        employee_name=attendance.employee_name or wfh_request.employee_name,
+                        date=attendance.date,
+                        event='remote-switch',
+                        location='Remote (approved)',
+                        at=local_now(),
+                    )
+                    if attendance.presence and str(attendance.presence).lower() not in ('away', 'break', 'on break'):
+                        attendance.presence = ''
+                        attendance.presence_at = local_now()
+                        attendance.save(update_fields=['presence', 'presence_at'])
 
             # Send notification
             NotificationService.send_wfh_approval_notification(

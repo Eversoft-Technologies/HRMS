@@ -70,6 +70,25 @@ def _is_super_admin(user):
     return (user.role or '').lower() == 'admin'
 
 
+# Accounts that predate RBAC carry only a legacy role string, which
+# _resolve_role maps onto a seeded role. 'recruitment' maps onto HR Executive
+# so recruiters keep their recruitment, onboarding and reporting access — but
+# that role also manages attendance, which a recruiter must not: it put the
+# Attendance Settings button (and HR's attendance approvals) in front of every
+# legacy recruiter. These grants are withheld from such accounts. An account
+# with an explicitly assigned role (role_ref) is unaffected: its role decides.
+LEGACY_WITHHELD_PERMS = {
+    'recruitment': frozenset({'attendance.edit', 'attendance.approve_offsite'}),
+}
+
+
+def withheld_perms(user):
+    """Permission codes a legacy-role account must not receive from its mapped role."""
+    if not user or user.role_ref_id:
+        return frozenset()
+    return LEGACY_WITHHELD_PERMS.get((user.role or '').lower(), frozenset())
+
+
 def _resolve_role(user):
     """Get the RBAC Role for a user (via role_ref, or fall back to legacy string mapping)."""
     if user.role_ref_id:
@@ -93,6 +112,8 @@ def _user_has_perm(user, code):
 
     role = _resolve_role(user)
     if not role:
+        return False
+    if code in withheld_perms(user):
         return False
 
     # Use a simple cache key for this request cycle

@@ -251,6 +251,14 @@
       '.kpi-card.c-cyan::before{background:linear-gradient(90deg,#06b6d4,#22d3ee)}',
       '.kpi-card.c-indigo::before{background:linear-gradient(90deg,#4f46e5,#6366f1)}',
       '.kpi-card.c-pink::before{background:linear-gradient(90deg,#ec4899,#f472b6)}',
+      /* Recruitment pipeline board: highlight the entire stage column and
+         candidate card on hover, not only the card border. */
+      '.kanban-col{transition:transform .15s ease,box-shadow .15s ease,border-color .15s ease,border .15s ease;}',
+      '.kanban-col:hover{transform:translateY(-2px);border:1px solid var(--accent,#4f8ef7)!important;box-shadow:0 8px 22px rgba(79,142,247,.18);}',
+      '.kanban-col:hover .kanban-col-head{color:var(--text,#e8edf7);}',
+      '.kanban-card{transition:transform .15s ease,box-shadow .15s ease,border-color .15s ease,background .15s ease;}',
+      '.kanban-card:hover{transform:translateY(-1px);border-color:var(--accent,#4f8ef7)!important;box-shadow:0 6px 16px rgba(79,142,247,.22);background:var(--surface,#243351)!important;}',
+      '.kanban-card:hover .kanban-card-title{color:var(--accent,#4f8ef7);}',
       '.kpi-card-val{font-size:26px;font-weight:700;color:var(--text1,#111);line-height:1.1;margin-top:6px;font-family:var(--font-d, "DM Sans", sans-serif)}',
       '.kpi-card-lbl{font-size:11px;font-weight:700;color:var(--text3,#888);text-transform:uppercase;letter-spacing:.5px}',
       '.kpi-card-sub{font-size:11px;color:var(--text3,#888);margin-top:4px}',
@@ -319,6 +327,10 @@
   /* ── open / close ─────────────────────────────────────────────────────── */
   function open() {
     if (document.getElementById(OVERLAY_ID)) return;
+    // Always open on Overview. `state` outlives the overlay, so without this the
+    // tab chosen last time (Pipeline, Resume Scoring, Trends ...) came back.
+    state.tab = 'overview';
+    state.lastRenderedTab = null;
     state.openPath = window.location.pathname + window.location.hash;
     var currentHistoryState = history.state;
     if (currentHistoryState && typeof currentHistoryState[HISTORY_KEY] === 'string') {
@@ -850,7 +862,7 @@
       var sum = document.getElementById("kpi-filter-summary");
       if (sum) sum.textContent = filterSummary();
       var lbl = document.getElementById('kpi-refresh-lbl');
-      if (lbl) lbl.textContent = 'Updated ' + new Date().toLocaleTimeString();
+      if (lbl) lbl.textContent = 'Updated ' + new Date().toLocaleTimeString('en-US');
       renderBody();
     });
   }
@@ -911,7 +923,16 @@
       })(wraps[w]);
     }
   }
-  function closeChartFilter() { var p = document.getElementById('kpi-cf-pop'); if (p) p.remove(); }
+  /* The chart filter is a small floating menu. It must go away as soon as the
+     person does anything else: it used to listen only for a mouse press, so on
+     a phone (where a swipe or tap is not a mouse press) it stayed floating over
+     the dashboard while the page scrolled underneath it. */
+  var chartFilterOff = null;   // removes the listeners of the open menu
+  function closeChartFilter() {
+    var p = document.getElementById('kpi-cf-pop');
+    if (p) p.remove();
+    if (chartFilterOff) { chartFilterOff(); chartFilterOff = null; }
+  }
   function toggleChartLabel(chart, i, show) {
     if (!chart._origData) chart._origData = chart.data.datasets.map(function (ds) { return ds.data.slice(); });
     if (!chart._hidden) chart._hidden = {};
@@ -943,9 +964,48 @@
         var k = +rb.getAttribute('data-i');
         labels.forEach(function (lb, i) { toggleChartLabel(chart, i, k === -1 || i === k); });
         btn.classList.toggle('on', k !== -1);
+        // a choice was made: put the menu away (a beat later, so the tick shows)
+        setTimeout(closeChartFilter, 160);
       });
     });
-    setTimeout(function () { document.addEventListener('mousedown', function h(e) { var p = document.getElementById('kpi-cf-pop'); if (p && !p.contains(e.target) && e.target !== btn) { p.remove(); document.removeEventListener('mousedown', h); } }); }, 0);
+    // Close on a press / tap anywhere else, on any scroll, on a resize or
+    // rotation, and on Escape. The Filter button itself is left to its own
+    // click, which toggles the menu.
+    var outside = function (e) {
+      var p = document.getElementById('kpi-cf-pop');
+      if (!p) return;
+      if (p.contains(e.target) || e.target === btn || (btn.contains && btn.contains(e.target))) return;
+      closeChartFilter();
+    };
+    var onScroll = function (e) {
+      var p = document.getElementById('kpi-cf-pop');
+      if (p && e.target && e.target.nodeType === 1 && p.contains(e.target)) return;   // scrolling inside the menu
+      closeChartFilter();
+    };
+    // Escape puts away only this menu; it must not also close the dashboard behind it.
+    var onKey = function (e) {
+      if (e.key !== 'Escape' || !document.getElementById('kpi-cf-pop')) return;
+      e.stopImmediatePropagation(); e.preventDefault();
+      closeChartFilter();
+    };
+    var armed = false;
+    var arm = setTimeout(function () {
+      armed = true;
+      document.addEventListener('mousedown', outside, true);
+      document.addEventListener('touchstart', outside, { capture: true, passive: true });
+      window.addEventListener('scroll', onScroll, true);
+      window.addEventListener('resize', closeChartFilter);
+      document.addEventListener('keydown', onKey, true);
+    }, 0);
+    chartFilterOff = function () {
+      clearTimeout(arm);
+      if (!armed) return;
+      document.removeEventListener('mousedown', outside, true);
+      document.removeEventListener('touchstart', outside, { capture: true });
+      window.removeEventListener('scroll', onScroll, true);
+      window.removeEventListener('resize', closeChartFilter);
+      document.removeEventListener('keydown', onKey, true);
+    };
   }
 
   /* ── helper: update values without destroying canvas elements ───────── */

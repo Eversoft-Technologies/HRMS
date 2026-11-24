@@ -44,7 +44,7 @@
     var U = window.__hrmsUI;
     var g = U.g, n = U.n, B = U.B, Us = U.Us, Gn = U.Gn, Hs = U.Hs, le = U.le,
         cn = U.cn, Qe = U.Qe, Bt = U.Bt, Vs = U.Vs, Dr = U.Dr, Et = U.Et;
-    const[L,sL]=g.useState([]),[ld,sld]=g.useState(!0),[er,ser]=g.useState(""),[wr,swr]=g.useState(""),[op,so]=g.useState(!1),[bz,sb]=g.useState(!1),[fm,sf]=g.useState({type:"Casual Leave",fromDate:"",toDate:"",reason:""}),[fe,sfe]=g.useState(""),[q,sq]=g.useState(""),[flt,sflt]=g.useState("All"),[srt,ssrt]=g.useState("newest"),[bal,sbal]=g.useState([]),[exp,sexp]=g.useState(null),[cf,scf]=g.useState(null),[more,smore]=g.useState({}),[hd,shd]=g.useState(null),[per,sper]=g.useState("today"),[cm,scm]=g.useState((new Date).getMonth()),[hol,shol]=g.useState([]),[holEr,sholEr]=g.useState(!1);
+    const[L,sL]=g.useState([]),[ld,sld]=g.useState(!0),[er,ser]=g.useState(""),[wr,swr]=g.useState(""),[op,so]=g.useState(!1),[bz,sb]=g.useState(!1),[fm,sf]=g.useState({type:"Casual Leave",fromDate:"",toDate:"",reason:""}),[fe,sfe]=g.useState(""),[q,sq]=g.useState(""),[flt,sflt]=g.useState("All"),[srt,ssrt]=g.useState("newest"),[lp,slp]=g.useState(1),[lps,slps]=g.useState(10),[bal,sbal]=g.useState([]),[exp,sexp]=g.useState(null),[cf,scf]=g.useState(null),[dr,sdr]=g.useState(""),[more,smore]=g.useState({}),[hd,shd]=g.useState(null),[per,sper]=g.useState("today"),[cm,scm]=g.useState((new Date).getMonth()),[hol,shol]=g.useState([]),[holEr,sholEr]=g.useState(!1);
     /* Missed Clock-Out — cor holds the correction requests: MY own normally,
        everyone's once appr resolves true. The mop/mfm/mfe/mbz quartet mirrors
        op/fm/fe/bz on the Apply Leave form; crj/crn/cre mirror cf on its
@@ -77,7 +77,8 @@
      same scoping for any caller without leave.action, so the param only keeps
      the request honest — it is not the security boundary. loadAppr calls this
      once permissions resolve, so the list is never fetched at the wrong scope. */
-  var loadList=function(all){var e=sess().email||"";sld(!0);return fetch("/api/leave").then(readJson).then(function(r){if(!r.ok||!Array.isArray(r.j))throw 0;sL(r.j);ser("");sld(!1)}).catch(function(){ser("Couldn't load leave requests.");sld(!1)})};
+  var quiet=!1;
+  var loadList=function(all){var e=sess().email||"";var q=quiet;quiet=!1;q||sld(!0);return fetch("/api/leave").then(readJson).then(function(r){if(!r.ok||!Array.isArray(r.j))throw 0;sL(r.j);ser("");sld(!1)}).catch(function(){ser("Couldn't load leave requests.");sld(!1)})};
   var loadBal=function(){var e=sess().email||"";if(!e){sbal([]);return}fetch("/api/leave/balance?email="+encodeURIComponent(e)).then(readJson).then(function(r){var b=r.ok&&r.j&&Array.isArray(r.j.balances)?r.j.balances:[];b.enforce=!(r.j&&r.j.enforceBalance===!1);sbal(b);
         if(b.length)sf(function(p){for(var i=0;i<b.length;i++){if(b[i].type===p.type)return p}var o={...p};o.type=b[0].type;return o})}).catch(function(){sbal([])})};
   /* Signed-in-user scoped, so it no-ops when logged out. Dropping ?email=
@@ -94,6 +95,8 @@
      the caller's permissions are known, so an employee's browser never even
      requests the unscoped list. */
   g.useEffect(function(){loadBal();loadCor(!1);loadAppr()},[]);
+  /* Requests and approvals change when someone ELSE acts, so a list fetched once on mount went stale until a reload. Re-fetch while the page is visible and when the tab is shown again; `quiet` keeps the list from flashing its loading state. */
+  g.useEffect(function(){var refresh=function(){if(document.hidden)return;quiet=!0;loadBal();loadCor(!1);loadAppr()};var t=setInterval(refresh,15000);document.addEventListener("visibilitychange",refresh);window.addEventListener("focus",refresh);return function(){clearInterval(t);document.removeEventListener("visibilitychange",refresh);window.removeEventListener("focus",refresh)}},[]);
   
   /* ---- date helpers ---- */
   var pad=function(v){return String(v).length>1?String(v):"0"+v};
@@ -253,6 +256,12 @@
   var totRem=bal.reduce(function(a,b){return a+(b.unlimited?0:(b.remaining||0))},0),totAll=bal.reduce(function(a,b){return a+(b.unlimited?0:(b.allowance||0))},0);
   var qq=q.trim().toLowerCase();
   var rows=g.useMemo(function(){return L.filter(function(z){if(flt!=="All"&&z.status!==flt)return!1;if(!qq)return!0;return((z.employee||"")+" "+(z.email||"")+" "+(z.type||"")).toLowerCase().indexOf(qq)!==-1}).slice().sort(function(a,b){if(srt==="longest")return(b.days||0)-(a.days||0);var x=a.fromDate||"",y=b.fromDate||"";if(x===y)return(b.id||0)-(a.id||0);if(srt==="oldest")return x<y?-1:1;return x<y?1:-1})},[L,flt,qq,srt]);
+  var leavePageCount=Math.max(1,Math.ceil(rows.length/lps));
+  var leavePage=Math.min(lp,leavePageCount);
+  var leaveStart=(leavePage-1)*lps;
+  var pageRows=rows.slice(leaveStart,leaveStart+lps);
+  g.useEffect(function(){slp(1)},[flt,qq,srt,lps]);
+  g.useEffect(function(){if(lp>leavePageCount)slp(leavePageCount)},[lp,leavePageCount]);
   var balColor=function(b){var r=b.allowance?b.remaining/b.allowance:0;return r>=.5?"var(--success)":r>=.25?"var(--warn)":"var(--danger)"};
   var types=g.useMemo(function(){var a=[];L.forEach(function(z){var t=z.type||"Other",f=null;for(var i=0;i<a.length;i++){if(a[i].type===t){f=a[i];break}}if(!f){f={type:t,n:0,days:0};a.push(f)}f.n++;f.days+=z.days||0});a.sort(function(x,y){return y.n-x.n});return a},[L]);
   var maxT=types.reduce(function(m,t){return Math.max(m,t.n)},0)||1;
@@ -372,7 +381,7 @@
             n.jsxs("td",{colSpan:7,style:msgSt,children:[
                   n.jsx("div",{style:{marginBottom:9},children:"No requests match this filter."}),
                   n.jsx("button",{className:"btn-sm",onClick:function(){sflt("All");sq("")},children:"Clear filters"})]})},"nomatch"));
-  else rows.forEach(function(e){var tm=tmeta(e.type);var live=onDay(e,TODAY);
+  else pageRows.forEach(function(e){var tm=tmeta(e.type);var live=onDay(e,TODAY);
         /* Delete belongs to the employee view ONLY: the owner of a
            still-Pending request, in a role without leave.action. Approvers
            (Super Admin included) never see it — they Decline instead, which
@@ -385,28 +394,28 @@
            API allows the assigned approver; never on your own request). */
         var routed=!own&&(e.approverEmail||"").toLowerCase()===myEmail&&!!myEmail,dp=function(code){return routed?{"data-keepcol":"1"}:{"data-perm":code}};body.push(
             n.jsxs("tr",{onClick:function(){sexp(exp===e.id?null:e.id)},style:{cursor:"pointer"},title:"Show reason, approver and applied date",children:[
-                  n.jsx("td",{children:
-                      n.jsxs("div",{style:{display:"flex",alignItems:"center",gap:9},children:[
+                  n.jsx("td",{style:{textAlign:"left",paddingLeft:12},children:
+                      n.jsxs("div",{style:{display:"flex",alignItems:"center",justifyContent:"flex-start",gap:9},children:[
                             n.jsx("span",{style:{color:"var(--text3)",fontSize:10,width:9,display:"inline-block"},children:exp===e.id?"▼":"▶"}),
                             n.jsx(Et,{initials:initials(e.employee||e.email),size:28,gradient:"135deg, "+tm.v+", var(--accent2)"}),
-                            n.jsxs("div",{style:{minWidth:0},children:[
-                                  n.jsxs("div",{style:{fontSize:12,fontWeight:600,display:"flex",alignItems:"center",gap:6},children:[e.employee||e.email,live?
+                            n.jsxs("div",{style:{minWidth:0,textAlign:"left"},children:[
+                                  n.jsxs("div",{style:{fontSize:12,fontWeight:600,display:"flex",alignItems:"center",justifyContent:"flex-start",gap:6},children:[e.employee||e.email,live?
                                         n.jsx("span",{className:"badge green",style:{fontSize:10,padding:"1px 6px"},children:"Out now"}):null]}),
                                   n.jsx("div",{style:{fontSize:11,color:"var(--text3)",overflow:"hidden",textOverflow:"ellipsis"},children:e.email||""})]})]})}),
-                  n.jsx("td",{children:
+                  n.jsx("td",{style:{textAlign:"center"},children:
                       n.jsx("span",{className:"badge "+tm.b,children:e.type})}),
-                  n.jsxs("td",{style:{fontSize:12},children:[dmy(e.fromDate),
+                  n.jsxs("td",{style:{fontSize:12,textAlign:"center"},children:[dmy(e.fromDate),
                         n.jsx("div",{style:{fontSize:11,color:"var(--text3)"},children:wdOf(e.fromDate)})]}),
-                  n.jsxs("td",{style:{fontSize:12},children:[dmy(e.toDate),
+                  n.jsxs("td",{style:{fontSize:12,textAlign:"center"},children:[dmy(e.toDate),
                         n.jsx("div",{style:{fontSize:11,color:"var(--text3)"},children:wdOf(e.toDate)})]}),
-                  n.jsx("td",{children:
+                  n.jsx("td",{style:{textAlign:"center"},children:
                       n.jsxs("span",{style:{display:"inline-flex",alignItems:"baseline",gap:3,background:"var(--bg3)",border:"1px solid var(--border2)",borderRadius:6,padding:"2px 8px"},children:[
                             n.jsx("span",{style:{fontSize:13,fontWeight:700,fontFamily:"var(--font-d)"},children:e.days}),
                             n.jsx("span",{style:{fontSize:11,color:"var(--text3)"},children:(e.days||0)===1?"day":"days"})]})}),
-                  n.jsx("td",{children:
+                  n.jsx("td",{style:{textAlign:"center"},children:
                       n.jsx(Gn,{status:e.status})}),
-                  n.jsx("td",{children:e.status==="Pending"?
-                      n.jsxs("div",{style:{display:"flex",gap:6,flexWrap:"wrap"},children:[e.status==="Pending"?
+                  n.jsx("td",{style:{textAlign:"center"},children:e.status==="Pending"?
+                      n.jsxs("div",{style:{display:"flex",gap:6,flexWrap:"wrap",justifyContent:"center"},children:[e.status==="Pending"?
                             n.jsx("button",{className:"btn-sm",...dp("leave.approve"),style:{fontSize:11,padding:"2px 8px",color:"var(--success)"},onClick:function(ev){ev.stopPropagation();setSt(e.id,"Approved")},children:"Approve"}):null,e.status==="Pending"?
                             n.jsx("button",{className:"btn-sm",...dp("leave.reject"),style:{fontSize:11,padding:"2px 8px",color:"var(--danger)"},onClick:function(ev){ev.stopPropagation();scf(e)},children:"Decline"}):null,showDel?
                             n.jsx("button",{className:"btn-sm","data-keepcol":"1",style:{fontSize:11,padding:"2px 8px",color:"var(--danger)"},onClick:function(ev){ev.stopPropagation();delRq(e)},children:"Delete"}):null]}):
@@ -460,7 +469,7 @@
   var cPend=cCount("Pending");
   var cRows=isAp&&cflt!=="All"?cor.filter(function(z){return cst(z)===cflt}):cor;
   var cCols=isAp?["Employee","Date","Requested clock-out","Reason","Status","Reviewer","Action"]:["Employee","Date","Requested clock-out","Reason","Status","Reviewer"];
-  var cGrid={display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:10};
+  var cGrid={display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:10,textAlign:"center"};
   /* Timeline dot for the detail panel. The leave table has an identical helper,
      but it is declared inside its row-building loop and is not in scope here. */
   var cdot=function(on,col){return n.jsx("span",{style:{width:9,height:9,borderRadius:"50%",background:on?col:"var(--border2)",display:"inline-block",flex:"0 0 auto"}})};
@@ -545,7 +554,7 @@
                         n.jsx("div",{style:{color:"var(--text)"},children:types.length?types.map(function(t){return n.jsx(Dr,{label:t.type,value:t.n+" request"+(t.n===1?"":"s")+" · "+t.days+"d",pct:Math.round(t.n/maxT*100),color:tmeta(t.type).v},t.type)}):
                             n.jsx("div",{style:{fontSize:12,color:"var(--text3)",padding:"4px 0"},children:"No requests to break down yet."})})]})]}),
             n.jsxs("div",{className:"card",children:[
-                  n.jsx(Us,{title:"Leave Requests",subtitle:L.length?rows.length+" of "+L.length+" shown":""}),
+                  n.jsx(Us,{title:"Leave Requests",subtitle:rows.length?"Showing "+(leaveStart+1)+"-"+Math.min(leaveStart+lps,rows.length)+" of "+rows.length+" matching requests ("+L.length+" total)":""}),
                   n.jsxs("div",{style:{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center",marginBottom:14},children:[
                         n.jsx("div",{style:{display:"flex",gap:8,flexWrap:"wrap"},children:["All","Pending","Approved","Rejected"].map(function(s){return n.jsxs("div",{className:"chip"+(flt===s?" active":""),onClick:function(){sflt(s)},children:[s," ",
                                       n.jsx("span",{style:{opacity:.7},children:s==="All"?L.length:byStatus(s).length})]},s)})}),
@@ -560,8 +569,14 @@
                   n.jsx("div",{className:"table-wrap",children:
                       n.jsxs("table",{children:[
                             n.jsx("thead",{children:
-                                n.jsx("tr",{children:["Employee","Type","From","To","Days","Status","Action"].map(function(e){return n.jsx("th",{children:e},e)})})}),
-                            n.jsx("tbody",{children:body})]})})]}),cor.length?
+                                n.jsx("tr",{children:["Employee","Type","From","To","Days","Status","Action"].map(function(e){return n.jsx("th",{style:{textAlign:"center"},children:e},e)})})}),
+                            n.jsx("tbody",{children:body})]})}),
+                  !ld&&!er?n.jsx("div",{style:{display:"flex",alignItems:"center",justifyContent:"flex-end",gap:12,flexWrap:"wrap",minHeight:70,boxSizing:"border-box",padding:"16px 2px",color:"var(--text2)",fontSize:12,borderTop:"1px solid var(--border2)",borderBottom:"1px solid var(--border2)"},children:
+                        n.jsxs("div",{style:{display:"flex",alignItems:"center",gap:10},children:[
+                              n.jsx("label",{children:n.jsx("select",{value:lps,"aria-label":"Requests per page",onChange:function(e){slps(Number(e.target.value));slp(1)},style:{height:36,minWidth:112,color:"var(--text2)",background:"var(--bg2)",border:"1px solid var(--border2)",borderRadius:10,padding:"0 12px",font:"inherit",fontWeight:600,cursor:"pointer"},children:[10,25,50].map(function(size){return n.jsx("option",{value:size,children:size+" / page"},size)})})}),
+                              n.jsx("button",{type:"button",disabled:leavePage<=1,"aria-label":"Previous page",onClick:function(){sexp(null);slp(leavePage-1)},style:{height:36,minWidth:64,color:"var(--text2)",background:"var(--bg2)",border:"1px solid var(--border2)",borderRadius:10,padding:"0 12px",font:"inherit",fontWeight:600,cursor:leavePage<=1?"not-allowed":"pointer",opacity:leavePage<=1?0.45:1},children:"Prev"}),
+                              n.jsx("span",{"aria-current":"page",style:{display:"inline-flex",alignItems:"center",justifyContent:"center",minWidth:40,height:36,boxSizing:"border-box",padding:"0 12px",borderRadius:10,background:"#315eea",color:"#fff",fontSize:13,fontWeight:700},children:leavePage}),
+                              n.jsx("button",{type:"button",disabled:leavePage>=leavePageCount,"aria-label":"Next page",onClick:function(){sexp(null);slp(leavePage+1)},style:{height:36,minWidth:64,color:"var(--text2)",background:"var(--bg2)",border:"1px solid var(--border2)",borderRadius:10,padding:"0 12px",font:"inherit",fontWeight:600,cursor:leavePage>=leavePageCount?"not-allowed":"pointer",opacity:leavePage>=leavePageCount?0.45:1},children:"Next"})]})}):null]}),cor.length?
             /* Deliberately NOT a <table>: hrms-perms.js locates the Leave
                action column by scanning every <table> on this route, so a
                second one here would risk it gating the wrong cells. */
@@ -667,13 +682,15 @@
                           n.jsx("textarea",{className:"input-field",rows:3,style:{resize:"vertical"},value:mfm.reason,onChange:function(d){setMF("reason",d.target.value)},placeholder:"Why the clock-out is missing — your admin sees this"})})}),
                   n.jsx("div",{style:{minHeight:18,fontSize:12,color:"var(--danger)",marginTop:-8},children:mfe||null}),
                   n.jsx(Vs,{onCancel:function(){smo(!1);smfe("")},onConfirm:msubmit,confirmLabel:"Send",loading:mbz})]}),
-            n.jsxs(Hs,{open:!!cf,onClose:function(){scf(null)},title:"Decline this request?",width:420,children:[
+            n.jsxs(Hs,{open:!!cf,onClose:function(){scf(null);sdr("")},title:"Decline this request?",width:420,children:[
                   n.jsxs("div",{style:{fontSize:13,color:"var(--text2)",lineHeight:1.6},children:["You're about to decline ",
                         n.jsx("strong",{children:cf&&(cf.employee||cf.email)||"this employee"}),"'s ",
                         n.jsx("strong",{children:cf&&cf.type||"leave"})," from ",cf&&prettyD(cf.fromDate)||""," to ",cf&&prettyD(cf.toDate)||""," (",cf&&cf.days||0," days). They'll be notified."]}),cf&&cf.reason?
                   n.jsxs("div",{style:{marginTop:13,padding:"10px 12px",background:"var(--bg3)",borderRadius:8,fontSize:12,color:"var(--text2)",lineHeight:1.5},children:[
                         n.jsx("div",{style:{fontSize:11,fontWeight:600,textTransform:"uppercase",letterSpacing:.5,color:"var(--text2)",marginBottom:4},children:"Their reason"}),cf.reason]}):null,
-                  n.jsx(Vs,{onCancel:function(){scf(null)},onConfirm:function(){var t=cf;scf(null);if(t)setSt(t.id,"Rejected")},confirmLabel:"Decline"})]})]})
+                  n.jsx("div",{style:{marginTop:13},children:
+                        n.jsx("textarea",{className:"input-field",rows:3,style:{resize:"vertical"},value:dr,onChange:function(e){sdr(e.target.value)},placeholder:"reason to decline"})}),
+                  n.jsx(Vs,{onCancel:function(){scf(null);sdr("")},onConfirm:function(){var t=cf;scf(null);sdr("");if(t)setSt(t.id,"Rejected")},confirmLabel:"Decline"})]})]})
   };
 
   console.log('[hrms-leaveui] loaded');

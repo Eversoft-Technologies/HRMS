@@ -25,6 +25,8 @@
     searchQuery: '',
     deptFilter: 'all',
     statusFilter: 'all',
+    page: 1,
+    pageSize: 10,
     deptChartType: 'doughnut', // doughnut | pie | bar
     sortColumn: 'name',
     sortAsc: true,
@@ -42,6 +44,119 @@
     { color: '#ec4899', hover: '#db2777' }, // Pink
     { color: '#14b8a6', hover: '#0d9488' }  // Teal
   ];
+
+  /* USA view. The server sends d.usa to the Recruiter (USA) role only (and only
+     for that signed-in user), so every other role renders exactly as before. */
+  var USA = false;
+  var REGION = false;   // USA or India recruiter: a region-only view that starts empty
+  var HIDE_DEAD = false; // USA or India recruiter: no links to pages the role cannot open
+  function usaOn(d) {
+    return !!(d && d.usa && String(d.usa.email || '').toLowerCase() === String(getEmail() || '').toLowerCase());
+  }
+  function indiaOn(d) {
+    return !!(d && d.india && String(d.india.email || '').toLowerCase() === String(getEmail() || '').toLowerCase());
+  }
+  function usd(v) {
+    v = Number(v) || 0;
+    if (v >= 1e6) return '$' + (v / 1e6).toFixed(2) + 'M';
+    if (v >= 1e3) return '$' + (v / 1e3).toFixed(1) + 'K';
+    return '$' + v.toLocaleString('en-US', { maximumFractionDigits: 0 });
+  }
+  function pct(n, total) { return total ? Math.round((n / total) * 100) : 0; }
+
+  /* The four KPI cards: [{id,label,val,sub,trend,color}]. */
+  function kpiCards(d) {
+    var att = d.attendance || { present: 0, total: 1, rate: 100, wfh: 0, late: 0, onLeave: 0 };
+    if (USA) {
+      var u = d.usa.attendance || {};
+      return [
+        { id: 'dash-kpi-emp', label: 'Total Employees', val: d.totalEmployees || '0',
+          sub: (d.activeEmployees || '0') + ' active employees',
+          trend: '\u2191 +' + (d.newJoinersThisMonth || 0) + ' this month', color: 'blue' },
+        { id: 'dash-kpi-pay', label: 'Payroll This Pay Period', val: usd(d.usa.payrollValue),
+          sub: 'Estimated Gross Payroll', trend: (d.usa.payFrequency || 'Monthly') + ' pay schedule', color: 'purple' },
+        { id: 'dash-kpi-pos', label: 'Open Positions', val: d.openPositions || '0',
+          sub: 'Active Job Openings', trend: (d.totalOpenings || '0') + ' total openings', color: 'green' },
+        { id: 'dash-kpi-att', label: 'Today\'s Time & Attendance', val: pct(u.clockedIn || 0, u.total || 0) + '%',
+          sub: (u.clockedIn || 0) + ' Clocked In \u2022 ' + (u.notYetClockedIn || 0) + ' Not Yet Clocked In',
+          trend: (u.onPto || 0) + ' on PTO \u2022 ' + (u.absent || 0) + ' Absent', color: 'orange' }
+      ];
+    }
+    return [
+      { id: 'dash-kpi-emp', label: 'Total Employees', val: d.totalEmployees || '0',
+        sub: d.activeEmployees + ' active in directory', trend: '\u2191 +' + (d.newJoinersThisMonth || 0) + ' this month', color: 'blue' },
+      { id: 'dash-kpi-pay', label: 'Monthly Payroll', val: d.monthlyPayroll || '\u20b90',
+        sub: 'Estimated Gross', trend: 'Live Calculation', color: 'purple' },
+      { id: 'dash-kpi-pos', label: 'Open Positions', val: d.openPositions || '0',
+        sub: d.totalOpenings + ' total openings', trend: 'Active Job Posts', color: 'green' },
+      { id: 'dash-kpi-att', label: 'Attendance Today', val: att.rate + '%',
+        sub: att.present + ' / ' + att.total + ' present',
+        trend: (att.wfh ? att.wfh + ' WFH \u2022 ' : '') + (att.late ? att.late + ' Late' : 'On track'), color: 'orange' }
+    ];
+  }
+
+  /* Bars of the Today's Attendance chart. */
+  function attSeries(d) {
+    var att = d.attendance || {};
+    if (USA) {
+      var u = d.usa.attendance || {};
+      return {
+        labels: ['Clocked In', 'Clocked Out', 'On PTO', 'Absent', 'Remote'],
+        data: [u.clockedIn || 0, u.clockedOut || 0, u.onPto || 0, u.absent || 0, u.remote || 0],
+        colors: ['#10b981', '#64748b', '#ef4444', '#f59e0b', '#2563eb'],
+        total: u.total || 0
+      };
+    }
+    var presentOffice = Math.max(0, (att.present || 0) - (att.wfh || 0));
+    return {
+      labels: ['Present in Office', 'Work From Home', 'Late Check-in', 'On Leave Today'],
+      data: [presentOffice, att.wfh || 0, att.late || 0, att.onLeave || 0],
+      colors: ['#10b981', '#2563eb', '#f59e0b', '#ef4444'],
+      total: 0
+    };
+  }
+
+  /* A Review button must not lead to an Access denied page: hide it when the
+     signed-in role lacks the permission that page needs. */
+  var USA_PATH_PERMS = {
+    '/employees/leave': 'leave.view',
+    '/employees/attendance': 'attendance.view',
+    '/employees/submissions': 'employee.view',
+    '/recruit/job-board': 'recruitment.view',
+    '/hr/hris': 'employee.view'
+  };
+  function usaCanOpen(path) {
+    var need = USA_PATH_PERMS[path];
+    if (!need || typeof window.__hrmsCan !== 'function') return true;
+    try { return !!window.__hrmsCan(need); } catch (_) { return true; }
+  }
+
+  function usaPendingLabel(label) {
+    return String(label)
+      .replace(/leave request/, 'PTO request')
+      .replace(/WFH request/, 'remote work request')
+      .replace(/attendance correction/, 'timecard correction')
+      .replace(/work deliverable/, 'timesheet submission')
+      .replace(/active job post/, 'active job opening');
+  }
+
+  /* Five columns under the attendance chart (the markup ships with four). */
+  function usaAttAxis(d) {
+    if (!USA) return;
+    var axis = document.querySelector('.hrms-att-bottom-axis');
+    if (!axis) return;
+    var cols = axis.querySelectorAll('.hrms-att-bottom-col');
+    while (cols.length && cols.length < 5) {
+      axis.appendChild(cols[cols.length - 1].cloneNode(true));
+      cols = axis.querySelectorAll('.hrms-att-bottom-col');
+    }
+    axis.style.gridTemplateColumns = 'repeat(5, 1fr)';
+    var labels = attSeries(d).labels;
+    for (var i = 0; i < cols.length; i++) {
+      var l = cols[i].querySelector('.hrms-att-col-label');
+      if (l && l.textContent !== labels[i]) l.textContent = labels[i];
+    }
+  }
 
   function getCachedStats() {
     try {
@@ -101,6 +216,11 @@
       '.hrms-pro-card-accent-bar { width: 3.5px; height: 14px; background: #3b82f6; border-radius: 2px; flex-shrink: 0; }',
       '.hrms-pro-pill-btn { display: inline-flex; align-items: center; justify-content: center; padding: 3px 12px; font-size: 11px; font-weight: 600; color: var(--text2); background: var(--bg3); border: 1px solid var(--border2); border-radius: 6px; text-decoration: none; cursor: pointer; transition: all 0.15s ease; white-space: nowrap; }',
       '.hrms-pro-pill-btn:hover { background: var(--surface); border-color: var(--accent); color: var(--text); transform: translateY(-1px); }',
+      '.hrms-dash-opts-btn { width: 24px; height: 24px; display: inline-grid; place-items: center; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--text3,#94a3b8); font-size: 15px; line-height: 1; cursor: pointer; padding: 0; }',
+      '.hrms-dash-opts-btn:hover, .hrms-dash-opts-btn[aria-expanded="true"] { background: var(--bg3); border-color: var(--border2,#d1d5db); color: var(--text); }',
+      '#hrms-dash-opts-menu { position: fixed; z-index: 9000; min-width: 190px; padding: 5px; border-radius: 10px; background: var(--surface,#fff); border: 1px solid var(--border2,#d1d5db); box-shadow: 0 16px 40px rgba(15,23,42,.22); }',
+      '#hrms-dash-opts-menu button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 10px; border: 0; border-radius: 7px; background: transparent; color: var(--text,#111827); font-size: 12.5px; font-weight: 500; text-align: left; cursor: pointer; }',
+      '#hrms-dash-opts-menu button:hover, #hrms-dash-opts-menu button:focus-visible { background: var(--bg3,#f3f4f6); outline: none; }',
       
       '.hrms-dept-row-item { display: flex; align-items: center; justify-content: space-between; padding: 10px 8px; border-bottom: 1px solid var(--border2); cursor: pointer; border-radius: 6px; transition: all 0.15s ease; }',
       '.hrms-dept-row-item:last-child { border-bottom: none; }',
@@ -153,15 +273,16 @@
          styles leaned on --text1 / --bg1, which the theme never defines. */
       '.hrms-dir-table { width: 100%; border-collapse: collapse; text-align: left; }',
       '.hrms-dir-table thead tr { background: var(--bg3); border-bottom: 1px solid var(--border2); }',
-      '.hrms-dir-table th { padding: 12px 10px; font-size: 11px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; color: var(--text2); white-space: nowrap; }',
+      '.hrms-dir-table th { padding: 12px 10px; font-size: 11px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; color: var(--text2); white-space: nowrap; text-align: left; }',
       '.hrms-dir-row { border-bottom: 1px solid var(--border2); cursor: pointer; transition: background 0.15s ease; }',
       '.hrms-dir-row:last-child { border-bottom: none; }',
       '.hrms-dir-row:hover { background: var(--bg3); }',
-      '.hrms-dir-row td { padding: 12px 10px; vertical-align: middle; font-size: 12px; color: var(--text2); }',
+      '.hrms-dir-row td { padding: 12px 10px; vertical-align: middle; font-size: 12px; color: var(--text2); text-align: left; }',
       '.hrms-dir-code { display: inline-block; background: rgba(79, 142, 247, 0.12); color: var(--accent); border: 1px solid rgba(79, 142, 247, 0.3); border-radius: 6px; padding: 3px 8px; font-size: 11px; font-weight: 700; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; letter-spacing: 0.5px; }',
-      '.hrms-dir-person { display: flex; align-items: center; gap: 10px; min-width: 0; }',
+      '.hrms-dir-person { display: flex; align-items: center; justify-content: flex-start; gap: 10px; min-width: 0; }',
       '.hrms-dir-avatar { width: 32px; height: 32px; border-radius: 50%; background: linear-gradient(135deg, #4f46e5, #06b6d4); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; flex-shrink: 0; box-shadow: 0 2px 5px rgba(79, 70, 229, 0.25); }',
-      '.hrms-dir-name { font-size: 13px; font-weight: 600; color: var(--text); line-height: 1.25; }',
+      '.hrms-dir-name { display: inline-block; font-size: 13px; font-weight: 600; color: var(--text); line-height: 1.25; text-decoration: underline; text-decoration-color: transparent; text-underline-offset: 3px; cursor: pointer; }',
+      '.hrms-dir-name:hover, .hrms-dir-name:focus-visible { color: var(--accent); text-decoration-color: currentColor; outline: none; }',
       '.hrms-dir-email { font-size: 11px; color: var(--text2); line-height: 1.25; margin-top: 2px; }',
       '.hrms-dir-dept { font-weight: 500; }',
       '.hrms-dir-role { font-weight: 600; color: var(--text); }',
@@ -171,7 +292,14 @@
       '.hrms-dir-badge.inactive { background: rgba(247, 95, 79, 0.14); color: var(--danger, #d94835); border: 1px solid rgba(247, 95, 79, 0.35); }',
       '.hrms-dir-date { white-space: nowrap; }',
       '.hrms-dir-action { font-size: 12px; font-weight: 600; color: var(--accent); white-space: nowrap; }',
-      '.hrms-dir-row:hover .hrms-dir-action { text-decoration: underline; }'
+      '.hrms-dir-row:hover .hrms-dir-action { text-decoration: underline; }',
+      '.hrms-dir-pagination { display:flex;align-items:center;justify-content:flex-end;gap:12px;flex-wrap:wrap;min-height:70px;box-sizing:border-box;padding:16px 2px;color:var(--text2);font-size:12px;border-top:1px solid var(--border2);border-bottom:1px solid var(--border2); }',
+      '.hrms-dir-pagination-controls { display:flex;align-items:center;gap:10px; }',
+      '.hrms-dir-page-size select,.hrms-dir-page-btn { height:36px;color:var(--text2);background:var(--bg2);border:1px solid var(--border2);border-radius:10px;padding:0 12px;font:inherit;font-weight:600; }',
+      '.hrms-dir-page-size select { min-width:112px;cursor:pointer; }',
+      '.hrms-dir-page-btn { min-width:64px;cursor:pointer; }',
+      '.hrms-dir-page-btn:disabled { opacity:.45;cursor:not-allowed; }',
+      '.hrms-dir-page-current { display:inline-flex;align-items:center;justify-content:center;min-width:40px;height:36px;box-sizing:border-box;padding:0 12px;border-radius:10px;background:#315eea;color:#fff;font-size:13px;font-weight:700; }'
     ].join('\n');
     document.head.appendChild(style);
   }
@@ -359,7 +487,7 @@
           '<div class="hrms-dir-person">' +
             '<div class="hrms-dir-avatar">' + esc(emp.initials || getInitials(emp.name, emp.email)) + '</div>' +
             '<div style="min-width:0;">' +
-              '<div class="hrms-dir-name">' + esc(nameText) + '</div>' +
+              '<a class="hrms-dir-name" href="/hr/hris/' + encodeURIComponent(emp.id) + '" aria-label="View ' + esc(nameText) + ' profile">' + esc(nameText) + '</a>' +
               '<div class="hrms-dir-email">' + esc(emp.email) + '</div>' +
             '</div>' +
           '</div>' +
@@ -369,9 +497,64 @@
         '<td><span class="hrms-dir-badge ' + (isAct ? 'active' : 'inactive') + '">' + esc(emp.status) + '</span></td>' +
         '<td>' + esc(emp.location) + '</td>' +
         '<td class="hrms-dir-date">' + esc(emp.joinDate) + '</td>' +
-        '<td style="text-align:right;"><span class="hrms-dir-action">View \u2192</span></td>' +
+        '<td style="text-align:center;"><span class="hrms-dir-action">View \u2192</span></td>' +
       '</tr>';
     }).join('');
+  }
+
+  function getPageInfo(filteredCount) {
+    var pageCount = Math.max(1, Math.ceil(filteredCount / state.pageSize));
+    state.page = Math.min(Math.max(state.page, 1), pageCount);
+    var startIndex = (state.page - 1) * state.pageSize;
+    return {
+      pageCount: pageCount,
+      startIndex: startIndex,
+      endIndex: Math.min(startIndex + state.pageSize, filteredCount),
+      start: filteredCount ? startIndex + 1 : 0,
+      end: Math.min(startIndex + state.pageSize, filteredCount)
+    };
+  }
+
+  function renderPaginationHtml(pageInfo) {
+    return '<div class="hrms-dir-pagination-controls">' +
+      '<label class="hrms-dir-page-size">' +
+        '<select id="hrms-dash-page-size" aria-label="Rows per page">' +
+          [10, 25, 50].map(function (size) {
+            return '<option value="' + size + '"' + (state.pageSize === size ? ' selected' : '') + '>' + size + ' / page</option>';
+          }).join('') +
+        '</select>' +
+      '</label>' +
+      '<button type="button" class="hrms-dir-page-btn" id="hrms-dash-page-prev" aria-label="Previous page"' + (state.page <= 1 ? ' disabled' : '') + '>Prev</button>' +
+      '<span class="hrms-dir-page-current" aria-current="page">' + state.page + '</span>' +
+      '<button type="button" class="hrms-dir-page-btn" id="hrms-dash-page-next" aria-label="Next page"' + (state.page >= pageInfo.pageCount ? ' disabled' : '') + '>Next</button>' +
+    '</div>';
+  }
+
+  function bindPaginationEvents() {
+    var pageSizeSelect = document.getElementById('hrms-dash-page-size');
+    if (pageSizeSelect) {
+      pageSizeSelect.addEventListener('change', function () {
+        state.pageSize = Number(pageSizeSelect.value);
+        state.page = 1;
+        updateEmployeeTable();
+      });
+    }
+
+    var prevButton = document.getElementById('hrms-dash-page-prev');
+    if (prevButton) {
+      prevButton.addEventListener('click', function () {
+        state.page--;
+        updateEmployeeTable();
+      });
+    }
+
+    var nextButton = document.getElementById('hrms-dash-page-next');
+    if (nextButton) {
+      nextButton.addEventListener('click', function () {
+        state.page++;
+        updateEmployeeTable();
+      });
+    }
   }
 
   function updateEmployeeTable() {
@@ -379,10 +562,11 @@
     if (!d) return;
     var filtered = getFilteredEmployees(d);
     var total = (d.employees || []).length;
+    var pageInfo = getPageInfo(filtered.length);
 
     var tbody = document.getElementById('dash-employee-tbody');
     if (tbody) {
-      tbody.innerHTML = renderTableRowsHtml(filtered);
+      tbody.innerHTML = renderTableRowsHtml(filtered.slice(pageInfo.startIndex, pageInfo.endIndex));
       var resetInEmpty = document.getElementById('hrms-dash-empty-reset');
       if (resetInEmpty) {
         resetInEmpty.addEventListener('click', function (e) {
@@ -390,6 +574,7 @@
           state.searchQuery = '';
           state.deptFilter = 'all';
           state.statusFilter = 'all';
+          state.page = 1;
           var sInput = document.getElementById('hrms-dash-search');
           if (sInput) sInput.value = '';
           updateEmployeeTable();
@@ -399,7 +584,14 @@
 
     var countEl = document.getElementById('dash-employee-count');
     if (countEl) {
-      countEl.textContent = 'Showing ' + filtered.length + ' of ' + total + ' registered employees';
+      countEl.textContent = 'Showing ' + pageInfo.start + '-' + pageInfo.end + ' of ' + filtered.length +
+        ' matching employees (' + total + ' registered)';
+    }
+
+    var paginationEl = document.getElementById('dash-employee-pagination');
+    if (paginationEl) {
+      paginationEl.innerHTML = renderPaginationHtml(pageInfo);
+      bindPaginationEvents();
     }
 
     var hasActiveFilters = state.searchQuery || state.deptFilter !== 'all' || state.statusFilter !== 'all';
@@ -486,8 +678,9 @@
 
     return list.map(function (act) {
       var aType = act.type || (act.label.indexOf('leave') !== -1 ? 'leave' : act.label.indexOf('WFH') !== -1 ? 'wfh' : act.label.indexOf('correction') !== -1 ? 'correction' : act.label.indexOf('job') !== -1 ? 'job' : 'submission');
-      var match = String(act.label).match(/^(\d+)\s+(.*)$/);
-      var formattedLabel = match ? '<b>' + match[1] + '</b> ' + esc(match[2]) : esc(act.label);
+      var shown = USA ? usaPendingLabel(act.label) : act.label;
+      var match = String(shown).match(/^(\d+)\s+(.*)$/);
+      var formattedLabel = match ? '<b>' + match[1] + '</b> ' + esc(match[2]) : esc(shown);
       var bgCol = actionColors[aType] || '#2563eb';
       var iconSvg = actionIcons[aType] || actionIcons.leave;
       return '<div class="hrms-action-row">' +
@@ -495,12 +688,16 @@
           '<div class="hrms-action-icon-box" style="background:' + bgCol + ';">' + iconSvg + '</div>' +
           '<div class="hrms-action-text">' + formattedLabel + '</div>' +
         '</div>' +
-        '<a href="' + esc(act.path || '#') + '" class="hrms-pro-pill-btn">Review →</a>' +
+        (HIDE_DEAD && !usaCanOpen(act.path) ? '' : '<a href="' + esc(act.path || '#') + '" class="hrms-pro-pill-btn">Review →</a>') +
       '</div>';
     }).join('');
   }
 
   function renderHighlightsHtml(highlights) {
+    // A region view starts empty: an empty feed shows a message, never the sample rows.
+    if (REGION && !(highlights && highlights.length)) {
+      return '<div style="padding:22px 6px;text-align:center;font-size:12px;color:var(--text2);">No activity yet</div>';
+    }
     var list = (highlights && highlights.length) ? highlights : [
       { initial: 'S', isCheckIn: true, color: '#10b981', dot: '#10b981', title: 'sri — Check In', sub: 'At 02:49 PM (Nellore)' },
       { initial: 'S', isCheckIn: true, color: '#10b981', dot: '#10b981', title: 'sree — Check In', sub: 'At 02:47 PM (Nellore)' },
@@ -511,6 +708,7 @@
     return list.slice(0, 4).map(function (h) {
       var isCheckIn = h.isCheckIn !== false && (!h.title || h.title.indexOf('Check Out') === -1);
       var avatarBg = isCheckIn ? '#10b981' : '#f97316';
+      if (h.kind) avatarBg = { 'in': '#10b981', out: '#f97316', pto: '#2563eb', join: '#8b5cf6', sheet: '#0891b2', remote: '#9333ea' }[h.kind] || avatarBg;
       var initial = h.initial || (h.title ? h.title.charAt(0).toUpperCase() : 'S');
       return '<div class="hrms-event-row">' +
         '<div class="hrms-event-left">' +
@@ -529,7 +727,7 @@
     var isDown = trend && (trend.indexOf('↓') !== -1 || trend.toLowerCase().indexOf('drop') !== -1);
     var trendClass = isDown ? 'stat-trend down' : 'stat-trend';
     return '<div class="stat-card ' + esc(color) + '">' +
-      '<div class="stat-label">' + esc(label) + '</div>' +
+      '<div class="stat-label" id="' + idPrefix + '-label">' + esc(label) + '</div>' +
       '<div class="stat-value" id="' + idPrefix + '-val">' + esc(val) + '</div>' +
       '<div class="stat-sub" id="' + idPrefix + '-sub">' + esc(sub || '') + '</div>' +
       '<div class="' + trendClass + '" id="' + idPrefix + '-trend">' + esc(trend || '') + '</div>' +
@@ -540,21 +738,22 @@
     var container = document.querySelector('.hrms-dash');
     if (!container) return;
 
+    USA = usaOn(d);
+    HIDE_DEAD = USA || indiaOn(d);
+    REGION = HIDE_DEAD;
     injectDashboardStyles();
 
     var att = d.attendance || { present: 0, total: 1, rate: 100, wfh: 0, late: 0, onLeave: 0 };
     var departments = d.departments || [];
-    var totalDeptEmployees = departments.reduce(function (s, x) { return s + x.count; }, 0) || d.totalEmployees || 1;
+    var totalDeptEmployees = departments.reduce(function (s, x) { return s + x.count; }, 0) || d.totalEmployees || (REGION ? 0 : 1);
     var filteredEmployees = getFilteredEmployees(d);
+    var pageInfo = getPageInfo(filteredEmployees.length);
     var hasActiveFilters = state.searchQuery || state.deptFilter !== 'all' || state.statusFilter !== 'all';
 
     var html = '<div id="' + DASHBOARD_MOUNT_ID + '">' +
       // Top Stat Cards
       '<div class="stat-grid" style="margin-bottom:24px;">' +
-        renderStatCard('dash-kpi-emp', 'Total Employees', d.totalEmployees, d.activeEmployees + ' active in directory', '↑ +' + (d.newJoinersThisMonth || 0) + ' this month', 'blue') +
-        renderStatCard('dash-kpi-pay', 'Monthly Payroll', d.monthlyPayroll, 'Estimated Gross', 'Live Calculation', 'purple') +
-        renderStatCard('dash-kpi-pos', 'Open Positions', d.openPositions, d.totalOpenings + ' total openings', 'Active Job Posts', 'green') +
-        renderStatCard('dash-kpi-att', 'Attendance Today', att.rate + '%', att.present + ' / ' + att.total + ' present', (att.wfh ? att.wfh + ' WFH • ' : '') + (att.late ? att.late + ' Late' : 'On track'), 'orange') +
+        kpiCards(d).map(function (c) { return renderStatCard(c.id, c.label, c.val, c.sub, c.trend, c.color); }).join('') +
       '</div>' +
 
       // Grid 2: Charts
@@ -607,8 +806,8 @@
               '<span>Today\'s Attendance &amp; Workforce Status</span>' +
             '</div>' +
             '<div style="display:flex;align-items:center;gap:6px;">' +
-              '<span id="dash-att-rate-badge" style="font-size:11.5px;color:#10b981;font-weight:700;">' + att.rate + '% Attendance</span>' +
-              '<span style="font-size:14px;color:var(--text3,#94a3b8);cursor:pointer;padding:0 2px;" title="Options">⋮</span>' +
+              '<span id="dash-att-rate-badge" style="font-size:11.5px;color:#10b981;font-weight:700;">' + (USA ? pct((d.usa.attendance || {}).clockedIn || 0, (d.usa.attendance || {}).total || 0) + '% Clocked In' : att.rate + '% Attendance') + '</span>' +
+              '<button type="button" id="dash-att-opts" class="hrms-dash-opts-btn" title="Options" aria-label="Attendance card options" aria-haspopup="menu" aria-expanded="false">⋮</button>' +
             '</div>' +
           '</div>' +
           '<div style="position:relative;height:165px;"><canvas id="dash-chart-attendance"></canvas></div>' +
@@ -660,10 +859,10 @@
               '<span class="hrms-pro-card-accent-bar"></span>' +
               '<span>Live Highlights &amp; Events</span>' +
             '</div>' +
-            '<a href="/employees/attendance" class="hrms-pro-pill-btn">View All</a>' +
+            (HIDE_DEAD && !usaCanOpen('/employees/attendance') ? '' : '<a href="/employees/attendance" class="hrms-pro-pill-btn">View All</a>') +
           '</div>' +
           '<div id="dash-live-highlights-list" style="display:flex;flex-direction:column;">' +
-            renderHighlightsHtml(d.highlights) +
+            renderHighlightsHtml(USA ? d.usa.highlights : d.highlights) +
           '</div>' +
         '</div>' +
       '</div>' +
@@ -674,11 +873,11 @@
         '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px;">' +
           '<div>' +
             '<div class="card-title" style="margin-bottom:2px;">Live Employee Directory</div>' +
-            '<div id="dash-employee-count" style="font-size:12px;color:var(--text2,#64748b);">Showing ' + filteredEmployees.length + ' of ' + (d.employees || []).length + ' registered employees</div>' +
+            '<div id="dash-employee-count" style="font-size:12px;color:var(--text2,#64748b);">Showing ' + pageInfo.start + '-' + pageInfo.end + ' of ' + filteredEmployees.length + ' matching employees (' + (d.employees || []).length + ' registered)</div>' +
           '</div>' +
           '<div style="display:flex;align-items:center;gap:10px;">' +
             '<button type="button" id="hrms-dash-reset-filters" class="btn-sm" style="font-size:11px;color:#ef4444;background:transparent;border:1px solid #fecaca;padding:5px 10px;border-radius:6px;cursor:pointer;' + (hasActiveFilters ? '' : 'display:none;') + '">✕ Reset Filters</button>' +
-            '<a href="/hr/hris" class="btn-sm" style="text-decoration:none;font-size:12px;padding:6px 14px;border-radius:8px;">View Full HRIS →</a>' +
+            (HIDE_DEAD && !usaCanOpen('/hr/hris') ? '' : '<a href="/hr/hris" class="btn-sm" style="text-decoration:none;font-size:12px;padding:6px 14px;border-radius:8px;">View Full HRIS →</a>') +
           '</div>' +
         '</div>' +
 
@@ -726,19 +925,23 @@
                 '<th class="hrms-table-header-sortable" data-sort="status" data-label="STATUS">STATUS ' + (state.sortColumn === 'status' ? (state.sortAsc ? '▲' : '▼') : '') + '</th>' +
                 '<th class="hrms-table-header-sortable" data-sort="location" data-label="LOCATION">LOCATION ' + (state.sortColumn === 'location' ? (state.sortAsc ? '▲' : '▼') : '') + '</th>' +
                 '<th class="hrms-table-header-sortable" data-sort="joinDate" data-label="JOIN DATE">JOIN DATE ' + (state.sortColumn === 'joinDate' ? (state.sortAsc ? '▲' : '▼') : '') + '</th>' +
-                '<th style="text-align:right;">ACTION</th>' +
+                '<th style="text-align:center;">ACTION</th>' +
               '</tr>' +
             '</thead>' +
             '<tbody id="dash-employee-tbody">' +
-              renderTableRowsHtml(filteredEmployees) +
+              renderTableRowsHtml(filteredEmployees.slice(pageInfo.startIndex, pageInfo.endIndex)) +
             '</tbody>' +
           '</table>' +
+        '</div>' +
+        '<div id="dash-employee-pagination" class="hrms-dir-pagination">' +
+          renderPaginationHtml(pageInfo) +
         '</div>' +
       '</div>' +
     '</div>';
 
     container.innerHTML = html;
     state.mounted = true;
+    usaAttAxis(d);
 
     wireDashboardEvents();
 
@@ -748,6 +951,9 @@
   }
 
   function updateLiveDashboard(d) {
+    USA = usaOn(d);
+    HIDE_DEAD = USA || indiaOn(d);
+    REGION = HIDE_DEAD;
     var wrap = document.getElementById(DASHBOARD_MOUNT_ID);
     if (!wrap || !document.contains(wrap)) {
       renderFullDashboard(d);
@@ -762,23 +968,21 @@
       if (el && txt !== undefined && el.textContent !== String(txt)) el.textContent = String(txt);
     };
 
-    setEl('dash-kpi-emp-val', d.totalEmployees || '0');
-    setEl('dash-kpi-emp-sub', (d.activeEmployees || '0') + ' active in directory');
-    setEl('dash-kpi-emp-trend', '↑ +' + (d.newJoinersThisMonth || 0) + ' this month');
+    kpiCards(d).forEach(function (c) {
+      setEl(c.id + '-label', c.label);
+      setEl(c.id + '-val', c.val);
+      setEl(c.id + '-sub', c.sub);
+      setEl(c.id + '-trend', c.trend);
+    });
 
-    setEl('dash-kpi-pay-val', d.monthlyPayroll || '₹0');
-    setEl('dash-kpi-pos-val', d.openPositions || '0');
-    setEl('dash-kpi-pos-sub', (d.totalOpenings || '0') + ' total openings');
-
-    setEl('dash-kpi-att-val', att.rate + '%');
-    setEl('dash-kpi-att-sub', att.present + ' / ' + att.total + ' present');
-    setEl('dash-kpi-att-trend', (att.wfh ? att.wfh + ' WFH • ' : '') + (att.late ? att.late + ' Late' : 'On track'));
-
-    setEl('dash-att-rate-badge', att.rate + '% Attendance');
+    setEl('dash-att-rate-badge', USA
+      ? pct((d.usa.attendance || {}).clockedIn || 0, (d.usa.attendance || {}).total || 0) + '% Clocked In'
+      : att.rate + '% Attendance');
+    usaAttAxis(d);
 
     // 2. Department Breakdown
     var departments = d.departments || [];
-    var totalDeptEmployees = departments.reduce(function (s, x) { return s + x.count; }, 0) || d.totalEmployees || 1;
+    var totalDeptEmployees = departments.reduce(function (s, x) { return s + x.count; }, 0) || d.totalEmployees || (REGION ? 0 : 1);
     setEl('dash-dept-subtitle', departments.length + ' Departments • ' + totalDeptEmployees + ' Total Staff');
 
     var deptListEl = document.getElementById('dash-dept-list');
@@ -792,7 +996,7 @@
     if (pendingEl) pendingEl.innerHTML = renderPendingActionsHtml(d.pendingActions);
 
     var highEl = document.getElementById('dash-live-highlights-list');
-    if (highEl) highEl.innerHTML = renderHighlightsHtml(d.highlights);
+    if (highEl) highEl.innerHTML = renderHighlightsHtml(USA ? d.usa.highlights : d.highlights);
 
     // 4. Update Charts in-place without destroying canvases
     updateChartsInPlace(d);
@@ -835,9 +1039,10 @@
     // Attendance Chart
     var chart3 = state.charts['attendance'];
     if (chart3 && d.attendance) {
-      var att = d.attendance;
-      var presentOffice = Math.max(0, (att.present || 0) - (att.wfh || 0));
-      chart3.data.datasets[0].data = [presentOffice, att.wfh || 0, att.late || 0, att.onLeave || 0];
+      var ser = attSeries(d);
+      chart3.data.labels = ser.labels;
+      chart3.data.datasets[0].data = ser.data;
+      chart3.data.datasets[0].backgroundColor = ser.colors;
       chart3.update('none');
     } else if (document.getElementById('dash-chart-attendance')) {
       initAttendanceChart(d);
@@ -851,6 +1056,7 @@
         var targetDept = el.getAttribute('data-dept');
         if (targetDept) {
           state.deptFilter = (state.deptFilter.toLowerCase() === targetDept.toLowerCase()) ? 'all' : targetDept;
+          state.page = 1;
           updateEmployeeTable();
         }
       });
@@ -863,6 +1069,7 @@
     if (searchInput) {
       searchInput.addEventListener('input', function (e) {
         state.searchQuery = e.target.value;
+        state.page = 1;
         updateEmployeeTable();
       });
     }
@@ -873,6 +1080,7 @@
       clearSearchBtn.addEventListener('click', function (e) {
         e.preventDefault();
         state.searchQuery = '';
+        state.page = 1;
         if (searchInput) searchInput.value = '';
         updateEmployeeTable();
       });
@@ -886,24 +1094,24 @@
         state.searchQuery = '';
         state.deptFilter = 'all';
         state.statusFilter = 'all';
+        state.page = 1;
         if (searchInput) searchInput.value = '';
         updateEmployeeTable();
       });
     }
 
     // Department quick pills
-document.addEventListener('click', function (e) {
-    var pill = e.target.closest('[data-dept-filter]');
-    if (!pill) return;
-    
-    e.preventDefault();
-    var targetDept = pill.getAttribute('data-dept-filter');
-    if (targetDept) {
-        state.deptFilter = targetDept.trim();
-        state.page = 1;
-        updateEmployeeTable();
-    }
-});
+    document.querySelectorAll('[data-dept-filter]').forEach(function (el) {
+      el.addEventListener('click', function (e) {
+        e.preventDefault();
+        var targetDept = el.getAttribute('data-dept-filter');
+        if (targetDept) {
+          state.deptFilter = (state.deptFilter.toLowerCase() === targetDept.toLowerCase()) ? 'all' : targetDept;
+          state.page = 1;
+          updateEmployeeTable();
+        }
+      });
+    });
 
     wireDeptListEvents();
 
@@ -914,6 +1122,7 @@ document.addEventListener('click', function (e) {
         var targetStatus = el.getAttribute('data-status-filter');
         if (targetStatus) {
           state.statusFilter = targetStatus;
+          state.page = 1;
           updateEmployeeTable();
         }
       });
@@ -950,10 +1159,13 @@ document.addEventListener('click', function (e) {
             state.sortColumn = col;
             state.sortAsc = true;
           }
+          state.page = 1;
           updateEmployeeTable();
         }
       });
     });
+
+    bindPaginationEvents();
   }
 
   function initHeadcountChart(d) {
@@ -1170,29 +1382,19 @@ document.addEventListener('click', function (e) {
     var textColor = isDark ? '#e2e8f0' : '#1e293b';
     var gridColor = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)';
 
-    var att = d.attendance;
-    var presentOffice = Math.max(0, (att.present || 0) - (att.wfh || 0));
-    var wfhCount = att.wfh || 0;
-    var lateCount = att.late || 0;
-    var onLeaveCount = att.onLeave || 0;
-
-    var maxVal = Math.max(presentOffice, wfhCount, lateCount, onLeaveCount, 2.0);
+    var series = attSeries(d);
+    var maxVal = Math.max.apply(null, series.data.concat([2.0]));
     var yStep = maxVal > 10 ? Math.ceil(maxVal / 5) : 0.5;
     var yMax = Math.max(2.5, Math.ceil((maxVal * 1.15) / yStep) * yStep);
 
     state.charts['attendance'] = new Chart(ctxAtt, {
       type: 'bar',
       data: {
-        labels: ['Present in Office', 'Work From Home', 'Late Check-in', 'On Leave Today'],
+        labels: series.labels,
         datasets: [{
           label: 'Employees',
-          data: [presentOffice, wfhCount, lateCount, onLeaveCount],
-          backgroundColor: [
-            '#10b981', // Vibrant Green for Present in Office
-            '#2563eb', // Blue for Work From Home
-            '#f59e0b', // Orange for Late Check-in
-            '#ef4444'  // Red for On Leave Today
-          ],
+          data: series.data,
+          backgroundColor: series.colors,
           borderRadius: { topLeft: 6, topRight: 6, bottomLeft: 0, bottomRight: 0 },
           borderSkipped: false,
           barThickness: 22,
@@ -1217,7 +1419,7 @@ document.addEventListener('click', function (e) {
             cornerRadius: 8,
             callbacks: {
               label: function (ctx) {
-                return ' ' + ctx.label + ': ' + ctx.raw + ' employees';
+                return ' ' + ctx.label + ': ' + ctx.raw + ' employees' + (series.total ? ' (' + pct(ctx.raw, series.total) + '%)' : '');
               }
             }
           }
@@ -1274,8 +1476,93 @@ document.addEventListener('click', function (e) {
     }
   }
 
+  /* The three dots on "Today's Attendance & Workforce Status". They were only
+     drawn, with nothing behind them. They now open a small menu:
+       - Refresh now           re-reads the dashboard numbers
+       - Open Attendance       goes to the Attendance page (left out for a
+                               role that cannot open it, like "View All")
+       - Download chart        saves the bar chart as a PNG
+     One listener on the document handles it, because the dashboard redraws
+     its own HTML and a listener on the button itself would be lost. */
+  function closeAttOptions() {
+    var m = document.getElementById('hrms-dash-opts-menu');
+    if (m && m.parentNode) m.parentNode.removeChild(m);
+    var b = document.getElementById('dash-att-opts');
+    if (b) b.setAttribute('aria-expanded', 'false');
+  }
+  function openAttOptions(btn) {
+    closeAttOptions();
+    var canOpen = !(HIDE_DEAD && !usaCanOpen('/employees/attendance'));
+    var m = document.createElement('div');
+    m.id = 'hrms-dash-opts-menu';
+    m.setAttribute('role', 'menu');
+    m.innerHTML =
+      '<button type="button" role="menuitem" data-att-opt="refresh">↻ Refresh now</button>' +
+      (canOpen ? '<button type="button" role="menuitem" data-att-opt="open">→ Open Attendance</button>' : '') +
+      '<button type="button" role="menuitem" data-att-opt="png">⭳ Download chart (PNG)</button>';
+    document.body.appendChild(m);
+    var r = btn.getBoundingClientRect(), w = m.offsetWidth, h = m.offsetHeight;
+    var left = Math.max(8, Math.min(r.right - w, window.innerWidth - w - 8));
+    var top = r.bottom + 6;
+    if (top + h > window.innerHeight - 8) top = Math.max(8, r.top - h - 6);
+    m.style.left = left + 'px';
+    m.style.top = top + 'px';
+    btn.setAttribute('aria-expanded', 'true');
+    var first = m.querySelector('button');
+    if (first) first.focus();
+  }
+  function runAttOption(kind) {
+    if (kind === 'refresh') {
+      fetchDashboardStats();
+    } else if (kind === 'open') {
+      window.location.href = '/employees/attendance';
+    } else if (kind === 'png') {
+      var chart = state.charts && state.charts['attendance'];
+      var canvas = document.getElementById('dash-chart-attendance');
+      try {
+        var url = chart && chart.toBase64Image ? chart.toBase64Image('image/png', 1) : (canvas ? canvas.toDataURL('image/png') : '');
+        if (!url) return;
+        var d = new Date(), p = function (n) { return (n < 10 ? '0' : '') + n; };
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = 'attendance-today-' + d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + '.png';
+        document.body.appendChild(a); a.click(); a.parentNode.removeChild(a);
+      } catch (e) { console.error('[hrms-dashboard] chart download failed', e); }
+    }
+  }
+  function wireAttOptions() {
+    document.addEventListener('click', function (e) {
+      var t = e.target;
+      if (!t || !t.closest) return;
+      var item = t.closest('#hrms-dash-opts-menu [data-att-opt]');
+      if (item) { var kind = item.getAttribute('data-att-opt'); closeAttOptions(); runAttOption(kind); return; }
+      var btn = t.closest('#dash-att-opts');
+      if (btn) {
+        e.preventDefault();
+        if (document.getElementById('hrms-dash-opts-menu')) closeAttOptions(); else openAttOptions(btn);
+        return;
+      }
+      if (!t.closest('#hrms-dash-opts-menu')) closeAttOptions();
+    });
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && document.getElementById('hrms-dash-opts-menu')) {
+        closeAttOptions();
+        var b = document.getElementById('dash-att-opts'); if (b) b.focus();
+      }
+    });
+    // moving on (wheel, swipe, resize) closes it, like the other floating menus
+    ['wheel', 'touchmove'].forEach(function (ev) {
+      document.addEventListener(ev, function (e) {
+        if (e.target && e.target.closest && e.target.closest('#hrms-dash-opts-menu')) return;
+        closeAttOptions();
+      }, { capture: true, passive: true });
+    });
+    window.addEventListener('resize', closeAttOptions);
+  }
+
   function boot() {
     tryMount();
+    wireAttOptions();
 
     // Theme observer: update charts smoothly with zero DOM tear-down
     var themeObs = new MutationObserver(function (muts) {

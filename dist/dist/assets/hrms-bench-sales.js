@@ -238,8 +238,12 @@
     if (s === 'interview scheduled') return 'warn';
     return 'neutral';
   }
-  function fmtDate(s) { return s ? String(s).slice(0, 10) : '—'; }
-  function fmtDateTime(s) { return s ? String(s).replace('T', ' ').slice(0, 16) : '—'; }
+  /* Company date format (Settings › General, MM/DD/YYYY by default) via
+     hrms-company.js; the raw ISO value if that helper is not loaded. */
+  function coDate(iso) { return window.HRMSCompany ? window.HRMSCompany.date(iso, { time: false }) : iso; }
+  function coDateTime(iso) { return window.HRMSCompany ? window.HRMSCompany.date(iso, { time: true }) : iso; }
+  function fmtDate(s) { return s ? coDate(String(s).slice(0, 10)) : '—'; }
+  function fmtDateTime(s) { return s ? coDateTime(String(s).replace('T', ' ').slice(0, 16)) : '—'; }
 
   /* Downloads a Bench Sales document (resume/DL/I-94) via fetch rather than a
      plain <a href> link: this API authenticates same-origin /api/ requests by
@@ -303,10 +307,11 @@
       '.bss-wrap{background:var(--bg2,#141b26);border:1px solid var(--border,#2a3446);border-radius:12px;',
       'overflow-x:auto;overflow-y:auto;max-height:480px;-webkit-overflow-scrolling:touch}',
       '.bss-table{width:100%;border-collapse:separate;border-spacing:0;font-size:13px}',
-      '.bss-table th{text-align:left;padding:11px 14px;font-size:11px;letter-spacing:.04em;text-transform:uppercase;',
+      '.bss-table th{text-align:center;padding:11px 14px;font-size:11px;letter-spacing:.04em;text-transform:uppercase;',
       'color:var(--muted,#8a9bb8);border-bottom:1px solid var(--border,#2a3446);white-space:nowrap;',
       'position:sticky;top:0;z-index:2;background:var(--bg2,#141b26)}',
-      '.bss-table td{padding:11px 14px;border-bottom:1px solid var(--border2,#1d2634);white-space:nowrap}',
+      '.bss-table td{padding:11px 14px;border-bottom:1px solid var(--border2,#1d2634);white-space:nowrap;text-align:center}',
+      '#bs-table-wrap .bss-table th,#bs-table-wrap .bss-table td{text-align:left}',
       /* Tech Stack tends to run long (many comma-separated skills) — give it
          roughly double the width of a normal column, but still clip with an
          ellipsis rather than wrapping/stretching the table; the full value
@@ -2164,7 +2169,16 @@
       changed = true;
     }
     if (root.parentElement !== main) main.appendChild(root);
-    if (!changed) { updateActiveNav(); return; }
+    if (!changed) {
+      // React can write its own title ("Recruit") a few milliseconds after our
+      // render set this page's name, and which one sticks is a race. Put ours
+      // back on every check for as long as it is wrong.
+      var ownTitle = page === 'submissions' ? 'Bench Work Submissions' : 'Bench Sales';
+      var ttOwn = document.querySelector('.topbar-title');
+      if (ttOwn && ttOwn.textContent !== ownTitle) ttOwn.textContent = ownTitle;
+      updateActiveNav();
+      return;
+    }
 
     state.page = page;
     updateActiveNav();
