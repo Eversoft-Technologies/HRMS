@@ -509,7 +509,7 @@
 
      The server caps pageSize at 200, so page through until the whole roster is
      collected (bounded by a safety cap so a huge table can't spin forever). */
-  var LOAD_PS = 200, LOAD_MAX_PAGES = 100;
+  var LOAD_PS = 200, LOAD_MAX_PAGES = Infinity;   // no ceiling: every candidate is loaded, however many pages that takes
   function loadCandidates(quiet) {
     if (!quiet) {
       state.loading = true;
