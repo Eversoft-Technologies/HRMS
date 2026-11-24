@@ -260,9 +260,9 @@
       /* table */
       '.ob-wrap{background:var(--bg2,#141b26);border:1px solid var(--border,#2a3446);border-radius:12px;overflow:auto}',
       '.ob-table{width:100%;border-collapse:collapse;font-size:13px}',
-      '.ob-table th{text-align:left;padding:11px 14px;font-size:11px;letter-spacing:.04em;text-transform:uppercase;',
+      '.ob-table th{text-align:center;padding:11px 14px;font-size:11px;letter-spacing:.04em;text-transform:uppercase;',
       'color:var(--muted,#8a9bb8);border-bottom:1px solid var(--border,#2a3446);white-space:nowrap;cursor:pointer;user-select:none}',
-      '.ob-table td{padding:11px 14px;border-bottom:1px solid var(--border2,#1d2634);white-space:nowrap}',
+      '.ob-table td{padding:11px 14px;border-bottom:1px solid var(--border2,#1d2634);white-space:nowrap;text-align:center}',
       '.ob-table tbody tr{cursor:pointer}',
       '.ob-table tbody tr:hover{background:var(--bg3,#1c2433)}',
       '.ob-table tbody tr:last-child td{border-bottom:none}',

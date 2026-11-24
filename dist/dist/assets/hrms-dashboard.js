@@ -271,15 +271,15 @@
       /* Live Employee Directory table. Only palette variables (--text, --text2,
          --bg3, --success, --danger) so both themes stay legible; the old inline
          styles leaned on --text1 / --bg1, which the theme never defines. */
-      '.hrms-dir-table { width: 100%; border-collapse: collapse; text-align: left; }',
+      '.hrms-dir-table { width: 100%; border-collapse: collapse; text-align: center; }',
       '.hrms-dir-table thead tr { background: var(--bg3); border-bottom: 1px solid var(--border2); }',
-      '.hrms-dir-table th { padding: 12px 10px; font-size: 11px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; color: var(--text2); white-space: nowrap; }',
+      '.hrms-dir-table th { padding: 12px 10px; font-size: 11px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; color: var(--text2); white-space: nowrap; text-align: center; }',
       '.hrms-dir-row { border-bottom: 1px solid var(--border2); cursor: pointer; transition: background 0.15s ease; }',
       '.hrms-dir-row:last-child { border-bottom: none; }',
       '.hrms-dir-row:hover { background: var(--bg3); }',
-      '.hrms-dir-row td { padding: 12px 10px; vertical-align: middle; font-size: 12px; color: var(--text2); }',
+      '.hrms-dir-row td { padding: 12px 10px; vertical-align: middle; font-size: 12px; color: var(--text2); text-align: center; }',
       '.hrms-dir-code { display: inline-block; background: rgba(79, 142, 247, 0.12); color: var(--accent); border: 1px solid rgba(79, 142, 247, 0.3); border-radius: 6px; padding: 3px 8px; font-size: 11px; font-weight: 700; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; letter-spacing: 0.5px; }',
-      '.hrms-dir-person { display: flex; align-items: center; gap: 10px; min-width: 0; }',
+      '.hrms-dir-person { display: flex; align-items: center; justify-content: center; gap: 10px; min-width: 0; }',
       '.hrms-dir-avatar { width: 32px; height: 32px; border-radius: 50%; background: linear-gradient(135deg, #4f46e5, #06b6d4); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; flex-shrink: 0; box-shadow: 0 2px 5px rgba(79, 70, 229, 0.25); }',
       '.hrms-dir-name { display: inline-block; font-size: 13px; font-weight: 600; color: var(--text); line-height: 1.25; text-decoration: underline; text-decoration-color: transparent; text-underline-offset: 3px; cursor: pointer; }',
       '.hrms-dir-name:hover, .hrms-dir-name:focus-visible { color: var(--accent); text-decoration-color: currentColor; outline: none; }',
@@ -497,7 +497,7 @@
         '<td><span class="hrms-dir-badge ' + (isAct ? 'active' : 'inactive') + '">' + esc(emp.status) + '</span></td>' +
         '<td>' + esc(emp.location) + '</td>' +
         '<td class="hrms-dir-date">' + esc(emp.joinDate) + '</td>' +
-        '<td style="text-align:right;"><span class="hrms-dir-action">View \u2192</span></td>' +
+        '<td style="text-align:center;"><span class="hrms-dir-action">View \u2192</span></td>' +
       '</tr>';
     }).join('');
   }
@@ -925,7 +925,7 @@
                 '<th class="hrms-table-header-sortable" data-sort="status" data-label="STATUS">STATUS ' + (state.sortColumn === 'status' ? (state.sortAsc ? '▲' : '▼') : '') + '</th>' +
                 '<th class="hrms-table-header-sortable" data-sort="location" data-label="LOCATION">LOCATION ' + (state.sortColumn === 'location' ? (state.sortAsc ? '▲' : '▼') : '') + '</th>' +
                 '<th class="hrms-table-header-sortable" data-sort="joinDate" data-label="JOIN DATE">JOIN DATE ' + (state.sortColumn === 'joinDate' ? (state.sortAsc ? '▲' : '▼') : '') + '</th>' +
-                '<th style="text-align:right;">ACTION</th>' +
+                '<th style="text-align:center;">ACTION</th>' +
               '</tr>' +
             '</thead>' +
             '<tbody id="dash-employee-tbody">' +
