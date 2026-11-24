@@ -388,28 +388,28 @@
            API allows the assigned approver; never on your own request). */
         var routed=!own&&(e.approverEmail||"").toLowerCase()===myEmail&&!!myEmail,dp=function(code){return routed?{"data-keepcol":"1"}:{"data-perm":code}};body.push(
             n.jsxs("tr",{onClick:function(){sexp(exp===e.id?null:e.id)},style:{cursor:"pointer"},title:"Show reason, approver and applied date",children:[
-                  n.jsx("td",{children:
-                      n.jsxs("div",{style:{display:"flex",alignItems:"center",gap:9},children:[
+                  n.jsx("td",{style:{textAlign:"left",paddingLeft:12},children:
+                      n.jsxs("div",{style:{display:"flex",alignItems:"center",justifyContent:"flex-start",gap:9},children:[
                             n.jsx("span",{style:{color:"var(--text3)",fontSize:10,width:9,display:"inline-block"},children:exp===e.id?"▼":"▶"}),
                             n.jsx(Et,{initials:initials(e.employee||e.email),size:28,gradient:"135deg, "+tm.v+", var(--accent2)"}),
-                            n.jsxs("div",{style:{minWidth:0},children:[
-                                  n.jsxs("div",{style:{fontSize:12,fontWeight:600,display:"flex",alignItems:"center",gap:6},children:[e.employee||e.email,live?
+                            n.jsxs("div",{style:{minWidth:0,textAlign:"left"},children:[
+                                  n.jsxs("div",{style:{fontSize:12,fontWeight:600,display:"flex",alignItems:"center",justifyContent:"flex-start",gap:6},children:[e.employee||e.email,live?
                                         n.jsx("span",{className:"badge green",style:{fontSize:10,padding:"1px 6px"},children:"Out now"}):null]}),
                                   n.jsx("div",{style:{fontSize:11,color:"var(--text3)",overflow:"hidden",textOverflow:"ellipsis"},children:e.email||""})]})]})}),
-                  n.jsx("td",{children:
+                  n.jsx("td",{style:{textAlign:"center"},children:
                       n.jsx("span",{className:"badge "+tm.b,children:e.type})}),
-                  n.jsxs("td",{style:{fontSize:12},children:[dmy(e.fromDate),
+                  n.jsxs("td",{style:{fontSize:12,textAlign:"center"},children:[dmy(e.fromDate),
                         n.jsx("div",{style:{fontSize:11,color:"var(--text3)"},children:wdOf(e.fromDate)})]}),
-                  n.jsxs("td",{style:{fontSize:12},children:[dmy(e.toDate),
+                  n.jsxs("td",{style:{fontSize:12,textAlign:"center"},children:[dmy(e.toDate),
                         n.jsx("div",{style:{fontSize:11,color:"var(--text3)"},children:wdOf(e.toDate)})]}),
-                  n.jsx("td",{children:
+                  n.jsx("td",{style:{textAlign:"center"},children:
                       n.jsxs("span",{style:{display:"inline-flex",alignItems:"baseline",gap:3,background:"var(--bg3)",border:"1px solid var(--border2)",borderRadius:6,padding:"2px 8px"},children:[
                             n.jsx("span",{style:{fontSize:13,fontWeight:700,fontFamily:"var(--font-d)"},children:e.days}),
                             n.jsx("span",{style:{fontSize:11,color:"var(--text3)"},children:(e.days||0)===1?"day":"days"})]})}),
-                  n.jsx("td",{children:
+                  n.jsx("td",{style:{textAlign:"center"},children:
                       n.jsx(Gn,{status:e.status})}),
-                  n.jsx("td",{children:e.status==="Pending"?
-                      n.jsxs("div",{style:{display:"flex",gap:6,flexWrap:"wrap"},children:[e.status==="Pending"?
+                  n.jsx("td",{style:{textAlign:"center"},children:e.status==="Pending"?
+                      n.jsxs("div",{style:{display:"flex",gap:6,flexWrap:"wrap",justifyContent:"center"},children:[e.status==="Pending"?
                             n.jsx("button",{className:"btn-sm",...dp("leave.approve"),style:{fontSize:11,padding:"2px 8px",color:"var(--success)"},onClick:function(ev){ev.stopPropagation();setSt(e.id,"Approved")},children:"Approve"}):null,e.status==="Pending"?
                             n.jsx("button",{className:"btn-sm",...dp("leave.reject"),style:{fontSize:11,padding:"2px 8px",color:"var(--danger)"},onClick:function(ev){ev.stopPropagation();scf(e)},children:"Decline"}):null,showDel?
                             n.jsx("button",{className:"btn-sm","data-keepcol":"1",style:{fontSize:11,padding:"2px 8px",color:"var(--danger)"},onClick:function(ev){ev.stopPropagation();delRq(e)},children:"Delete"}):null]}):
@@ -463,7 +463,7 @@
   var cPend=cCount("Pending");
   var cRows=isAp&&cflt!=="All"?cor.filter(function(z){return cst(z)===cflt}):cor;
   var cCols=isAp?["Employee","Date","Requested clock-out","Reason","Status","Reviewer","Action"]:["Employee","Date","Requested clock-out","Reason","Status","Reviewer"];
-  var cGrid={display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:10};
+  var cGrid={display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:10,textAlign:"center"};
   /* Timeline dot for the detail panel. The leave table has an identical helper,
      but it is declared inside its row-building loop and is not in scope here. */
   var cdot=function(on,col){return n.jsx("span",{style:{width:9,height:9,borderRadius:"50%",background:on?col:"var(--border2)",display:"inline-block",flex:"0 0 auto"}})};
@@ -563,7 +563,7 @@
                   n.jsx("div",{className:"table-wrap",children:
                       n.jsxs("table",{children:[
                             n.jsx("thead",{children:
-                                n.jsx("tr",{children:["Employee","Type","From","To","Days","Status","Action"].map(function(e){return n.jsx("th",{children:e},e)})})}),
+                                n.jsx("tr",{children:["Employee","Type","From","To","Days","Status","Action"].map(function(e){return n.jsx("th",{style:{textAlign:"center"},children:e},e)})})}),
                             n.jsx("tbody",{children:body})]})})]}),cor.length?
             /* Deliberately NOT a <table>: hrms-perms.js locates the Leave
                action column by scanning every <table> on this route, so a
