@@ -269,31 +269,42 @@
 
   /* ── leaving the office while checked in ──────────────────────────────
    *
-   * Samples the position on a timer and checks out when the employee has
-   * clearly left the geofence.
+   * The employee's rule:
+   *   1. outside the office fence continuously for the policy timeout
+   *      (default 10 min) → a prominent warning for warning_seconds (default
+   *      10 s) with a sound;
+   *   2. still outside when it ends (one more fresh, precise reading) →
+   *      automatic check-out;
+   *   3. checking in again that day needs the manager's approval (server);
+   *   4. a forgotten check-out is never closed here — nothing happens unless
+   *      the server has seen an unbroken outside run.
    *
-   * What this genuinely cannot do, so nobody plans around it: browsers only
-   * run timers while the page is open, and throttle or suspend them when the
-   * tab is hidden or the machine sleeps. Closing the laptop does not trigger a
-   * checkout — the tab is gone. So treat this as a convenience for people who
-   * leave with the tab open, not as an authoritative record of departure. The
-   * shift-end sweep is what actually catches forgotten sessions.
+   * The SERVER decides: geofence-check keeps the run of precise outside
+   * readings on the session and answers departureDue only once it is long
+   * enough and fresh; the check-out re-checks the same run. This script only
+   * samples, warns and asks.
    *
-   * Safeguards, because a wrong auto-checkout silently costs someone hours:
-   *   - two consecutive out-of-fence samples, never a single reading
-   *   - the fix's own accuracy widens the fence, exactly as check-in does
-   *   - a poor fix (worse than the tolerance) is discarded, not acted on
-   *   - never for someone working from home
-  /* ── GPS watch & Auto Clock-Out on Geofence Departure ────────────────── */
-  var GEO_WATCH_MS = 5 * 60 * 1000;      // sample every 5 minutes
-  var departurePolicy = { enabled: true, timeout_minutes: 15, warning_minutes: 5 };
-  var geoWatch = { timer: null, strikes: 0, warned: false, lastAt: 0, beat: null };
-  /* Reliability: a strike only counts inside an unbroken run of precise
-     samples. A gap longer than this (laptop asleep, frozen background tab,
-     network down) starts the count again. The server keeps its own record
-     too and refuses an auto check-out it cannot confirm. */
-  var GEO_MAX_GAP_MS = 2 * GEO_WATCH_MS;
-  var GEO_STRIKE_MAX_ACC_M = 100;          // only a fix this precise can add a strike
+   * Limits, so nobody plans around them: browsers run this only while the
+   * page is open and visible. A hidden, throttled or sleeping tab does not
+   * sample or act (and the server restarts the run after a 12-minute gap).
+   * Audio can only play after one click / key press on the page (browser
+   * autoplay rules); without it the warning vibrates (phones), flashes and
+   * raises a system notification when that permission was granted.
+   *
+   * Safeguards:
+   *   - only precise readings (≤ 100 m) count, on the server;
+   *   - one tab watches (leader lock per signed-in email);
+   *   - never for an off-site or work-from-home session (server: offsite/wfh);
+   *   - the final reading after the countdown must still be outside.
+   */
+  /* ── GPS watch & auto check-out on geofence departure ───────────────── */
+  var GEO_WATCH_MS = 5 * 60 * 1000;      // normal sampling
+  var GEO_WATCH_OUT_MS = 60 * 1000;      // while an outside run is building: every minute
+  var GEO_FIRST_SAMPLE_MS = 20 * 1000;   // soon after check-in / page load
+  var departurePolicy = { enabled: true, timeout_minutes: 10, warning_seconds: 10, warning_sound: true,
+                          recheckin_requires_approval: true };
+  var geoWatch = { timer: null, beat: null, warning: null };
+  var GEO_PRECISE_M = 100;               // a fix vaguer than this never confirms "still outside"
   /* One tab watches: several open tabs used to count (and act) separately. */
   var TAB_ID = Math.random().toString(36).slice(2);
   var LEADER_STALE_MS = 150 * 1000;
@@ -308,10 +319,11 @@
       return false;
     } catch (_) { return true; }
   }
-  function resetStrikes() { geoWatch.strikes = 0; geoWatch.warned = false; geoWatch.lastAt = 0; }
-  document.addEventListener('visibilitychange', function () { if (!document.hidden) resetStrikes(); });
-  window.addEventListener('online', resetStrikes);
-  window.addEventListener('hrmsNetOnline', resetStrikes);
+  // A tab that goes to the background stops warning (it cannot be seen, and
+  // its timers are throttled); the next visible sample starts again.
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden && geoWatch.warning) { cancelWarning(); scheduleSample(GEO_WATCH_OUT_MS); }
+  });
   window.addEventListener('pagehide', function () {
     try { var cur = JSON.parse(localStorage.getItem(leaderKey()) || 'null'); if (cur && cur.id === TAB_ID) localStorage.removeItem(leaderKey()); } catch (_) {}
   });
@@ -321,7 +333,7 @@
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (d) {
         if (d && typeof d.enabled === 'boolean') {
-          departurePolicy = d;
+          for (var k in d) if (Object.prototype.hasOwnProperty.call(d, k)) departurePolicy[k] = d[k];
         }
         return departurePolicy;
       })
@@ -329,74 +341,268 @@
   }
 
   function stopGeoWatch() {
-    if (geoWatch.timer) clearInterval(geoWatch.timer);
+    if (geoWatch.timer) clearTimeout(geoWatch.timer);
     if (geoWatch.beat) clearInterval(geoWatch.beat);
-    geoWatch.timer = null; geoWatch.beat = null; resetStrikes();
+    geoWatch.timer = null; geoWatch.beat = null;
+    cancelWarning();
+  }
+
+  function scheduleSample(ms) {
+    if (geoWatch.timer) clearTimeout(geoWatch.timer);
+    geoWatch.timer = setTimeout(sampleGeo, ms);
   }
 
   function startGeoWatch() {
     stopGeoWatch();
     if (!navigator.geolocation) return;
     fetchDeparturePolicy().then(function (pol) {
-      if (pol.enabled === false) return;
-      geoWatch.timer = setInterval(sampleGeo, GEO_WATCH_MS);
+      if (pol.enabled === false || !isCheckedIn) return;
+      scheduleSample(GEO_FIRST_SAMPLE_MS);
       geoWatch.beat = setInterval(function () { if (!document.hidden) isGeoLeader(); }, 60 * 1000);
     });
   }
+  /* Keep a running watch as it is (re-syncs must not restart its clock). */
+  function ensureGeoWatch() {
+    if (geoWatch.timer || geoWatch.warning) return;
+    startGeoWatch();
+  }
 
-  function sampleGeo() {
-    if (!isCheckedIn) { stopGeoWatch(); return; }
-    if (document.hidden) return;
-    if (departurePolicy && departurePolicy.enabled === false) { stopGeoWatch(); return; }
-
-    var actor = getActor();
-    if (!actor.email) return;
-    if (!isGeoLeader()) { resetStrikes(); return; }          // another tab is watching
-    var nowMs = Date.now();
-    if (geoWatch.lastAt && nowMs - geoWatch.lastAt > GEO_MAX_GAP_MS) resetStrikes();   // slept / throttled
-    geoWatch.lastAt = nowMs;
-
-    var timeoutMinutes = (departurePolicy && departurePolicy.timeout_minutes) || 15;
-    var requiredStrikes = Math.max(2, Math.round(timeoutMinutes / 5));
-
-    getPosition(GEO_WAIT_SAMPLE_MS).then(function (pos) {
-      if (!pos) return;
-      fetch('/api/attendance/geofence-check?latitude=' + pos.latitude +
+  /* One fresh position + the server's verdict on it: {d, pos} or null. */
+  function readGeofence() {
+    return getPosition(GEO_WAIT_SAMPLE_MS).then(function (pos) {
+      if (!pos) return null;
+      return fetch('/api/attendance/geofence-check?latitude=' + pos.latitude +
             '&longitude=' + pos.longitude +
             (pos.accuracy ? '&accuracy=' + pos.accuracy : ''), {
         headers: { 'Content-Type': 'application/json' }
       })
         .then(function (r) { return r.ok ? r.json() : null; })
-        .then(function (d) {
-          // Off-site / WFH sessions have no office to leave: stop watching.
-          if (!d || d.enforced === false || d.wfh || d.offsite) { stopGeoWatch(); return; }
-          if (d.inside) { geoWatch.strikes = 0; geoWatch.warned = false; return; }
-          // A vague fix tells us nothing either way: neither counts nor clears.
-          if (d.uncertain || !(pos.accuracy <= GEO_STRIKE_MAX_ACC_M)) return;
+        .then(function (d) { return d ? { d: d, pos: pos } : null; });
+    }).catch(function () { return null; });
+  }
 
-          geoWatch.strikes++;
-          var minutesAway = geoWatch.strikes * 5;
-          var minutesRemaining = Math.max(0, timeoutMinutes - minutesAway);
+  function sampleGeo() {
+    geoWatch.timer = null;
+    if (!isCheckedIn) { stopGeoWatch(); return; }
+    if (departurePolicy && departurePolicy.enabled === false) { stopGeoWatch(); return; }
+    if (geoWatch.warning) return;                               // the warning owns the next step
+    if (document.hidden || !getActor().email || !isGeoLeader()) { scheduleSample(GEO_WATCH_MS); return; }
 
-          if (geoWatch.strikes < requiredStrikes) {
-            geoWatch.warned = true;
-            notice('Outside office perimeter (' + minutesAway + ' mins)',
-              'You are about ' + Math.round(d.distance || 0) + ' m from ' +
-              (d.fence || 'the office') + '. You will be automatically clocked out in ' +
-              minutesRemaining + ' minutes if you do not return.');
-            return;
-          }
-
-          if (geoWatch.strikes >= requiredStrikes) {
-            autoCheckOut(d, timeoutMinutes, pos);
-          }
-        })
-        .catch(function () {});
+    readGeofence().then(function (res) {
+      if (!isCheckedIn) { stopGeoWatch(); return; }
+      if (!res) { scheduleSample(GEO_WATCH_MS); return; }
+      var d = res.d;
+      // Off-site / WFH sessions have no office to leave; policy switched off.
+      if (d.enforced === false || d.wfh || d.offsite || d.autoCheckout === false) { stopGeoWatch(); return; }
+      // On the office's own network (Wi-Fi / IP whitelist): inside, whatever
+      // indoor GPS says — never warn, and drop any warning already showing.
+      if (d.network && d.network.matched) { cancelWarning(); scheduleSample(GEO_WATCH_MS); return; }
+      if (d.departureDue && !document.hidden) { showDepartureWarning(d); return; }
+      // Outside (precisely): sample every minute so the warning comes on time.
+      scheduleSample(!d.inside && !d.uncertain ? GEO_WATCH_OUT_MS : GEO_WATCH_MS);
     });
   }
 
-  function autoCheckOut(d, timeoutMinutes, pos) {
-    stopGeoWatch();
+  /* ── warning sound ─────────────────────────────────────────────────────
+     Web Audio, no file. Browsers keep audio locked until the person has
+     interacted with the page, so the context is created / resumed on the
+     first click, tap or key press and is ready when the warning needs it. */
+  var alarm = { ctx: null, nodes: [] };
+  function unlockAudio() {
+    try {
+      if (!alarm.ctx) {
+        var AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC) return;
+        alarm.ctx = new AC();
+      }
+      if (alarm.ctx.state === 'suspended' && alarm.ctx.resume) alarm.ctx.resume().catch(function () {});
+      // A silent one-sample buffer completes the unlock on iOS Safari.
+      var b = alarm.ctx.createBuffer(1, 1, 22050), s = alarm.ctx.createBufferSource();
+      s.buffer = b; s.connect(alarm.ctx.destination); s.start(0);
+    } catch (_) {}
+  }
+  ['pointerdown', 'keydown', 'touchstart'].forEach(function (ev) {
+    document.addEventListener(ev, function () {
+      if (!alarm.ctx || alarm.ctx.state !== 'running') unlockAudio();
+    }, { capture: true, passive: true });
+  });
+  /* Beep-beep-beep every 2 s for ``secs``. True when sound was scheduled. */
+  function playAlarm(secs) {
+    var c = alarm.ctx;
+    window.__hrmsGeoAlarm = { attempted: true, at: Date.now(), state: c ? c.state : 'none' };
+    if (!c || c.state !== 'running') return false;
+    try {
+      var t0 = c.currentTime + 0.05;
+      for (var k = 0; k < Math.max(1, Math.ceil(secs / 2)); k++) {
+        for (var j = 0; j < 3; j++) {
+          var start = t0 + k * 2 + j * 0.25;
+          var osc = c.createOscillator(), g = c.createGain();
+          osc.type = 'square';
+          osc.frequency.value = j === 2 ? 1175 : 880;
+          g.gain.setValueAtTime(0.0001, start);
+          g.gain.exponentialRampToValueAtTime(0.25, start + 0.02);
+          g.gain.exponentialRampToValueAtTime(0.0001, start + 0.18);
+          osc.connect(g); g.connect(c.destination);
+          osc.start(start); osc.stop(start + 0.2);
+          alarm.nodes.push(osc);
+        }
+      }
+      window.__hrmsGeoAlarm.played = true;
+      return true;
+    } catch (_) { return false; }
+  }
+  function stopAlarm() {
+    alarm.nodes.forEach(function (o) { try { o.stop(); } catch (_) {} });
+    alarm.nodes = [];
+    try { if (navigator.vibrate) navigator.vibrate(0); } catch (_) {}
+  }
+
+  /* ── the warning ──────────────────────────────────────────────────────── */
+  function ensureWarnStyle() {
+    if (document.getElementById('hrms-geo-warn-style')) return;
+    var st = document.createElement('style');
+    st.id = 'hrms-geo-warn-style';
+    st.textContent =
+      '#hrms-geo-warn{position:fixed;inset:0;z-index:100010;display:flex;align-items:center;justify-content:center;' +
+      "padding:16px;background:rgba(127,29,29,.55);font-family:'Segoe UI',Arial,sans-serif;}" +
+      '#hrms-geo-warn.hgw-flash{animation:hgwFlash 1s steps(2,start) infinite;}' +
+      '@keyframes hgwFlash{0%{background:rgba(220,38,38,.65)}100%{background:rgba(127,29,29,.45)}}' +
+      '#hrms-geo-warn .hgw-card{background:var(--bg2,#fff);color:var(--text,#0f172a);border-radius:16px;max-width:440px;' +
+      'width:100%;box-shadow:0 24px 70px rgba(0,0,0,.45);border-top:6px solid #dc2626;padding:22px 22px 18px;box-sizing:border-box;}' +
+      '#hrms-geo-warn .hgw-top{display:flex;align-items:center;gap:14px;}' +
+      '#hrms-geo-warn .hgw-count{flex:0 0 auto;width:64px;height:64px;border-radius:50%;background:#dc2626;color:#fff;' +
+      'display:flex;align-items:center;justify-content:center;font-size:28px;font-weight:800;font-variant-numeric:tabular-nums;}' +
+      '#hrms-geo-warn h2{margin:0 0 4px;font-size:18px;font-weight:800;line-height:1.3;color:var(--text,#0f172a);}' +
+      '#hrms-geo-warn p{margin:0;font-size:14px;line-height:1.55;color:var(--text2,#475569);}' +
+      '#hrms-geo-warn .hgw-msg{margin-top:12px;min-height:18px;font-size:13px;font-weight:600;color:#b91c1c;}' +
+      '#hrms-geo-warn .hgw-acts{display:flex;justify-content:flex-end;margin-top:14px;}' +
+      '#hrms-geo-warn button{padding:11px 18px;border-radius:9px;border:none;background:#0f9d58;color:#fff;font-size:14px;' +
+      'font-weight:700;cursor:pointer;min-height:44px;}' +
+      '#hrms-geo-warn button[disabled]{opacity:.6;cursor:default;}' +
+      '@media (max-width:420px){#hrms-geo-warn .hgw-top{flex-direction:column;align-items:flex-start;}' +
+      '#hrms-geo-warn button{width:100%;}}';
+    document.head.appendChild(st);
+  }
+
+  function showDepartureWarning(d) {
+    if (geoWatch.warning || !isCheckedIn) return;
+    ensureWarnStyle();
+    var secs = Math.max(5, Math.min(120, parseInt(d.warningSeconds || departurePolicy.warning_seconds, 10) || 10));
+    var mins = d.timeoutMinutes || departurePolicy.timeout_minutes || 10;
+    var el = document.createElement('div');
+    el.id = 'hrms-geo-warn';
+    el.setAttribute('role', 'alertdialog');
+    el.setAttribute('aria-modal', 'true');
+    el.setAttribute('aria-labelledby', 'hgw-title');
+    el.setAttribute('aria-describedby', 'hgw-body');
+    el.innerHTML =
+      '<div class="hgw-card">' +
+      '<div class="hgw-top"><div class="hgw-count" aria-hidden="true">' + secs + '</div>' +
+      '<div><h2 id="hgw-title">You\'ve left the office</h2>' +
+      '<p id="hgw-body">You\'ve been outside the office for ' + mins + ' minute' + (mins === 1 ? '' : 's') +
+      '. You\'ll be checked out in <b class="hgw-secs">' + secs + '</b>&nbsp;s unless you\'re back inside.</p></div></div>' +
+      '<div class="hgw-msg" aria-live="polite"></div>' +
+      '<div class="hgw-acts"><button type="button" class="hgw-back">I\'m back — re-check location</button></div>' +
+      '</div>';
+    document.body.appendChild(el);
+    var w = { el: el, deadline: Date.now() + secs * 1000, checking: false, done: false, tick: null, d: d };
+    geoWatch.warning = w;
+    var btn = el.querySelector('.hgw-back'), msg = el.querySelector('.hgw-msg');
+    try { btn.focus(); } catch (_) {}
+
+    var sound = departurePolicy.warning_sound !== false && d.warningSound !== false;
+    var played = sound && playAlarm(secs);
+    if (!played) {
+      // Audio blocked (no click on the page yet) or switched off: make the
+      // warning impossible to miss another way.
+      el.classList.add('hgw-flash');
+      try { if (navigator.vibrate) navigator.vibrate([400, 200, 400, 200, 400, 200, 400]); } catch (_) {}
+      try {
+        if (window.Notification && Notification.permission === 'granted') {
+          var n = new Notification('You\'ve left the office', {
+            body: 'You\'ll be checked out in ' + secs + ' s unless you\'re back inside.',
+            tag: 'hrms-geo-departure', requireInteraction: true
+          });
+          w.notification = n;
+          n.onclick = function () { try { window.focus(); } catch (_) {} n.close(); };
+        }
+      } catch (_) {}
+    }
+
+    btn.onclick = function () {
+      if (w.checking || w.done) return;
+      unlockAudio();
+      w.checking = true;
+      btn.disabled = true;
+      msg.textContent = 'Checking your location…';
+      readGeofence().then(function (res) {
+        if (w.done) return;
+        w.checking = false;
+        btn.disabled = false;
+        if (res && res.d && (res.d.inside || (res.d.network && res.d.network.matched))) { backInside(); return; }
+        msg.textContent = res && res.d && !res.d.uncertain
+          ? 'Still outside' + (res.d.fence ? ' ' + res.d.fence : ' the office') +
+            (res.d.distance != null ? ' (about ' + Math.round(res.d.distance) + ' m from its centre)' : '') + '.'
+          : 'Could not get a precise location. Move near a window or turn on precise location.';
+      });
+    };
+
+    function paint() {
+      var left = Math.max(0, Math.ceil((w.deadline - Date.now()) / 1000));
+      el.querySelector('.hgw-count').textContent = left;
+      el.querySelector('.hgw-secs').textContent = left;
+      if (left <= 0 && !w.checking && !w.done) finalCheck();
+    }
+    w.tick = setInterval(paint, 250);
+  }
+
+  function cancelWarning() {
+    var w = geoWatch.warning;
+    if (!w) return;
+    w.done = true;
+    if (w.tick) clearInterval(w.tick);
+    stopAlarm();
+    try { if (w.notification) w.notification.close(); } catch (_) {}
+    if (w.el && w.el.parentNode) w.el.parentNode.removeChild(w.el);
+    geoWatch.warning = null;
+  }
+
+  function backInside() {
+    cancelWarning();
+    notice('Welcome back', 'You are inside the office — you stay checked in.');
+    scheduleSample(GEO_WATCH_MS);
+  }
+
+  /* The countdown ended: one more fresh reading decides. */
+  function finalCheck() {
+    var w = geoWatch.warning;
+    if (!w || w.checking || w.done) return;
+    w.checking = true;
+    var btn = w.el.querySelector('.hgw-back'), msg = w.el.querySelector('.hgw-msg');
+    btn.disabled = true;
+    msg.textContent = 'Checking your location one more time…';
+    readGeofence().then(function (res) {
+      if (w.done) return;
+      if (document.hidden || !isCheckedIn) { cancelWarning(); scheduleSample(GEO_WATCH_OUT_MS); return; }
+      var d = res && res.d;
+      if (d && (d.inside || (d.network && d.network.matched))) { backInside(); return; }
+      if (d && d.departureDue && !d.uncertain && res.pos && res.pos.accuracy <= GEO_PRECISE_M) {
+        msg.textContent = 'Checking you out…';
+        autoCheckOut(d, res.pos);
+        return;
+      }
+      // Not proven still outside (vague fix, no fix): do nothing now.
+      cancelWarning();
+      scheduleSample(GEO_WATCH_OUT_MS);
+    });
+  }
+
+  function hhmm(s) {
+    var m = /(\d{1,2}):(\d{2})/.exec(String(s || '').split(' ').pop() || '');
+    return m ? m[1] + ':' + m[2] : '';
+  }
+
+  function autoCheckOut(d, pos) {
     var actor = getActor();
     fetch('/api/attendance/check-out', {
       method: 'POST',
@@ -404,7 +610,7 @@
       body: JSON.stringify({
         email: actor.email,
         auto: 'geofence_departure',
-        outside_minutes: timeoutMinutes || 15,
+        outside_minutes: d && d.outsideMinutes,
         // where they were, so the employee, HR and the timeline can see why
         distance: d && d.distance != null ? d.distance : undefined,
         fence: d && d.fence ? d.fence : undefined,
@@ -413,17 +619,22 @@
       })
     })
       .then(function (r) {
-        if (r.ok) return r.json().catch(function () { return null; });
+        if (r.ok) return r.json().catch(function () { return {}; });
         // The server did not see an unbroken outside run long enough (the tab
         // slept, the network dropped, readings were vague): keep watching.
         return r.json().catch(function () { return {}; }).then(function (e) {
-          if (e && e.code === 'AUTO_CHECKOUT_UNCONFIRMED') startGeoWatch();
+          cancelWarning();
+          if (e && (e.code === 'NO_OPEN_SESSION' || e.code === 'SESSION_EXPIRED')) { syncFromServer(true); return null; }
+          if (e && e.code === 'NOT_AN_OFFICE_SESSION') { stopGeoWatch(); return null; }
+          scheduleSample(GEO_WATCH_OUT_MS);
           return null;
         });
       })
       .then(function (record) {
         if (!record) return;
+        stopGeoWatch();
         isCheckedIn = false;
+        checkInAt = null;
         rememberState(false);
         var w = document.getElementById(WRAPPER_ID), t = document.getElementById(TOGGLE_ID);
         if (w && t) refreshUI(w, t, w.querySelector('.hrms-ci-icon'), getCheckinDevice());
@@ -431,10 +642,104 @@
           { detail: { checkedIn: false, device: getCheckinDevice() } }));
         window.dispatchEvent(new CustomEvent('hrmsAttendanceSynced',
           { detail: { checkedIn: false, record: record } }));
-        notice('Auto Clocked Out (Geofence Departure)',
-          'You were outside ' + (d.fence || 'the office') + ' for more than ' + (timeoutMinutes || 15) + ' consecutive minutes. Check in again upon return.');
+        var at = hhmm(record.autoCheckoutAt), left = record.checkOutTime || '';
+        notice('Checked out automatically',
+          'You were outside ' + (d.fence || 'the office') + ' for ' + (d.outsideMinutes || d.timeoutMinutes || 10) +
+          ' minutes, so you were checked out' + (at ? ' at ' + at : '') + '.' +
+          (left ? ' Your hours count until you left, at ' + left + '.' : '') +
+          (departurePolicy.recheckin_requires_approval !== false
+            ? ' Checking in again today needs your manager\'s approval.' : ''));
       })
-      .catch(function () {});
+      .catch(function () { cancelWarning(); scheduleSample(GEO_WATCH_OUT_MS); });
+  }
+
+  /* ── checking in again after an automatic check-out ─────────────────── */
+  var recheckinStatus = '';             // '' | Pending | Approved | Rejected (today's row)
+  var recheckinPoll = null;
+  function setRecheckinStatus(st, quiet) {
+    st = st || '';
+    var prev = recheckinStatus;
+    recheckinStatus = st;
+    if (!quiet && prev === 'Pending' && st === 'Approved') {
+      notice('Check-in approved', 'Your manager approved your check-in after the automatic check-out. Your time counts.');
+    } else if (!quiet && prev === 'Pending' && st === 'Rejected') {
+      notice('Check-in not approved', 'Your manager did not approve your check-in after the automatic check-out. ' +
+        'That time is not counted. Check the bell for details.');
+    }
+    if (st === 'Pending' && !recheckinPoll) {
+      recheckinPoll = setInterval(function () { syncFromServer(true); }, 60 * 1000);
+    } else if (st !== 'Pending' && recheckinPoll) {
+      clearInterval(recheckinPoll); recheckinPoll = null;
+    }
+    paintPendingBadge();
+  }
+  function paintPendingBadge() {
+    var wrap = document.getElementById(WRAPPER_ID);
+    if (!wrap) return;
+    var b = wrap.querySelector('.hrms-ci-pending');
+    var show = recheckinStatus === 'Pending';
+    if (show && !b) {
+      b = document.createElement('span');
+      b.className = 'hrms-ci-pending';
+      b.setAttribute('style', 'margin-left:6px;padding:2px 8px;border-radius:999px;font:700 11px/1.6 \'Segoe UI\',Arial,' +
+        'sans-serif;background:#fef3c7;color:#92400e;border:1px solid #f59e0b;white-space:nowrap;');
+      b.textContent = 'Awaiting manager approval';
+      b.title = 'You checked in again after an automatic check-out. The time counts once your manager approves it.';
+      wrap.appendChild(b);
+    } else if (!show && b) {
+      b.parentNode.removeChild(b);
+    }
+  }
+
+  function askRecheckinReason(info) {
+    info = info || {};
+    return new Promise(function (resolve) {
+      var back = document.createElement('div');
+      back.id = 'hrms-recheckin-modal';
+      back.setAttribute('role', 'dialog');
+      back.setAttribute('aria-modal', 'true');
+      back.setAttribute('aria-labelledby', 'hrms-rc-title');
+      back.setAttribute('style',
+        'position:fixed;inset:0;z-index:100000;background:rgba(15,23,42,0.55);' +
+        'display:flex;align-items:center;justify-content:center;padding:16px;' +
+        "font-family:'Segoe UI',Arial,sans-serif;");
+      var when = info.autoCheckoutTime || hhmm(info.autoCheckoutAt);
+      var explain = 'You were checked out automatically' + (when ? ' at ' + when : '') +
+        ' for leaving the office. Checking in again needs your manager\'s approval.';
+      back.innerHTML =
+        '<div style="background:var(--bg2,#fff);color:var(--text,#0f172a);border-radius:14px;max-width:460px;width:100%;' +
+        'box-shadow:0 20px 60px rgba(0,0,0,0.25);overflow:hidden;">' +
+        '<div style="padding:20px 22px 0;">' +
+        '<div id="hrms-rc-title" style="font-size:17px;font-weight:800;margin-bottom:8px;">Check in again?</div>' +
+        '<div style="font-size:13px;color:var(--text2,#475569);line-height:1.6;">' + explain.replace(/</g, '&lt;') +
+        '<br><br><strong>You will be checked in now; the time counts once your manager approves it.</strong></div>' +
+        '<label for="hrms-rc-reason" style="display:block;margin-top:14px;font-size:12px;font-weight:700;">Reason</label>' +
+        '<textarea id="hrms-rc-reason" rows="3" placeholder="e.g. Went to the bank on a work errand" ' +
+        'style="width:100%;margin-top:4px;padding:10px 12px;border:1px solid var(--border2,#cbd5e1);' +
+        'background:var(--bg3,#fff);color:var(--text,#0f172a);border-radius:8px;font-size:13px;font-family:inherit;' +
+        'resize:vertical;box-sizing:border-box;"></textarea>' +
+        '<div id="hrms-rc-err" style="color:#dc2626;font-size:12px;min-height:16px;margin-top:4px;"></div>' +
+        '</div>' +
+        '<div style="display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap;padding:8px 22px 20px;">' +
+        '<button id="hrms-rc-cancel" type="button" style="padding:9px 18px;min-height:40px;border-radius:8px;' +
+        'border:1px solid var(--border2,#e2e8f0);background:var(--bg3,#fff);color:var(--text,#334155);font-size:13px;' +
+        'font-weight:600;cursor:pointer;">Cancel</button>' +
+        '<button id="hrms-rc-ok" type="button" style="padding:9px 18px;min-height:40px;border-radius:8px;border:none;' +
+        'background:#0f9d58;color:#fff;font-size:13px;font-weight:700;cursor:pointer;">Send to manager &amp; check in</button>' +
+        '</div></div>';
+      document.body.appendChild(back);
+      var box = back.querySelector('#hrms-rc-reason'), errEl = back.querySelector('#hrms-rc-err');
+      if (box) box.focus();
+      function close(v) { if (back.parentNode) back.parentNode.removeChild(back); resolve(v); }
+      back.querySelector('#hrms-rc-cancel').onclick = function () { close(null); };
+      back.querySelector('#hrms-rc-ok').onclick = function () {
+        var v = (box && box.value || '').trim();
+        if (v.length < 3) { errEl.textContent = 'Please give a brief reason.'; if (box) box.focus(); return; }
+        close(v);
+      };
+      back.addEventListener('keydown', function (e) { if (e.key === 'Escape') close(null); });
+      back.addEventListener('click', function (e) { if (e.target === back) close(null); });
+    });
   }
 
   /* A short banner for outcomes the employee must actually notice — the
@@ -585,6 +890,7 @@
     if (!actor.email) return;
     var path = checkedIn ? '/api/attendance/check-in' : '/api/attendance/check-out';
 
+    var recheckinReason = '';
     function post(extra) {
       var bypass = !isGeofenceEnabled();
       var body = checkedIn
@@ -596,6 +902,7 @@
           }
         : { email: actor.email };
       for (var k in extra) if (Object.prototype.hasOwnProperty.call(extra, k)) body[k] = extra[k];
+      if (checkedIn && recheckinReason) body.recheckinReason = recheckinReason;
       return fetch(path, {
         method: 'POST',
         headers: {
@@ -613,8 +920,21 @@
             detail: { checkedIn: checkedIn, record: record }
           }));
           console.log('[hrms-checkin] attendance', checkedIn ? 'check-in' : 'check-out', record);
+          if (record && typeof record.recheckinStatus === 'string') {
+            setRecheckinStatus(record.recheckinStatus, true);
+            if (checkedIn && record.recheckinStatus === 'Pending') {
+              notice('Waiting for manager approval', record.message ||
+                'You are checked in. Because you were checked out automatically today, this time counts once your manager approves it.');
+            }
+          }
           // Checked in from home with no home address on file. Offered after
           // the check-in has already succeeded, so declining costs nothing.
+          // GPS drifted (or was unavailable) but the request came from the
+          // office's own network: say how the check-in was verified.
+          if (checkedIn && record && record.verifiedBy === 'office_network') {
+            notice('Checked in — verified by office Wi-Fi', record.locationMessage ||
+              'You are on the office network, so your check-in was verified without GPS.');
+          }
           if (record && record.homeLocationMissing) {
             var hs = record.homeLocationStatus || 'Not set up';
             if (hs === 'Not set up' || hs === 'Rejected') {
@@ -637,7 +957,7 @@
     return (checkedIn ? getPosition(undefined, undefined, { fast: true }) : Promise.resolve(null))
       .then(function (pos) {
         if (checkedIn) showLocating('Verifying with the office\u2026');
-        return post(pos || {}).then(function (r) {
+        return post(pos || {}).then(function handle(r) {
           hideLocating();
           if (r.ok) return settle(r);
           if (!isGeofenceEnabled()) return settle(r);
@@ -660,6 +980,34 @@
             // open. Whatever caused the drift — a stale tab, a reload during
             // the reason dialog, a second device — arguing with the user about
             // it is useless; re-ask the server and show the truth.
+            // A session from an earlier day was never checked out and its
+            // shift is over: it cannot be closed "now" (that would record a
+            // day and a half). Open the regularization form for that day.
+            if (d.code === 'SESSION_EXPIRED') {
+              syncFromServer(true);
+              notice('Check-out missed on ' + (d.date || 'an earlier day'),
+                d.message || 'Please submit a Missed punch / Regularize request for that day.');
+              try { if (window.HRMSRegularize && d.date) window.HRMSRegularize.open({ date: d.date }); } catch (_) {}
+              return false;
+            }
+
+            // Checked out automatically today for leaving the office: coming
+            // back needs the manager. Ask for a reason, then check in pending.
+            if (d.code === 'RECHECKIN_APPROVAL_REQUIRED') {
+              return askRecheckinReason(d).then(function (why) {
+                if (!why) return false;                  // cancelled → stay checked out
+                recheckinReason = why;
+                return post(pos ? { latitude: pos.latitude, longitude: pos.longitude, accuracy: pos.accuracy } : {})
+                  .then(handle);
+              });
+            }
+
+            if (d.code === 'RECHECKIN_REJECTED') {
+              notice('Check-in not approved',
+                d.message || 'Your manager did not approve checking in again today.');
+              return false;
+            }
+
             if (d.code === 'NO_OPEN_SESSION') {
               syncFromServer(true);
               notice('You were not checked in',
@@ -783,6 +1131,19 @@
       '.hrms-ci-wrap.ci-tip-open .' + TIP_CLASS + '{opacity:1;visibility:visible;transform:none;}' +
       '.' + TIP_CLASS + ' b{font-weight:700;color:#fff;}' +
       '.' + TIP_CLASS + ' .hrms-ci-tip-time{color:#22c55e;font-weight:700;font-variant-numeric:tabular-nums;font-family:ui-monospace,Menlo,Consolas,monospace;}' +
+      '.' + TIP_CLASS + '{background:#000!important;font-size:14px!important;padding:8px 14px!important;gap:8px!important;}' +
+      '.' + TIP_CLASS + '::before{background:#000!important;}' +
+      '.' + TIP_CLASS + ' .hrms-ci-tip-time{color:#4ade80;font-size:14px;}' +
+      '.' + TIP_CLASS + '.ci-tip2{display:block!important;padding:8px 12px;}' +
+      '.' + TIP_CLASS + ' .ci-tip-row{display:flex;align-items:baseline;gap:6px;}' +
+      '.' + TIP_CLASS + ' .ci-tip-lbl{color:#cbd5e1;}' +
+      '.' + TIP_CLASS + ' .ci-tip-in{color:#22c55e;font-weight:700;font-size:14px;font-variant-numeric:tabular-nums;}' +
+      '.' + TIP_CLASS + ' .ci-tip-sub{display:block;margin-top:3px;color:#94a3b8;font-size:11.5px;}' +
+      '.hrms-ci-wrap{cursor:pointer;}' +
+      '.hrms-ci-wrap .hrms-ci-switch{transition:box-shadow .15s ease,transform .15s ease,filter .15s ease;}' +
+      '.hrms-ci-wrap:hover .hrms-ci-switch,.hrms-ci-wrap .hrms-ci-switch:focus-visible{box-shadow:0 0 0 4px rgba(148,163,184,.28);transform:scale(1.04);}' +
+      '.hrms-ci-wrap:hover .hrms-ci-switch.ci-on,.hrms-ci-wrap .hrms-ci-switch.ci-on:focus-visible{box-shadow:0 0 0 4px rgba(34,197,94,.30);filter:brightness(1.06);}' +
+      '@media (prefers-reduced-motion:reduce){.hrms-ci-wrap .hrms-ci-switch{transition:none;}.hrms-ci-wrap:hover .hrms-ci-switch{transform:none;}}' +
       '.topbar .hrms-ci-wrap{overflow:visible!important;max-width:none!important;}';
     document.head.appendChild(st);
   }
@@ -798,6 +1159,8 @@
       wrap.classList.remove('ci-tip-open');
       return;
     }
+    // "In 01:47:26 Hrs": time since check-in, ticking every second.
+    tip.classList.remove('ci-tip2');
     var since = checkInAt ? hms(Date.now() - checkInAt) : '--:--:--';
     var html = '<b>In</b><span class="hrms-ci-tip-time">' + since + '</span><b>Hrs</b>';
     if (tip.innerHTML !== html) tip.innerHTML = html;
@@ -831,7 +1194,7 @@
        textContent is empty and the label matcher never fires. Fails open: if
        permissions cannot be loaded, nothing is hidden. */
     wrap.setAttribute('data-perm', 'attendance.checkinout');
-    wrap.title = isCheckedIn ? 'Click to Check Out' : 'Click to Check In';
+    wrap.title = isCheckedIn ? '' : 'Click to Check In';
 
     /* device icon badge */
     var iconEl = document.createElement('span');
@@ -868,7 +1231,18 @@
     wrap.appendChild(iconEl);
     wrap.appendChild(toggle);
 
-    /* (The hover tooltip showing time since check-in was removed on request.) */
+    /* Hover / keyboard focus: when checked in, show the check-in time. */
+    var tip = document.createElement('span');
+    tip.className = TIP_CLASS;
+    tip.setAttribute('role', 'tooltip');
+    tip.id = 'hrms-ci-tip';
+    wrap.appendChild(tip);
+    toggle.setAttribute('aria-describedby', 'hrms-ci-tip');
+    wrap.addEventListener('mouseenter', function () { showTip(wrap); });
+    wrap.addEventListener('mouseleave', function () { hideTip(wrap); });
+    toggle.addEventListener('focus', function () { showTip(wrap); });
+    toggle.addEventListener('blur', function () { hideTip(wrap); });
+    ensureTipStyle();
 
     return wrap;
   }
@@ -927,7 +1301,7 @@
       wrap.classList.add('ci-active');
       toggle.classList.add('ci-on');
       toggle.setAttribute('aria-pressed', 'true');
-      wrap.title = 'Click to Check Out';
+      wrap.title = '';                       // the hover card says it (with the check-in time)
     } else {
       wrap.classList.remove('ci-active');
       toggle.classList.remove('ci-on');
@@ -937,6 +1311,8 @@
 
     iconEl.innerHTML = deviceIcon(device);
     paintTip(wrap);
+    if (isCheckedIn && wrap.matches && wrap.matches(':hover')) showTip(wrap);
+    paintPendingBadge();
   }
 
   window.addEventListener('hrmsGeofenceSettingChange', function () {
@@ -1005,6 +1381,10 @@
       var dataRoute = (el.getAttribute && (el.getAttribute('data-route') || '').toLowerCase()) || '';
       var isSettings = text === 'settings' || title.indexOf('setting') !== -1 || aria.indexOf('setting') !== -1 || href.indexOf('/settings') !== -1 || dataRoute.indexOf('/settings') !== -1 || href.indexOf('settings') !== -1;
       if (!isSettings) return;
+      // A link to a page of its own under /settings/ (e.g. /settings/holidays,
+      // served by hrms-sidecar.js) is real navigation, not the Settings button.
+      var sc = window.HRMSSidecar;
+      if (href.indexOf('/settings/') === 0 && sc && sc.has && sc.has(href.split('?')[0].split('#')[0])) return;
       e.preventDefault();
       e.stopPropagation();
       openSettingsRoute();
@@ -1336,8 +1716,9 @@
         isCheckedIn = truth;
         checkInAt = (truth && d.checkIn) ? parseLocal(d.checkIn) : null;
         rememberState(truth);
+        setRecheckinStatus(d.recheckinStatus || '');
         paintState();
-        if (truth) startGeoWatch(); else stopGeoWatch();
+        if (truth) ensureGeoWatch(); else stopGeoWatch();
         return truth;
       })
       .catch(function () {

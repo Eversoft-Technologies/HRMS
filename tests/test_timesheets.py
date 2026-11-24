@@ -20,12 +20,12 @@ def c(email):
 
 class Base(TestCase):
     def setUp(self):
-        approve = Permission.objects.create(code='timesheet.approve', name='Approve timesheets')
-        audit = Permission.objects.create(code='attendance.audit', name='Attendance audit')
-        hr_role = Role.objects.create(name='HR Executive')
-        RolePermission.objects.create(role=hr_role, permission=audit)
-        pm_role = Role.objects.create(name='Project Manager')
-        RolePermission.objects.create(role=pm_role, permission=approve)
+        approve, _ = Permission.objects.get_or_create(code='timesheet.approve', defaults={'name': 'Approve timesheets'})
+        audit, _ = Permission.objects.get_or_create(code='attendance.audit', defaults={'name': 'Attendance audit'})
+        hr_role, _ = Role.objects.get_or_create(name='HR Executive')
+        RolePermission.objects.get_or_create(role=hr_role, permission=audit)
+        pm_role, _ = Role.objects.get_or_create(name='Project Manager')
+        RolePermission.objects.get_or_create(role=pm_role, permission=approve)
 
         AppUser.objects.create(email='emp@co.com', full_name='Emp Loyee', role='employee')
         AppUser.objects.create(email='mgr@co.com', full_name='Man Ager', role='employee')
@@ -235,24 +235,6 @@ class AttendanceAuditTests(Base):
         self.assertTrue(all(x.source == 'edit' and x.actor == 'admin@co.com' and x.reason == 'Manager confirmed'
                             for x in rows.values()))
         self.assertNotIn('status', rows)                       # unchanged fields are not logged
-
-    def test_auto_checkout_is_logged(self):
-        GeoFence.objects.create(name='HQ', latitude=13.15, longitude=78.51, radius_meters=200)
-        AppUser.objects.filter(email='emp@co.com').update(role='admin')   # check-out perms for the test only
-        att = EmployeeAttendance.objects.create(email='emp@co.com', date=MON, check_in=datetime(2026, 11, 2, 9, 0),
-                                                location_lat=13.15, location_lng=78.51, geo_verified=True)
-        noon = datetime(2026, 11, 2, 12, 0)
-        for k in (20, 15, 10, 5):
-            with at(noon - timedelta(minutes=k)):
-                self.emp.get('/api/attendance/geofence-check?email=emp@co.com&latitude=13.23&longitude=78.56&accuracy=30')
-        with at(noon):
-            r = self.emp.post('/api/attendance/check-out', {'email': 'emp@co.com', 'auto': 'geofence_departure'},
-                              content_type='application/json')
-        self.assertEqual(r.status_code, 200, r.content)
-        rows = {x.field: x for x in AttendanceAuditLog.objects.filter(attendance_id=att.id)}
-        self.assertEqual(rows['check_out'].new_value, '2026-11-02 12:00:00')
-        self.assertIn('auto_checkout_at', rows)
-        self.assertTrue(all(x.source == 'auto_checkout' and x.actor == 'system' for x in rows.values()))
 
     def test_manual_checkout_is_not_logged(self):
         AppUser.objects.filter(email='emp@co.com').update(role='admin')

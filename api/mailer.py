@@ -174,6 +174,14 @@ def _send_via_resend(settings, to, subject, html=None, text=None):
                 # layers can decide to fallback to SMTP if desired.
                 return {'ok': False, 'error': f'Resend API validation_error: {msg or resp.text}', 'resend_validation_error': True}
 
+        # Daily / monthly quota used up, or rate-limited (429): the email is
+        # fine, Resend just won't take more right now — the SMTP account can.
+        if resp.status_code == 429:
+            name = parsed.get('name') if isinstance(parsed, dict) else ''
+            msg = parsed.get('message') if isinstance(parsed, dict) else resp.text
+            return {'ok': False, 'error': f'Resend API {name or "rate_limited"}: {msg}', 'resend_validation_error': True,
+                    'resend_quota_error': True}
+
         try:
             error = parsed.get('error') or parsed or resp.text
         except Exception:
@@ -203,7 +211,11 @@ def send_email(to, subject, html=None, text=None, sender_email=None):
         if resp.get('resend_validation_error'):
             smtp_settings = get_smtp_settings(sender_email)
             if smtp_settings:
-                return _send_via_smtp(smtp_settings, to, subject, html=html, text=text)
+                fb = _send_via_smtp(smtp_settings, to, subject, html=html, text=text)
+                if not fb.get('ok'):
+                    # Keep both reasons: why Resend refused, and why SMTP failed.
+                    fb = dict(fb, error=f"{resp.get('error')} — SMTP fallback also failed: {fb.get('error')}")
+                return fb
         return resp
 
     return _send_via_smtp(s, to, subject, html=html, text=text)
@@ -312,6 +324,114 @@ def render_cta(url, label, accent=BRAND_GREEN):
         f'<a href="{url}" style="color:#94a3b8;font-size:11px;word-break:break-all;">{url}</a>'
         f'</div>'
     )
+
+
+NAVY = '#14213d'
+_PILL = {
+    'green': ('#dcfce7', '#15803d'), 'red': ('#fee2e2', '#b91c1c'), 'amber': ('#fef3c7', '#b45309'),
+    'blue': ('#dbeafe', '#1d4ed8'), 'sky': ('#e0f2fe', '#0369a1'), 'purple': ('#ede9fe', '#6d28d9'),
+    'gray': ('#f1f5f9', '#475569'),
+}
+
+
+def render_pill(text, tone='gray'):
+    """A small rounded tag (e.g. a project, status or priority) for e-mail."""
+    bg, fg = _PILL.get(tone, _PILL['gray'])
+    return (f'<span style="display:inline-block;background:{bg};color:{fg};font-size:13px;font-weight:600;'
+            f'line-height:20px;padding:2px 10px;border-radius:6px;white-space:nowrap;">{text}</span>')
+
+
+def render_notification(*, eyebrow='HRMS NOTIFICATION', title, subtitle='', badge='&#10003;', badge_color='#22c55e',
+                        greeting='', lead_html='', details_title='', details=(), extra_html='',
+                        cta_url='', cta_label='', reason_html='', base_url='', company=BRAND_COMPANY,
+                        logo_url=''):
+    """The "HRMS NOTIFICATION" e-mail: a white card with the brand header, a
+    navy banner (eyebrow, title, subtitle and a round badge), a greeting, one
+    lead sentence, a details table with an icon column, an optional extra
+    block, a navy call-to-action, and a footer with links.
+
+    ``details`` is a sequence of (icon, label, value_html); empty values are
+    skipped. Every value must already be HTML-escaped by the caller. Built from
+    tables and inline styles so it renders in Gmail, Outlook and phones.
+    """
+    if not logo_url:
+        logo_url = brand_logo_url(base_url)
+    base = (base_url or '').rstrip('/')
+    logo = (f'<img src="{logo_url}" alt="" width="34" height="34" style="width:34px;height:34px;border-radius:7px;'
+            f'object-fit:contain;display:block;border:0;">' if logo_url else
+            '<div style="width:34px;height:34px;border-radius:7px;background:#e7f6ee;color:#0f9d58;font-size:18px;'
+            'font-weight:800;line-height:34px;text-align:center;">E</div>')
+    rows = [(i, l, v) for i, l, v in details if v not in (None, '')]
+    table = ''
+    if rows:
+        body = ''.join(
+            f'<tr>'
+            f'<td width="46" align="center" style="width:46px;border-top:1px solid #e2e8f0;border-right:1px solid #e2e8f0;'
+            f'padding:11px 0;color:#64748b;font-size:15px;line-height:20px;">{icon}</td>'
+            f'<td style="width:34%;border-top:1px solid #e2e8f0;border-right:1px solid #e2e8f0;padding:11px 14px;'
+            f'color:#334155;font-size:14px;line-height:20px;">{label}</td>'
+            f'<td style="border-top:1px solid #e2e8f0;padding:11px 14px;color:#0f172a;font-size:14px;line-height:20px;'
+            f'word-break:break-word;">{value}</td></tr>'
+            for icon, label, value in rows)
+        table = (
+            f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e2e8f0;'
+            f'border-radius:10px;border-collapse:separate;overflow:hidden;margin:0 0 24px;">'
+            f'<tr><td colspan="3" style="background:#eef3f9;padding:14px 16px;font-size:16px;font-weight:700;color:#0f172a;">'
+            f'<span style="color:#64748b;font-weight:400;margin-right:8px;">&#9636;</span>{details_title or "Details"}</td></tr>'
+            f'{body}</table>')
+    cta = (f'<div style="text-align:center;margin:0 0 8px;">'
+           f'<a href="{cta_url}" target="_blank" rel="noreferrer noopener" style="display:inline-block;background:{NAVY};'
+           f'color:#ffffff;font-size:15px;font-weight:700;text-decoration:none;padding:12px 26px;border-radius:8px;">'
+           f'{cta_label} &#8599;</a></div>' if cta_url and cta_label else '')
+    links = [('Open HRMS', base + '/' if base else ''), ('Notification Settings', base + '/settings' if base else ''),
+             ('Help & Support', base + '/tickets' if base else '')]
+    link_html = ' <span style="color:#cbd5e1;">|</span> '.join(
+        (f'<a href="{u}" style="color:#334155;text-decoration:none;">{t.replace("&", "&amp;")}</a>' if u
+         else f'<span style="color:#334155;">{t.replace("&", "&amp;")}</span>') for t, u in links)
+    year = datetime.now().year
+    return f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{title}</title>
+<style>@media (max-width:520px){{.hn-dept{{display:none!important}}.hn-title{{font-size:23px!important}}.hn-pad{{padding-left:18px!important;padding-right:18px!important}}.hn-badge{{width:52px!important;height:52px!important;line-height:52px!important;font-size:26px!important}}}}</style></head>
+<body style="margin:0;padding:0;background:#f3f5f8;font-family:'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#0f172a;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f3f5f8;padding:24px 12px;">
+    <tr><td align="center">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:640px;background:#ffffff;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden;">
+        <tr><td class="hn-pad" style="padding:18px 28px 14px;">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-bottom:1px solid #e5e7eb;padding-bottom:14px;"><tr>
+            <td style="padding-bottom:12px;"><table role="presentation" cellpadding="0" cellspacing="0"><tr>
+              <td style="padding-right:10px;">{logo}</td>
+              <td style="font-size:19px;font-weight:700;color:{NAVY};">{company}</td></tr></table></td>
+            <td class="hn-dept" align="right" style="padding-bottom:12px;padding-left:12px;font-size:13px;color:#334155;white-space:nowrap;">Human Resources Department
+              <span style="display:inline-block;width:26px;height:26px;border-radius:50%;background:#64748b;color:#ffffff;font-size:10px;font-weight:700;line-height:26px;text-align:center;vertical-align:middle;margin-left:8px;">HR</span></td>
+          </tr></table>
+        </td></tr>
+        <tr><td class="hn-pad" style="background:{NAVY};padding:30px 28px;">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
+            <td style="vertical-align:middle;">
+              <div style="font-size:12px;font-weight:700;letter-spacing:1.2px;color:#94a3b8;text-transform:uppercase;margin:0 0 8px;">{eyebrow}</div>
+              <div class="hn-title" style="font-size:28px;font-weight:800;color:#ffffff;line-height:1.2;margin:0 0 8px;">{title}</div>
+              <div style="font-size:15px;color:#e2e8f0;line-height:1.5;">{subtitle}</div>
+            </td>
+            <td width="84" align="right" style="vertical-align:middle;">
+              <div class="hn-badge" style="width:64px;height:64px;border-radius:50%;border:3px solid {badge_color};color:{badge_color};font-size:32px;font-weight:700;line-height:64px;text-align:center;">{badge}</div>
+            </td>
+          </tr></table>
+        </td></tr>
+        <tr><td class="hn-pad" style="padding:28px 28px 26px;">
+          {f'<p style="font-size:16px;margin:0 0 16px;color:#0f172a;">{greeting}</p>' if greeting else ''}
+          {f'<p style="font-size:16px;line-height:1.6;margin:0 0 22px;color:#0f172a;">{lead_html}</p>' if lead_html else ''}
+          {table}{extra_html}{cta}
+        </td></tr>
+      </table>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:640px;">
+        <tr><td style="padding:18px 28px 0;text-align:center;font-size:13px;line-height:1.6;color:#475569;">{reason_html}</td></tr>
+        <tr><td style="padding:14px 28px 0;"><div style="border-top:1px solid #e2e8f0;height:1px;line-height:1px;">&nbsp;</div></td></tr>
+        <tr><td style="padding:14px 28px 4px;text-align:center;font-size:13px;">{link_html}</td></tr>
+        <tr><td style="padding:4px 28px 8px;text-align:center;font-size:12px;color:#64748b;">Copyright {year}, {company}.</td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body></html>"""
 
 
 def render_branded(title, intro, highlight_html='', footer='', company=BRAND_COMPANY,

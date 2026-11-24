@@ -13,6 +13,16 @@ app: Attendance Administration › Recalculate Hours.
 
 Each applied change is recorded on that day's timeline ("Hours recalculated").
 Days whose event trail does not pair up are reported and left as they are.
+
+--policy re-evaluates the DAY STATUS (present / late / half-day / absent) of
+closed days under each employee's attendance policy profile
+(api/attendance_ext/day_status.py) instead of the hours, e.g. after a profile
+was created or its thresholds changed. Same preview / --apply rule; applied
+changes go to the attendance audit log (source 'policy_recalc') and the
+penalties of every month touched are re-evaluated.
+
+  python manage.py recalc_attendance --policy --from 2026-11-01 --to 2026-11-30
+  python manage.py recalc_attendance --policy --from 2026-11-01 --apply
 """
 import csv
 
@@ -32,6 +42,8 @@ class Command(BaseCommand):
         parser.add_argument('--email', help='Only this employee')
         parser.add_argument('--csv', help='Also write the changes to this CSV file')
         parser.add_argument('--apply', action='store_true', help='Write the changes (default: preview only)')
+        parser.add_argument('--policy', action='store_true',
+                            help='Re-evaluate day status (present/late/half-day/absent) under the attendance policy')
 
     def handle(self, *args, **o):
         today = local_today()
@@ -40,6 +52,8 @@ class Command(BaseCommand):
             d_to = rc.parse_day(o['date_to'], today)
         except ValueError:
             raise CommandError('Dates must be YYYY-MM-DD.')
+        if o['policy']:
+            return self._policy(d_from, d_to, o)
         changes, skipped = rc.preview(d_from, d_to, o['email'])
 
         mode = 'APPLY' if o['apply'] else 'PREVIEW (nothing is changed; add --apply to write)'
@@ -64,3 +78,25 @@ class Command(BaseCommand):
             self.stdout.write(f'Wrote {o["csv"]}')
         if o['apply'] and changes:
             rc.apply(changes, 'recalc_attendance')
+
+    def _policy(self, d_from, d_to, o):
+        from api.attendance_ext import day_status as ds
+        changes = ds.reevaluate(d_from, d_to, o['email'])
+        mode = 'APPLY' if o['apply'] else 'PREVIEW (nothing is changed; add --apply to write)'
+        self.stdout.write(f'{mode} — day status under the attendance policy, closed days {d_from} → {d_to}'
+                          + (f' for {o["email"]}' if o['email'] else ''))
+        self.stdout.write(f'{"date":<11} {"employee":<36} {"status":>21}  reason')
+        for att, status, late, r in changes:
+            self.stdout.write(f'{att.date!s:<11} {att.email[:36]:<36} {(att.status or "-"):>9} → {status:<9}  {r.reason}')
+        self.stdout.write(f'{len(changes)} day(s) would change' if not o['apply'] else f'{len(changes)} day(s) changed')
+        if o['csv']:
+            with open(o['csv'], 'w', newline='', encoding='utf-8') as fh:
+                w = csv.writer(fh)
+                w.writerow(['date', 'email', 'old_status', 'new_status', 'old_late_min', 'new_late_min',
+                            'worked_min', 'credited_min', 'reason'])
+                for att, status, late, r in changes:
+                    w.writerow([att.date, att.email, att.status, status, att.late_minutes or 0, late,
+                                r.worked, r.credited, r.reason])
+            self.stdout.write(f'Wrote {o["csv"]}')
+        if o['apply'] and changes:
+            ds.apply_changes(changes, 'recalc_attendance --policy')

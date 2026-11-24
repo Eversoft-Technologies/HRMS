@@ -1,7 +1,8 @@
-from django.urls import path
+from django.urls import include, path
 
 from . import ai_settings
-from . import tickets, timesheets, org_tree
+from . import tickets, timesheets, org_tree, project_views
+from . import team_hub
 from . import stt_settings
 from . import attendance_recalc
 from . import chat_extras
@@ -10,6 +11,15 @@ from . import org_views
 from . import submission_discussion
 from . import tts_views
 from . import work_setup
+from . import sensitive
+from .attendance_ext import holiday_views
+from .attendance_ext import leave_views as leave_ledger_views
+from .attendance_ext import regularization as att_regularization
+from .attendance_ext import history as att_history
+from .attendance_ext import policy_views as att_policy
+from .attendance_ext import short_leave as att_short_leave
+from .attendance_ext import overtime_views as att_overtime
+from .attendance_ext import networks as att_networks
 from . import (auth_views, email_template_views, linkedin_oauth, live_views, views,
                attendance_views, job_form_views, onboarding_views, payroll_views)
 
@@ -113,6 +123,15 @@ urlpatterns = [
     # Phase 3 — interactive org tree
     path('org/tree', org_tree.org_tree),
     path('org/manager', org_tree.set_manager),
+    # Team Management Phase 1 — My Team command center (api/team_hub.py)
+    path('my-team/summary', team_hub.summary),
+    path('my-team/members', team_hub.members),
+    path('my-team/inbox', team_hub.inbox),
+    path('my-team/inbox/decide', team_hub.inbox_decide),
+    path('my-team/inbox/batch', team_hub.inbox_batch),
+    path('my-team/presence', team_hub.presence),
+    path('my-team/calendar', team_hub.calendar),
+    path('my-team/workload', team_hub.workload),
     # Phase 3 — service desk tickets
     path('tickets/meta', tickets.ticket_meta),
     path('tickets', tickets.tickets),
@@ -157,6 +176,7 @@ urlpatterns = [
 
     # Employees module — Attendance / Check-In-Out
     path('attendance', views.attendance),
+    path('attendance/history', att_history.attendance_history),
     path('attendance/check-in', views.attendance_check_in),
     path('attendance/check-out', views.attendance_check_out),
     path('attendance/today', views.attendance_today),
@@ -172,6 +192,9 @@ urlpatterns = [
     path('attendance/heatmap', views.attendance_heatmap),
     path('attendance/remind', views.attendance_remind),
     path('attendance/departure-policy', views.attendance_departure_policy),
+    path('attendance/networks', att_networks.attendance_networks),
+    path('attendance/recheckin-requests', views.attendance_recheckin_requests),
+    path('attendance/recheckin/<int:pk>/decide', views.attendance_recheckin_decide),
     path('attendance/roster', views.attendance_roster),
     path('attendance/home-locations', views.attendance_home_locations),
     path('attendance/home-locations/review', views.attendance_home_location_review),
@@ -191,6 +214,32 @@ urlpatterns = [
     path('attendance/punch-ticket/pending', views.attendance_punch_ticket_pending),
     path('attendance/punch-ticket/<int:pk>/proof', views.attendance_punch_ticket_proof),
     path('attendance/punch-ticket/<int:pk>/decide', views.attendance_punch_ticket_decide),
+    # Attendance policy profiles, penalties, short leave (attendance_ext/policy_views.py, short_leave.py)
+    path('attendance/policies', att_policy.policies),
+    path('attendance/policies/assignments', att_policy.assignments),
+    path('attendance/policies/preview', att_policy.policy_preview),
+    path('attendance/policies/options', att_policy.policy_options),
+    path('attendance/policies/resolve', att_policy.policy_resolve),
+    path('attendance/policies/<int:pk>', att_policy.policy_detail),
+    path('attendance/penalties', att_policy.penalty_list),
+    path('attendance/penalties/evaluate', att_policy.penalty_evaluate),
+    path('attendance/penalties/<int:pk>/waive', att_policy.penalty_waive),
+    path('attendance/short-leave', att_short_leave.short_leave),
+    path('attendance/short-leave/queue', att_short_leave.short_leave_queue),
+    path('attendance/short-leave/<int:pk>/decide', att_short_leave.short_leave_decide),
+    path('attendance/short-leave/<int:pk>/cancel', att_short_leave.short_leave_cancel),
+    # Missed punches + regularization (attendance_ext/regularization.py)
+    path('attendance/regularization', att_regularization.regularization),
+    path('attendance/regularization/queue', att_regularization.regularization_queue),
+    path('attendance/regularization/<int:pk>/decide', att_regularization.regularization_decide),
+    path('attendance/punch-issues', att_regularization.punch_issues),
+    path('attendance/missed-punch-policy', att_regularization.missed_punch_policy),
+    # Overtime rules + comp-off (attendance_ext/overtime.py, Workstream O)
+    path('attendance/overtime-records', att_overtime.records),
+    path('attendance/overtime-records/batch', att_overtime.batch),
+    path('attendance/overtime-records/<int:pk>/decide', att_overtime.decide),
+    path('attendance/overtime-summary', att_overtime.summary),
+    path('attendance/overtime-evaluate', att_overtime.evaluate),
     # Employee attendance detail + hourly location tracking
     path('attendance/day-detail', views.attendance_day_detail),
     path('attendance/location-punch', views.attendance_location_punch),
@@ -207,7 +256,21 @@ urlpatterns = [
     path('leave', views.leave),
     path('leave/balance', views.leave_balance),
     path('leave/policy', views.leave_policy),
-    path('holidays', views.holidays),
+    # Leave accrual ledger (Attendance Phase 1 / L): attendance_ext/leave_accrual.py
+    path('leave/ledger', leave_ledger_views.ledger),
+    path('leave/ledger/adjust', leave_ledger_views.adjust),
+    path('leave/ledger/people', leave_ledger_views.people),
+    path('leave/accrual/run', leave_ledger_views.accrual_run),
+    path('leave/rollover', leave_ledger_views.rollover),
+    # Holiday calendars (Attendance Phase 1 / H): /api/holidays now resolves
+    # the caller's own calendar; views.holidays is the old national-only view.
+    path('holidays', holiday_views.holidays_api),
+    path('holiday-calendars', holiday_views.holiday_calendars),
+    path('holiday-calendars/assignments', holiday_views.holiday_calendar_assignments),
+    path('holiday-calendars/<int:pk>', holiday_views.holiday_calendar_detail),
+    path('holiday-calendars/<int:pk>/days', holiday_views.holiday_calendar_days),
+    path('holiday-calendars/<int:pk>/days/<int:day_id>', holiday_views.holiday_calendar_day_detail),
+    path('holiday-calendars/<int:pk>/import', holiday_views.holiday_calendar_import),
     path('leave/<int:pk>', views.leave_detail),
     path('leave/<int:pk>/approver', views.leave_approver),
 
@@ -215,6 +278,22 @@ urlpatterns = [
     path('tasks', views.tasks),
     path('tasks/assignees', views.task_assignees),
     path('tasks/<int:pk>', views.task_detail),
+    path('tasks/<int:pk>/comments', project_views.task_comments),
+    path('tasks/<int:task_pk>/comments/<int:comment_pk>', project_views.task_comment_detail),
+    path('tasks/<int:task_pk>/comments/<int:comment_pk>/reactions', project_views.task_reaction),
+    path('projects', project_views.projects_list),
+    path('projects/<int:pk>', project_views.project_detail),
+    path('projects/<int:pk>/milestones', project_views.project_milestones),
+    path('projects/<int:pk>/burndown', project_views.project_burndown),
+    path('projects/<int:pk>/status-updates', project_views.project_status_updates),
+    path('projects/<int:pk>/status-updates/<int:uid>', project_views.project_status_update_detail),
+    path('projects/<int:pk>/archive', project_views.project_archive),
+    path('projects/<int:pk>/unarchive', project_views.project_unarchive),
+    path('projects/<int:pk>/views', project_views.project_views_list),
+    path('projects/<int:pk>/views/<int:vid>', project_views.project_view_detail),
+    path('projects/<int:pk>/fields', project_views.project_fields_list),
+    path('projects/<int:pk>/fields/<int:fid>', project_views.project_field_detail),
+    path('tasks/<int:task_pk>/fields/<int:fid>', project_views.task_field_value),
 
     # Employees module — Work Submissions
     path('submissions', views.submissions),
@@ -283,19 +362,44 @@ urlpatterns = [
     path('attendance/summary/', attendance_views.AttendanceCheckInOutViewSet.as_view({'get': 'summary'})),
 
     # Core Payroll Endpoints
+    path('payroll/dashboard', payroll_views.payroll_dashboard),
+    path('payroll/structures', payroll_views.SalaryStructureViewSet.as_view({'get': 'list', 'post': 'create'})),
+    path('payroll/structures/<int:pk>', payroll_views.SalaryStructureViewSet.as_view({'get': 'retrieve', 'put': 'update', 'delete': 'destroy'})),
+    path('payroll/structures/<int:pk>/components', payroll_views.SalaryStructureViewSet.as_view({'get': 'manage_components', 'post': 'manage_components'})),
+    path('payroll/structures/<int:pk>/components/<int:component_id>', payroll_views.SalaryStructureViewSet.as_view({'delete': 'delete_component'})),
+    path('payroll/periods', payroll_views.PayrollPeriodViewSet.as_view({'get': 'list', 'post': 'create'})),
+    path('payroll/periods/<int:pk>', payroll_views.PayrollPeriodViewSet.as_view({'get': 'retrieve', 'put': 'update', 'delete': 'destroy'})),
     path('payroll/compensations', payroll_views.EmployeeCompensationViewSet.as_view({'get': 'list', 'post': 'create'})),
-    path('payroll/compensations/<int:pk>', payroll_views.EmployeeCompensationViewSet.as_view({'get': 'retrieve', 'put': 'update', 'delete': 'destroy'})),
+    path('payroll/compensations/<int:pk>', payroll_views.EmployeeCompensationViewSet.as_view({'get': 'retrieve', 'put': 'update', 'patch': 'partial_update', 'delete': 'destroy'})),
     path('payroll/components', payroll_views.PayComponentViewSet.as_view({'get': 'list', 'post': 'create'})),
     path('payroll/components/<int:pk>', payroll_views.PayComponentViewSet.as_view({'get': 'retrieve', 'put': 'update', 'delete': 'destroy'})),
     path('payroll/employee-components', payroll_views.EmployeePayComponentViewSet.as_view({'get': 'list', 'post': 'create'})),
     path('payroll/employee-components/<int:pk>', payroll_views.EmployeePayComponentViewSet.as_view({'get': 'retrieve', 'put': 'update', 'delete': 'destroy'})),
     path('payroll/runs', payroll_views.PayrollRunViewSet.as_view({'get': 'list', 'post': 'create'})),
     path('payroll/runs/<int:pk>', payroll_views.PayrollRunViewSet.as_view({'get': 'retrieve', 'put': 'update', 'delete': 'destroy'})),
+    path('payroll/runs/<int:pk>/entries', payroll_views.PayrollRunViewSet.as_view({'get': 'get_entries'})),
+    path('payroll/runs/<int:pk>/attendance-summary', payroll_views.PayrollRunViewSet.as_view({'get': 'attendance_summary'})),
+    path('payroll/runs/<int:pk>/validate', payroll_views.PayrollRunViewSet.as_view({'post': 'validate_run'})),
+    path('payroll/runs/<int:pk>/submit-approval', payroll_views.PayrollRunViewSet.as_view({'post': 'submit_approval'})),
+    path('payroll/runs/<int:pk>/action-approval', payroll_views.PayrollRunViewSet.as_view({'post': 'action_approval'})),
     path('payroll/runs/<int:pk>/approve', payroll_views.PayrollRunViewSet.as_view({'post': 'approve'})),
+    path('payroll/runs/<int:pk>/create-payment-batch', payroll_views.PayrollRunViewSet.as_view({'post': 'create_payment_batch'})),
     path('payroll/runs/<int:pk>/export-bank-file', payroll_views.PayrollRunViewSet.as_view({'get': 'export_bank_file'})),
+    path('payroll/runs/<int:pk>/export-neft-file', payroll_views.PayrollRunViewSet.as_view({'get': 'export_neft_file'})),
+    path('payroll/adjustments', payroll_views.PayrollAdjustmentViewSet.as_view({'get': 'list', 'post': 'create'})),
+    path('payroll/adjustments/<int:pk>', payroll_views.PayrollAdjustmentViewSet.as_view({'get': 'retrieve', 'delete': 'destroy'})),
+    path('payroll/approvals', payroll_views.PayrollApprovalViewSet.as_view({'get': 'list'})),
+    path('payroll/payments', payroll_views.PayrollPaymentViewSet.as_view({'get': 'list'})),
+    path('payroll/payments/disburse', payroll_views.PayrollPaymentViewSet.as_view({'post': 'disburse_batch'})),
+    path('payroll/payments/<int:pk>/mark-failed', payroll_views.PayrollPaymentViewSet.as_view({'post': 'mark_failed'})),
+    path('payroll/audit-logs', payroll_views.PayrollAuditLogViewSet.as_view({'get': 'list'})),
+    path('payroll/reports/monthly', payroll_views.payroll_monthly_report),
+    path('payroll/reports/department', payroll_views.payroll_department_report),
+    path('payroll/reports/statutory', payroll_views.payroll_statutory_report),
     path('payroll/payslips', payroll_views.PayslipViewSet.as_view({'get': 'list', 'post': 'create'})),
     path('payroll/payslips/<int:pk>', payroll_views.PayslipViewSet.as_view({'get': 'retrieve'})),
     path('payroll/payslips/<int:pk>/pdf', payroll_views.PayslipViewSet.as_view({'get': 'download_pdf'})),
+    path('payroll/payslips/<int:pk>/regenerate', payroll_views.PayslipViewSet.as_view({'post': 'regenerate_pdf'})),
     path('payroll/settings', payroll_views.PayrollSettingViewSet.as_view({'get': 'list', 'post': 'create'})),
 
     # Breaks
@@ -352,6 +456,8 @@ urlpatterns = [
     path('onboarding/candidates/<int:pk>/assets', onboarding_views.candidate_assets),
     path('onboarding/candidates/<int:pk>/assets/<int:asset_id>', onboarding_views.candidate_asset_detail),
     path('onboarding/candidates/<int:pk>/payroll', onboarding_views.candidate_payroll),
+    # Audited reveal of ONE encrypted identifier (permission + fresh sign-in) — api/sensitive.py
+    path('sensitive/<str:entity>/<int:pk>/reveal', sensitive.reveal),
     path('onboarding/candidates/<int:pk>/activate', onboarding_views.candidate_activate),
 
     # Payroll form templates (admin)
@@ -393,4 +499,6 @@ urlpatterns += [
     path("chat/message/<int:msg_id>/react", chat_extras.chat_message_react),
     path("chat/meetings", views.chat_meetings),
     path("chat/meetings/<int:meeting_id>", views.chat_meeting_detail),
+    # Payroll extensions (tax, statutory, payouts, US, ESS, F&F) — api/payroll_ext
+    path('', include('api.payroll_ext.urls')),
 ]

@@ -65,7 +65,10 @@ class MultiSessionTests(TestCase):
         self.check_in(19)
         self.check_out(20)                        # +60 → 525, overtime past 480
         r = self.row()
-        self.assertEqual((r.worked_minutes, r.overtime_minutes), (525, 45))
+        # Overtime is now a pending OvertimeRecord; overtime_minutes holds only approved (payable) OT.
+        from api.models import OvertimeRecord
+        ot = OvertimeRecord.objects.get(email=self.email, date=r.date)
+        self.assertEqual((r.worked_minutes, ot.overtime_minutes, ot.status, r.overtime_minutes), (525, 45, 'Pending', 0))
 
     def test_live_tile_and_day_view_count_earlier_sessions(self):
         self.check_in(9)
