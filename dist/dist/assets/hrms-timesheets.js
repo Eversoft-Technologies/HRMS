@@ -106,9 +106,14 @@
       '.ts-note b{font-weight:600}',
       '.ts-gridwrap{overflow-x:auto;margin-bottom:16px}',
       '.ts-grid{display:grid;grid-template-columns:repeat(7,minmax(92px,1fr));gap:8px;min-width:680px}',
-      '.ts-day{background:var(--bg2);border:1px solid var(--border2);border-radius:10px;padding:10px 12px;cursor:pointer;transition:border-color .15s;text-align:left;font-family:var(--font);color:var(--text)}',
-      '.ts-day:hover{border-color:var(--accent)}',
-      '.ts-day.locked{cursor:default}.ts-day.locked:hover{border-color:var(--border2)}',
+      '.ts-day{position:relative;overflow:hidden;background:var(--bg2);border:1px solid var(--border2);border-radius:10px;padding:10px 12px;cursor:pointer;transition:border-color .15s,transform .15s;text-align:left;font-family:var(--font);color:var(--text)}',
+      '.ts-day::before{content:"";position:absolute;top:0;left:0;right:0;height:3px}',
+      '.ts-day.blue::before{background:var(--accent)}',
+      '.ts-day.purple::before{background:var(--accent2)}',
+      '.ts-day.green::before{background:var(--accent3)}',
+      '.ts-day.orange::before{background:var(--accent4)}',
+      '.ts-day:hover{border-color:var(--accent);transform:rotate(-1deg)}',
+      '.ts-day.locked{cursor:default}.ts-day.locked:hover{border-color:var(--border2);transform:none}',
       '.ts-day.today{border-color:color-mix(in srgb,var(--accent) 55%,transparent)}',
       '.ts-day .ts-dn{font-size:11px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:var(--text3)}',
       '.ts-day .ts-dd{font-size:12px;color:var(--text2);margin-top:2px}',
@@ -272,12 +277,13 @@
         esc(d.approver.name || d.approver.email) + '</b> for approval.</div>';
     }
 
+    var DAY_COLORS = ['blue', 'purple', 'green', 'orange'];
     html += '<div class="ts-gridwrap"><div class="ts-grid">';
     d.days.forEach(function (day, i) {
       var worked = day.attendanceMinutes || 0;
       var over = worked > 0 && day.hours * 60 > worked + 30;
       var pct = worked ? Math.min(100, Math.round(day.hours * 60 / worked * 100)) : (day.hours ? 100 : 0);
-      html += '<button type="button" class="ts-day' + (locked ? ' locked' : '') + (day.date === todayIso ? ' today' : '') +
+      html += '<button type="button" class="ts-day ' + DAY_COLORS[i % 4] + (locked ? ' locked' : '') + (day.date === todayIso ? ' today' : '') +
         '" data-day="' + esc(day.date) + '"' + (locked ? ' tabindex="-1"' : ' title="Add hours for this day"') + '>' +
         '<div class="ts-dn">' + DAYS[i] + '</div>' +
         '<div class="ts-dd">' + esc(fmtDate(day.date)) + '</div>' +
