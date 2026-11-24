@@ -164,6 +164,46 @@ class MigrationTests(TestCase):
         self.assertEqual((grp.name, grp.module.name), ('Attendance Policy Group', 'Attendance'))
         self.assertEqual(RolePermission.objects.filter(role__name='HR Manager').count(), len(mig.PERMS))
 
+    def test_0107_creates_project_codes_when_missing_and_grants_them(self):
+        # Production never had project.* rows: 0106 could not grant them.
+        for name in ('Super Admin', 'HR Manager', 'HR Executive', 'Manager', 'Team Lead', 'Employee', 'IT Admin'):
+            Role.objects.create(name=name)
+        Permission.objects.filter(code__startswith='project.').delete()
+        mig = importlib.import_module('api.migrations.0107_project_permissions')
+        mig.forwards(django_apps, None)
+        mig.forwards(django_apps, None)
+
+        def codes(role):
+            return set(RolePermission.objects.filter(role__name=role, permission__code__startswith='project.')
+                       .values_list('permission__code', flat=True))
+        allp = {'project.view', 'project.create', 'project.edit', 'project.delete', 'project.manage'}
+        self.assertEqual(codes('Super Admin'), allp)
+        self.assertEqual(codes('HR Manager'), allp)
+        self.assertEqual(codes('Manager'), {'project.view', 'project.create', 'project.edit'})
+        self.assertEqual(codes('Team Lead'), {'project.view', 'project.create', 'project.edit'})
+        self.assertEqual(codes('Employee'), {'project.view'})
+        self.assertEqual(codes('IT Admin'), set())
+        grp = Permission.objects.get(code='project.create').group
+        self.assertEqual((grp.name, grp.module.name), ('Project Group', 'Employees'))
+        self.assertEqual(Permission.objects.filter(code__startswith='project.').count(), 5)
+
+    def test_manager_can_create_a_project_after_0107(self):
+        Permission.objects.filter(code__startswith='project.').delete()
+        mgr_role = Role.objects.create(name='Manager')
+        emp_role = Role.objects.create(name='Employee')
+        importlib.import_module('api.migrations.0107_project_permissions').forwards(django_apps, None)
+        AppUser.objects.create(email='mgr@x.com', full_name='Mgr', password='x', role='employee', role_ref=mgr_role,
+                               status='active')
+        AppUser.objects.create(email='e@x.com', full_name='E', password='x', role='employee', role_ref=emp_role,
+                               status='active')
+        mgr, emp = Client(HTTP_X_USER_EMAIL='mgr@x.com'), Client(HTTP_X_USER_EMAIL='e@x.com')
+        r = mgr.post('/api/projects', {'name': 'From a manager'}, content_type=J)
+        self.assertIn(r.status_code, (200, 201), r.content)
+        self.assertEqual(emp.post('/api/projects', {'name': 'Nope'}, content_type=J).status_code, 403)
+        listed = emp.get('/api/projects?archived=all')
+        self.assertEqual(listed.status_code, 200, listed.content)
+        self.assertEqual([p['name'] for p in listed.json()], ['From a manager'])
+
 
 class ProjectEditTests(TestCase):
     def setUp(self):

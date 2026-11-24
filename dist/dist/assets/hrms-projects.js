@@ -754,11 +754,14 @@
   function loadMeta() {
     var my = S;
     return Promise.all([
-      req('/api/projects?archived=all').catch(function () { return []; }),
+      req('/api/projects?archived=all').catch(function (e) { return { __err: e }; }),
       req('/api/teams').catch(function () { return []; })
     ]).then(function (res) {
       if (S !== my || !S.root) return;
       S.projects = Array.isArray(res[0]) ? res[0] : [];
+      S.projErr = (res[0] && res[0].__err) ? (res[0].__err.status === 403
+        ? "You don't have access to the project list (needs the project.view permission)."
+        : 'Could not load projects' + (res[0].__err.status ? ' (error ' + res[0].__err.status + ')' : '') + ': ' + (res[0].__err.message || 'unknown error')) : '';
       S.teams = (Array.isArray(res[1]) ? res[1] : []).filter(function (t) { return (t.status || 'active') === 'active' || String(t.id) === S.f.team; });
       S.metaLoaded = true;
       knownPeople('');
@@ -3617,7 +3620,8 @@
   }
   function openProjectPicker(anchor) {
     openListPop(anchor, {
-      title: 'Switch project', wide: true, placeholder: 'Filter projects', empty: S.projects.length ? 'No matching projects.' : 'No projects yet.',
+      title: 'Switch project', wide: true, placeholder: 'Filter projects',
+      empty: S.projErr ? S.projErr : S.projects.length ? 'No matching projects.' : 'No projects yet.',
       items: function () {
         var pins = getPins(), list = sortedProjects(S.showArchived);
         var out = [{ v: '', label: 'All projects', checked: !S.f.project, html: svg(P.board, 14) + '<span>All projects</span>' }];
@@ -3635,7 +3639,8 @@
         if (arch.length) { out.push({ header: 'Archived' }); arch.forEach(function (p) { out.push(item(p, false)); }); }
         return out;
       },
-      footer: (S.projects.some(function (p) { return p.archivedAt; }) ? [{ v: '__arch', html: '<span class="gh-check" aria-hidden="true">' + (S.showArchived ? '✓' : '') + '</span><span>Show archived projects (' +
+      footer: (S.projErr ? [{ v: '__retry', html: '<span class="gh-check" aria-hidden="true">⚠</span><span>' + esc(S.projErr) + ' — click to retry</span>' }]
+        : (!S.projects.length && !canCreateProject()) ? [{ v: '__none', html: '<span class="gh-check" aria-hidden="true">ℹ</span><span>No projects yet. Ask an HR Manager, Manager or Team Lead to create one.</span>' }] : []).concat(S.projects.some(function (p) { return p.archivedAt; }) ? [{ v: '__arch', html: '<span class="gh-check" aria-hidden="true">' + (S.showArchived ? '✓' : '') + '</span><span>Show archived projects (' +
         S.projects.filter(function (p) { return p.archivedAt; }).length + ')</span>' }] : [])
         .concat(canCreateProject() ? [{ v: '__new', html: svg(P.plus, 14) + '<span>New project</span>' }] : []),
       onMore: function (v, b) { var p = projectById(v); if (p) openProjectMore(b, p); },
@@ -3646,6 +3651,8 @@
       },
       onPick: function (v) {
         if (v === '__new') openNewProject();
+        else if (v === '__retry') { loadMeta(); }
+        else if (v === '__none') { /* information only */ }
         else if (v === '__arch') { S.showArchived = !S.showArchived; setTimeout(function () { if (S && S.refs.proj) openProjectPicker(S.refs.proj); }, 0); }
         else setFilter({ project: v }, { push: true });
       }
