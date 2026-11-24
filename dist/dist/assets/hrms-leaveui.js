@@ -44,7 +44,7 @@
     var U = window.__hrmsUI;
     var g = U.g, n = U.n, B = U.B, Us = U.Us, Gn = U.Gn, Hs = U.Hs, le = U.le,
         cn = U.cn, Qe = U.Qe, Bt = U.Bt, Vs = U.Vs, Dr = U.Dr, Et = U.Et;
-    const[L,sL]=g.useState([]),[ld,sld]=g.useState(!0),[er,ser]=g.useState(""),[wr,swr]=g.useState(""),[op,so]=g.useState(!1),[bz,sb]=g.useState(!1),[fm,sf]=g.useState({type:"Casual Leave",fromDate:"",toDate:"",reason:""}),[fe,sfe]=g.useState(""),[q,sq]=g.useState(""),[flt,sflt]=g.useState("All"),[srt,ssrt]=g.useState("newest"),[bal,sbal]=g.useState([]),[exp,sexp]=g.useState(null),[cf,scf]=g.useState(null),[dr,sdr]=g.useState(""),[more,smore]=g.useState({}),[hd,shd]=g.useState(null),[per,sper]=g.useState("today"),[cm,scm]=g.useState((new Date).getMonth()),[hol,shol]=g.useState([]),[holEr,sholEr]=g.useState(!1);
+    const[L,sL]=g.useState([]),[ld,sld]=g.useState(!0),[er,ser]=g.useState(""),[wr,swr]=g.useState(""),[op,so]=g.useState(!1),[bz,sb]=g.useState(!1),[fm,sf]=g.useState({type:"Casual Leave",fromDate:"",toDate:"",reason:""}),[fe,sfe]=g.useState(""),[q,sq]=g.useState(""),[flt,sflt]=g.useState("All"),[srt,ssrt]=g.useState("newest"),[lp,slp]=g.useState(1),[lps,slps]=g.useState(10),[bal,sbal]=g.useState([]),[exp,sexp]=g.useState(null),[cf,scf]=g.useState(null),[dr,sdr]=g.useState(""),[more,smore]=g.useState({}),[hd,shd]=g.useState(null),[per,sper]=g.useState("today"),[cm,scm]=g.useState((new Date).getMonth()),[hol,shol]=g.useState([]),[holEr,sholEr]=g.useState(!1);
     /* Missed Clock-Out — cor holds the correction requests: MY own normally,
        everyone's once appr resolves true. The mop/mfm/mfe/mbz quartet mirrors
        op/fm/fe/bz on the Apply Leave form; crj/crn/cre mirror cf on its
@@ -256,6 +256,12 @@
   var totRem=bal.reduce(function(a,b){return a+(b.unlimited?0:(b.remaining||0))},0),totAll=bal.reduce(function(a,b){return a+(b.unlimited?0:(b.allowance||0))},0);
   var qq=q.trim().toLowerCase();
   var rows=g.useMemo(function(){return L.filter(function(z){if(flt!=="All"&&z.status!==flt)return!1;if(!qq)return!0;return((z.employee||"")+" "+(z.email||"")+" "+(z.type||"")).toLowerCase().indexOf(qq)!==-1}).slice().sort(function(a,b){if(srt==="longest")return(b.days||0)-(a.days||0);var x=a.fromDate||"",y=b.fromDate||"";if(x===y)return(b.id||0)-(a.id||0);if(srt==="oldest")return x<y?-1:1;return x<y?1:-1})},[L,flt,qq,srt]);
+  var leavePageCount=Math.max(1,Math.ceil(rows.length/lps));
+  var leavePage=Math.min(lp,leavePageCount);
+  var leaveStart=(leavePage-1)*lps;
+  var pageRows=rows.slice(leaveStart,leaveStart+lps);
+  g.useEffect(function(){slp(1)},[flt,qq,srt,lps]);
+  g.useEffect(function(){if(lp>leavePageCount)slp(leavePageCount)},[lp,leavePageCount]);
   var balColor=function(b){var r=b.allowance?b.remaining/b.allowance:0;return r>=.5?"var(--success)":r>=.25?"var(--warn)":"var(--danger)"};
   var types=g.useMemo(function(){var a=[];L.forEach(function(z){var t=z.type||"Other",f=null;for(var i=0;i<a.length;i++){if(a[i].type===t){f=a[i];break}}if(!f){f={type:t,n:0,days:0};a.push(f)}f.n++;f.days+=z.days||0});a.sort(function(x,y){return y.n-x.n});return a},[L]);
   var maxT=types.reduce(function(m,t){return Math.max(m,t.n)},0)||1;
@@ -375,7 +381,7 @@
             n.jsxs("td",{colSpan:7,style:msgSt,children:[
                   n.jsx("div",{style:{marginBottom:9},children:"No requests match this filter."}),
                   n.jsx("button",{className:"btn-sm",onClick:function(){sflt("All");sq("")},children:"Clear filters"})]})},"nomatch"));
-  else rows.forEach(function(e){var tm=tmeta(e.type);var live=onDay(e,TODAY);
+  else pageRows.forEach(function(e){var tm=tmeta(e.type);var live=onDay(e,TODAY);
         /* Delete belongs to the employee view ONLY: the owner of a
            still-Pending request, in a role without leave.action. Approvers
            (Super Admin included) never see it — they Decline instead, which
@@ -548,7 +554,7 @@
                         n.jsx("div",{style:{color:"var(--text)"},children:types.length?types.map(function(t){return n.jsx(Dr,{label:t.type,value:t.n+" request"+(t.n===1?"":"s")+" · "+t.days+"d",pct:Math.round(t.n/maxT*100),color:tmeta(t.type).v},t.type)}):
                             n.jsx("div",{style:{fontSize:12,color:"var(--text3)",padding:"4px 0"},children:"No requests to break down yet."})})]})]}),
             n.jsxs("div",{className:"card",children:[
-                  n.jsx(Us,{title:"Leave Requests",subtitle:L.length?rows.length+" of "+L.length+" shown":""}),
+                  n.jsx(Us,{title:"Leave Requests",subtitle:rows.length?"Showing "+(leaveStart+1)+"-"+Math.min(leaveStart+lps,rows.length)+" of "+rows.length+" matching requests ("+L.length+" total)":""}),
                   n.jsxs("div",{style:{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center",marginBottom:14},children:[
                         n.jsx("div",{style:{display:"flex",gap:8,flexWrap:"wrap"},children:["All","Pending","Approved","Rejected"].map(function(s){return n.jsxs("div",{className:"chip"+(flt===s?" active":""),onClick:function(){sflt(s)},children:[s," ",
                                       n.jsx("span",{style:{opacity:.7},children:s==="All"?L.length:byStatus(s).length})]},s)})}),
@@ -564,7 +570,13 @@
                       n.jsxs("table",{children:[
                             n.jsx("thead",{children:
                                 n.jsx("tr",{children:["Employee","Type","From","To","Days","Status","Action"].map(function(e){return n.jsx("th",{style:{textAlign:"center"},children:e},e)})})}),
-                            n.jsx("tbody",{children:body})]})})]}),cor.length?
+                            n.jsx("tbody",{children:body})]})}),
+                  !ld&&!er?n.jsx("div",{style:{display:"flex",alignItems:"center",justifyContent:"flex-end",gap:12,flexWrap:"wrap",minHeight:70,boxSizing:"border-box",padding:"16px 2px",color:"var(--text2)",fontSize:12,borderTop:"1px solid var(--border2)",borderBottom:"1px solid var(--border2)"},children:
+                        n.jsxs("div",{style:{display:"flex",alignItems:"center",gap:10},children:[
+                              n.jsx("label",{children:n.jsx("select",{value:lps,"aria-label":"Requests per page",onChange:function(e){slps(Number(e.target.value));slp(1)},style:{height:36,minWidth:112,color:"var(--text2)",background:"var(--bg2)",border:"1px solid var(--border2)",borderRadius:10,padding:"0 12px",font:"inherit",fontWeight:600,cursor:"pointer"},children:[10,25,50].map(function(size){return n.jsx("option",{value:size,children:size+" / page"},size)})})}),
+                              n.jsx("button",{type:"button",disabled:leavePage<=1,"aria-label":"Previous page",onClick:function(){sexp(null);slp(leavePage-1)},style:{height:36,minWidth:64,color:"var(--text2)",background:"var(--bg2)",border:"1px solid var(--border2)",borderRadius:10,padding:"0 12px",font:"inherit",fontWeight:600,cursor:leavePage<=1?"not-allowed":"pointer",opacity:leavePage<=1?0.45:1},children:"Prev"}),
+                              n.jsx("span",{"aria-current":"page",style:{display:"inline-flex",alignItems:"center",justifyContent:"center",minWidth:40,height:36,boxSizing:"border-box",padding:"0 12px",borderRadius:10,background:"#315eea",color:"#fff",fontSize:13,fontWeight:700},children:leavePage}),
+                              n.jsx("button",{type:"button",disabled:leavePage>=leavePageCount,"aria-label":"Next page",onClick:function(){sexp(null);slp(leavePage+1)},style:{height:36,minWidth:64,color:"var(--text2)",background:"var(--bg2)",border:"1px solid var(--border2)",borderRadius:10,padding:"0 12px",font:"inherit",fontWeight:600,cursor:leavePage>=leavePageCount?"not-allowed":"pointer",opacity:leavePage>=leavePageCount?0.45:1},children:"Next"})]})}):null]}),cor.length?
             /* Deliberately NOT a <table>: hrms-perms.js locates the Leave
                action column by scanning every <table> on this route, so a
                second one here would risk it gating the wrong cells. */
