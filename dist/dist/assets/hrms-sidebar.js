@@ -136,6 +136,16 @@
   function syncActive() {
     var path = location.pathname.replace(/\/+$/, '') || '/';
     var items = document.querySelectorAll('.sidebar a.nav-item[href]');
+    // The Access Control console is an overlay on /settings (the URL does not change),
+    // so while it is open its own sidebar link is the current page, not Settings.
+    var rbacLink = document.getElementById('hrms-rbac-link');
+    if (rbacLink && path === '/settings' && document.getElementById('hrms-rbac-page')) {
+      for (var r = 0; r < items.length; r++) {
+        var on = items[r] === rbacLink;
+        if (items[r].classList.contains('active') !== on) items[r].classList.toggle('active', on);
+      }
+      return;
+    }
     var best = null, bestLen = -1;
     for (var i = 0; i < items.length; i++) {
       var href = (items[i].getAttribute('href') || '').replace(/\/+$/, '') || '/';
@@ -202,9 +212,28 @@
     }
   }
 
+  // React re-lights a link by changing its class, which the child-list observer below
+  // never sees. Without this, opening the Access Control console let React put
+  // "active" back on Settings a moment later and both items stayed lit. Watch the
+  // sidebar's class changes too; syncActive only writes when something is wrong,
+  // so the correction cannot loop.
+  var watchedSidebar = null, classObserver = null, classScheduled = false;
+  function watchSidebarClasses(sidebar) {
+    if (sidebar === watchedSidebar) return;
+    watchedSidebar = sidebar;
+    if (classObserver) classObserver.disconnect();
+    classObserver = new MutationObserver(function () {
+      if (classScheduled) return; classScheduled = true;
+      Promise.resolve().then(function () { classScheduled = false; syncActive(); });
+    });
+    classObserver.observe(sidebar, { attributes: true, attributeFilter: ['class'], subtree: true });
+  }
+
   function sync() {
     ensureStyle();
-    if (!document.querySelector('.sidebar')) return;
+    var sidebarEl = document.querySelector('.sidebar');
+    if (!sidebarEl) return;
+    watchSidebarClasses(sidebarEl);
     ensureButton();
     labelNavItems();
     syncActive();

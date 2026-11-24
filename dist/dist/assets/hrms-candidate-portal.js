@@ -420,7 +420,7 @@
                 '    <div class="cp-upload-zone" id="doc-up-zone-' + item.type + '">',
                 '      <span style="font-size:24px;display:block;margin-bottom:8px">⬆</span>',
                 (match ? 'Upload new version / replace document' : 'Drag &amp; drop file here, or click to browse'),
-                '      <input type="file" id="doc-file-inp-' + item.type + '" accept=".pdf,.png,.jpg,.jpeg" hidden>',
+                '      <input type="file" id="doc-file-inp-' + item.type + '" accept=".pdf,.doc,.docx,.png,.jpg,.jpeg" hidden>',
                 '    </div>',
                 '    <div style="font-size:12px;color:var(--muted,#8a9bb8);text-align:center" id="doc-up-info-' + item.type + '"></div>',
                 '    <button class="cp-btn" style="margin-top:12px;display:none" id="doc-btn-submit-' + item.type + '">Upload Document</button>',
@@ -463,7 +463,13 @@
                 reader.onload = function (e) {
                   base64 = e.target.result.split(',')[1];
                   fileName = file.name;
-                  fileMime = file.type;
+                  // Browsers often report no type (or octet-stream) for Word files: use the extension then.
+                  fileMime = (file.type && file.type !== 'application/octet-stream') ? file.type : (function (n) {
+                    var m = /\.([a-z0-9]+)$/i.exec(n || '');
+                    var map = { pdf: 'application/pdf', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
+                      doc: 'application/msword', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' };
+                    return m ? (map[m[1].toLowerCase()] || '') : '';
+                  })(file.name);
                   infoEl.innerHTML = '<strong>Selected:</strong> ' + esc(file.name) + ' (' + Math.round(file.size/1024) + ' KB)';
                   submitBtn.style.display = 'block';
                 };

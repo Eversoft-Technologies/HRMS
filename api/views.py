@@ -20,6 +20,8 @@ import logging
 import os
 import re
 import secrets
+import threading
+import time as _time_mod
 from datetime import datetime, time, timedelta
 from pathlib import Path
 from urllib.parse import urlencode
@@ -5975,30 +5977,97 @@ def _team_status(event, att):
     return ('Remote' if (att.is_wfh or att.device == 'mobile') else 'In Office'), att.check_in
 
 
-@api_view(['GET'])
-def attendance_team(request):
-    """Live presence snapshot for the whole team (Team Status Now panel).
-    Status per person comes from their latest activity event today, else from
-    their attendance record; everyone else is shown as Absent.
+# ---------------------------------------------------------------------------
+# Team Status snapshot
+# ---------------------------------------------------------------------------
+# Every signed-in browser asks for this list every 15-30 s (the presence dots on
+# every page, plus the Check In/Out page's own panel) and again after each
+# check-in. Rebuilding it per request meant that when many people logged in at
+# the same moment the server spent all its workers on identical work, and each
+# person's own check-in / Today's Activity Log calls queued behind it. The
+# answer is the same for everybody, so it is built once and shared:
+#
+#   * the snapshot is reused until something is written (an attendance row or
+#     event is saved) or it is TEAM_SNAPSHOT_TTL old, so a person's own change
+#     is in the very next answer;
+#   * only one thread rebuilds at a time: requests that arrive mid-rebuild get
+#     the previous snapshot instead of piling on, so the work is bounded by one
+#     rebuild at a time however many people ask;
+#   * a rebuild costs a fixed handful of queries however many people there are.
+#
+# The snapshot lives in this process, so with several workers each keeps its
+# own; a change is visible everywhere within TEAM_SNAPSHOT_TTL at most.
+TEAM_SNAPSHOT_MIN_INTERVAL = 0.0    # seconds a snapshot is reused even after a write (0 = rebuild on the next request)
+TEAM_SNAPSHOT_TTL = 4.0             # seconds: rebuild at least this often
+_TEAM_SNAPSHOT = {'at': 0.0, 'body': None, 'dirty': True}
+_TEAM_SNAPSHOT_LOCK = threading.Lock()
 
-    Intentionally ungated: every employee may see their team's presence on the
-    Check In/Out page (it exposes only name + coarse status + since-time, no
-    sensitive data), so the attendance.view permission is not required here."""
+
+def _team_snapshot_reset():
+    """Forget the snapshot (tests; also what a deploy does by restarting)."""
+    _TEAM_SNAPSHOT.update(at=0.0, body=None, dirty=True)
+
+
+def _team_snapshot_mark_dirty(**_kwargs):
+    _TEAM_SNAPSHOT['dirty'] = True
+
+
+# Any save/delete of an attendance row or event means the picture changed.
+from django.db.models.signals import post_delete as _post_delete, post_save as _post_save  # noqa: E402
+for _model in (EmployeeAttendance, AttendanceEvent):
+    _post_save.connect(_team_snapshot_mark_dirty, sender=_model, dispatch_uid='team_snapshot_save_' + _model.__name__)
+    _post_delete.connect(_team_snapshot_mark_dirty, sender=_model, dispatch_uid='team_snapshot_delete_' + _model.__name__)
+
+
+def _team_snapshot_usable():
+    body = _TEAM_SNAPSHOT['body']
+    if body is None:
+        return False
+    age = _time_mod.monotonic() - _TEAM_SNAPSHOT['at']
+    return age < TEAM_SNAPSHOT_MIN_INTERVAL or (age < TEAM_SNAPSHOT_TTL and not _TEAM_SNAPSHOT['dirty'])
+
+
+def _team_snapshot_body():
+    if _team_snapshot_usable():
+        return _TEAM_SNAPSHOT['body']
+    # First ever build: wait for it. Afterwards a request that finds a rebuild
+    # already running just takes the previous snapshot.
+    if not _TEAM_SNAPSHOT_LOCK.acquire(blocking=_TEAM_SNAPSHOT['body'] is None):
+        return _TEAM_SNAPSHOT['body']
+    try:
+        if _team_snapshot_usable():            # built while this request waited
+            return _TEAM_SNAPSHOT['body']
+        _TEAM_SNAPSHOT['dirty'] = False        # a write during the build re-dirties it
+        body = json.dumps(_build_team_rows()).encode('utf-8')
+        _TEAM_SNAPSHOT['body'] = body
+        _TEAM_SNAPSHOT['at'] = _time_mod.monotonic()
+        return body
+    finally:
+        _TEAM_SNAPSHOT_LOCK.release()
+
+
+def _build_team_rows():
     today = local_now().date()
 
     today_att = {a.email: a for a in EmployeeAttendance.objects.filter(date=today)}
-    # After midnight a night shift's open session is still yesterday's row.
+    # After midnight a night shift's open session is still yesterday's row. Which
+    # of those count is decided from one shared lookup of the night shifts, not a
+    # query per person (that was ~3 queries for each person still checked in).
+    night_shift_ids = set(Shift.objects.filter(is_night_shift=True).values_list('id', flat=True))
     for a in EmployeeAttendance.objects.filter(date=today - timedelta(days=1), check_in__isnull=False,
                                                check_out__isnull=True):
         cur = today_att.get(a.email)
-        if (cur is None or not _is_checked_in(cur)) and _open_attendance_session(a.email, today) == a:
+        if (cur is None or not _is_checked_in(cur)) and _is_checked_in(a) and a.shift_id in night_shift_ids:
             today_att[a.email] = a
 
     # Latest event per email for the session shown (queryset is ordered by
     # ``at`` ascending, so the last write wins) + the best name seen for them.
     latest_event = {}
     event_name = {}
-    for ev in AttendanceEvent.objects.filter(date__gte=today - timedelta(days=1)).order_by('at'):
+    events = (AttendanceEvent.objects.filter(date__gte=today - timedelta(days=1))
+              .only('email', 'date', 'event', 'location', 'at', 'employee_name')
+              .order_by('at'))
+    for ev in events:
         att = today_att.get(ev.email)
         if ev.date == today or (att is not None and att.date == ev.date):
             if att is None or att.date == ev.date:
@@ -6007,7 +6076,7 @@ def attendance_team(request):
             event_name[ev.email] = ev.employee_name
 
     # Roster = all app users, plus any email that has activity but no login row.
-    roster = [(u.email, u.full_name) for u in AppUser.objects.all()]
+    roster = list(AppUser.objects.values_list('email', 'full_name'))
     known = {e for e, _ in roster}
     for email in set(list(latest_event.keys()) + list(today_att.keys())):
         if email not in known:
@@ -6030,7 +6099,22 @@ def attendance_team(request):
             'since': since_dt.strftime('%I:%M %p') if since_dt else '—',
         })
     rows.sort(key=lambda r: (priority.get(r['status'], 9), r['name'].lower()))
-    return Response(rows)
+    return rows
+
+
+@api_view(['GET'])
+def attendance_team(request):
+    """Live presence snapshot for the whole team (Team Status Now panel).
+    Status per person comes from their latest activity event today, else from
+    their attendance record; everyone else is shown as Absent.
+
+    Intentionally ungated: every employee may see their team's presence on the
+    Check In/Out page (it exposes only name + coarse status + since-time, no
+    sensitive data), so the attendance.view permission is not required here.
+
+    Served from a shared snapshot (see above), so it costs the same whether one
+    person or a thousand are asking."""
+    return HttpResponse(_team_snapshot_body(), content_type='application/json')
 
 
 #: Heatmap periods the map offers (days, including today).
