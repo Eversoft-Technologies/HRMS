@@ -199,6 +199,15 @@ ALLOWED_DOC_MIMES = {
 }
 MAX_DOC_BYTES = 10 * 1024 * 1024  # 10 MB decoded
 
+# A candidate's own documents (the Work Authorization panel and the candidate
+# portal) may also be Word files. Form and payroll templates stay PDF/image only.
+WORD_DOC_MIMES = {
+    'application/msword': 'doc',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+}
+CANDIDATE_DOC_MIMES = {**ALLOWED_DOC_MIMES, **WORD_DOC_MIMES}
+CANDIDATE_DOC_ERROR = 'Only PDF, Word (DOC/DOCX), PNG and JPG files are allowed'
+
 VERIFICATION_STATUSES = ['Pending', 'Approved', 'Rejected']
 APPROVAL_ACTIONS = ['Approved', 'Rejected', 'Returned']
 ASSET_SOURCES = ['Client', 'Eversoft']
@@ -343,16 +352,17 @@ def get_candidate(pk):
     return OnboardingCandidate.objects.filter(pk=pk, is_deleted=False).first()
 
 
-def decode_document(file_data, file_mime):
+def decode_document(file_data, file_mime, allowed=None, error=None):
     """Validate an uploaded base64 document.
 
     Returns ``(size_bytes, cleaned_base64, error_message)``. Enforces the MIME
-    allowlist and the 10 MB cap on the *decoded* bytes — base64 inflates by ~33%,
-    so checking the encoded length would reject legitimate ~7.5 MB files.
+    allowlist (``allowed``, default PDF/PNG/JPG) and the 10 MB cap on the
+    *decoded* bytes — base64 inflates by ~33%, so checking the encoded length
+    would reject legitimate ~7.5 MB files.
     """
     mime = (file_mime or '').strip().lower()
-    if mime not in ALLOWED_DOC_MIMES:
-        return 0, '', 'Only PDF, PNG and JPG files are allowed'
+    if mime not in (ALLOWED_DOC_MIMES if allowed is None else allowed):
+        return 0, '', error or 'Only PDF, PNG and JPG files are allowed'
 
     raw = str(file_data or '').strip()
     if not raw:
@@ -1319,7 +1329,8 @@ def candidate_documents(request, pk):
     if error:
         return err(error)
 
-    size, cleaned, error = decode_document(body.get('fileData'), body.get('fileMime'))
+    size, cleaned, error = decode_document(body.get('fileData'), body.get('fileMime'),
+                                           allowed=CANDIDATE_DOC_MIMES, error=CANDIDATE_DOC_ERROR)
     if error:
         return err(error)
 
@@ -2532,7 +2543,8 @@ def public_upload_document(request):
     if error:
         return err(error)
 
-    size, cleaned, error = decode_document(body.get('fileData'), body.get('fileMime'))
+    size, cleaned, error = decode_document(body.get('fileData'), body.get('fileMime'),
+                                           allowed=CANDIDATE_DOC_MIMES, error=CANDIDATE_DOC_ERROR)
     if error:
         return err(error)
 

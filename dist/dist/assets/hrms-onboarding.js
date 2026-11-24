@@ -114,7 +114,19 @@
   var EVERSOFT_ASSETS = ['Laptop', 'Monitor', 'Mouse', 'Keyboard', 'Dock', 'Bag', 'Headset','Office365','Email_ID','Software License','ID_Card','Desktop','Mobile'];
   var ASSET_STATUSES = ['Assigned', 'Returned', 'Lost', 'Damaged','pending', 'Delivered'];
   var MAX_MB = 10;
-  var ALLOWED_MIME = ['application/pdf', 'image/png', 'image/jpeg'];
+  var WORD_MIMES = ['application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
+  var ALLOWED_MIME = ['application/pdf', 'image/png', 'image/jpeg'].concat(WORD_MIMES);
+  var EXT_MIME = {
+    pdf: 'application/pdf', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
+    doc: 'application/msword', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+  };
+  // The file's type if we accept it, else '' . Browsers often report NO type for
+  // Word files (and some report application/octet-stream), so the extension decides then.
+  function docMime(f) {
+    if (f && ALLOWED_MIME.indexOf(f.type) !== -1) return f.type;
+    var m = /\.([a-z0-9]+)$/i.exec((f && f.name) || '');
+    return (m && EXT_MIME[m[1].toLowerCase()]) || '';
+  }
   var PAGE_SIZES = [10, 15, 25, 50, 100];
 
   /* Which drawer tab each sidebar page lands on. */
@@ -668,60 +680,87 @@
     ['payrollPending', 'Payroll Pending'],
   ];
 
+  // base64 -> a blob: URL. A 10 MB file as a data: URL is a ~13 MB string held in the
+  // page and some browsers will not show a PDF from one; a blob URL is the file itself.
+  function b64ToBlobUrl(b64, mime) {
+    try {
+      var bin = atob(b64), n = bin.length, bytes = new Uint8Array(n);
+      for (var i = 0; i < n; i++) bytes[i] = bin.charCodeAt(i);
+      return URL.createObjectURL(new Blob([bytes], { type: mime }));
+    } catch (_) {
+      return 'data:' + mime + ';base64,' + b64;
+    }
+  }
+
+  /* The document viewer. Always inside the app, never a new browser tab (a tab
+     opened with an empty address is a blank page outside the site):
+     PDFs and images are shown in place, anything else (Word files) offers Download.
+     d = { fileData (base64), fileMime, fileName, docType?, version?, uploadedAt? } */
+  function showDocModal(d) {
+    if (!d || !d.fileData) { toast('Document data not available', 'warn'); return; }
+    var prev = document.getElementById('hrms-ob-doc-modal');
+    if (prev) prev.remove();
+    var modal = document.createElement('div');
+    modal.id = 'hrms-ob-doc-modal';
+    modal.className = 'ob-ov';
+    modal.style.zIndex = '99999';
+    var mime = d.fileMime || 'application/octet-stream';
+    var src = b64ToBlobUrl(d.fileData, mime);
+    var isPdf = mime === 'application/pdf' || (d.fileName || '').toLowerCase().endsWith('.pdf');
+    var isImg = mime.indexOf('image/') === 0 || /\.(png|jpg|jpeg|gif|webp|svg)$/i.test(d.fileName || '');
+
+    var bodyContent = '';
+    if (isPdf) {
+      bodyContent = '<iframe src="' + src + '" style="border:0;width:100%;height:78vh;border-radius:6px;background:#fff"></iframe>';
+    } else if (isImg) {
+      bodyContent = '<div style="text-align:center;max-height:78vh;overflow:auto;padding:12px;background:rgba(0,0,0,0.15);border-radius:8px;display:flex;align-items:center;justify-content:center">' +
+                    '<img src="' + src + '" style="max-width:100%;max-height:74vh;object-fit:contain;border-radius:6px;box-shadow:0 4px 20px rgba(0,0,0,0.3)" alt="' + esc(d.fileName || 'Screenshot') + '">' +
+                    '</div>';
+    } else {
+      bodyContent = '<div style="padding:48px 20px;text-align:center">' +
+                    '<div style="font-size:36px;margin-bottom:12px">📄</div>' +
+                    '<p style="font-size:14px;font-weight:600;margin-bottom:6px;color:var(--text,#ffffff)">' + esc(d.fileName || 'Document') + '</p>' +
+                    '<p style="font-size:12.5px;margin:0 0 16px;color:var(--muted,#8a9bb8)">This file type cannot be shown in the browser. Download it to open it.</p>' +
+                    '<a href="' + src + '" download="' + esc(d.fileName || 'document') + '" class="ob-btn primary" style="text-decoration:none">Download File</a></div>';
+    }
+
+    modal.innerHTML =
+      '<div style="position:fixed;inset:0;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box">' +
+        '<div style="background:var(--bg2,#141b26);border:1px solid var(--border,#2a3446);border-radius:14px;width:min(920px,96vw);max-height:92vh;display:flex;flex-direction:column;box-shadow:0 16px 48px rgba(0,0,0,0.55);overflow:hidden">' +
+          '<div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--border,#2a3446);gap:12px">' +
+            '<div style="flex:1;min-width:0">' +
+              '<h3 style="margin:0;font-size:15px;font-weight:700;color:var(--text,#ffffff);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(d.fileName || d.docType || 'Document Preview') + '</h3>' +
+              '<span style="font-size:11.5px;color:var(--muted,#8a9bb8)">Version ' + (d.version || 1) + (d.uploadedAt ? ' • ' + fmtDateTime(d.uploadedAt) : '') + '</span>' +
+            '</div>' +
+            '<div style="display:flex;align-items:center;gap:8px;flex-shrink:0">' +
+              '<a href="' + src + '" download="' + esc(d.fileName || 'download') + '" class="ob-btn" style="text-decoration:none;padding:5px 11px;font-size:12px">Download</a>' +
+              '<button class="ob-x" id="ob-doc-modal-close" style="font-size:22px;line-height:1;cursor:pointer;padding:0 4px" title="Close">×</button>' +
+            '</div>' +
+          '</div>' +
+          '<div style="padding:14px;overflow-y:auto;flex:1">' + bodyContent + '</div>' +
+        '</div>' +
+      '</div>';
+
+    document.body.appendChild(modal);
+    function closeModal() {
+      modal.remove();
+      if (src.indexOf('blob:') === 0) { try { URL.revokeObjectURL(src); } catch (_) {} }
+      document.removeEventListener('keydown', onKey);
+    }
+    function onKey(e) { if (e.key === 'Escape') closeModal(); }
+    document.addEventListener('keydown', onKey);
+    modal.addEventListener('click', function (e) {
+      if (e.target === modal || e.target.id === 'ob-doc-modal-close' || e.target === modal.firstChild) closeModal();
+    });
+    var closeBtn = modal.querySelector('#ob-doc-modal-close');
+    if (closeBtn) closeBtn.addEventListener('click', closeModal);
+  }
+
   function previewCandidateDoc(cid, did) {
     if (!cid || !did) return;
     toast('Loading preview…', 'ok');
-    api('/onboarding/candidates/' + cid + '/documents/' + did).then(function (d) {
-      if (!d || !d.fileData) { toast('Document data not available', 'warn'); return; }
-      var prev = document.getElementById('hrms-ob-doc-modal');
-      if (prev) prev.remove();
-      var modal = document.createElement('div');
-      modal.id = 'hrms-ob-doc-modal';
-      modal.className = 'ob-ov';
-      modal.style.zIndex = '99999';
-      var mime = d.fileMime || 'application/octet-stream';
-      var src = 'data:' + mime + ';base64,' + d.fileData;
-      var isPdf = mime === 'application/pdf' || (d.fileName || '').toLowerCase().endsWith('.pdf');
-      var isImg = mime.indexOf('image/') === 0 || /\.(png|jpg|jpeg|gif|webp|svg)$/i.test(d.fileName || '');
-
-      var bodyContent = '';
-      if (isPdf) {
-        bodyContent = '<iframe src="' + src + '" style="border:0;width:100%;height:78vh;border-radius:6px;background:#fff"></iframe>';
-      } else if (isImg) {
-        bodyContent = '<div style="text-align:center;max-height:78vh;overflow:auto;padding:12px;background:rgba(0,0,0,0.15);border-radius:8px;display:flex;align-items:center;justify-content:center">' +
-                      '<img src="' + src + '" style="max-width:100%;max-height:74vh;object-fit:contain;border-radius:6px;box-shadow:0 4px 20px rgba(0,0,0,0.3)" alt="' + esc(d.fileName || 'Screenshot') + '">' +
-                      '</div>';
-      } else {
-        bodyContent = '<div style="padding:48px 20px;text-align:center">' +
-                      '<div style="font-size:36px;margin-bottom:12px">📄</div>' +
-                      '<p style="font-size:14px;font-weight:600;margin-bottom:16px;color:var(--text,#ffffff)">' + esc(d.fileName || 'Document') + '</p>' +
-                      '<a href="' + src + '" download="' + esc(d.fileName || 'document') + '" class="ob-btn primary" style="text-decoration:none">Download File</a></div>';
-      }
-
-      modal.innerHTML =
-        '<div style="position:fixed;inset:0;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box">' +
-          '<div style="background:var(--bg2,#141b26);border:1px solid var(--border,#2a3446);border-radius:14px;width:min(920px,96vw);max-height:92vh;display:flex;flex-direction:column;box-shadow:0 16px 48px rgba(0,0,0,0.55);overflow:hidden">' +
-            '<div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--border,#2a3446);gap:12px">' +
-              '<div style="flex:1;min-width:0">' +
-                '<h3 style="margin:0;font-size:15px;font-weight:700;color:var(--text,#ffffff);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(d.fileName || d.docType || 'Document Preview') + '</h3>' +
-                '<span style="font-size:11.5px;color:var(--muted,#8a9bb8)">Version ' + (d.version || 1) + (d.uploadedAt ? ' • ' + fmtDateTime(d.uploadedAt) : '') + '</span>' +
-              '</div>' +
-              '<div style="display:flex;align-items:center;gap:8px;flex-shrink:0">' +
-                '<a href="' + src + '" download="' + esc(d.fileName || 'download') + '" class="ob-btn" style="text-decoration:none;padding:5px 11px;font-size:12px">Download</a>' +
-                '<button class="ob-x" id="ob-doc-modal-close" style="font-size:22px;line-height:1;cursor:pointer;padding:0 4px" title="Close">×</button>' +
-              '</div>' +
-            '</div>' +
-            '<div style="padding:14px;overflow-y:auto;flex:1">' + bodyContent + '</div>' +
-          '</div>' +
-        '</div>';
-
-      document.body.appendChild(modal);
-      modal.addEventListener('click', function (e) {
-        if (e.target === modal || e.target.id === 'ob-doc-modal-close') modal.remove();
-      });
-      var closeBtn = modal.querySelector('#ob-doc-modal-close');
-      if (closeBtn) closeBtn.addEventListener('click', function () { modal.remove(); });
-    }).catch(function (e) { toast(e.message || 'Could not load document', 'error'); });
+    api('/onboarding/candidates/' + cid + '/documents/' + did).then(showDocModal)
+      .catch(function (e) { toast(e.message || 'Could not load document', 'error'); });
   }
 
   function renderRecentCandidates(list) {
@@ -1406,7 +1445,7 @@
       '<div class="ob-panel"><h3>Document Rules</h3>' + rows([
         ['Mandatory', badge('SSN', 'err') + ' ' + badge('Driver License OR State ID', 'err')],
         ['Optional', badge('Visa', 'neutral') + ' ' + badge('I-94', 'neutral')],
-        ['Allowed types', 'PDF, PNG, JPG'],
+        ['Allowed types', 'PDF, Word (DOC/DOCX), PNG, JPG'],
         ['Maximum size', MAX_MB + ' MB'],
         ['Versioning', 'Re-upload supersedes; history kept'],
       ]) + '</div>' +
@@ -2037,8 +2076,8 @@
               MAX_DOC_LABEL + '" placeholder="Name this document (e.g. Work Permit), then choose the file below">' +
             '<div class="ob-dz" id="ob-dz"><div class="big">⬆</div>' +
             '<div id="ob-dz-txt"><b>Drag &amp; drop</b> files here, or click to choose</div>' +
-            '<div class="ob-sub" style="margin:6px 0 0">PDF, PNG or JPG · max ' + MAX_MB + ' MB each</div></div>' +
-            '<input type="file" id="ob-file" accept=".pdf,.png,.jpg,.jpeg" multiple hidden>' +
+            '<div class="ob-sub" style="margin:6px 0 0">PDF, Word, PNG or JPG · max ' + MAX_MB + ' MB each</div></div>' +
+            '<input type="file" id="ob-file" accept=".pdf,.doc,.docx,.png,.jpg,.jpeg" multiple hidden>' +
             '<div class="ob-bar" id="ob-bar" style="display:none"><i></i></div>' +
             '<div class="ob-err" id="ob-de"></div>' +
           '</div>');
@@ -2160,16 +2199,7 @@
       });
 
       el.querySelectorAll('[data-dl]').forEach(function (b) {
-        b.addEventListener('click', function () {
-          api('/onboarding/candidates/' + c.id + '/documents/' + b.dataset.dl).then(function (d) {
-            var w = window.open('');
-            if (!w) { toast('Popup blocked — allow popups to preview', 'warn'); return; }
-            var src = 'data:' + d.fileMime + ';base64,' + d.fileData;
-            w.document.write(d.fileMime === 'application/pdf'
-              ? '<iframe src="' + src + '" style="border:0;width:100%;height:100vh"></iframe>'
-              : '<img src="' + src + '" style="max-width:100%">');
-          }).catch(function (e) { toast(e.message, 'error'); });
-        });
+        b.addEventListener('click', function () { previewCandidateDoc(c.id, b.dataset.dl); });
       });
 
       el.querySelectorAll('[data-hist]').forEach(function (b) {
@@ -2269,9 +2299,9 @@
             return;
           }
         }
-        var invalid = files.filter(function (f) { return ALLOWED_MIME.indexOf(f.type) === -1; });
+        var invalid = files.filter(function (f) { return !docMime(f); });
         if (invalid.length) {
-          errEl.textContent = 'Only PDF, PNG or JPG files are allowed.';
+          errEl.textContent = 'Only PDF, Word (DOC/DOCX), PNG or JPG files are allowed.';
           return;
         }
         var big = files.filter(function (f) { return f.size > MAX_MB * 1024 * 1024; });
@@ -2302,7 +2332,7 @@
                 isCustom: isCustom,
                 label: label,
                 fileName: f.name,
-                fileMime: f.type,
+                fileMime: docMime(f),
                 fileData: base64,
               },
             }).then(function () {
@@ -2786,16 +2816,7 @@
 
       // Event handlers to view uploaded checklist documents
       el.querySelectorAll('[data-dl]').forEach(function (b) {
-        b.addEventListener('click', function () {
-          api('/onboarding/candidates/' + c.id + '/documents/' + b.dataset.dl).then(function (d) {
-            var w = window.open('');
-            if (!w) { toast('Popup blocked — allow popups to preview', 'warn'); return; }
-            var src = 'data:' + d.fileMime + ';base64,' + d.fileData;
-            w.document.write(d.fileMime === 'application/pdf'
-              ? '<iframe src="' + src + '" style="border:0;width:100%;height:100vh"></iframe>'
-              : '<img src="' + src + '" style="max-width:100%">');
-          }).catch(function (e) { toast(e.message, 'error'); });
-        });
+        b.addEventListener('click', function () { previewCandidateDoc(c.id, b.dataset.dl); });
       });
 
       // Event handlers for viewing signed PDF
@@ -2803,10 +2824,8 @@
         b.addEventListener('click', function () {
           api('/onboarding/candidates/' + c.id + '/submissions/' + b.dataset.viewPdf + '/pdf')
             .then(function (sub) {
-              var w = window.open('');
-              if (!w) { toast('Popup blocked — allow popups to preview', 'warn'); return; }
-              var src = 'data:' + sub.fileMime + ';base64,' + sub.fileData;
-              w.document.write('<iframe src="' + src + '" style="border:0;width:100%;height:100vh"></iframe>');
+              showDocModal({ fileData: sub && sub.fileData, fileMime: (sub && sub.fileMime) || 'application/pdf',
+                             fileName: (sub && sub.fileName) || 'Signed form.pdf', docType: 'Signed form' });
             }).catch(function (err) { toast(err.message, 'error'); });
         });
       });
