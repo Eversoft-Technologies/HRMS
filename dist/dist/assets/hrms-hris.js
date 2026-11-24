@@ -1422,30 +1422,19 @@
     loadListPermissions();
     var unmatched = false;
     rows.forEach(function (tr) {
-      if (tr.hasAttribute('data-hris-skip')) return;
-      tr.querySelectorAll('td').forEach(function (td) {
-        td.style.textAlign = 'center';
-        var avRow = td.querySelector('.av-row');
-        if (avRow) {
-          avRow.style.justifyContent = 'center';
-        }
+      if (tr.hasAttribute('data-hris-email') || tr.hasAttribute('data-hris-skip')) return;
+      var nameEl = tr.querySelector('td .av-row span') || tr.querySelector('td');
+      var name = nameEl ? (nameEl.textContent || '').trim().toLowerCase() : '';
+      if (!name || tr.children.length < 3) { tr.setAttribute('data-hris-skip', '1'); return; }   // the "no employees" placeholder row
+      var email = listCache && listCache[name];
+      if (!email) { unmatched = true; return; }
+      tr.setAttribute('data-hris-email', email);
+      tr.style.cursor = 'pointer';
+      tr.title = 'Open employee profile';
+      tr.addEventListener('click', function (ev) {
+        if (ev.target.closest('a, button, input, select')) return;
+        navTo(profileUrl(email));
       });
-      var email = tr.getAttribute('data-hris-email');
-      if (!email) {
-        var nameEl = tr.querySelector('td .av-row span') || tr.querySelector('td');
-        var name = nameEl ? listNameKey(nameEl.textContent) : '';
-        if (!name || tr.children.length < 3) { tr.setAttribute('data-hris-skip', '1'); return; }   // the "no employees" placeholder row
-        email = listCache && listCache[name];
-        if (!email) { unmatched = true; return; }
-        tr.setAttribute('data-hris-email', email);
-        tr.style.cursor = 'pointer';
-        tr.title = 'Open employee profile';
-        tr.addEventListener('click', function (ev) {
-          if (ev.target.closest('a, button, input, select')) return;
-          navTo(profileUrl(email));
-        });
-      }
-      if (listCanDelete) addDeleteAction(table, tr);
     });
     if ((!listCache || unmatched) && !listLoading && Date.now() - listFetchedAt > 5000) {
       listLoading = true;

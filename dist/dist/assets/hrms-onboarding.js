@@ -235,11 +235,18 @@
       '.ob-search{max-width:280px}',
       '.ob-search{max-width:280px}',
       /* cards */
-      '.ob-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;margin-bottom:22px;width:100%;box-sizing:border-box}',
-      '.ob-card{background:var(--bg2,#141b26);border:1px solid var(--border,#2a3446);border-radius:12px;padding:16px;box-sizing:border-box;transition:border-color .15s}',
-      '.ob-card:hover{border-color:var(--accent,#4f8ef7)}',
-      '.ob-card .n{font-size:26px;font-weight:800;line-height:1.1;color:var(--text,#e6edf7)}',
-      '.ob-card .l{color:var(--muted,#8a9bb8);font-size:12px;margin-top:6px;font-weight:500}',
+      '.ob-cards{display:grid;grid-template-columns:repeat(8,1fr);gap:14px;margin-bottom:22px;width:100%;box-sizing:border-box}',
+      '.ob-card{background:var(--bg2,#141b26);border:1px solid var(--border,#2a3446);border-radius:12px;padding:16px 14px;box-sizing:border-box;position:relative;overflow:hidden;min-width:0;transition:transform .2s cubic-bezier(.22,1,.36,1),box-shadow .2s ease,border-color .2s ease}',
+      '.ob-card:before{content:"";position:absolute;top:0;left:0;right:0;height:2px;background:var(--accent,#4f8ef7)}',
+      '.ob-card.blue:before{background:var(--accent,#4f8ef7)}',
+      '.ob-card.purple:before{background:var(--accent2,#7c5cfc)}',
+      '.ob-card.green:before{background:var(--accent3,#22d3a5)}',
+      '.ob-card.orange:before{background:var(--accent4,#f7954f)}',
+      '.ob-card:hover{border-color:color-mix(in srgb, var(--accent,#4f8ef7) 26%, var(--border,#2a3446));transform:translateY(-3px);box-shadow:0 10px 26px rgba(0,0,0,.28)}',
+      '@media (hover:none){.ob-card:hover{transform:none;box-shadow:none}}',
+      '@media (prefers-reduced-motion: reduce){.ob-card{transition:none}}',
+      '.ob-card .l{color:var(--muted,#8a9bb8);font-size:10px;font-weight:600;letter-spacing:.5px;text-transform:uppercase;margin-bottom:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
+      '.ob-card .n{font-family:var(--font-d,inherit);font-size:22px;font-weight:800;line-height:1;color:var(--text,#e6edf7)}',
       /* panels & grids */
       '.ob-grid1{display:grid;grid-template-columns:1fr;gap:16px;margin-bottom:22px;width:100%;box-sizing:border-box}',
       '.ob-grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;margin-bottom:22px;width:100%;box-sizing:border-box}',
@@ -380,6 +387,10 @@
       '.ob-fd-cf select,.ob-fd-cf input{flex:1;min-width:0;background:var(--bg2,#141b26);border:1px solid var(--border,#2a3446);',
       'border-radius:7px;color:var(--text,#e6edf7);font:inherit;font-size:12px;padding:7px 8px}',
       '.ob-fd-cfx{flex:0 0 auto;width:30px;background:var(--bg2,#141b26);border:1px solid var(--border,#2a3446);border-radius:7px;color:#ef4444;cursor:pointer}',
+      /* responsive tablet styles */
+      '@media (max-width: 1100px) and (min-width: 641px){',
+      '  .ob-cards{grid-template-columns:repeat(4,1fr)!important;gap:10px!important}',
+      '}',
       /* responsive mobile styles */
       '@media (max-width: 640px){',
       '  #' + ID.root + '{padding:14px 12px!important;width:100%!important;max-width:100vw!important;box-sizing:border-box!important}',
@@ -498,7 +509,7 @@
 
      The server caps pageSize at 200, so page through until the whole roster is
      collected (bounded by a safety cap so a huge table can't spin forever). */
-  var LOAD_PS = 200, LOAD_MAX_PAGES = 100;
+  var LOAD_PS = 200, LOAD_MAX_PAGES = Infinity;   // no ceiling: every candidate is loaded, however many pages that takes
   function loadCandidates(quiet) {
     if (!quiet) {
       state.loading = true;
@@ -767,10 +778,12 @@
       }).join('') + '</div>';
     }
     var d = state.dash;
-    var cards = CARDS.map(function (c) {
+    var CARD_COLORS = ['blue', 'purple', 'green', 'orange'];
+    var cards = CARDS.map(function (c, i) {
       var n = d.cards[c[0]] || 0;
-      return '<div class="ob-card"><div class="n">' + n + '</div>' +
-             '<div class="l">' + c[1] + '</div></div>';
+      return '<div class="ob-card ' + CARD_COLORS[i % CARD_COLORS.length] + '">' +
+             '<div class="l">' + c[1] + '</div>' +
+             '<div class="n">' + n + '</div></div>';
     }).join('');
 
     var alerts = state.alerts.length
