@@ -311,6 +311,7 @@
       'color:var(--muted,#8a9bb8);border-bottom:1px solid var(--border,#2a3446);white-space:nowrap;',
       'position:sticky;top:0;z-index:2;background:var(--bg2,#141b26)}',
       '.bss-table td{padding:11px 14px;border-bottom:1px solid var(--border2,#1d2634);white-space:nowrap;text-align:center}',
+      '#bs-table-wrap .bss-table th,#bs-table-wrap .bss-table td{text-align:left}',
       /* Tech Stack tends to run long (many comma-separated skills) — give it
          roughly double the width of a normal column, but still clip with an
          ellipsis rather than wrapping/stretching the table; the full value
