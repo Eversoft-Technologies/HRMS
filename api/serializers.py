@@ -21,6 +21,7 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.validators import EmailValidator
 from rest_framework import serializers
 
+from .sensitive import MaskedFieldsMixin, is_masked_input, mask as mask_identifier, scrub as scrub_identifiers
 from .models import (
     AppUser,
     AttendanceEvent,
@@ -75,6 +76,19 @@ from .models import (
     PayrollRun,
     Payslip,
     PayrollSetting,
+    SalaryStructure,
+    SalaryStructureComponent,
+    PayrollPeriod,
+    PayrollEntry,
+    PayrollAdjustment,
+    PayrollApproval,
+    PayrollPayment,
+    PayrollAuditLog,
+    Team,
+    Project,
+    ProjectMilestone,
+    ProjectStatusUpdate,
+    TaskComment,
 )
 
 # Datetime wire format used everywhere by the original API (naive, USE_TZ=False).
@@ -951,6 +965,12 @@ class EmployeeAttendanceSerializer(serializers.ModelSerializer):
             'geoVerified': bool(instance.geo_verified),
             # Closed by the leave-the-office watcher, not by the employee.
             'autoCheckedOut': bool(getattr(instance, 'auto_checkout_at', None)),
+            'autoCheckoutAt': (instance.auto_checkout_at.strftime(DATETIME_FMT)
+                               if getattr(instance, 'auto_checkout_at', None) else None),
+            # Checked in again after that: ''|Pending|Approved|Rejected (the
+            # time counts only once the manager approves).
+            'recheckinStatus': getattr(instance, 'recheckin_status', '') or '',
+            'recheckinHeldMinutes': getattr(instance, 'recheckin_held_minutes', 0) or 0,
         }
 
 
@@ -1009,11 +1029,140 @@ class LeaveRequestSerializer(serializers.ModelSerializer):
         }
 
 
+class ProjectMilestoneSerializer(serializers.ModelSerializer):
+    dueDate = serializers.DateField(source='due_date', required=False, allow_null=True)
+    isCompleted = serializers.BooleanField(source='is_completed', required=False, default=False)
+    sortOrder = serializers.IntegerField(source='sort_order', required=False, default=0)
+
+    class Meta:
+        model = ProjectMilestone
+        fields = ['id', 'project', 'title', 'dueDate', 'isCompleted', 'sortOrder']
+        read_only_fields = ['id']
+
+
+class ProjectStatusUpdateSerializer(serializers.ModelSerializer):
+    """Wire format of a project status update. ``body`` is markdown, stored and
+    returned raw (rendering — with HTML escaped first — happens client-side)."""
+    STATUSES = [c[0] for c in ProjectStatusUpdate.STATUS_CHOICES]
+
+    projectId = serializers.IntegerField(source='project_id', read_only=True)
+    status = serializers.ChoiceField(choices=ProjectStatusUpdate.STATUS_CHOICES, required=False, default='on_track')
+    startDate = serializers.DateField(source='start_date', required=False, allow_null=True, default=None)
+    targetDate = serializers.DateField(source='target_date', required=False, allow_null=True, default=None)
+    body = serializers.CharField(required=False, allow_blank=True, default='', max_length=65000)
+    authorEmail = serializers.CharField(source='author_email', read_only=True)
+    authorName = serializers.CharField(source='author_name', read_only=True)
+    createdAt = serializers.DateTimeField(source='created_at', read_only=True, format=DATETIME_FMT)
+    updatedAt = serializers.DateTimeField(source='updated_at', read_only=True, format=DATETIME_FMT)
+
+    class Meta:
+        model = ProjectStatusUpdate
+        fields = ['id', 'projectId', 'status', 'startDate', 'targetDate', 'body',
+                  'authorEmail', 'authorName', 'createdAt', 'updatedAt']
+        read_only_fields = ['id']
+
+    def validate(self, attrs):
+        start = attrs.get('start_date', getattr(self.instance, 'start_date', None))
+        target = attrs.get('target_date', getattr(self.instance, 'target_date', None))
+        if start and target and target < start:
+            raise serializers.ValidationError({'targetDate': 'Target date cannot be before the start date.'})
+        return attrs
+
+
+class ProjectSerializer(serializers.ModelSerializer):
+    projectCode = serializers.CharField(source='project_code')
+    projectManager = serializers.CharField(source='project_manager', required=False, allow_blank=True, default='')
+    startDate = serializers.DateField(source='start_date', required=False, allow_null=True, default=None)
+    targetEndDate = serializers.DateField(source='target_end_date', required=False, allow_null=True, default=None)
+    allocatedHours = serializers.DecimalField(source='allocated_hours', max_digits=7, decimal_places=2, required=False, default=0.0)
+    createdBy = serializers.CharField(source='created_by', required=False, allow_blank=True, default='')
+    contributingTeams = serializers.SerializerMethodField()
+    contributingTeamIds = serializers.PrimaryKeyRelatedField(
+        source='contributing_teams', many=True, queryset=Team.objects.all(), required=False
+    )
+    milestones = ProjectMilestoneSerializer(many=True, read_only=True)
+    taskStats = serializers.SerializerMethodField()
+    # Markdown, stored raw — the browser escapes before rendering.
+    readme = serializers.CharField(required=False, allow_blank=True, default='')
+    latestStatus = serializers.SerializerMethodField()
+    archivedAt = serializers.DateTimeField(source='archived_at', read_only=True, format=DATETIME_FMT)
+
+    class Meta:
+        model = Project
+        fields = [
+            'id', 'projectCode', 'name', 'description', 'readme', 'status', 'projectManager',
+            'startDate', 'targetEndDate', 'allocatedHours', 'createdBy',
+            'contributingTeams', 'contributingTeamIds', 'milestones', 'taskStats',
+            'latestStatus', 'archivedAt', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def validate_description(self, value):
+        # The "Short description" is plain text of at most 255 characters. An
+        # older, longer description is left alone unless it is being changed.
+        value = value or ''
+        if len(value) > 255 and (self.instance is None or value != (self.instance.description or '')):
+            raise serializers.ValidationError('Short description must be 255 characters or fewer.')
+        return value
+
+    def get_latestStatus(self, obj):
+        # Uses a prefetch of status_updates when the list view provides one.
+        # (slicing .all() reads the prefetch cache when there is one)
+        ups = list(obj.status_updates.all()[:1])
+        return ProjectStatusUpdateSerializer(ups[0]).data if ups else None
+
+    def get_contributingTeams(self, obj):
+        return [{'id': t.id, 'name': t.name, 'department': t.department} for t in obj.contributing_teams.all()]
+
+    def get_taskStats(self, obj):
+        tasks = obj.tasks.all()
+        total = tasks.count()
+        done = tasks.filter(stage__in=['done', 'complete', 'completed']).count()
+        inprogress = tasks.filter(stage='inprogress').count()
+        todo = tasks.filter(stage='todo').count()
+        return {
+            'total': total,
+            'done': done,
+            'inProgress': inprogress,
+            'todo': todo,
+            'completionRate': round((done / total * 100), 1) if total > 0 else 0.0
+        }
+
+
+class TaskCommentSerializer(serializers.ModelSerializer):
+    authorEmail = serializers.CharField(source='author_email')
+    authorName = serializers.CharField(source='author_name', required=False, allow_blank=True, default='')
+    commentType = serializers.CharField(source='comment_type', required=False, default='comment')
+    createdAt = serializers.DateTimeField(source='created_at', read_only=True)
+
+    class Meta:
+        model = TaskComment
+        fields = ['id', 'task', 'authorEmail', 'authorName', 'commentType', 'body', 'reactions', 'createdAt']
+        read_only_fields = ['id', 'createdAt']
+
+
+ISSUE_TYPES = ('task', 'bug', 'feature', 'improvement')
+
+
 class EmployeeTaskSerializer(serializers.ModelSerializer):
     assigneeEmail = serializers.CharField(source='assignee_email', required=False, allow_blank=True, default='')
     createdBy = serializers.CharField(source='created_by', required=False, allow_blank=True, default='')
     taskCode = serializers.CharField(source='task_code', required=False, allow_blank=True, default='')
     teamLead = serializers.CharField(source='team_lead', required=False, allow_blank=True, default='')
+    teamId = serializers.IntegerField(source='team_id', required=False, allow_null=True)
+    teamName = serializers.CharField(source='team.name', read_only=True, default='')
+    projectId = serializers.IntegerField(source='project_id', required=False, allow_null=True)
+    projectCode = serializers.CharField(source='project.project_code', read_only=True, default='')
+    projectName = serializers.CharField(source='project.name', read_only=True, default='')
+    milestoneId = serializers.IntegerField(source='milestone_id', required=False, allow_null=True)
+    milestoneTitle = serializers.CharField(source='milestone.title', read_only=True, default='')
+    reviewTeamId = serializers.IntegerField(source='review_team_id', required=False, allow_null=True)
+    reviewTeamName = serializers.CharField(source='review_team.name', read_only=True, default='')
+    reviewerEmail = serializers.CharField(source='reviewer_email', required=False, allow_blank=True, default='')
+    watchers = serializers.CharField(required=False, allow_blank=True, default='[]')
+    labels = serializers.CharField(required=False, allow_blank=True, default='[]')
+    issueType = serializers.ChoiceField(source='issue_type', choices=ISSUE_TYPES, required=False, default='task')
+    commentCount = serializers.SerializerMethodField()
     estimatedHours = serializers.FloatField(source='estimated_hours', required=False, allow_null=True, default=None)
     attachmentFileName = serializers.CharField(source='attachment_file_name', required=False, allow_blank=True, default='')
     attachmentFileMime = serializers.CharField(source='attachment_file_mime', required=False, allow_blank=True, default='')
@@ -1022,15 +1171,23 @@ class EmployeeTaskSerializer(serializers.ModelSerializer):
     imageFileMime = serializers.CharField(source='image_file_mime', required=False, allow_blank=True, default='')
     imageFileData = serializers.CharField(source='image_file_data', required=False, allow_blank=True, default='')
     rejectReason = serializers.CharField(source='reject_reason', required=False, allow_blank=True, default='')
+    blockedByIds = serializers.SerializerMethodField()
+    startDate = serializers.DateField(source='start_date', required=False, allow_null=True)
+    targetDate = serializers.DateField(source='target_date', required=False, allow_null=True)
+    effort = serializers.FloatField(required=False, allow_null=True, min_value=0, max_value=1000000)
+    parentId = serializers.IntegerField(source='parent_id', required=False, allow_null=True)
 
     class Meta:
         model = EmployeeTask
         fields = [
             'id', 'title', 'assignee', 'assigneeEmail', 'due', 'priority',
             'stage', 'description', 'createdBy', 'taskCode', 'teamLead',
-            'department', 'estimatedHours', 'progress', 'attachmentFileName',
-            'attachmentFileMime', 'attachmentFileData', 'imageFileName',
-            'imageFileMime', 'imageFileData', 'rejectReason',
+            'teamId', 'teamName', 'department', 'estimatedHours', 'progress',
+            'projectId', 'projectCode', 'projectName', 'milestoneId', 'milestoneTitle',
+            'reviewTeamId', 'reviewTeamName', 'reviewerEmail', 'watchers', 'labels', 'issueType', 'commentCount', 'blockedByIds',
+            'attachmentFileName', 'attachmentFileMime', 'attachmentFileData',
+            'imageFileName', 'imageFileMime', 'imageFileData', 'rejectReason',
+            'startDate', 'targetDate', 'effort', 'parentId',
         ]
         read_only_fields = ['id']
         extra_kwargs = {
@@ -1042,6 +1199,50 @@ class EmployeeTaskSerializer(serializers.ModelSerializer):
             'department': {'required': False, 'allow_blank': True, 'default': ''},
             'progress': {'required': False, 'default': 0},
         }
+
+    def get_commentCount(self, obj):
+        try:
+            return obj.comments.filter(comment_type='comment').count()
+        except Exception:
+            return 0
+
+    def get_blockedByIds(self, obj):
+        try:
+            # .all() (not values_list) so a prefetch_related('blocked_by') is used.
+            return [t.id for t in obj.blocked_by.all()]
+        except Exception:
+            return []
+
+    def _comment_count(self, obj):
+        # The list view annotates the count (one query for the whole board).
+        n = getattr(obj, 'comment_count', None)
+        return n if n is not None else self.get_commentCount(obj)
+
+    def validate(self, attrs):
+        start = attrs.get('start_date', getattr(self.instance, 'start_date', None))
+        target = attrs.get('target_date', getattr(self.instance, 'target_date', None))
+        if start and target and target < start:
+            raise serializers.ValidationError({'targetDate': 'Target date cannot be before the start date.'})
+        return attrs
+
+    def _sub_issues(self, obj):
+        # The list view bulk-loads {parent_id: (done, total)} into the context.
+        m = self.context.get('sub_counts') if self.context else None
+        if m is not None:
+            done, total = m.get(obj.id, (0, 0))
+        else:
+            from django.db.models import Count, Q
+            agg = EmployeeTask.objects.filter(parent_id=obj.id).aggregate(
+                total=Count('id'), done=Count('id', filter=Q(stage__in=EmployeeTask.DONE_STAGES)))
+            done, total = agg['done'] or 0, agg['total'] or 0
+        return {'done': done, 'total': total}
+
+    def _field_values(self, obj):
+        m = self.context.get('field_values') if self.context else None
+        if m is not None:
+            return m.get(obj.id, {})
+        from .models import TaskFieldValue
+        return {str(v.field_id): v.value for v in TaskFieldValue.objects.filter(task_id=obj.id)}
 
     def to_representation(self, instance):
         return {
@@ -1070,6 +1271,31 @@ class EmployeeTaskSerializer(serializers.ModelSerializer):
             'imageFileData': instance.image_file_data or '',
             'rejectReason': instance.reject_reason or '',
             'createdAt': instance.created_at.strftime(DATETIME_FMT) if instance.created_at else None,
+            # Project tracking fields (Task Tracker board). These are declared
+            # above but were dropped by this hand-written representation, so
+            # labels / project / milestone saved fine and never came back.
+            'updatedAt': instance.updated_at.strftime(DATETIME_FMT) if getattr(instance, 'updated_at', None) else None,
+            'projectId': instance.project_id,
+            'projectCode': instance.project.project_code if instance.project_id and instance.project else '',
+            'projectName': instance.project.name if instance.project_id and instance.project else '',
+            'milestoneId': instance.milestone_id,
+            'milestoneTitle': instance.milestone.title if instance.milestone_id and instance.milestone else '',
+            'reviewTeamId': instance.review_team_id,
+            'reviewTeamName': instance.review_team.name if instance.review_team_id and instance.review_team else '',
+            'reviewerEmail': instance.reviewer_email or '',
+            'watchers': instance.watchers or '[]',
+            'labels': instance.labels or '[]',
+            'issueType': instance.issue_type or 'task',
+            'commentCount': self._comment_count(instance),
+            'blockedByIds': self.get_blockedByIds(instance),
+            'startDate': instance.start_date.isoformat() if instance.start_date else None,
+            'targetDate': instance.target_date.isoformat() if instance.target_date else None,
+            'effort': instance.effort,
+            'parentId': instance.parent_id,
+            'parentTitle': instance.parent.title if instance.parent_id and instance.parent else '',
+            'closedAt': instance.closed_at.strftime(DATETIME_FMT) if instance.closed_at else None,
+            'subIssues': self._sub_issues(instance),
+            'fields': self._field_values(instance),
         }
 
 
@@ -1260,6 +1486,18 @@ class BenchSalesProfileSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError('Date of Birth cannot be in the future.')
         return value
 
+    def validate(self, attrs):
+        # The roster shows the passport number masked. An edit form that saves
+        # that mask back must not overwrite the stored number with it.
+        attrs = super().validate(attrs)
+        if 'passport_no' in attrs:
+            if is_masked_input(attrs['passport_no']):
+                attrs.pop('passport_no')
+            else:
+                from .sensitive import check_input
+                attrs['passport_no'] = check_input(attrs['passport_no'], 40, 'Passport No')
+        return attrs
+
     class Meta:
         model = BenchSalesProfile
         fields = [
@@ -1295,7 +1533,10 @@ class BenchSalesProfileSerializer(serializers.ModelSerializer):
             'email': instance.email or '',
             'contactNo': instance.contact_no or '',
             'dateOfBirth': instance.date_of_birth.isoformat() if instance.date_of_birth else '',
-            'passportNo': instance.passport_no or '',
+            # Masked on the server; the full number only via the audited
+            # reveal endpoint (api/sensitive.py).
+            'passportNo': mask_identifier(instance.passport_no, 'passport'),
+            'hasPassportNo': bool(instance.passport_no),
             'workAuthorization': instance.work_authorization or '',
             'certificates': [
                 {'id': c.id, 'fileName': c.file_name}
@@ -1634,6 +1875,10 @@ class GeoFenceSerializer(serializers.ModelSerializer):
             'isActive': bool(instance.is_active),
             'createdBy': instance.created_by or '',
             'createdAt': instance.created_at.strftime(DATETIME_FMT) if instance.created_at else None,
+            # Only the count: the addresses themselves are managed (and shown)
+            # through /api/attendance/networks, which needs attendance.edit.
+            'networkCount': len([n for n in (getattr(instance, 'office_networks', None) or [])
+                                 if isinstance(n, dict) and n.get('cidr')]),
         }
 
 
@@ -2238,9 +2483,20 @@ class PayrollInformationSerializer(serializers.ModelSerializer):
         read_only_fields = ['id']
         extra_kwargs = {'status': {'required': False, 'default': 'Pending'}}
 
+    def validate_accountNumber(self, value):
+        from .sensitive import check_input
+        return check_input(value, 64, 'Account number')
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        # Never store a mask that a form sent back.
+        if 'account_number' in attrs and is_masked_input(attrs['account_number']):
+            attrs.pop('account_number')
+        return attrs
+
     def to_representation(self, instance):
-        acct = (instance.account_number or '').strip()
-        masked = ('*' * max(0, len(acct) - 4)) + acct[-4:] if acct else ''
+        acct = instance.account_number or ''
+        masked = mask_identifier(acct, 'account')
         return {
             'id': instance.id,
             'candidateId': instance.candidate_id,
@@ -2300,16 +2556,78 @@ class CandidateFormSubmissionSerializer(serializers.ModelSerializer):
 # Core Payroll Serializers
 # ===========================================================================
 
-class EmployeeCompensationSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = EmployeeCompensation
-        fields = '__all__'
-
-
 class PayComponentSerializer(serializers.ModelSerializer):
     class Meta:
         model = PayComponent
         fields = '__all__'
+
+
+class SalaryStructureComponentSerializer(serializers.ModelSerializer):
+    component_details = PayComponentSerializer(source='component', read_only=True)
+
+    class Meta:
+        model = SalaryStructureComponent
+        fields = '__all__'
+
+
+class SalaryStructureSerializer(serializers.ModelSerializer):
+    components = SalaryStructureComponentSerializer(source='salarystructurecomponent_set', many=True, read_only=True)
+    employee_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = SalaryStructure
+        fields = '__all__'
+
+    def get_employee_count(self, obj):
+        try:
+            return EmployeeCompensation.objects.filter(salary_structure=obj, is_active=True).count()
+        except Exception:
+            return 0
+
+
+class EmployeeCompensationSerializer(MaskedFieldsMixin, serializers.ModelSerializer):
+    # PAN / UAN / PF / bank account are masked on read (full value: audited
+    # POST /api/sensitive/compensation/<id>/reveal); a mask sent back is ignored.
+    masked_fields = ('pan_number', 'uan_number', 'pf_account_number', 'bank_account_number')
+    structure_name = serializers.CharField(source='salary_structure.name', read_only=True)
+    structure_code = serializers.CharField(source='salary_structure.code', read_only=True)
+    employee_name = serializers.SerializerMethodField()
+    department = serializers.SerializerMethodField()
+    designation = serializers.SerializerMethodField()
+
+    class Meta:
+        model = EmployeeCompensation
+        fields = '__all__'
+
+    def get_employee_name(self, obj):
+        try:
+            up = UserProfile.objects.filter(email__iexact=obj.email).first()
+            if up:
+                fn = (up.first_name or '').strip()
+                ln = (up.last_name or '').strip()
+                name = f"{fn} {ln}".strip()
+                if name:
+                    return name
+            user = AppUser.objects.filter(email__iexact=obj.email).first()
+            if user:
+                return user.name or user.email.split('@')[0]
+        except Exception:
+            pass
+        return obj.email.split('@')[0] if obj.email else ''
+
+    def get_department(self, obj):
+        try:
+            up = UserProfile.objects.filter(email__iexact=obj.email).first()
+            return up.department if up else ''
+        except Exception:
+            return ''
+
+    def get_designation(self, obj):
+        try:
+            up = UserProfile.objects.filter(email__iexact=obj.email).first()
+            return up.designation if up else ''
+        except Exception:
+            return ''
 
 
 class EmployeePayComponentSerializer(serializers.ModelSerializer):
@@ -2320,18 +2638,123 @@ class EmployeePayComponentSerializer(serializers.ModelSerializer):
         fields = '__all__'
 
 
-class PayslipSerializer(serializers.ModelSerializer):
+class PayrollPeriodSerializer(serializers.ModelSerializer):
+    runs_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = PayrollPeriod
+        fields = '__all__'
+
+    def get_runs_count(self, obj):
+        try:
+            return obj.payrollrun_set.count()
+        except Exception:
+            return 0
+
+
+class PayrollAdjustmentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PayrollAdjustment
+        fields = '__all__'
+
+
+class PayrollApprovalSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PayrollApproval
+        fields = '__all__'
+
+
+class PayrollPaymentSerializer(MaskedFieldsMixin, serializers.ModelSerializer):
+    masked_fields = ('account_number',)
+    employee_name = serializers.CharField(source='entry.employee_name', read_only=True)
+    employee_email = serializers.CharField(source='entry.email', read_only=True)
+    department = serializers.CharField(source='entry.department', read_only=True)
+
+    class Meta:
+        model = PayrollPayment
+        fields = '__all__'
+
+
+class PayrollEntrySerializer(serializers.ModelSerializer):
+    adjustments = serializers.SerializerMethodField()
+    payment_info = serializers.SerializerMethodField()
+
+    class Meta:
+        model = PayrollEntry
+        fields = '__all__'
+
+    def get_adjustments(self, obj):
+        try:
+            items = PayrollAdjustment.objects.filter(run=obj.run, email__iexact=obj.email)
+            return PayrollAdjustmentSerializer(items, many=True).data
+        except Exception:
+            return []
+
+    def get_payment_info(self, obj):
+        try:
+            pm = PayrollPayment.objects.filter(entry=obj).first()
+            if pm:
+                return {
+                    'id': pm.id,
+                    'status': pm.status,
+                    'reference_number': pm.reference_number,
+                    'failure_reason': pm.failure_reason,
+                    'disbursed_at': pm.disbursed_at.isoformat() if pm.disbursed_at else None,
+                }
+        except Exception:
+            pass
+        return None
+
+
+class PayslipSerializer(MaskedFieldsMixin, serializers.ModelSerializer):
+    masked_fields = ('pan_number', 'uan_number', 'pf_account_number', 'bank_account_number')
+    # Period label for the employee's own payslip list (hrms-hris.js), which
+    # cannot read /api/payroll/runs without payroll.view.
+    run_period = serializers.CharField(source='run.period_label', read_only=True, default='')
+
     class Meta:
         model = Payslip
         fields = '__all__'
+        # The stored payslip document is served by /payslips/<id>/pdf to its
+        # owner; listing it here would also leak the full identifiers it holds.
+        extra_kwargs = {'file_data': {'write_only': True}}
 
 
 class PayrollRunSerializer(serializers.ModelSerializer):
     payslips = PayslipSerializer(many=True, read_only=True)
+    period_details = PayrollPeriodSerializer(source='period', read_only=True)
+    # No source=: the field name already is the relation (DRF asserts on a redundant source).
+    approvals = PayrollApprovalSerializer(many=True, read_only=True)
+    entries_count = serializers.SerializerMethodField()
+    payments_count = serializers.SerializerMethodField()
 
     class Meta:
         model = PayrollRun
         fields = '__all__'
+
+    def get_entries_count(self, obj):
+        try:
+            return obj.entries.count()
+        except Exception:
+            return 0
+
+    def get_payments_count(self, obj):
+        try:
+            return obj.payments.count()
+        except Exception:
+            return 0
+
+
+class PayrollAuditLogSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PayrollAuditLog
+        fields = '__all__'
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        # Rows written before identifiers were masked may still hold them.
+        data['changes'] = scrub_identifiers(data.get('changes'))
+        return data
 
 
 class PayrollSettingSerializer(serializers.ModelSerializer):

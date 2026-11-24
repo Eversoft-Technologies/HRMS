@@ -1,0 +1,642 @@
+{% extends "careers/base.html" %}
+{% block title %}{{ job.title }} – Careers at {{ company.name }}{% endblock %}
+{% block description %}{{ meta_description }}{% endblock %}
+{% block head %}{% if base %}<link rel="canonical" href="{{ base }}{{ job.url }}">{% endif %}
+<meta property="og:title" content="{{ job.title }} – {{ company.name }}">
+<meta property="og:description" content="{{ meta_description }}">
+<meta property="og:type" content="website">
+<script type="application/ld+json">{{ json_ld|safe }}</script>{% endblock %}
+{% block style %}
+.job-hero{padding:34px 0 40px}
+.crumbs{display:flex;align-items:center;gap:8px;font-size:13.5px;margin-bottom:18px}
+.crumbs a{color:var(--hero-muted);text-decoration:none}.crumbs a:hover{color:#fff;text-decoration:underline}
+.crumbs span{color:var(--hero-muted);opacity:.6}
+.job-hero h1{font-size:clamp(28px,4vw,42px);font-weight:800;margin:0 0 14px;line-height:1.1}
+.job-hero .meta{display:flex;flex-wrap:wrap;gap:8px 18px;color:var(--hero-muted);font-size:14.5px;margin-bottom:24px}
+.job-hero .meta span{display:inline-flex;align-items:center;gap:7px}
+.job-hero .chip.remote{background:rgba(52,211,153,.16);color:#a7f3d0}
+.hero-actions{display:flex;flex-wrap:wrap;gap:10px}
+.btn-glass{background:rgba(255,255,255,.08);border-color:rgba(255,255,255,.22);color:#fff}
+.btn-glass:hover{background:rgba(255,255,255,.14);border-color:rgba(255,255,255,.32)}
+
+.layout{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:28px;align-items:start;padding:36px 0 8px}
+.prose{padding:32px 34px}
+.prose h2{font-size:21px;margin:0 0 14px}
+.prose .desc{color:var(--text);font-size:15.5px;line-height:1.75}
+.prose .desc p{margin:0 0 14px}
+.prose .desc :is(ul,ol){padding-left:22px;margin:0 0 14px}
+.side{position:sticky;top:84px;display:grid;gap:14px}
+.facts-card{padding:22px}
+.facts-card h2{font-size:15px;margin:0 0 14px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+dl.facts{margin:0 0 18px;display:grid;gap:14px}
+dl.facts div{display:grid;grid-template-columns:22px minmax(0,1fr);gap:2px 10px;align-items:start}
+dl.facts svg{grid-row:span 2;margin-top:3px;color:var(--brand-strong)}
+@media (prefers-color-scheme: dark){dl.facts svg{color:var(--brand)}}
+dl.facts dt{font-size:12px;color:var(--muted);font-weight:500}
+dl.facts dd{margin:0;font-weight:600;color:var(--ink);font-size:14.5px;word-break:break-word}
+.share{display:flex;gap:8px}
+.share .btn{flex:1}
+.note-card{padding:18px 20px;font-size:13.5px;color:var(--muted)}
+.note-card b{color:var(--ink)}
+
+.apply-wrap{padding:28px 0 64px}
+.apply-card{display:grid;grid-template-columns:300px minmax(0,1fr);overflow:hidden}
+.apply-aside{padding:30px 26px;background:linear-gradient(170deg,var(--hero-1),var(--hero-2));color:#fff}
+.apply-aside h2{color:#fff;font-size:22px;margin:0 0 8px}
+.apply-aside p{color:var(--hero-muted);font-size:14px;margin:0 0 22px}
+.apply-aside ol{list-style:none;margin:0;padding:0;display:grid;gap:16px}
+.apply-aside li{display:grid;grid-template-columns:28px 1fr;gap:10px;font-size:14px;color:#e6edf5}
+.apply-aside li b{display:grid;place-items:center;width:28px;height:28px;border-radius:50%;background:rgba(52,211,153,.18);color:#6ee7b7;font-size:13px}
+.apply-aside small{display:block;color:var(--hero-muted);font-size:12.5px}
+.apply-main{padding:30px 32px}
+
+form.apply .row{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+form.apply .f{margin-bottom:16px}
+form.apply label,form.apply legend{display:block;font-weight:600;font-size:13.5px;color:var(--ink);margin-bottom:6px}
+form.apply .req{color:var(--danger)}
+form.apply .hint{font-size:12.5px;color:var(--muted);margin-top:5px}
+form.apply .err{font-size:13px;color:var(--danger);margin-top:5px}
+form.apply .err:empty{display:none}
+form.apply .invalid{border-color:var(--danger)!important;box-shadow:0 0 0 4px var(--danger-soft)!important}
+form.apply fieldset{border:0;padding:0;margin:0 0 18px}
+.group-h{display:flex;align-items:center;gap:10px;font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:6px 0 14px}
+.group-h::after{content:"";flex:1;height:1px;background:var(--border)}
+.check{display:flex;gap:12px;align-items:flex-start;font-weight:400!important;font-size:14px!important;color:var(--text)!important;cursor:pointer}
+.check input{margin-top:2px;width:18px;height:18px;flex:none;accent-color:var(--brand)}
+
+/* resume dropzone (the real file input sits on top, transparent, so click,
+   keyboard and screen readers all use the native control) */
+.drop{position:relative;display:flex;align-items:center;gap:16px;padding:20px;border:1.5px dashed var(--border-strong);border-radius:14px;
+  background:var(--surface-2);transition:border-color .15s,background .15s}
+.drop:hover,.drop.over{border-color:var(--brand);background:var(--brand-soft)}
+.drop:focus-within{border-color:var(--brand);box-shadow:0 0 0 4px var(--focus)}
+.drop input[type=file]{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer}
+.drop .icon{flex:none;width:46px;height:46px;border-radius:12px;display:grid;place-items:center;background:var(--surface);border:1px solid var(--border);color:var(--brand-strong)}
+@media (prefers-color-scheme: dark){.drop .icon{color:var(--brand)}}
+.drop .t{font-weight:600;color:var(--ink);font-size:14.5px}
+.drop .t u{color:var(--brand-strong);text-decoration-thickness:1px}
+.drop .s{font-size:12.5px;color:var(--muted)}
+.drop.has .t{color:var(--brand-strong)}
+.parse-status{min-height:0}
+.parse-status.ok{display:flex;gap:8px;align-items:flex-start;padding:10px 12px;border-radius:10px;background:var(--success-soft);color:var(--success)!important;font-size:13px!important}
+.field-input.autofilled{border-color:var(--brand)!important;background:color-mix(in srgb,var(--brand-soft) 60%,var(--input))}
+
+.alert{border-radius:10px;padding:12px 14px;margin-bottom:16px;font-size:14px}
+.alert.err{background:var(--danger-soft);color:var(--danger);border:1px solid color-mix(in srgb,var(--danger) 25%,transparent)}
+.submit-row{display:flex;flex-wrap:wrap;align-items:center;gap:14px;margin-top:6px}
+.submit-row .btn{height:48px;padding:0 28px;font-size:15px}
+.submit-row small{color:var(--muted);font-size:12.5px}
+.success{text-align:center;padding:36px 12px}
+.success .tick{width:64px;height:64px;margin:0 auto 16px;border-radius:50%;display:grid;place-items:center;background:var(--success-soft);color:var(--success)}
+.success h2{font-size:24px;margin:0 0 8px}
+.success p{color:var(--muted);margin:0 0 6px}
+
+.pop-ov{position:fixed;inset:0;z-index:100;display:grid;place-items:center;padding:16px;background:rgba(5,10,20,.62);
+  backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);animation:popfade .18s ease-out}
+.pop{position:relative;width:100%;max-width:480px;max-height:calc(100vh - 32px);overflow:auto;background:var(--surface);color:var(--text);
+  border:1px solid var(--border);border-radius:20px;padding:34px 28px 26px;text-align:center;box-shadow:0 30px 80px -20px rgba(0,0,0,.55);
+  animation:popin .22s cubic-bezier(.2,.9,.3,1.2)}
+.pop .tick{width:68px;height:68px;margin:0 auto 16px;border-radius:50%;display:grid;place-items:center;background:var(--success-soft);color:var(--success)}
+.pop h2{font-size:24px;margin:0 0 8px}
+.pop p{margin:0 0 6px;color:var(--muted);font-size:14.5px}
+.pop .tick.info{background:color-mix(in srgb,#3b82f6 14%,transparent);color:#3b82f6}
+.pop .pop-ref{font-weight:600;color:var(--ink)}
+.pop .pop-mail{font-size:13.5px;margin-top:10px;padding:10px 12px;border-radius:10px;background:var(--surface-2)}
+.pop-actions{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:22px}
+.pop-actions .btn:first-child{grid-column:1/-1}
+.pop-actions .pop-exit{color:var(--danger)}
+.pop-hint{font-size:12px!important;margin-top:12px!important;color:var(--subtle)!important}
+.pop-x{position:absolute;top:12px;right:12px;width:36px;height:36px;border-radius:10px;border:0;background:transparent;color:var(--muted);font-size:24px;line-height:1;cursor:pointer}
+.pop-x:hover{background:var(--surface-2);color:var(--ink)}
+@keyframes popfade{from{opacity:0}to{opacity:1}}
+@keyframes popin{from{opacity:0;transform:translateY(12px) scale(.96)}to{opacity:1;transform:none}}
+@media (max-width:420px){.pop-actions{grid-template-columns:1fr}}
+.success-nav{display:flex;flex-wrap:wrap;justify-content:center;gap:10px;margin-top:22px}
+.mobile-bar{display:none}
+@media (max-width:960px){
+  .layout{grid-template-columns:1fr}.side{position:static}
+  .apply-card{grid-template-columns:1fr}.apply-aside{padding:24px}
+}
+@media (max-width:640px){
+  .job-hero{padding:24px 0 28px}
+  .prose{padding:22px 20px}.apply-main{padding:22px 18px}
+  form.apply .row{grid-template-columns:1fr;gap:0}
+  .apply-aside ol{display:none}
+  .mobile-bar{display:flex;position:fixed;left:0;right:0;bottom:0;z-index:40;padding:10px 16px calc(10px + env(safe-area-inset-bottom));
+    background:color-mix(in srgb,var(--surface) 92%,transparent);backdrop-filter:blur(10px);border-top:1px solid var(--border)}
+  .mobile-bar .btn{flex:1}
+  footer.site{padding-bottom:72px}
+  .mobile-bar.hide{display:none}
+}
+.embed .apply-aside{display:none}.embed .apply-card{grid-template-columns:1fr}
+{% endblock %}
+{% block content %}
+{% if not embed %}
+<section class="hero job-hero" aria-labelledby="job-h">
+  <div class="wrap">
+    <nav class="crumbs" aria-label="Breadcrumb"><a href="/careers">Careers</a><span aria-hidden="true">/</span>{% if job.department %}<a href="/careers?department={{ job.department|urlencode }}#roles">{{ job.department }}</a><span aria-hidden="true">/</span>{% endif %}<span aria-current="page" style="opacity:1;color:#fff">{{ job.title }}</span></nav>
+    <h1 id="job-h">{{ job.title }}</h1>
+    <div class="meta">
+      {% if job.department %}<span><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="2" y="4.5" width="12" height="9" rx="1.5"/><path d="M5.5 4.5V3a1 1 0 011-1h3a1 1 0 011 1v1.5"/></svg>{{ job.department }}</span>{% endif %}
+      {% if job.location %}<span><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M8 14s5-4.2 5-8A5 5 0 003 6c0 3.8 5 8 5 8z"/><circle cx="8" cy="6" r="1.8"/></svg>{{ job.location }}</span>{% endif %}
+      {% if job.type %}<span><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="8" cy="8" r="6"/><path d="M8 4.5V8l2.5 1.5"/></svg>{{ job.type }}</span>{% endif %}
+      {% if job.remote %}<span class="chip remote">Remote</span>{% endif %}
+      {% if posted %}<span>Posted {{ posted|date:"M j, Y" }}</span>{% endif %}
+    </div>
+    <div class="hero-actions">
+      <a class="btn" href="#apply">Apply now
+        <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8h10M9 4l4 4-4 4"/></svg></a>
+      <button class="btn btn-glass" type="button" data-share>
+        <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.5 9.5a3 3 0 004.2 0l2-2a3 3 0 00-4.2-4.2l-.6.6M9.5 6.5a3 3 0 00-4.2 0l-2 2a3 3 0 004.2 4.2l.6-.6"/></svg>
+        <span>Copy link</span></button>
+    </div>
+  </div>
+</section>
+{% endif %}
+
+<div class="wrap">
+  {% if embed %}<p style="margin:0 0 12px"><a href="/careers{{ embed_q }}">← All open positions</a></p><h1 style="margin:0 0 6px">{{ job.title }}</h1>{% endif %}
+  <div class="layout">
+    <article class="card prose" aria-labelledby="about-h">
+      <h2 id="about-h">About the role</h2>
+      <div class="desc">{% if job.description %}{{ job.description|linebreaks }}{% else %}<p>Details will be shared during the interview process.</p>{% endif %}</div>
+    </article>
+    <aside class="side" aria-label="Job summary">
+      <div class="card facts-card">
+        <h2>Job overview</h2>
+        <dl class="facts">
+          {% if job.department %}<div><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="2" y="4.5" width="12" height="9" rx="1.5"/><path d="M5.5 4.5V3a1 1 0 011-1h3a1 1 0 011 1v1.5"/></svg><dt>Department</dt><dd>{{ job.department }}</dd></div>{% endif %}
+          {% if job.location or job.remote %}<div><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M8 14s5-4.2 5-8A5 5 0 003 6c0 3.8 5 8 5 8z"/><circle cx="8" cy="6" r="1.8"/></svg><dt>Location</dt><dd>{% if job.location %}{{ job.location }}{% if job.remote %} · Remote{% endif %}{% else %}Remote{% endif %}</dd></div>{% endif %}
+          {% if job.type %}<div><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="8" cy="8" r="6"/><path d="M8 4.5V8l2.5 1.5"/></svg><dt>Job type</dt><dd>{{ job.type }}</dd></div>{% endif %}
+          {% if job.salary %}<div><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="1.5" y="4" width="13" height="8" rx="1.5"/><circle cx="8" cy="8" r="1.8"/></svg><dt>Salary</dt><dd>{{ job.salary }}</dd></div>{% endif %}
+          {% if job.openings > 1 %}<div><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="6" cy="5.5" r="2.2"/><path d="M1.8 13a4.3 4.3 0 018.4 0M10.8 3.6a2.2 2.2 0 010 3.8M12 9.2a4.3 4.3 0 012.2 3.4"/></svg><dt>Openings</dt><dd>{{ job.openings }}</dd></div>{% endif %}
+          {% if settings.showApplicants %}<div><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M2 13V9M6 13V5M10 13V7M14 13V3"/></svg><dt>Applicants</dt><dd>{{ job.applicants }}</dd></div>{% endif %}
+          {% for f in job.fields %}<div><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="8" cy="8" r="6"/><path d="M8 7v4M8 5h.01"/></svg><dt>{{ f.label }}</dt><dd>{{ f.value }}</dd></div>{% endfor %}
+          {% if job.code %}<div><svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M5 2.5L3.5 13.5M11.5 2.5L10 13.5M2.5 6h11M2 10.5h11"/></svg><dt>Reference</dt><dd>{{ job.code }}</dd></div>{% endif %}
+        </dl>
+        <a class="btn btn-block" href="#apply">Apply for this job</a>
+      </div>
+      <div class="card note-card"><b>Quick apply.</b> Upload your resume and we'll fill in your details — most people finish in under 3 minutes.</div>
+    </aside>
+  </div>
+</div>
+
+<section id="apply" class="apply-wrap" aria-labelledby="apply-h">
+  <div class="wrap">
+    <div class="card apply-card">
+      <div class="apply-aside">
+        <h2>Apply for this role</h2>
+        <p>{{ job.title }}{% if job.location %} · {{ job.location }}{% endif %}</p>
+        <ol>
+          <li><b>1</b><span>Upload your resume<small>We read it to fill in your details.</small></span></li>
+          <li><b>2</b><span>Check your details<small>Edit anything we got wrong.</small></span></li>
+          <li><b>3</b><span>Submit<small>You'll get an email confirmation.</small></span></li>
+        </ol>
+      </div>
+      <div class="apply-main">
+        <h2 id="apply-h" class="sr">Apply for {{ job.title }}</h2>
+        <div id="apply-result" role="status" aria-live="polite"></div>
+        <form class="apply" id="apply-form" novalidate data-job="{{ job.id }}" data-max-mb="{{ max_mb }}">
+          <input type="hidden" name="formToken" value="{{ form_token }}">
+          <div class="hp" aria-hidden="true">
+            <label for="a-website">Leave this field empty</label>
+            <input id="a-website" type="text" name="website" tabindex="-1" autocomplete="off">
+          </div>
+
+                    <div class="f">
+            <label for="a-resume">Start with your resume <span class="req" aria-hidden="true">*</span></label>
+            <div class="drop" id="drop">
+              <span class="icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 1.5H4a1.5 1.5 0 00-1.5 1.5v10A1.5 1.5 0 004 14.5h8a1.5 1.5 0 001.5-1.5V5.5z"/><path d="M9.5 1.5v4h4M8 12V8M6 9.8L8 8l2 1.8"/></svg></span>
+              <span><span class="t" id="drop-t"><u>Choose a file</u> or drag it here</span><br><span class="s" id="h-resume">PDF or DOCX, up to {{ max_mb }} MB · we'll fill in the empty fields from it</span></span>
+              <input class="field-input" id="a-resume" name="resume" type="file" accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" required aria-describedby="h-resume parse-status e-resume">
+            </div>
+            <div class="hint parse-status" id="parse-status" role="status" aria-live="polite"></div>
+            <div class="err" id="e-resume"></div>
+          </div>
+
+          <div class="group-h">Your details</div>
+          <p class="hint" style="margin:-6px 0 14px">Fields marked <span class="req">*</span> are required.</p>
+          <div class="row">
+            <div class="f">
+              <label for="a-name">Full name <span class="req" aria-hidden="true">*</span></label>
+              <input class="field-input" id="a-name" name="fullName" autocomplete="name" required maxlength="200" aria-describedby="e-fullName">
+              <div class="err" id="e-fullName"></div>
+            </div>
+            <div class="f">
+              <label for="a-email">Email <span class="req" aria-hidden="true">*</span></label>
+              <input class="field-input" id="a-email" name="email" type="email" autocomplete="email" required maxlength="254" aria-describedby="e-email">
+              <div class="err" id="e-email"></div>
+            </div>
+          </div>
+          <div class="row">
+            <div class="f">
+              <label for="a-phone">Phone</label>
+              <input class="field-input" id="a-phone" name="phone" type="tel" autocomplete="tel" maxlength="40" aria-describedby="e-phone">
+              <div class="err" id="e-phone"></div>
+            </div>
+            <div class="f">
+              <label for="a-loc">Current location</label>
+              <input class="field-input" id="a-loc" name="location" autocomplete="address-level2" maxlength="200" aria-describedby="e-location">
+              <div class="err" id="e-location"></div>
+            </div>
+          </div>
+          <div class="f">
+            <label for="a-li">LinkedIn profile</label>
+            <input class="field-input" id="a-li" name="linkedinUrl" type="url" placeholder="https://www.linkedin.com/in/…" maxlength="300" aria-describedby="e-linkedinUrl">
+            <div class="err" id="e-linkedinUrl"></div>
+          </div>
+
+          {% if job.questions %}<div class="group-h">A few questions</div>{% endif %}
+          {% for q in job.questions %}
+          <div class="f">
+            {% if q.type == "boolean" %}
+            <label class="check" for="q-{{ q.key }}"><input type="checkbox" id="q-{{ q.key }}" data-q="{{ q.key }}" data-type="boolean" aria-describedby="e-answers.{{ q.key }}"> <span>{{ q.label }}{% if q.required %} <span class="req" aria-hidden="true">*</span>{% endif %}</span></label>
+            {% else %}
+            <label for="q-{{ q.key }}">{{ q.label }}{% if q.required %} <span class="req" aria-hidden="true">*</span>{% endif %}</label>
+            {% if q.type == "select" %}
+            <select class="field-input" id="q-{{ q.key }}" data-q="{{ q.key }}"{% if q.required %} required{% endif %} aria-describedby="e-answers.{{ q.key }}">
+              <option value="">Choose…</option>
+              {% for o in q.options %}<option value="{{ o }}">{{ o }}</option>{% endfor %}
+            </select>
+            {% elif q.type == "textarea" %}
+            <textarea class="field-input" id="q-{{ q.key }}" data-q="{{ q.key }}" maxlength="2000"{% if q.required %} required{% endif %} aria-describedby="e-answers.{{ q.key }}"></textarea>
+            {% else %}
+            <input class="field-input" id="q-{{ q.key }}" data-q="{{ q.key }}" maxlength="2000" type="{% if q.type == 'number' %}number{% elif q.type == 'url' %}url{% elif q.type == 'email' %}email{% else %}text{% endif %}"{% if q.required %} required{% endif %} aria-describedby="e-answers.{{ q.key }}">
+            {% endif %}
+            {% endif %}
+            <div class="err" id="e-answers.{{ q.key }}"></div>
+          </div>
+          {% endfor %}
+
+          <div class="group-h">Anything else?</div>
+          <div class="f">
+            <label for="a-cover">Cover letter <span style="font-weight:400;color:var(--muted)">(optional)</span></label>
+            <textarea class="field-input" id="a-cover" name="coverLetter" maxlength="10000" placeholder="Tell us why you're interested in this role…" aria-describedby="e-coverLetter"></textarea>
+            <div class="err" id="e-coverLetter"></div>
+          </div>
+          <fieldset>
+            <legend class="sr">Consent</legend>
+            <label class="check" for="a-consent"><input type="checkbox" id="a-consent" name="consent" required aria-describedby="e-consent">
+              <span>I agree that {{ company.name }} may store and process my application data for recruiting purposes{% if settings.privacyUrl %}, as described in the <a href="{{ settings.privacyUrl }}" target="_blank" rel="noopener">privacy notice</a>{% endif %}. <span class="req" aria-hidden="true">*</span></span></label>
+            <div class="err" id="e-consent"></div>
+          </fieldset>
+          <div class="submit-row">
+            <button class="btn" type="submit" id="a-submit">Submit application</button>
+            <small>We'll email you a confirmation.</small>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</section>
+{% if not embed %}<div class="mobile-bar" id="mobile-bar"><a class="btn" href="#apply">Apply for this job</a></div>{% endif %}
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+  'use strict';
+  var form = document.getElementById('apply-form');
+  var EMBED_Q = '{{ embed_q|escapejs }}';
+  var SITE = '{{ company.website|default:""|escapejs }}';
+  var COMPANY = '{{ company.name|escapejs }}';
+  var result = document.getElementById('apply-result');
+  var btn = document.getElementById('a-submit');
+  if (!form || !window.fetch || !window.FileReader) return;
+  var MAX = (parseInt(form.getAttribute('data-max-mb'), 10) || 5) * 1024 * 1024;
+  var params = new URLSearchParams(location.search);
+  var src = params.get('src'); if (src !== 'widget' && src !== 'referral') src = 'careers';
+  var ref = (params.get('ref') || '').slice(0, 255);
+
+  function errEl(k) { return document.getElementById('e-' + k); }
+  function inputFor(k) {
+    if (k.indexOf('answers.') === 0) return document.getElementById('q-' + k.slice(8));
+    return form.querySelector('[name="' + k + '"]');
+  }
+  function clearErrors() {
+    form.querySelectorAll('.err').forEach(function (e) { e.textContent = ''; });
+    form.querySelectorAll('.invalid').forEach(function (e) { e.classList.remove('invalid'); e.removeAttribute('aria-invalid'); });
+    result.innerHTML = '';
+  }
+  function showErrors(errors, message) {
+    var first = null;
+    Object.keys(errors || {}).forEach(function (k) {
+      var e = errEl(k), i = inputFor(k);
+      if (e) e.textContent = errors[k];
+      if (i) { i.classList.add('invalid'); i.setAttribute('aria-invalid', 'true'); if (!first) first = i; }
+    });
+    var a = document.createElement('div'); a.className = 'alert err'; a.textContent = message || 'Please fix the highlighted fields.';
+    result.innerHTML = ''; result.appendChild(a);
+    if (first) first.focus();
+    else { a.setAttribute('tabindex', '-1'); a.focus(); }
+  }
+  function readFile(file) {
+    return new Promise(function (resolve, reject) {
+      var r = new FileReader();
+      r.onload = function () { resolve(String(r.result || '')); };
+      r.onerror = function () { reject(new Error('The file could not be read.')); };
+      r.readAsDataURL(file);
+    });
+  }
+  /* ── Dropzone, copy link, mobile apply bar ───────────────────────────── */
+  (function () {
+    var drop = document.getElementById('drop'), inp = document.getElementById('a-resume'), t = document.getElementById('drop-t');
+    if (drop && inp) {
+      ['dragenter', 'dragover'].forEach(function (n) { drop.addEventListener(n, function () { drop.classList.add('over'); }); });
+      ['dragleave', 'drop'].forEach(function (n) { drop.addEventListener(n, function () { drop.classList.remove('over'); }); });
+      inp.addEventListener('change', function () {
+        var f = inp.files && inp.files[0];
+        drop.classList.toggle('has', !!f);
+        t.innerHTML = '';
+        if (f) { t.textContent = f.name + ' · ' + Math.max(1, Math.round(f.size / 1024)) + ' KB — click to change'; }
+        else { var u = document.createElement('u'); u.textContent = 'Choose a file'; t.appendChild(u); t.appendChild(document.createTextNode(' or drag it here')); }
+      });
+    }
+    var share = document.querySelector('[data-share]');
+    if (share) share.addEventListener('click', function () {
+      var label = share.querySelector('span'), url = location.href.split('#')[0];
+      var done = function () { label.textContent = 'Link copied'; setTimeout(function () { label.textContent = 'Copy link'; }, 2000); };
+      if (navigator.share && /Mobi/i.test(navigator.userAgent)) { navigator.share({ title: document.title, url: url }).catch(function () {}); return; }
+      if (navigator.clipboard) navigator.clipboard.writeText(url).then(done, function () { prompt('Copy this link:', url); });
+      else prompt('Copy this link:', url);
+    });
+    var bar = document.getElementById('mobile-bar'), apply = document.getElementById('apply');
+    if (bar && apply && 'IntersectionObserver' in window) {
+      new IntersectionObserver(function (es) { bar.classList.toggle('hide', es[0].isIntersecting); }, { threshold: 0.05 }).observe(apply);
+    }
+  })();
+
+  /* ── Resume parsing: pre-fill empty fields from the chosen resume ───────
+     Only fields the applicant left empty are filled, and anything they type
+     afterwards wins. Each filled field is marked so they know to check it. */
+  var parseStatus = document.getElementById('parse-status');
+  var parseSeq = 0;
+  (function () {
+    var st = document.createElement('style');
+    st.textContent = '.parse-status{margin-top:6px}';
+    document.head.appendChild(st);
+  })();
+  function setStatus(text, ok) {
+    if (!parseStatus) return;
+    parseStatus.textContent = text || '';
+    parseStatus.className = 'hint parse-status' + (ok ? ' ok' : '');
+  }
+  // Custom questions get filled too when their key / label says what they ask.
+  var QUESTION_MAP = [
+    [/linked\s*in/i, 'linkedinUrl'], [/git\s*hub/i, 'githubUrl'], [/portfolio|website|personal\s*site/i, 'portfolioUrl'],
+    [/experience|years|yoe/i, 'experienceYears'], [/skill|tech(nical)?\s*stack|technologies/i, 'skills'],
+    [/phone|mobile|contact\s*number/i, 'phone'], [/location|city|based/i, 'location'], [/e-?mail/i, 'email'],
+    [/full\s*name|^name$/i, 'fullName']
+  ];
+  function questionTarget(el) {
+    var key = el.getAttribute('data-q') || '';
+    var lab = form.querySelector('label[for="' + el.id + '"]');
+    var text = key + ' ' + (lab ? lab.textContent : '');
+    for (var i = 0; i < QUESTION_MAP.length; i++) if (QUESTION_MAP[i][0].test(text)) return QUESTION_MAP[i][1];
+    return '';
+  }
+  function fillOne(el, value) {
+    if (!el || value === undefined || value === null || value === '') return false;
+    if (el.getAttribute('data-type') === 'boolean' || el.type === 'checkbox' || el.tagName === 'SELECT') return false;
+    if (el.value && el.value.trim()) return false;              // never overwrite what they typed
+    var v = Array.isArray(value) ? value.join(', ') : String(value);
+    if (el.type === 'number') { var n = parseFloat(v); if (isNaN(n)) return false; v = String(n); }
+    if (el.type === 'url' && !/^https?:\/\//i.test(v)) return false;
+    if (el.maxLength > 0) v = v.slice(0, el.maxLength);
+    el.value = v;
+    el.classList.add('autofilled');
+    el.addEventListener('input', function off() { el.classList.remove('autofilled'); el.removeEventListener('input', off); });
+    return true;
+  }
+  function applyParsed(fields) {
+    var filled = [];
+    var std = { fullName: 'Full name', email: 'Email', phone: 'Phone', location: 'Location', linkedinUrl: 'LinkedIn' };
+    Object.keys(std).forEach(function (k) {
+      if (fillOne(form.querySelector('[name="' + k + '"]'), fields[k])) filled.push(std[k]);
+    });
+    form.querySelectorAll('[data-q]').forEach(function (el) {
+      var t = questionTarget(el);
+      if (t && fillOne(el, fields[t])) {
+        var lab = form.querySelector('label[for="' + el.id + '"]');
+        filled.push(lab ? lab.textContent.replace(/\*/g, '').trim() : t);
+      }
+    });
+    return filled;
+  }
+  var resumeInput = document.getElementById('a-resume');
+  if (resumeInput) resumeInput.addEventListener('change', function () {
+    var file = resumeInput.files && resumeInput.files[0];
+    var seq = ++parseSeq;
+    setStatus('');
+    if (!file || !/\.(pdf|docx)$/i.test(file.name) || file.size > MAX) return;   // submit-time checks explain these
+    setStatus('Reading your resume…');
+    readFile(file).then(function (dataUrl) {
+      return fetch('/api/public/careers/parse-resume', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'omit',
+        body: JSON.stringify({ resume: { name: file.name, mime: file.type, data: dataUrl } })
+      });
+    }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (d) { return { status: r.status, d: d }; });
+    }).then(function (res) {
+      if (seq !== parseSeq) return;                              // a newer file was chosen meanwhile
+      if (res.status !== 200 || !res.d.ok) {
+        setStatus(res.d && res.d.code === 'BAD_RESUME' ? (res.d.message || '') : "We couldn't read details from this resume — please fill the form in.");
+        return;
+      }
+      if (!res.d.readable) { setStatus(res.d.message || ''); return; }
+      var filled = applyParsed(res.d.fields || {});
+      setStatus(filled.length
+        ? 'Filled from your resume: ' + filled.join(', ') + '. Please check them before submitting.'
+        : 'Resume attached. Nothing new to fill in — your details are already entered.', !!filled.length);
+    }).catch(function () {
+      if (seq === parseSeq) setStatus("We couldn't read details from this resume — please fill the form in.");
+    });
+  });
+
+
+  /* ── Success pop-up ─────────────────────────────────────────────────────
+     A modal dialog over the page (focus kept inside, Esc / backdrop close).
+     The form is replaced by a short "Application sent" note so the page
+     stays truthful after the dialog is closed. */
+  function exitSite() {
+    // Same exit as the header button (base.html); after applying there is
+    // nothing to lose, so no confirmation.
+    if (window.careersExit) { window.careersExit(true); return; }
+    try { window.close(); } catch (_) {}
+    setTimeout(function () { if (!window.closed) location.replace(SITE || ('/careers' + EMBED_Q)); }, 150);
+  }
+  // Tells the header Exit button whether the visitor has started the form.
+  window.careersHasUnsavedInput = function () {
+    var f = document.getElementById('apply-form');
+    if (!f) return false;                                    // already applied
+    var els = f.querySelectorAll('input, textarea, select');
+    for (var i = 0; i < els.length; i++) {
+      var el = els[i];
+      if (el.type === 'hidden' || el.name === 'website') continue;
+      if (el.type === 'checkbox') { if (el.checked) return true; continue; }
+      if (el.type === 'file') { if (el.files && el.files.length) return true; continue; }
+      if ((el.value || '').trim()) return true;
+    }
+    return false;
+  };
+  function showSuccess(d) {
+    var email = d.email || ((form.querySelector('[name="email"]') || {}).value || '');
+    // Inline note where the form was.
+    var note = document.createElement('div'); note.className = 'success'; note.setAttribute('tabindex', '-1');
+    note.innerHTML = '<div class="tick"><svg width="30" height="30" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7"/></svg></div>';
+    var nh = document.createElement('h2'); nh.textContent = 'Application sent'; note.appendChild(nh);
+    var np = document.createElement('p'); np.textContent = 'Reference: ' + (d.reference || ''); note.appendChild(np);
+    form.parentNode.replaceChild(note, form); result.innerHTML = '';
+    var bar = document.getElementById('mobile-bar'); if (bar) bar.parentNode.removeChild(bar);
+    var hb = document.querySelectorAll('a[href="#apply"]');
+    for (var i = 0; i < hb.length; i++) { hb[i].textContent = 'Application sent ✓'; hb[i].setAttribute('aria-disabled', 'true'); hb[i].style.pointerEvents = 'none'; hb[i].style.opacity = '.7'; }
+
+    // The dialog.
+    var opener = document.activeElement;
+    var ov = document.createElement('div'); ov.className = 'pop-ov';
+    var dlg = document.createElement('div'); dlg.className = 'pop'; dlg.setAttribute('role', 'dialog'); dlg.setAttribute('aria-modal', 'true');
+    dlg.setAttribute('aria-labelledby', 'pop-h'); dlg.setAttribute('aria-describedby', 'pop-d');
+    dlg.innerHTML =
+      '<button type="button" class="pop-x" aria-label="Close">×</button>' +
+      '<div class="tick"><svg width="32" height="32" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7"/></svg></div>' +
+      '<h2 id="pop-h"></h2><p id="pop-d"></p><p class="pop-ref"></p><p class="pop-mail"></p>' +
+      '<div class="pop-actions"></div>';
+    dlg.querySelector('#pop-h').textContent = 'Application sent!';
+    dlg.querySelector('#pop-d').textContent = d.message || 'Thank you for applying.';
+    dlg.querySelector('.pop-ref').textContent = 'Reference: ' + (d.reference || '');
+    dlg.querySelector('.pop-mail').textContent = 'A confirmation email is on its way to ' + email +
+      '. If it does not arrive in a few minutes, please check your spam folder.';
+    var actions = dlg.querySelector('.pop-actions');
+    function close() {
+      document.removeEventListener('keydown', onKey, true);
+      if (ov.parentNode) ov.parentNode.removeChild(ov);
+      document.documentElement.style.overflow = '';
+      note.focus();
+    }
+    function btn(label, cls, onClick, href) {
+      var b = document.createElement(href ? 'a' : 'button');
+      b.className = cls; b.textContent = label;
+      if (href) b.href = href; else b.type = 'button';
+      b.addEventListener('click', onClick);
+      actions.appendChild(b); return b;
+    }
+    var first = btn('Browse more jobs', 'btn', function () {}, '/careers' + EMBED_Q + '#roles');
+    btn('Back to this job', 'btn btn-ghost', function (e) { e.preventDefault(); close(); window.scrollTo({ top: 0, behavior: 'smooth' }); });
+    if (!EMBED_Q) btn('Exit', 'btn btn-ghost pop-exit', function (e) { e.preventDefault(); exitSite(); });
+    var hint = document.createElement('p'); hint.className = 'pop-hint';
+    hint.textContent = EMBED_Q ? '' : (SITE ? 'Exit closes this tab or takes you to ' + SITE.replace(/^https?:\/\/(www\.)?/, '').replace(/\/$/, '') + '.' : 'Exit closes this tab.');
+    if (hint.textContent) dlg.appendChild(hint);
+    dlg.querySelector('.pop-x').addEventListener('click', close);
+    ov.addEventListener('mousedown', function (e) { if (e.target === ov) close(); });
+    function onKey(e) {
+      if (e.key === 'Escape') { e.preventDefault(); close(); return; }
+      if (e.key !== 'Tab') return;
+      var f = dlg.querySelectorAll('a[href],button:not([disabled])');
+      if (!f.length) return;
+      var a = f[0], z = f[f.length - 1];
+      if (e.shiftKey && document.activeElement === a) { e.preventDefault(); z.focus(); }
+      else if (!e.shiftKey && document.activeElement === z) { e.preventDefault(); a.focus(); }
+    }
+    document.addEventListener('keydown', onKey, true);
+    ov.appendChild(dlg); document.body.appendChild(ov);
+    document.documentElement.style.overflow = 'hidden';
+    first.focus();
+  }
+
+  /* "Already applied" (409 ALREADY_APPLIED): not an error for the person —
+     say so in the same pop-up style, with the same ways out. */
+  function showAlreadyApplied(message) {
+    var ov = document.createElement('div'); ov.className = 'pop-ov';
+    var dlg = document.createElement('div'); dlg.className = 'pop'; dlg.setAttribute('role', 'dialog'); dlg.setAttribute('aria-modal', 'true');
+    dlg.setAttribute('aria-labelledby', 'pop-h'); dlg.setAttribute('aria-describedby', 'pop-d');
+    dlg.innerHTML =
+      '<button type="button" class="pop-x" aria-label="Close">×</button>' +
+      '<div class="tick info"><svg width="32" height="32" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="6.2"/><path d="M8 7.2v3.6M8 5h.01"/></svg></div>' +
+      '<h2 id="pop-h"></h2><p id="pop-d"></p><p class="pop-mail"></p><div class="pop-actions"></div>';
+    dlg.querySelector('#pop-h').textContent = "You've already applied";
+    dlg.querySelector('#pop-d').textContent = message || "You've already applied for this job. Our team will be in touch.";
+    dlg.querySelector('.pop-mail').textContent = 'Each person can apply once per role. You are welcome to apply for our other open positions.';
+    var actions = dlg.querySelector('.pop-actions');
+    function close() {
+      document.removeEventListener('keydown', onKey, true);
+      if (ov.parentNode) ov.parentNode.removeChild(ov);
+      document.documentElement.style.overflow = '';
+      btn && btn.focus();
+    }
+    function add(label, cls, onClick, href) {
+      var b = document.createElement(href ? 'a' : 'button');
+      b.className = cls; b.textContent = label;
+      if (href) b.href = href; else b.type = 'button';
+      b.addEventListener('click', onClick); actions.appendChild(b); return b;
+    }
+    var first = add('Browse other jobs', 'btn', function () {}, '/careers' + EMBED_Q + '#roles');
+    add('Close', 'btn btn-ghost', function (e) { e.preventDefault(); close(); });
+    if (!EMBED_Q) add('Exit', 'btn btn-ghost pop-exit', function (e) { e.preventDefault(); exitSite(); });
+    dlg.querySelector('.pop-x').addEventListener('click', close);
+    ov.addEventListener('mousedown', function (e) { if (e.target === ov) close(); });
+    function onKey(e) {
+      if (e.key === 'Escape') { e.preventDefault(); close(); return; }
+      if (e.key !== 'Tab') return;
+      var f = dlg.querySelectorAll('a[href],button:not([disabled])');
+      var a = f[0], z = f[f.length - 1];
+      if (e.shiftKey && document.activeElement === a) { e.preventDefault(); z.focus(); }
+      else if (!e.shiftKey && document.activeElement === z) { e.preventDefault(); a.focus(); }
+    }
+    document.addEventListener('keydown', onKey, true);
+    ov.appendChild(dlg); document.body.appendChild(ov);
+    document.documentElement.style.overflow = 'hidden';
+    first.focus();
+  }
+
+  form.addEventListener('submit', function (ev) {
+    ev.preventDefault();
+    clearErrors();
+    var errors = {};
+    var v = function (n) { var el = form.querySelector('[name="' + n + '"]'); return el ? el.value.trim() : ''; };
+    if (v('fullName').length < 2) errors.fullName = 'Please enter your full name.';
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v('email'))) errors.email = 'Please enter a valid email address.';
+    var fileInput = document.getElementById('a-resume');
+    var file = fileInput.files && fileInput.files[0];
+    if (!file) errors.resume = 'Please attach your resume (PDF or DOCX).';
+    else if (!/\.(pdf|docx)$/i.test(file.name)) errors.resume = 'Only PDF or DOCX resumes are accepted.';
+    else if (file.size > MAX) errors.resume = 'Resumes must be ' + (MAX / 1048576) + ' MB or smaller.';
+    if (!document.getElementById('a-consent').checked) errors.consent = 'Please agree to the privacy notice so we can process your application.';
+    var answers = {};
+    form.querySelectorAll('[data-q]').forEach(function (el) {
+      var k = el.getAttribute('data-q');
+      var val = el.getAttribute('data-type') === 'boolean' ? (el.checked ? 'true' : '') : el.value.trim();
+      if (val) answers[k] = val;
+      else if (el.required) errors['answers.' + k] = 'This question is required.';
+    });
+    if (Object.keys(errors).length) { showErrors(errors); return; }
+    btn.disabled = true; btn.textContent = 'Submitting…';
+    readFile(file).then(function (dataUrl) {
+      return fetch('/api/public/careers/apply', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'omit',
+        body: JSON.stringify({
+          jobId: form.getAttribute('data-job'), formToken: v('formToken'), website: v('website'),
+          fullName: v('fullName'), email: v('email'), phone: v('phone'), location: v('location'),
+          linkedinUrl: v('linkedinUrl'), coverLetter: form.querySelector('[name="coverLetter"]').value,
+          answers: answers, consent: true, source: src, sourceDetail: ref,
+          resume: { name: file.name, mime: file.type, data: dataUrl }
+        })
+      });
+    }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (d) { return { status: r.status, d: d }; });
+    }).then(function (res) {
+      if (res.status === 201 && res.d.ok) {
+        showSuccess(res.d);
+        return;
+      }
+      if (res.status === 409 && res.d.code === 'ALREADY_APPLIED') {
+        result.innerHTML = '';
+        showAlreadyApplied(res.d.message);
+        return;
+      }
+      showErrors(res.d.errors || {}, res.d.message || ('Something went wrong (' + res.status + '). Please try again.'));
+    }).catch(function (e) {
+      showErrors({}, (e && e.message) || 'Network error. Please check your connection and try again.');
+    }).then(function () { if (btn) { btn.disabled = false; btn.textContent = 'Submit application'; } });
+  });
+})();
+</script>
+{% endblock %}

@@ -20,7 +20,7 @@ class RoutingBase(TestCase):
     def setUp(self):
         AppUser.objects.create(email='admin@x.com', full_name='Admin', password='x', role='admin')
         hr = Role.objects.create(name='HR Manager')
-        grant(hr, 'employee.view', 'employee.edit', 'employee.create', 'leave.action', 'submission.view_all',
+        grant(hr, 'employee.view', 'employee.edit', 'employee.create', 'task.create', 'leave.action', 'submission.view_all',
               'submission.action', 'attendance.view', 'attendance.create', 'task.edit', 'leave.view')
         AppUser.objects.create(email='hr@x.com', full_name='HR Person', password='x', role='hr', role_ref=hr)
         emp = Role.objects.create(name='Employee')

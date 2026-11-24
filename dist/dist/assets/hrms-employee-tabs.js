@@ -179,6 +179,47 @@
       '.het-bal{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:14px;}',
       '.het-bal .het-tile b{display:block;font-size:20px;font-weight:800;color:var(--text,#0f172a);}',
       '.het-bal .het-tile small{font-size:11px;color:var(--text3,#64748b);}',
+      '.het-ahbar{display:flex;flex-wrap:wrap;justify-content:space-between;gap:10px;margin-bottom:10px;}',
+      '.het-ahchips{display:flex;flex-wrap:wrap;gap:6px;}',
+      '.het-ahc{border:1px solid var(--border2,#e5e7eb);background:var(--bg2,#fff);color:var(--text2,#475569);border-radius:999px;padding:4px 10px;font:inherit;font-size:12px;font-weight:600;cursor:pointer;}',
+      '.het-ahc span{display:inline-block;min-width:18px;margin-left:4px;padding:0 6px;border-radius:999px;background:var(--bg3,#f1f5f9);color:var(--text,#0f172a);font-size:11px;}',
+      '.het-ahc:hover{border-color:var(--accent,#4f8ef7);}',
+      '.het-ahc.on{background:var(--accent,#4f8ef7);border-color:var(--accent,#4f8ef7);color:#fff;}',
+      '.het-ahc.on span{background:rgba(255,255,255,.25);color:#fff;}',
+      '.het-ahctl{display:flex;flex-wrap:wrap;align-items:center;gap:8px;}',
+      '.het-ahiss{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--text2,#475569);cursor:pointer;}',
+      '.het-ahlink{background:none;border:0;color:var(--accent,#4f8ef7);font:inherit;font-size:12px;font-weight:600;cursor:pointer;padding:4px;}',
+      '.het-ahwrap{max-height:420px;overflow:auto;border:1px solid var(--border2,#e5e7eb);border-radius:12px;}',
+      '.het-ahwrap:focus{outline:2px solid var(--accent,#4f8ef7);outline-offset:2px;}',
+      '.het-aht{width:100%;border-collapse:collapse;font-size:12.5px;min-width:780px;}',
+      '.het-aht th{position:sticky;top:0;z-index:1;background:var(--bg3,#f1f5f9);text-align:left;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--text3,#64748b);padding:9px 10px;border-bottom:1px solid var(--border2,#e5e7eb);white-space:nowrap;}',
+      '.het-aht td{padding:9px 10px;border-bottom:1px solid var(--border2,#e5e7eb);vertical-align:middle;white-space:nowrap;color:var(--text,#0f172a);}',
+      '.het-aht td small{display:block;font-size:11px;color:var(--text3,#64748b);}',
+      '.het-aht td i{color:var(--text3,#94a3b8);font-style:normal;}',
+      '.het-aht td.het-ahx{white-space:normal;min-width:160px;color:var(--text2,#475569);}',
+      '.het-aht tbody tr:hover td{background:var(--bg3,#f8fafc);}',
+      '.het-aht tr.weekend td,.het-aht tr.holiday td{background:color-mix(in srgb,var(--bg3,#f1f5f9) 60%,transparent);}',
+      '.het-ahs{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:700;background:var(--bg3,#f1f5f9);color:var(--text2,#475569);}',
+      '.het-ahs.present{background:rgba(16,185,129,.14);color:#059669;}',
+      '.het-ahs.late{background:rgba(245,158,11,.16);color:#b45309;}',
+      '.het-ahs.half-day{background:rgba(249,115,22,.15);color:#c2410c;}',
+      '.het-ahs.absent{background:rgba(239,68,68,.14);color:#dc2626;}',
+      '.het-ahs.leave{background:rgba(139,92,246,.15);color:#7c3aed;}',
+      '.het-ahs.holiday{background:rgba(14,165,233,.15);color:#0284c7;}',
+      '.het-ahs.working{background:rgba(79,142,247,.15);color:var(--accent,#4f8ef7);}',
+      'html[data-theme="dark"] .het-ahs.present{color:#34d399;}html[data-theme="dark"] .het-ahs.late{color:#fbbf24;}html[data-theme="dark"] .het-ahs.half-day{color:#fb923c;}html[data-theme="dark"] .het-ahs.absent{color:#f87171;}html[data-theme="dark"] .het-ahs.leave{color:#a78bfa;}html[data-theme="dark"] .het-ahs.holiday{color:#38bdf8;}',
+      '.het-ahm{display:inline-block;padding:1px 7px;border-radius:6px;font-size:11px;font-weight:600;border:1px solid var(--border2,#e5e7eb);color:var(--text2,#475569);}',
+      '.het-ahm.wfh{border-color:rgba(139,92,246,.4);color:#7c3aed;}',
+      '.het-ahwarn{color:#dc2626;font-weight:600;}',
+      '.het-ahlive{color:var(--accent,#4f8ef7);font-weight:600;}',
+      '.het-ahpg{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;margin-top:10px;font-size:12px;color:var(--text3,#64748b);}',
+      '.het-ahpg b{color:var(--text,#0f172a);}',
+      '.het-ahnav{display:flex;align-items:center;gap:4px;}',
+      '.het-ahnav button{min-width:30px;height:30px;padding:0 8px;border-radius:8px;border:1px solid var(--border2,#e5e7eb);background:var(--bg2,#fff);color:var(--text,#0f172a);font:inherit;font-size:12px;font-weight:600;cursor:pointer;}',
+      '.het-ahnav button.on{background:var(--accent,#4f8ef7);border-color:var(--accent,#4f8ef7);color:#fff;}',
+      '.het-ahnav button:disabled{opacity:.45;cursor:default;}',
+      '.het-ahdots{padding:0 4px;}',
+      '@media(max-width:720px){.het-ahbar{flex-direction:column;}.het-ahwrap{max-height:360px;}}',
       '@media(max-width:720px){.het-pipe{grid-template-columns:1fr 1fr;}.het-break{grid-template-columns:1fr 1fr;}}',
       '@media(max-width:480px){.het-pipe{grid-template-columns:1fr;}.het-two{grid-template-columns:1fr;}}'
     ].join('');
@@ -191,9 +232,10 @@
   /* ── Attendance ─────────────────────────────────────────────────────────── */
   function wireAtt(box, ctx) {
     var s = ctx.state;
-    on(box, 'att-range', function () { s.attRange = this.value; s.attSummary = null; render('attendance', box, ctx); });
-    on(box, 'att-from', function () { s.attFrom = this.value; s.attSummary = null; render('attendance', box, ctx); });
-    on(box, 'att-to', function () { s.attTo = this.value; s.attSummary = null; render('attendance', box, ctx); });
+    var again = function () { s.attSummary = null; s.ahData = null; s.ahPage = 1; render('attendance', box, ctx); };
+    on(box, 'att-range', function () { s.attRange = this.value; again(); });
+    on(box, 'att-from', function () { s.attFrom = this.value; again(); });
+    on(box, 'att-to', function () { s.attTo = this.value; again(); });
   }
   function renderAttendance(box, ctx) {
     var s = ctx.state;
@@ -222,8 +264,145 @@
       '</div>' +
       '<div class="het-hrs"><span>Worked <b>' + fmtMins(sum.total_worked_minutes) + '</b></span>' +
         '<span>Breaks <b>' + fmtMins(sum.total_break_minutes) + '</b></span>' +
-        '<span>Overtime <b>' + fmtMins(sum.total_overtime_minutes) + '</b></span></div>';
+        '<span>Overtime <b>' + fmtMins(sum.total_overtime_minutes) + '</b></span></div>' +
+      '<div class="het-ah" data-het="ah"></div>';
     wireAtt(box, ctx);
+    renderHistory(box, ctx);
+  }
+
+  /* ── Attendance history: every day of the range, filters + pagination ─── */
+  var AH_STATUS = [
+    ['present', 'Present'], ['late', 'Late'], ['half-day', 'Half-day'], ['absent', 'Absent'], ['leave', 'Leave'],
+    ['holiday', 'Holiday'], ['weekend', 'Weekly off'], ['working', 'Working'], ['pending', 'Not checked in']
+  ];
+  var AH_LABEL = {}; AH_STATUS.forEach(function (x) { AH_LABEL[x[0]] = x[1]; });
+  function ahQuery(ctx, extra) {
+    var s = ctx.state, r = rangeFor(s.attRange || '30', s.attFrom, s.attTo);
+    var qs = 'email=' + encodeURIComponent(ctx.email) + '&from=' + r.from + '&to=' + r.to +
+      '&page=' + (s.ahPage || 1) + '&pageSize=' + (s.ahSize || 10);
+    var st = Object.keys(s.ahStatus || {}).filter(function (k) { return s.ahStatus[k]; });
+    if (st.length) qs += '&status=' + encodeURIComponent(st.join(','));
+    if (s.ahMode) qs += '&mode=' + s.ahMode;
+    if (s.ahIssues) qs += '&issues=1';
+    return '/api/attendance/history?' + qs + (extra || '');
+  }
+  function renderHistory(box, ctx) {
+    var s = ctx.state, host = q(box, 'ah');
+    if (!host) return;
+    if (!s.ahData && !s.ahError) {
+      host.innerHTML = ahHead(s, null) + '<div class="het-loading">Loading history…</div>';
+      wireHistory(box, ctx);
+      var tok = s.ahTok = (s.ahTok || 0) + 1;
+      api(ahQuery(ctx)).then(function (d) {
+        if (tok !== s.ahTok) return;
+        s.ahData = d; s.ahError = null;
+        if (box.getAttribute('data-het-tab') === 'attendance') renderHistory(box, ctx);
+      }).catch(function (e) {
+        if (tok !== s.ahTok) return;
+        s.ahError = e;
+        if (box.getAttribute('data-het-tab') === 'attendance') renderHistory(box, ctx);
+      });
+      return;
+    }
+    if (s.ahError) {
+      var err = s.ahError; s.ahError = null;
+      host.innerHTML = ahHead(s, null) + denied(err, 'attendance history');
+      wireHistory(box, ctx);
+      return;
+    }
+    var d = s.ahData, rows = d.results || [];
+    var body = rows.length ? rows.map(function (x) {
+      var mode = x.mode === 'wfh' ? '<span class="het-ahm wfh">WFH</span>' : x.mode === 'office' ? '<span class="het-ahm">Office</span>' : '';
+      var extra = [];
+      if (x.detail) extra.push(esc(x.detail));
+      if (x.punchIssue) extra.push('<span class="het-ahwarn">Missed punch</span>');
+      if (x.lateMinutes && x.status === 'late') extra.push(x.lateMinutes + ' min late');
+      if (x.note) extra.push('<span title="' + esc(x.note) + '">' + esc(x.note.length > 40 ? x.note.slice(0, 40) + '…' : x.note) + '</span>');
+      return '<tr class="het-ahr ' + esc(x.status) + '">' +
+        '<td><b>' + esc(fmtDate(x.date)) + '</b><small>' + esc(x.weekday) + '</small></td>' +
+        '<td><span class="het-ahs ' + esc(x.status) + '">' + esc(AH_LABEL[x.status] || x.status) + '</span></td>' +
+        '<td>' + (x.checkIn ? esc(x.checkIn) : '<i>—</i>') + '</td>' +
+        '<td>' + (x.checkOut ? esc(x.checkOut) : (x.status === 'working' ? '<span class="het-ahlive">In progress</span>' : '<i>—</i>')) + '</td>' +
+        '<td>' + (x.workedMinutes ? esc(fmtMins(x.workedMinutes)) : '<i>—</i>') + '</td>' +
+        '<td>' + (x.breakMinutes ? esc(fmtMins(x.breakMinutes)) : '<i>—</i>') + '</td>' +
+        '<td>' + (x.overtimeMinutes ? esc(fmtMins(x.overtimeMinutes)) : '<i>—</i>') + '</td>' +
+        '<td>' + mode + '</td>' +
+        '<td class="het-ahx">' + (extra.join(' · ') || '<i>—</i>') + '</td></tr>';
+    }).join('') : '<tr><td colspan="9" class="het-empty">No days match these filters.</td></tr>';
+    var from = d.total ? (d.page - 1) * d.pageSize + 1 : 0, to = Math.min(d.page * d.pageSize, d.total);
+    host.innerHTML = ahHead(s, d) +
+      '<div class="het-ahwrap" tabindex="0" aria-label="Attendance history"><table class="het-aht"><thead><tr>' +
+        '<th>Date</th><th>Status</th><th>Check in</th><th>Check out</th><th>Worked</th><th>Break</th><th>Overtime</th><th>Mode</th><th>Details</th>' +
+      '</tr></thead><tbody>' + body + '</tbody></table></div>' +
+      '<div class="het-ahpg"><span>' + (d.total ? 'Showing <b>' + from + '–' + to + '</b> of <b>' + d.total + '</b> days' : '0 days') + '</span>' +
+        '<span class="het-ahnav">' + pager(d) + '</span></div>';
+    wireHistory(box, ctx);
+  }
+  function pager(d) {
+    var p = d.page, n = d.pages, out = [];
+    out.push('<button type="button" data-ahpage="' + (p - 1) + '"' + (p <= 1 ? ' disabled' : '') + ' aria-label="Previous page">‹</button>');
+    var pages = [];
+    for (var i = 1; i <= n; i++) if (i === 1 || i === n || Math.abs(i - p) <= 1) pages.push(i);
+    var last = 0;
+    pages.forEach(function (i) {
+      if (i - last > 1) out.push('<span class="het-ahdots">…</span>');
+      out.push('<button type="button" data-ahpage="' + i + '"' + (i === p ? ' class="on" aria-current="page"' : '') + '>' + i + '</button>');
+      last = i;
+    });
+    out.push('<button type="button" data-ahpage="' + (p + 1) + '"' + (p >= n ? ' disabled' : '') + ' aria-label="Next page">›</button>');
+    return out.join('');
+  }
+  function ahHead(s, d) {
+    var counts = (d && d.counts) || {};
+    var chips = AH_STATUS.filter(function (x) { return !d || counts[x[0]] || (s.ahStatus || {})[x[0]]; }).map(function (x) {
+      var on = (s.ahStatus || {})[x[0]];
+      return '<button type="button" class="het-ahc ' + x[0] + (on ? ' on' : '') + '" data-ahst="' + x[0] + '" aria-pressed="' + (on ? 'true' : 'false') + '">' +
+        esc(x[1]) + (d ? ' <span>' + (counts[x[0]] || 0) + '</span>' : '') + '</button>';
+    }).join('');
+    var any = Object.keys(s.ahStatus || {}).some(function (k) { return s.ahStatus[k]; }) || s.ahMode || s.ahIssues;
+    return '<div class="het-sec" style="margin-top:20px">Attendance history</div>' +
+      '<div class="het-ahbar">' +
+        '<div class="het-ahchips" role="group" aria-label="Filter by status">' + chips + '</div>' +
+        '<div class="het-ahctl">' +
+          selOpts('ah-mode', s.ahMode || '', [['', 'All work modes'], ['office', 'Office'], ['wfh', 'WFH']]) +
+          '<label class="het-ahiss"><input type="checkbox" data-het="ah-issues"' + (s.ahIssues ? ' checked' : '') + '> Needs attention</label>' +
+          selOpts('ah-size', String(s.ahSize || 10), [['10', '10 / page'], ['20', '20 / page'], ['50', '50 / page'], ['100', '100 / page']]) +
+          (any ? '<button type="button" class="het-ahlink" data-ahclear="1">Clear filters</button>' : '') +
+          '<button type="button" class="het-filter" data-ahcsv="1" title="Download these days as CSV">Export CSV</button>' +
+        '</div>' +
+      '</div>';
+  }
+  function wireHistory(box, ctx) {
+    var s = ctx.state, host = q(box, 'ah');
+    if (!host) return;
+    var reload = function (keepPage) { s.ahData = null; if (!keepPage) s.ahPage = 1; renderHistory(box, ctx); };
+    host.querySelectorAll('[data-ahst]').forEach(function (b) {
+      b.onclick = function () { s.ahStatus = s.ahStatus || {}; var k = b.getAttribute('data-ahst'); s.ahStatus[k] = !s.ahStatus[k]; reload(); };
+    });
+    var m = q(host, 'ah-mode'); if (m) m.onchange = function () { s.ahMode = this.value; reload(); };
+    var sz = q(host, 'ah-size'); if (sz) sz.onchange = function () { s.ahSize = parseInt(this.value, 10) || 10; reload(); };
+    var iss = q(host, 'ah-issues'); if (iss) iss.onchange = function () { s.ahIssues = this.checked; reload(); };
+    var cl = host.querySelector('[data-ahclear]'); if (cl) cl.onclick = function () { s.ahStatus = {}; s.ahMode = ''; s.ahIssues = false; reload(); };
+    host.querySelectorAll('[data-ahpage]').forEach(function (b) {
+      b.onclick = function () {
+        if (b.disabled) return;
+        s.ahPage = parseInt(b.getAttribute('data-ahpage'), 10) || 1; reload(true);
+        var w = host.querySelector('.het-ahwrap'); if (w) w.scrollTop = 0;
+      };
+    });
+    var csv = host.querySelector('[data-ahcsv]');
+    if (csv) csv.onclick = function () {
+      csv.disabled = true;
+      fetch(ahQuery(ctx, '&export=csv')).then(function (r) {
+        if (!r.ok) throw new Error('Export failed (' + r.status + ')');
+        var name = ((r.headers.get('Content-Disposition') || '').match(/filename="([^"]+)"/) || [])[1] || 'attendance.csv';
+        return r.blob().then(function (b) { return { b: b, name: name }; });
+      }).then(function (x) {
+        var url = URL.createObjectURL(x.b), a = document.createElement('a');
+        a.href = url; a.download = x.name; document.body.appendChild(a); a.click(); a.parentNode.removeChild(a);
+        setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+      }).catch(function (e) { alert(e.message); }).then(function () { csv.disabled = false; });
+    };
   }
   function bk(v, l) { return '<div class="het-bk"><b>' + v + '</b><small>' + esc(l) + '</small></div>'; }
 
@@ -427,7 +606,7 @@
   function reset(ctx, tab) {
     var s = (ctx && ctx.state) || {};
     var keys = {
-      attendance: ['attSummary', 'attError'],
+      attendance: ['attSummary', 'attError', 'ahData', 'ahError'],
       checkin: ['day', 'dayError', 'punches'],
       tasks: ['tasks', 'tasksError'],
       submissions: ['subs', 'subsError'],
