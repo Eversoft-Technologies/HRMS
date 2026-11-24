@@ -928,6 +928,10 @@
    HRIS employee list on a phone: keep the full table and allow
    horizontal swiping, like the dashboard employee directory.
    ============================================================ */
+body:has(.sidebar a.nav-item.active[href="/hr/hris"]) #root .content .card .table-wrap th {
+  text-align: left !important;
+}
+
 @media (max-width: 600px) {
   body:has(.sidebar a.nav-item.active[href="/hr/hris"]) #root .content .card > .sec-head ~ .table-wrap {
     overflow-x: auto !important;
