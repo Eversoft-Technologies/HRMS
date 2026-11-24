@@ -11,6 +11,7 @@ export { default as ManagerDashboard } from './ManagerDashboard';
 export { default as AdminDashboard } from './AdminDashboard';
 export { default as NotificationCenter } from './NotificationCenter';
 export { default as WorkSubmissions } from './WorkSubmissions';
+export { default as PayrollDashboard } from './PayrollDashboard';
 
 // Component usage guide:
 // 

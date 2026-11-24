@@ -39,6 +39,7 @@
     wfh:   'hrms-att-wfh',      // Work From Home card
     act:   'hrms-att-activity', // our Today's Activity Log card
     team:  'hrms-att-team',     // our Team Status Now card
+    regz:  'hrms-att-regz',     // missed punches + regularization queue (full-width, top)
     style: 'hrms-att-actions-style'
   };
   var state = { actFilter: 'all', teamFilter: 'all', teamSearch: '' };
@@ -275,7 +276,27 @@
         + '#' + ID.stats + ' .haa-ci-v{font-size:14px;}'
         + '.haa-scope .haa-title{font-size:13px;}'
         + '.haa-scope .haa-scroll{max-height:220px;}'
-      + '}'
+      + '}',
+      /* missed punches / regularization card (ours, full width, top row) */
+      '#' + ID.regz + ' .hrg-sec + .hrg-sec{margin-top:14px;}',
+      '#' + ID.regz + ' .hrg-row{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;background:var(--bg3);border:1px solid var(--border);border-left:3px solid var(--warn,#f7c94f);border-radius:10px;padding:10px 12px;margin-bottom:8px;}',
+      '#' + ID.regz + ' .hrg-row.overdue{border-left-color:var(--danger,#f75f4f);}',
+      '#' + ID.regz + ' .hrg-row.queue{border-left-color:var(--accent,#4f8ef7);}',
+      '#' + ID.regz + ' .hrg-main{flex:1 1 260px;min-width:0;}',
+      '#' + ID.regz + ' .hrg-what{font-size:13px;font-weight:700;color:var(--text);}',
+      '#' + ID.regz + ' .hrg-msg{font-size:12px;color:var(--text2);margin-top:2px;}',
+      '#' + ID.regz + ' .hrg-meta{font-size:11.5px;color:var(--text3);margin-top:3px;}',
+      '#' + ID.regz + ' .hrg-due{font-weight:700;color:var(--warn,#f7c94f);}',
+      '#' + ID.regz + ' .hrg-due.overdue{color:var(--danger,#f75f4f);}',
+      '#' + ID.regz + ' .hrg-acts{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}',
+      '#' + ID.regz + ' .hrg-note{background:var(--bg2);border:1px solid var(--border);border-radius:7px;color:var(--text);font:inherit;font-size:11.5px;padding:5px 8px;width:150px;max-width:100%;}',
+      '#' + ID.regz + ' .hrg-note::placeholder{color:var(--text3);}',
+      '#' + ID.regz + ' .hrg-btn{background:var(--accent,#4f8ef7);color:#fff;border:none;border-radius:8px;padding:7px 14px;font-size:12px;font-weight:700;cursor:pointer;}',
+      '#' + ID.regz + ' .hrg-btn:disabled{opacity:.55;cursor:not-allowed;}',
+      '.haa-scope .haa-pill.late,.haa-scope .haa-pill.overdue{background:rgba(247,95,79,.16);color:var(--danger,#f75f4f);}',
+      '.hrg-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;}',
+      '.hrg-cur{font-size:11px;color:var(--text3);font-weight:400;text-transform:none;letter-spacing:normal;}',
+      '@media(max-width:520px){.hrg-grid{grid-template-columns:1fr;}#' + ID.regz + ' .hrg-note{width:100%;}}'
     ].join('');
     var st = document.createElement('style');
     st.id = ID.style; st.textContent = css;
@@ -862,176 +883,33 @@
       });
   }
 
-  /* ── layout ───────────────────────────────────────────────────────────── */
-  /* ---- Forgot-punch tickets ---- */
-  var ticketProofData = '';
-  function kindLabel(k) { return k === 'forgot_checkin' ? 'Check-in correction' : (k === 'forgot_checkout' ? 'Check-out correction' : (k || '')); }
-  function setMsg(el, t, c) { if (!el) return; el.textContent = t || ''; el.className = 'hat-msg' + (c ? (' ' + c) : ''); }
-  function closeTicketModal() { var b = document.getElementById('hat-back'); if (b && b.parentNode) b.parentNode.removeChild(b); }
-
-  function openTicketModal() {
-    var em = actorEmail();
-    if (!em) { if (window.alert) window.alert('Please sign in first.'); return; }
-    ensureStyle();
-    var back = document.createElement('div');
-    back.id = 'hat-back'; back.className = 'hat-back haa-scope';
-    back.innerHTML = '<div class="hat-modal"><div class="hat-loading">Loading…</div></div>';
-    back.addEventListener('click', function (e) { if (e.target === back) closeTicketModal(); });
-    document.body.appendChild(back);
-    checkApprover(function (isAppr) {
-      api('/api/attendance/punch-ticket?email=' + encodeURIComponent(em))
-        .then(function (ctx) { renderTicketModal(back, ctx, isAppr); if (isAppr) loadTicketApprovals(back); })
-        .catch(function (err) {
-          var m = back.querySelector('.hat-modal');
-          if (m) m.innerHTML = '<div class="hat-err">' + esc((err && err.message) || 'Could not load tickets.') + '</div><div class="hat-mf"><button class="cx" id="hat-x">Close</button></div>';
-          var x = back.querySelector('#hat-x'); if (x) x.onclick = closeTicketModal;
-        });
-    });
+  /* ---- Missed punch / Regularize (one feature: hrms-regularize.js) ----
+   * The card is ours (full width, top row); its content — the entry button,
+   * flagged days with deadlines, the employee's requests of every kind and
+   * the manager / HR approval queue — is window.HRMSRegularize's panel, the
+   * same one the Leave page shows. The old "Attendance tickets" pop-up and
+   * the inline regularization form are gone: every entry point opens
+   * HRMSRegularize.open(). */
+  function buildRegzCard() {
+    var card = document.createElement('div');
+    card.id = ID.regz; card.className = 'card haa-scope';
+    card.innerHTML = '<div id="hrg-mount"></div>';
+    mountRegz(card);
+    return card;
   }
-
-  function renderTicketModal(back, ctx, isAppr) {
-    ticketProofData = '';
-    var m = back.querySelector('.hat-modal'); if (!m) return;
-    var canIn = ctx.canRaiseCheckin, canOut = ctx.canRaiseCheckout;
-    var remaining = (ctx.remaining == null ? 0 : ctx.remaining), limit = ctx.limit || 3;
-    var picker = '';
-    if (canIn && canOut) {
-      picker = '<div class="hat-f"><label>What did you forget?</label>' +
-        '<select id="hat-kind" class="hat-in">' +
-          '<option value="forgot_checkout">Correct check-out (missed)</option>' +
-          '<option value="forgot_checkin">Correct check-in (late or missed)</option>' +
-        '</select></div>';
-    } else if (canIn) {
-      picker = '<input type="hidden" id="hat-kind" value="forgot_checkin">' +
-        '<div class="hat-note">Correct your <b>check-in</b>. On approval it is set to the office start time (' + esc(ctx.officeStart || '09:00') + ') — use this if you missed check-in, or checked in late but were working from the start.</div>';
-    } else if (canOut) {
-      picker = '<input type="hidden" id="hat-kind" value="forgot_checkout">' +
-        '<div class="hat-note">You forgot to <b>check out</b> today. On approval your check-out becomes the office end time (' + esc(ctx.officeEnd || '18:00') + ').</div>';
-    }
-    var raise;
-    if (canIn || canOut) {
-      if (remaining <= 0) {
-        raise = '<div class="hat-block">You have used all ' + limit + ' attendance tickets this month.</div>';
-      } else {
-        raise = picker +
-          '<div class="hat-f"><label>Reason <span class="hat-req">*</span></label>' +
-            '<textarea id="hat-reason" class="hat-in" placeholder="Why did you forget to punch? This is what the approver verifies."></textarea></div>' +
-          '<div class="hat-f"><label>Proof — photo of attendance sheet <span class="hat-req">*</span></label>' +
-            '<input type="file" accept="image/*" id="hat-file" class="hat-file">' +
-            '<div id="hat-preview" class="hat-preview" style="display:none"></div></div>' +
-          '<div class="hat-mf"><button class="cx" id="hat-cancel">Cancel</button>' +
-            '<button class="ok" id="hat-submit">Submit ticket</button></div>' +
-          '<div class="hat-msg" id="hat-msg"></div>';
+  function mountRegz(card) {
+    var el = card.querySelector('#hrg-mount');
+    if (!el || el.__hrzMounted) return;
+    if (window.HRMSRegularize) { el.__hrzMounted = true; window.HRMSRegularize.mount(el); return; }
+    var tries = 0, t = setInterval(function () {      // the module loads (defer) before us; belt and braces
+      if (window.HRMSRegularize || ++tries > 50) {
+        clearInterval(t);
+        if (window.HRMSRegularize && document.documentElement.contains(el)) { el.__hrzMounted = true; window.HRMSRegularize.mount(el); }
       }
-    } else {
-      raise = '<div class="hat-block">' + esc(ctx.blockReason || 'Nothing to correct for today.') + '</div>';
-    }
-    var mine = (ctx.tickets || []).map(function (t) {
-      var cls = String(t.status || 'Pending').toLowerCase();
-      return '<li class="haa-li"><span><span class="haa-who">' + esc(kindLabel(t.kind)) + '</span>' +
-        '<div class="haa-sub">' + esc(t.date || '') + (t.reviewerNote ? ' Â· ' + esc(t.reviewerNote) : '') + '</div></span>' +
-        '<span class="haa-pill ' + esc(cls) + '">' + esc(t.status || 'Pending') + '</span></li>';
-    }).join('') || '<li class="haa-empty">No tickets yet.</li>';
-
-    m.innerHTML =
-      '<div class="hat-head"><div class="hat-title">Attendance Tickets</div>' +
-        '<div class="hat-count">' + remaining + ' of ' + limit + ' left this month</div></div>' +
-      raise +
-      '<div class="haa-list-title">My recent tickets</div>' +
-      '<ul class="haa-list">' + mine + '</ul>' +
-      '<div id="hat-approvals"></div>' +
-      ((canIn || canOut) && remaining > 0 ? '' : '<div class="hat-mf"><button class="cx" id="hat-close2">Close</button></div>');
-
-    var cancel = m.querySelector('#hat-cancel') || m.querySelector('#hat-close2');
-    if (cancel) cancel.onclick = closeTicketModal;
-    var file = m.querySelector('#hat-file'); if (file) file.addEventListener('change', onTicketFile);
-    var sub = m.querySelector('#hat-submit'); if (sub) sub.onclick = function () { submitTicket(back, isAppr); };
+    }, 100);
   }
-
-  function onTicketFile(e) {
-    var f = e.target.files && e.target.files[0]; if (!f) return;
-    var prev = document.getElementById('hat-preview');
-    var reader = new FileReader();
-    reader.onload = function () {
-      var img = new Image();
-      img.onload = function () {
-        var max = 1400, w = img.width, h = img.height;
-        if (w > max || h > max) { var sc = Math.min(max / w, max / h); w = Math.round(w * sc); h = Math.round(h * sc); }
-        try {
-          var cv = document.createElement('canvas'); cv.width = w; cv.height = h;
-          cv.getContext('2d').drawImage(img, 0, 0, w, h);
-          ticketProofData = cv.toDataURL('image/jpeg', 0.72);
-        } catch (_) { ticketProofData = reader.result; }
-        if (prev) { prev.style.display = 'block'; prev.innerHTML = '<img src="' + ticketProofData + '" alt="proof">'; }
-      };
-      img.onerror = function () { ticketProofData = reader.result; if (prev) { prev.style.display = 'block'; prev.innerHTML = '<img src="' + ticketProofData + '" alt="proof">'; } };
-      img.src = reader.result;
-    };
-    reader.readAsDataURL(f);
-  }
-
-  function submitTicket(back, isAppr) {
-    var m = back.querySelector('.hat-modal'); var em = actorEmail();
-    var msg = m.querySelector('#hat-msg'), sub = m.querySelector('#hat-submit');
-    var kindEl = m.querySelector('#hat-kind'); var kind = kindEl ? kindEl.value : '';
-    var rEl = m.querySelector('#hat-reason'); var reason = (rEl ? rEl.value : '').trim();
-    setMsg(msg, '', '');
-    if (!kind) { setMsg(msg, 'Please choose what you forgot.', 'err'); return; }
-    if (!reason) { setMsg(msg, 'Please enter a reason.', 'err'); return; }
-    if (!ticketProofData) { setMsg(msg, 'Please attach a photo of the attendance sheet.', 'err'); return; }
-    if (sub) { sub.disabled = true; sub.textContent = 'Submitting…'; }
-    api('/api/attendance/punch-ticket', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: em, employeeName: actorName(), kind: kind, reason: reason, proofImage: ticketProofData }) })
-      .then(function () { return api('/api/attendance/punch-ticket?email=' + encodeURIComponent(em)); })
-      .then(function (ctx2) {
-        renderTicketModal(back, ctx2, isAppr);
-        if (isAppr) loadTicketApprovals(back);
-        var okm = back.querySelector('#hat-msg') || back.querySelector('.hat-block');
-        var note = document.createElement('div'); note.className = 'hat-msg ok'; note.textContent = 'Ticket submitted for approval.';
-        var head = back.querySelector('.hat-head'); if (head && head.parentNode) head.parentNode.insertBefore(note, head.nextSibling);
-      })
-      .catch(function (err) { if (sub) { sub.disabled = false; sub.textContent = 'Submit ticket'; } setMsg(msg, (err && err.message) || 'Could not submit the ticket.', 'err'); });
-  }
-
-  function loadTicketApprovals(back) {
-    var box = back.querySelector('#hat-approvals'); if (!box) return;
-    api('/api/attendance/punch-ticket/pending').then(function (rows) {
-      rows = Array.isArray(rows) ? rows : [];
-      var head = '<div class="haa-list-title">Pending tickets (team)</div>';
-      if (!rows.length) { box.innerHTML = head + '<ul class="haa-list"><li class="haa-empty">No pending tickets.</li></ul>'; return; }
-      box.innerHTML = head + '<ul class="haa-list">' + rows.map(function (r) {
-        return '<li class="haa-li"><span><span class="haa-who">' + esc(r.employee || r.email) + '</span>' +
-          '<div class="haa-sub">' + esc(kindLabel(r.kind)) + ' Â· ' + esc(r.date || '') + '</div>' +
-          '<div class="haa-sub hat-reason">' + esc(r.reason || '') + '</div></span>' +
-          '<div class="haa-li-actions">' +
-            (r.hasProof ? '<button class="haa-switch" data-proof="' + esc(r.id) + '">Proof</button>' : '') +
-            '<button class="haa-appr-btn approve" data-appr="' + esc(r.id) + '">Approve</button>' +
-            '<button class="haa-appr-btn reject" data-rej="' + esc(r.id) + '">Reject</button>' +
-          '</div></li>';
-      }).join('') + '</ul>';
-      box.querySelectorAll('[data-appr]').forEach(function (b) { b.onclick = function () { decideTicket(back, 'approve', b.getAttribute('data-appr'), b); }; });
-      box.querySelectorAll('[data-rej]').forEach(function (b) { b.onclick = function () { decideTicket(back, 'reject', b.getAttribute('data-rej'), b); }; });
-      box.querySelectorAll('[data-proof]').forEach(function (b) { b.onclick = function () { viewProof(b.getAttribute('data-proof')); }; });
-    }).catch(function () { box.innerHTML = ''; });
-  }
-
-  function decideTicket(back, action, id, btn) {
-    if (!id) return;
-    var li = btn.closest('.haa-li'); if (li) li.querySelectorAll('button').forEach(function (b) { b.disabled = true; });
-    api('/api/attendance/punch-ticket/' + id + '/decide', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: action }) })
-      .then(function () { loadTicketApprovals(back); window.dispatchEvent(new CustomEvent('hrmsAttendanceSynced', { detail: {} })); })
-      .catch(function (err) { if (li) li.querySelectorAll('button').forEach(function (b) { b.disabled = false; }); if (window.alert) window.alert((err && err.message) || 'Could not update the ticket.'); });
-  }
-
-  function viewProof(id) {
-    api('/api/attendance/punch-ticket/' + id + '/proof').then(function (d) {
-      var v = document.createElement('div'); v.className = 'hat-back haa-scope'; v.style.zIndex = '100001';
-      v.innerHTML = '<div class="hat-modal hat-proofview"><div class="hat-head"><div class="hat-title">Proof of attendance</div></div>' +
-        '<div class="hat-proofimg"><img src="' + ((d && d.proofImage) || '') + '" alt="proof"></div>' +
-        '<div class="hat-mf"><button class="cx">Close</button></div></div>';
-      v.addEventListener('click', function (e) { if (e.target === v || (e.target.classList && e.target.classList.contains('cx'))) v.remove(); });
-      document.body.appendChild(v);
-    }).catch(function (err) { if (window.alert) window.alert((err && err.message) || 'Could not load the proof.'); });
-  }
+  function loadRegz() { if (window.HRMSRegularize) window.HRMSRegularize.load(true); }
+  function openTicketModal() { if (window.HRMSRegularize) window.HRMSRegularize.open({}); }
 
   /* --- Employee attendance detail popup (opened from Team Status) --- */
   function openEmployeeDetail(email, name) {
@@ -1275,7 +1153,7 @@
   function ensureLayout() {
     if (!onCheckinPage()) {
       document.body.classList.remove('hrms-checkin-page');
-      [ID.wfh, ID.act, ID.team, ID.ot, ID.brk, ID.stats].forEach(function (id) { var el = document.getElementById(id); if (el && el.parentNode) el.parentNode.removeChild(el); });
+      [ID.wfh, ID.act, ID.team, ID.ot, ID.brk, ID.stats, ID.regz].forEach(function (id) { var el = document.getElementById(id); if (el && el.parentNode) el.parentNode.removeChild(el); });
       return;
     }
     var clock = clockCard();
@@ -1329,20 +1207,32 @@
     // right column = Work From Home filling the full height (so the two
     // columns bottom-align and there is no stray blank space). Mobile: a
     // single natural-order column.
+    // Missed punches / regularizations: a full-width row above the rest,
+    // present only while it has something to show (rows shift down by one).
+    var regz = document.getElementById(ID.regz), freshRegz = false;
+    if (!regz) { regz = buildRegzCard(); freshRegz = true; }
+    appendOrdered(grid, regz, '5');
+    mountRegz(regz);
+    var off = 1;
+
     if (haaNarrow) {
-      [clock, act, wfh, team].forEach(function (el) {
+      [clock, act, wfh, team, regz].forEach(function (el) {
         el.style.gridColumn = ''; el.style.gridRow = ''; el.style.alignSelf = '';
       });
+      regz.style.order = '-1';                 // first in the single column
     } else {
-      clock.style.gridColumn = '1'; clock.style.gridRow = '1'; clock.style.alignSelf = 'start';
-      act.style.gridColumn   = '1'; act.style.gridRow   = '2'; act.style.alignSelf   = '';
-      team.style.gridColumn  = '1'; team.style.gridRow  = '3'; team.style.alignSelf  = '';
-      wfh.style.gridColumn   = '2'; wfh.style.gridRow   = '1 / span 3'; wfh.style.alignSelf = '';
+      regz.style.order = '';
+      regz.style.gridColumn = '1 / -1'; regz.style.gridRow = off ? '1' : ''; regz.style.alignSelf = '';
+      clock.style.gridColumn = '1'; clock.style.gridRow = String(1 + off); clock.style.alignSelf = 'start';
+      act.style.gridColumn   = '1'; act.style.gridRow   = String(2 + off); act.style.alignSelf   = '';
+      team.style.gridColumn  = '1'; team.style.gridRow  = String(3 + off); team.style.alignSelf  = '';
+      wfh.style.gridColumn   = '2'; wfh.style.gridRow   = (1 + off) + ' / span 3'; wfh.style.alignSelf = '';
     }
 
     if (freshWfh) { loadWfh(); loadApprovals(); loadOffsite(); }
     if (freshAct) { loadActivity(); }
     if (freshTeam) { loadTeam(); }
+    if (freshRegz) { /* HRMSRegularize.mount() loads it */ }
   }
 
   /* ── boot ─────────────────────────────────────────────────────────────── */
@@ -1385,6 +1275,12 @@
     setInterval(refreshRequests, 5000);
     document.addEventListener('visibilitychange', function () { if (!document.hidden) { refreshRequests(); refreshLive(); } });
     window.addEventListener('focus', function () { refreshRequests(); refreshLive(); });
+    // Missed punches / regularizations: re-fetch every minute (the server
+    // throttles detection to once a minute anyway), countdown every 30 s.
+    function refreshRegz() { if (!document.hidden && onCheckinPage()) loadRegz(); }
+    /* (HRMSRegularize polls + ticks its own countdowns while mounted) */
+    window.addEventListener('focus', refreshRegz);
+    window.addEventListener('hrmsAttendanceSynced', refreshRegz);
     // Tick the Working / Overtime / Break tiles once a second while checked
     // in, and refresh right after a Break / Remote / Office button in the
     // app's own card is used (the 30s poll is too slow to feel live).

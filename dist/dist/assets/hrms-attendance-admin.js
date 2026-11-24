@@ -25,7 +25,7 @@
   var OVERLAY_ID = 'hrms-att-admin-overlay';
   var state = { tab: 'live_map', fences: [], shifts: [], assignments: [], reviews: [],
                 arrangements: [], roster: [], homes: [], mapFeed: { fences: [], employees: [] },
-                departurePolicy: { enabled: true, timeout_minutes: 15, warning_minutes: 5 },
+                departurePolicy: { enabled: true, timeout_minutes: 10, warning_seconds: 10, warning_sound: true, recheckin_requires_approval: true },
                 mapMode: 'markers', mapFilter: 'all', deptFilter: 'all', basemap: 'auto',
                 searchQuery: '', asgSearch: '', asgPage: 1, asgPageSize: 10, busy: false, errors: {} };
 
@@ -1696,8 +1696,10 @@
       grab('homes', '/api/attendance/home-locations'),
       grab('homeChanges', '/api/attendance/home-locations/changes?status=Pending&kind=change'),
       grab('mapFeed', '/api/attendance/map-feed'),
-      grab('departurePolicy', '/api/attendance/departure-policy')
+      grab('departurePolicy', '/api/attendance/departure-policy'),
+      grab('networks', '/api/attendance/networks')
     ]).then(function (r) {
+      state.networks = (r[10] && Array.isArray(r[10].fences)) ? r[10] : null;
       state.fences = Array.isArray(r[0]) ? r[0] : [];
       state.shifts = Array.isArray(r[1]) ? r[1] : [];
       state.assignments = Array.isArray(r[2]) ? r[2] : [];
@@ -1707,7 +1709,7 @@
       state.homes = Array.isArray(r[6]) ? r[6] : [];
       state.homeChanges = Array.isArray(r[7]) ? r[7] : [];
       state.mapFeed = (r[8] && Array.isArray(r[8].employees)) ? r[8] : { fences: state.fences, employees: [] };
-      state.departurePolicy = (r[9] && typeof r[9].enabled === 'boolean') ? r[9] : (state.departurePolicy || { enabled: true, timeout_minutes: 15 });
+      state.departurePolicy = (r[9] && typeof r[9].enabled === 'boolean') ? r[9] : (state.departurePolicy || { enabled: true, timeout_minutes: 10, warning_seconds: 10, warning_sound: true, recheckin_requires_approval: true });
       state.busy = false; render();
     });
   }
@@ -1725,7 +1727,11 @@
   /* ── tab: geofences ──────────────────────────────────────────────────── */
   function fencesHtml() {
     var rows = state.fences.map(function (f) {
-      return '<tr><td>' + esc(f.name) + '</td>' +
+      return '<tr><td>' + esc(f.name) +
+        (f.networkCount > 0
+          ? ' <span class="haa-pill" title="Check-ins from this office\'s network (' + f.networkCount + ' listed) are verified even when indoor GPS drifts" ' +
+            'style="background:var(--haa-info-bg);color:var(--haa-info-fg);white-space:nowrap">&#128246; Wi-Fi verified</span>'
+          : '') + '</td>' +
         '<td>' + esc(f.latitude) + ', ' + esc(f.longitude) + '</td>' +
         '<td>' + esc(f.radiusMeters || f.radius_meters || 0) + ' m</td>' +
         '<td><span class="haa-pill" style="background:' +
@@ -1759,41 +1765,259 @@
             }) + '</div>';
           }).join('') + '</div>'
         : '<div class="haa-empty">No office locations yet — geofencing stays off until you add one.</div>') +
-      '<div class="haa-card" style="margin-top:20px;border-top:2px solid var(--haa-accent,#4f46e5);">' +
-      '  <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:12px;">' +
-      '    <div>' +
-      '      <div style="font-weight:700;font-size:14px;color:var(--haa-text,#0f172a);">Auto Clock-Out on Geofence Departure</div>' +
-      '      <div style="font-size:12px;color:var(--haa-muted,#64748b);">Automatically clock out employees if they remain outside the office perimeter for extended periods.</div>' +
-      '    </div>' +
-      '    <label style="display:inline-flex;align-items:center;gap:8px;cursor:pointer;font-weight:600;font-size:13px;">' +
-      '      <input type="checkbox" id="haa-dep-enabled" ' + ((state.departurePolicy && state.departurePolicy.enabled) ? 'checked' : '') + ' style="width:16px;height:16px;cursor:pointer;">' +
-      '      <span>Enable Auto Clock-Out</span>' +
-      '    </label>' +
-      '  </div>' +
-      '  <div class="haa-grid" style="grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px;">' +
-      '    <div>' +
-      '      <label class="haa-lbl">Auto clock-out threshold</label>' +
-      '      <select class="haa-in" id="haa-dep-timeout">' +
-      '        <option value="10"' + (state.departurePolicy && state.departurePolicy.timeout_minutes == 10 ? ' selected' : '') + '>10 consecutive minutes outside fence</option>' +
-      '        <option value="15"' + (state.departurePolicy && state.departurePolicy.timeout_minutes == 15 ? ' selected' : '') + '>15 consecutive minutes outside fence (Recommended)</option>' +
-      '        <option value="20"' + (state.departurePolicy && state.departurePolicy.timeout_minutes == 20 ? ' selected' : '') + '>20 consecutive minutes outside fence</option>' +
-      '        <option value="30"' + (state.departurePolicy && state.departurePolicy.timeout_minutes == 30 ? ' selected' : '') + '>30 consecutive minutes outside fence</option>' +
-      '        <option value="45"' + (state.departurePolicy && state.departurePolicy.timeout_minutes == 45 ? ' selected' : '') + '>45 consecutive minutes outside fence</option>' +
-      '        <option value="60"' + (state.departurePolicy && state.departurePolicy.timeout_minutes == 60 ? ' selected' : '') + '>60 consecutive minutes outside fence</option>' +
-      '      </select>' +
-      '    </div>' +
-      '    <div>' +
-      '      <label class="haa-lbl">Early warning notice</label>' +
-      '      <select class="haa-in" id="haa-dep-warn">' +
-      '        <option value="5"' + (state.departurePolicy && state.departurePolicy.warning_minutes == 5 ? ' selected' : '') + '>Warn after 5 minutes outside fence</option>' +
-      '        <option value="10"' + (state.departurePolicy && state.departurePolicy.warning_minutes == 10 ? ' selected' : '') + '>Warn after 10 minutes outside fence</option>' +
-      '        <option value="0"' + (state.departurePolicy && state.departurePolicy.warning_minutes == 0 ? ' selected' : '') + '>No early warning</option>' +
-      '      </select>' +
-      '    </div>' +
-      '  </div>' +
-      '  <div style="display:flex;align-items:center;justify-content:flex-end;">' +
-      '    <button class="haa-btn" id="haa-dep-save">Save Departure Policy</button>' +
-      '  </div>' +
+      '<div style="margin-top:18px;font-size:13px;color:var(--haa-muted);">Auto check-out settings moved to the ' +
+      '<a href="#" data-goto-tab="network" style="color:var(--haa-link);font-weight:600;">Auto Check-out &amp; Network</a> tab.</div>';
+  }
+
+  /* ── tab: auto check-out & office network ──────────────────────────────
+     The departure policy card, plus the office Wi-Fi / IP whitelist
+     (GET/PUT /api/attendance/networks — api/attendance_ext/networks.py).
+     A request from a listed network counts as inside that location: check-in
+     is verified without GPS and the auto check-out never fires there. */
+  function networkTabHtml() {
+    return departureCard() + networksCard();
+  }
+
+  function networksCard() {
+    var n = state.networks;
+    var head = '<div style="font-weight:700;font-size:14px;color:var(--haa-text);">Office networks (Wi-Fi / IP)</div>' +
+      '<div style="font-size:12px;color:var(--haa-muted);max-width:720px;margin-top:2px;">Indoors, GPS can drift ' +
+      '50–150 m, so people at their desks can look "outside the office". A check-in or location check that comes from ' +
+      'one of the office\'s own networks counts as <b>inside that location</b>: it is verified without GPS, needs no ' +
+      'off-site approval, and the automatic check-out never fires while the device is on that network. ' +
+      'Work-from-home days are never verified by an office network.</div>';
+    if (!n) {
+      return '<div class="haa-card" id="haa-net-card" style="margin-top:20px;">' + head +
+        '<div style="margin-top:12px;">' + (errorBanner('networks') ||
+        '<div class="haa-empty">Office networks could not be loaded.</div>') + '</div></div>';
+    }
+    var pol = n.policy || {};
+    var can = n.canManage !== false;
+    var dis = can ? '' : ' disabled';
+    var fences = n.fences || [];
+    var ip = n.yourIp || '';
+    var m = n.yourMatch;
+
+    // Banner: the caller's address as the server sees it, and one click to add it.
+    var banner = '<div style="background:var(--haa-info-bg);color:var(--haa-info-fg);border-radius:10px;padding:12px 14px;margin-top:14px;font-size:13px;">' +
+      'Your current public IP as the server sees it: <b id="haa-net-myip" style="font-family:Consolas,monospace;font-size:14px;">' + esc(ip || 'unknown') + '</b>' +
+      (m ? '<div style="margin-top:6px;">&#10003; This network is already listed for <b>' + esc(m.fence) + '</b>' +
+           (m.label ? ' (' + esc(m.label) + ')' : '') + ' — your check-ins from here are verified.</div>' : '') +
+      (n.yourIpPrivate ? '<div style="margin-top:6px;color:var(--haa-warn-fg);">This is a private / local address: you are ' +
+           'probably on the same network as the server (or testing locally). Employees reaching a hosted server show the ' +
+           'office\'s public IP instead.</div>' : '');
+    if (ip && !m && can && fences.length) {
+      var opts = fences.map(function (f) {
+        return '<option value="' + f.id + '">' + esc(f.name) + (f.isActive === false ? ' (inactive)' : '') + '</option>';
+      }).join('');
+      banner += '<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:10px;">' +
+        (fences.length > 1 ? '<select class="haa-in" id="haa-net-mine-fence" style="width:auto;min-width:160px;flex:0 1 220px;">' + opts + '</select>' : '') +
+        '<input class="haa-in" id="haa-net-mine-label" placeholder="Label, e.g. Main Wi-Fi" maxlength="60" style="flex:1 1 160px;min-width:140px;width:auto;">' +
+        '<button class="haa-btn" id="haa-net-mine-add" data-fence="' + fences[0].id + '">Add this network to ' + esc(fences[0].name) + '</button>' +
+        '</div>';
+    }
+    banner += '</div>';
+
+    var warnings = (state.netWarnings || []).length
+      ? '<div style="background:var(--haa-warn-bg);color:var(--haa-warn-fg);border-radius:9px;padding:10px 14px;margin-top:12px;font-size:12.5px;">' +
+        state.netWarnings.map(function (w) { return '<div>&#9888; ' + esc(w) + '</div>'; }).join('') + '</div>'
+      : '';
+
+    var lists = fences.length ? fences.map(function (f) {
+      var rows = (f.networks || []).map(function (x) {
+        return '<tr><td style="font-family:Consolas,monospace;word-break:break-all;">' + esc(x.cidr) + '</td>' +
+          '<td>' + (esc(x.label) || '<span style="color:var(--haa-faint)">—</span>') +
+          (x['private'] ? ' <span class="haa-pill" title="Private address: only seen when the server is on the office LAN" ' +
+            'style="background:var(--haa-warn-bg);color:var(--haa-warn-fg)">private</span>' : '') + '</td>' +
+          '<td style="text-align:right">' + (can ? '<button class="haa-btn dgr" data-net-del="' + f.id + '" data-cidr="' + esc(x.cidr) + '">Remove</button>' : '') + '</td></tr>';
+      }).join('');
+      return '<div style="margin-top:14px;border:1px solid var(--haa-line);border-radius:10px;padding:12px;background:var(--haa-card);">' +
+        '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-weight:700;font-size:13.5px;color:var(--haa-text);">' + esc(f.name) +
+        (f.isActive === false ? ' <span class="haa-pill" style="background:var(--haa-err-bg);color:var(--haa-err-fg)">Inactive — not used</span>' : '') +
+        ((f.networks || []).length ? ' <span class="haa-pill" style="background:var(--haa-info-bg);color:var(--haa-info-fg)">&#128246; Wi-Fi verified</span>' : '') +
+        '</div>' +
+        ((f.networks || []).length
+          ? '<div style="overflow-x:auto;margin-top:8px;"><table class="haa-tbl"><thead><tr><th>Network (CIDR)</th><th>Label</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div>'
+          : '<div style="font-size:12.5px;color:var(--haa-muted);margin-top:6px;">No networks yet — check-ins here are verified by GPS only.</div>') +
+        (can ? '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;">' +
+          '<input class="haa-in" data-net-cidr="' + f.id + '" placeholder="203.0.113.10 or 203.0.113.0/28" style="flex:2 1 200px;min-width:160px;width:auto;">' +
+          '<input class="haa-in" data-net-label="' + f.id + '" placeholder="Label (optional)" maxlength="60" style="flex:1 1 140px;min-width:120px;width:auto;">' +
+          '<button class="haa-btn sec" data-net-add="' + f.id + '">Add network</button></div>' : '') +
+        '</div>';
+    }).join('') : '<div class="haa-empty" style="margin-top:12px;">Add an office location first (Office Locations tab).</div>';
+
+    var settings = '<div style="margin-top:18px;border-top:1px solid var(--haa-line);padding-top:14px;">' +
+      '<div style="font-weight:700;font-size:13.5px;color:var(--haa-text);">Network settings</div>' +
+      '<label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;font-size:13px;margin-top:10px;">' +
+      '<input type="checkbox" id="haa-net-enabled"' + (pol.enabled !== false ? ' checked' : '') + dis + ' style="width:16px;height:16px;margin-top:2px;cursor:pointer;">' +
+      '<span><b style="font-weight:600;">Verify attendance by office network</b><br><span style="font-size:12px;color:var(--haa-muted);">' +
+      'Off: the lists above are kept but ignored, and only GPS decides.</span></span></label>' +
+      '<label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;font-size:13px;margin-top:10px;">' +
+      '<input type="checkbox" id="haa-net-xff"' + (pol.trustForwardedFor ? ' checked' : '') + dis + ' style="width:16px;height:16px;margin-top:2px;cursor:pointer;">' +
+      '<span><b style="font-weight:600;">The server sits behind a reverse proxy / CDN — trust X-Forwarded-For</b><br>' +
+      '<span style="font-size:12px;color:var(--haa-err-fg);">Leave this OFF unless a proxy you control (e.g. Cloudflare, a load balancer) is in front of the app. ' +
+      'X-Forwarded-For is an ordinary header any browser or script can set: trusting it without such a proxy lets anyone ' +
+      'check in "from the office" from home. On a standard cPanel host it must stay off.</span></span></label>' +
+      '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px;font-size:13px;">' +
+      '<label class="haa-lbl" for="haa-net-proxies" style="margin:0;">Trusted proxies in front of the app</label>' +
+      '<input class="haa-in" id="haa-net-proxies" type="number" min="1" max="5" step="1" value="' + esc(pol.proxyCount || 1) + '"' + dis + ' style="width:80px;">' +
+      '<span style="font-size:12px;color:var(--haa-muted);">Only used when the option above is on: the client address is the entry the last of these proxies appended.</span></div>' +
+      (n.forwardedFor ? '<div style="font-size:12px;color:var(--haa-muted);margin-top:8px;">This request arrived with X-Forwarded-For: <code>' + esc(n.forwardedFor) +
+        '</code> (connection from <code>' + esc(n.remoteAddr) + '</code>).</div>' : '') +
+      '<div id="haa-net-err" style="color:var(--haa-err-fg);font-size:12px;min-height:16px;margin-top:8px;"></div>' +
+      (can ? '<div style="display:flex;justify-content:flex-end;"><button class="haa-btn" id="haa-net-save">Save network settings</button></div>' : '') +
+      '</div>';
+
+    var help = '<details style="margin-top:14px;font-size:12.5px;color:var(--haa-text2);">' +
+      '<summary style="cursor:pointer;font-weight:600;">Which address do I add?</summary>' +
+      '<ul style="margin:8px 0 0 18px;padding:0;line-height:1.6;">' +
+      '<li>The server sees the office\'s <b>public</b> IP — the address of your internet connection — not the 192.168.x.x / 10.x.x.x addresses devices have on the Wi-Fi.</li>' +
+      '<li>Easiest: open this page on a computer connected to the office Wi-Fi and use <b>Add this network</b> above.</li>' +
+      '<li>Ask your ISP or IT team for the office\'s <b>static</b> IP. A dynamic IP changes (often daily or on router restart); when it does, office check-ins fall back to GPS until you update it here.</li>' +
+      '<li>Several lines or a second ISP? Add each address. A small block from your ISP can be entered as a range (e.g. /29). Ranges wider than /16 (IPv4) or /48 (IPv6) are refused — they would cover other customers\' homes.</li>' +
+      '<li>Guest Wi-Fi on the same connection counts too — keep it on a separate line if visitors\' devices should not verify.</li>' +
+      '</ul></details>';
+
+    var audit = (n.audit || []).length
+      ? '<details style="margin-top:10px;font-size:12px;color:var(--haa-muted);"><summary style="cursor:pointer;">Recent changes</summary>' +
+        n.audit.slice(0, 10).map(function (a) {
+          return '<div style="margin-top:4px;">' + esc(a.at) + ' — ' + esc(a.by || '?') + (a.fence ? ' · ' + esc(a.fence) : '') + ': ' + esc(a.detail) + '</div>';
+        }).join('') + '</details>'
+      : '';
+
+    return '<div class="haa-card" id="haa-net-card" style="margin-top:20px;border-top:2px solid var(--haa-accent,#4f46e5);">' +
+      head + banner + warnings + lists + settings + help + audit + '</div>';
+  }
+
+  /* PUT /api/attendance/networks, then refresh the tab from the reply. */
+  function saveNetworks(payload, btn, okMsg) {
+    var label = btn ? btn.textContent : '';
+    if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+    return api('/api/attendance/networks', { method: 'PUT', body: JSON.stringify(payload) })
+      .then(function (d) {
+        state.networks = d;
+        state.netWarnings = (d && d.warnings) || [];
+        // Keep the Office Locations chips in step without a reload.
+        (d.fences || []).forEach(function (nf) {
+          state.fences.forEach(function (f) { if (f.id === nf.id) f.networkCount = (nf.networks || []).length; });
+        });
+        toast(okMsg || 'Saved');
+        render();
+      })
+      .catch(function (e) {
+        if (btn) { btn.disabled = false; btn.textContent = label; }
+        var errEl = document.getElementById('haa-net-err');
+        if (errEl) errEl.textContent = e.message;
+        toast(e.message, true);
+      });
+  }
+
+  function netFence(id) {
+    var list = (state.networks && state.networks.fences) || [];
+    for (var i = 0; i < list.length; i++) if (String(list[i].id) === String(id)) return list[i];
+    return null;
+  }
+
+  function wireNetworks(body) {
+    var mineBtn = body.querySelector('#haa-net-mine-add');
+    var mineSel = body.querySelector('#haa-net-mine-fence');
+    if (mineSel && mineBtn) {
+      mineSel.onchange = function () {
+        var f = netFence(mineSel.value);
+        mineBtn.setAttribute('data-fence', mineSel.value);
+        mineBtn.textContent = 'Add this network to ' + (f ? f.name : 'this location');
+      };
+    }
+    if (mineBtn) {
+      mineBtn.onclick = function () {
+        var f = netFence(mineBtn.getAttribute('data-fence'));
+        if (!f || !state.networks.yourIp) return;
+        var lbl = String((body.querySelector('#haa-net-mine-label') || {}).value || '').trim();
+        var list = (f.networks || []).map(function (x) { return { cidr: x.cidr, label: x.label }; });
+        list.push({ cidr: state.networks.yourIp, label: lbl });
+        saveNetworks({ fences: [{ id: f.id, networks: list }] }, mineBtn, 'Network added to ' + f.name);
+      };
+    }
+    var adds = body.querySelectorAll('[data-net-add]');
+    for (var i = 0; i < adds.length; i++) {
+      (function (b) {
+        b.onclick = function () {
+          var id = b.getAttribute('data-net-add'), f = netFence(id);
+          var cidrEl = body.querySelector('[data-net-cidr="' + id + '"]');
+          var lblEl = body.querySelector('[data-net-label="' + id + '"]');
+          var cidr = String(cidrEl && cidrEl.value || '').trim();
+          var errEl = body.querySelector('#haa-net-err');
+          if (!cidr) { if (errEl) errEl.textContent = 'Enter an IP address or CIDR range for ' + (f ? f.name : 'this location') + '.'; if (cidrEl) cidrEl.focus(); return; }
+          var list = ((f && f.networks) || []).map(function (x) { return { cidr: x.cidr, label: x.label }; });
+          list.push({ cidr: cidr, label: String(lblEl && lblEl.value || '').trim() });
+          saveNetworks({ fences: [{ id: Number(id), networks: list }] }, b, 'Network added to ' + (f ? f.name : 'location'));
+        };
+      })(adds[i]);
+    }
+    var dels = body.querySelectorAll('[data-net-del]');
+    for (var j = 0; j < dels.length; j++) {
+      (function (b) {
+        b.onclick = function () {
+          var id = b.getAttribute('data-net-del'), cidr = b.getAttribute('data-cidr'), f = netFence(id);
+          if (!f || !window.confirm('Remove ' + cidr + ' from ' + f.name + '? Check-ins from it will be verified by GPS only.')) return;
+          var list = (f.networks || []).filter(function (x) { return x.cidr !== cidr; })
+            .map(function (x) { return { cidr: x.cidr, label: x.label }; });
+          saveNetworks({ fences: [{ id: f.id, networks: list }] }, b, 'Network removed');
+        };
+      })(dels[j]);
+    }
+    var save = body.querySelector('#haa-net-save');
+    if (save) {
+      save.onclick = function () {
+        var raw = String(body.querySelector('#haa-net-proxies').value || '').trim();
+        var errEl = body.querySelector('#haa-net-err');
+        if (!/^\d+$/.test(raw) || Number(raw) < 1 || Number(raw) > 5) { errEl.textContent = 'Trusted proxies: a whole number from 1 to 5.'; return; }
+        var xff = !!body.querySelector('#haa-net-xff').checked;
+        if (xff && !(state.networks.policy || {}).trustForwardedFor &&
+            !window.confirm('Only trust X-Forwarded-For if a proxy you control sits in front of the app. Otherwise anyone can fake being on the office network. Continue?')) return;
+        errEl.textContent = '';
+        saveNetworks({ policy: { enabled: !!body.querySelector('#haa-net-enabled').checked, trustForwardedFor: xff,
+                                 proxyCount: Number(raw) } }, save, 'Network settings saved');
+      };
+    }
+  }
+
+  /* Auto check-out on leaving the office geofence (GET/POST
+     /api/attendance/departure-policy; the server validates every value). */
+  function departureCard() {
+    var p = state.departurePolicy || {};
+    function chk(id, on, label, hint) {
+      return '<label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;font-size:13px;margin-top:10px;">' +
+        '<input type="checkbox" id="' + id + '"' + (on ? ' checked' : '') + ' style="width:16px;height:16px;margin-top:2px;cursor:pointer;">' +
+        '<span><b style="font-weight:600;">' + label + '</b>' +
+        (hint ? '<br><span style="font-size:12px;color:var(--haa-muted,#64748b);">' + hint + '</span>' : '') + '</span></label>';
+    }
+    return '<div class="haa-card" id="haa-dep-card" style="margin-top:20px;border-top:2px solid var(--haa-accent,#4f46e5);">' +
+      '<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:6px;">' +
+      '<div><div style="font-weight:700;font-size:14px;color:var(--haa-text,#0f172a);">Auto check-out on leaving the office</div>' +
+      '<div style="font-size:12px;color:var(--haa-muted,#64748b);max-width:640px;">An employee checked in at the office who stays ' +
+      'outside every office fence for the set time sees a warning with a countdown and a sound; still outside when it ends, ' +
+      'they are checked out. Their hours end when they left. Only precise, unbroken readings count, and only while the HRMS ' +
+      'page is open. Off-site and work-from-home days are never checked out. A forgotten check-out is never closed ' +
+      'automatically — it is flagged for regularization.</div></div>' +
+      '<label style="display:inline-flex;align-items:center;gap:8px;cursor:pointer;font-weight:600;font-size:13px;">' +
+      '<input type="checkbox" id="haa-dep-enabled"' + (p.enabled !== false ? ' checked' : '') + ' style="width:16px;height:16px;cursor:pointer;">' +
+      '<span>Enabled</span></label></div>' +
+      '<div class="haa-grid" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-top:10px;">' +
+      '<div><label class="haa-lbl" for="haa-dep-timeout">Minutes outside before the warning</label>' +
+      '<input class="haa-in" id="haa-dep-timeout" type="number" min="1" max="240" step="1" value="' + (p.timeout_minutes || 10) + '">' +
+      '<div style="font-size:11px;color:var(--haa-muted,#64748b);margin-top:3px;">Continuous time outside the fence (1–240).</div></div>' +
+      '<div><label class="haa-lbl" for="haa-dep-warn">Warning countdown (seconds)</label>' +
+      '<input class="haa-in" id="haa-dep-warn" type="number" min="5" max="120" step="1" value="' + (p.warning_seconds || 10) + '">' +
+      '<div style="font-size:11px;color:var(--haa-muted,#64748b);margin-top:3px;">Time to get back inside before the check-out (5–120).</div></div>' +
+      '</div>' +
+      chk('haa-dep-sound', p.warning_sound !== false, 'Play a warning sound',
+          'Browsers allow sound only after the employee has clicked somewhere on the page; otherwise the warning flashes and vibrates.') +
+      chk('haa-dep-recheck', p.recheckin_requires_approval !== false, 'Checking in again the same day needs the manager\'s approval',
+          'The employee gives a reason; the time counts only once their manager (or HR) approves it in My Team.') +
+      '<div id="haa-dep-err" style="color:#dc2626;font-size:12px;min-height:16px;margin-top:8px;"></div>' +
+      '<div style="display:flex;align-items:center;justify-content:flex-end;">' +
+      '<button class="haa-btn" id="haa-dep-save">Save departure policy</button></div>' +
       '</div>';
   }
 
@@ -2519,6 +2743,7 @@
     if (state.busy) { body.innerHTML = '<div class="haa-empty">Loading…</div>'; return; }
     body.innerHTML = state.tab === 'live_map' ? liveMapHtml()
       : state.tab === 'fences' ? fencesHtml()
+      : state.tab === 'network' ? networkTabHtml()
       : state.tab === 'shifts' ? shiftsHtml()
       : state.tab === 'arrangements' ? arrangementsHtml()
       : state.tab === 'recalc' ? recalcHtml()
@@ -2725,25 +2950,43 @@
       }
     }
     var host = body.querySelector('#haa-picker');
+    var gotos = body.querySelectorAll('[data-goto-tab]');
+    for (var gt = 0; gt < gotos.length; gt++) {
+      (function (a) {
+        a.onclick = function (e) { e.preventDefault(); state.tab = a.getAttribute('data-goto-tab'); render(); };
+      })(gotos[gt]);
+    }
+    if (body.querySelector('#haa-net-card')) wireNetworks(body);
     var depSave = body.querySelector('#haa-dep-save');
     if (depSave) {
       depSave.onclick = function () {
-        var en = !!body.querySelector('#haa-dep-enabled').checked;
-        var to = parseInt(body.querySelector('#haa-dep-timeout').value, 10) || 15;
-        var wn = parseInt(body.querySelector('#haa-dep-warn').value, 10) || 5;
+        var errEl = body.querySelector('#haa-dep-err');
+        var toRaw = String(body.querySelector('#haa-dep-timeout').value || '').trim();
+        var wnRaw = String(body.querySelector('#haa-dep-warn').value || '').trim();
+        var to = Number(toRaw), wn = Number(wnRaw);
+        if (!/^\d+$/.test(toRaw) || to < 1 || to > 240) { errEl.textContent = 'Minutes outside: a whole number from 1 to 240.'; return; }
+        if (!/^\d+$/.test(wnRaw) || wn < 5 || wn > 120) { errEl.textContent = 'Warning countdown: a whole number of seconds from 5 to 120.'; return; }
+        errEl.textContent = '';
         depSave.disabled = true;
         depSave.textContent = 'Saving…';
         api('/api/attendance/departure-policy', {
           method: 'POST',
-          body: JSON.stringify({ enabled: en, timeout_minutes: to, warning_minutes: wn, notify_employee: true })
+          body: JSON.stringify({
+            enabled: !!body.querySelector('#haa-dep-enabled').checked,
+            timeout_minutes: to,
+            warning_seconds: wn,
+            warning_sound: !!body.querySelector('#haa-dep-sound').checked,
+            recheckin_requires_approval: !!body.querySelector('#haa-dep-recheck').checked
+          })
         }).then(function (p) {
           depSave.disabled = false;
-          depSave.textContent = 'Save Departure Policy';
+          depSave.textContent = 'Save departure policy';
           state.departurePolicy = p;
-          toast('Geofence departure policy saved');
+          toast('Departure policy saved');
         }).catch(function (e) {
           depSave.disabled = false;
-          depSave.textContent = 'Save Departure Policy';
+          depSave.textContent = 'Save departure policy';
+          errEl.textContent = e.message;
           toast(e.message, true);
         });
       };
@@ -3174,6 +3417,7 @@ bindEdit('data-edit-asg');
   /* ── open / close ────────────────────────────────────────────────────── */
   /* tab is optional: notifications deep-link straight to e.g. 'reviews'. */
   function open(tab) {
+    if (tab === 'geofence' || tab === 'departure' || tab === 'networks') tab = 'network';
     if (typeof tab === 'string' && tab) state.tab = tab;
     if (document.getElementById(OVERLAY_ID)) { render(); return; }
     injectStyle();
@@ -3187,6 +3431,7 @@ bindEdit('data-edit-asg');
       '<div class="haa-tabs">' +
       '<button class="haa-tab on" data-tab="live_map">🗺️ Live Map & Heatmap</button>' +
       '<button class="haa-tab" data-tab="fences">Office Locations</button>' +
+      '<button class="haa-tab" data-tab="network">Auto Check-out &amp; Network</button>' +
       '<button class="haa-tab" data-tab="shifts">Shifts</button>' +
       '<button class="haa-tab" data-tab="reviews">Off-site Approvals</button>' +
       '<button class="haa-tab" data-tab="arrangements">Work Arrangements</button>' +

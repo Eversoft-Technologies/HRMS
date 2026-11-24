@@ -16,9 +16,12 @@ from django.db.models import Q, Sum
 
 from api.models import (
     AppUser, UserProfile, CompanyDetail,
-    EmployeeAttendance, LeaveRequest, WfhRequest,
+    EmployeeAttendance, LeaveRequest, WfhRequest, Overtime,
     EmployeeCompensation, PayComponent, EmployeePayComponent,
-    PayrollRun, Payslip, PayrollSetting, PayrollInformation
+    PayrollRun, Payslip, PayrollSetting, PayrollInformation,
+    SalaryStructure, SalaryStructureComponent, PayrollPeriod,
+    PayrollEntry, PayrollAdjustment, PayrollApproval,
+    PayrollPayment, PayrollAuditLog
 )
 from api import mailer
 
@@ -81,12 +84,28 @@ def amount_to_words_inr(amount):
 
 # ─── Default Indian Pay Components Seeder ────────────────────────────────────
 
+def audit_payroll_action(action, entity_type, entity_id, actor_email='system', actor_name='System', changes=None, notes='', ip_address=None):
+    """Write an immutable audit log entry for any payroll change."""
+    try:
+        from api.models import PayrollAuditLog
+        PayrollAuditLog.objects.create(
+            action=action,
+            entity_type=entity_type,
+            entity_id=str(entity_id),
+            actor_email=actor_email or 'system',
+            actor_name=actor_name or 'System',
+            changes=changes or {},
+            notes=notes or '',
+            ip_address=ip_address or ''
+        )
+    except Exception as ex:
+        logger.warning(f"Error recording payroll audit log: {ex}")
+
+
 def seed_default_pay_components():
-    """Seed standard Indian earnings & deductions pay components if catalogue is empty."""
+    """Seed standard Indian earnings & deductions pay components."""
     try:
         from api.models import PayComponent
-        if PayComponent.objects.exists():
-            return
 
         defaults = [
             # ── Earnings ──
@@ -103,7 +122,7 @@ def seed_default_pay_components():
             },
             {
                 'code': 'HRA',
-                'name': 'HRA',
+                'name': 'House Rent Allowance (HRA)',
                 'component_type': 'earning',
                 'calc_type': 'percent_of_base',
                 'rate': Decimal('0.5000'),   # 50% of Basic
@@ -111,6 +130,72 @@ def seed_default_pay_components():
                 'is_taxable': True,
                 'is_active': True,
                 'display_order': 2,
+            },
+            {
+                'code': 'CONVEYANCE_ALLOWANCE',
+                'name': 'Conveyance Allowance',
+                'component_type': 'earning',
+                'calc_type': 'fixed',
+                'rate': Decimal('0.0000'),
+                'default_amount': Decimal('1600.00'),
+                'is_taxable': True,
+                'is_active': True,
+                'display_order': 3,
+            },
+            {
+                'code': 'MEDICAL_ALLOWANCE',
+                'name': 'Medical Allowance',
+                'component_type': 'earning',
+                'calc_type': 'fixed',
+                'rate': Decimal('0.0000'),
+                'default_amount': Decimal('1250.00'),
+                'is_taxable': True,
+                'is_active': True,
+                'display_order': 4,
+            },
+            {
+                'code': 'SPECIAL_ALLOWANCE',
+                'name': 'Special Allowance',
+                'component_type': 'earning',
+                'calc_type': 'fixed',
+                'rate': Decimal('0.0000'),
+                'default_amount': Decimal('3500.00'),
+                'is_taxable': True,
+                'is_active': True,
+                'display_order': 5,
+            },
+            {
+                'code': 'PERFORMANCE_BONUS',
+                'name': 'Performance Bonus',
+                'component_type': 'earning',
+                'calc_type': 'fixed',
+                'rate': Decimal('0.0000'),
+                'default_amount': Decimal('0.00'),
+                'is_taxable': True,
+                'is_active': True,
+                'display_order': 6,
+            },
+            {
+                'code': 'OVERTIME',
+                'name': 'Overtime Pay',
+                'component_type': 'earning',
+                'calc_type': 'fixed',
+                'rate': Decimal('0.0000'),
+                'default_amount': Decimal('0.00'),
+                'is_taxable': True,
+                'is_active': True,
+                'display_order': 7,
+            },
+            {
+                'code': 'OTHER_ALLOWANCES',
+                'name': 'Other Allowances',
+                'component_type': 'earning',
+                'calc_type': 'fixed',
+                'rate': Decimal('0.0000'),
+                'default_amount': Decimal('0.00'),
+                'is_taxable': True,
+                'is_active': True,
+                'display_order': 8,
             },
             {
                 'code': 'TRANSPORT_ALLOWANCE',
@@ -121,7 +206,7 @@ def seed_default_pay_components():
                 'default_amount': Decimal('1600.00'),
                 'is_taxable': True,
                 'is_active': True,
-                'display_order': 3,
+                'display_order': 9,
             },
             {
                 'code': 'CEA',
@@ -132,29 +217,18 @@ def seed_default_pay_components():
                 'default_amount': Decimal('200.00'),
                 'is_taxable': False,
                 'is_active': True,
-                'display_order': 4,
+                'display_order': 10,
             },
             {
                 'code': 'LTA',
-                'name': 'LTA',
+                'name': 'Leave Travel Allowance',
                 'component_type': 'earning',
                 'calc_type': 'fixed',
                 'rate': Decimal('0.0000'),
                 'default_amount': Decimal('0.00'),
                 'is_taxable': False,
                 'is_active': True,
-                'display_order': 5,
-            },
-            {
-                'code': 'SPECIAL_ALLOWANCE',
-                'name': 'Special Allowance',
-                'component_type': 'earning',
-                'calc_type': 'fixed',
-                'rate': Decimal('0.0000'),
-                'default_amount': Decimal('0.00'),
-                'is_taxable': True,
-                'is_active': True,
-                'display_order': 6,
+                'display_order': 11,
             },
             {
                 'code': 'INCENTIVES',
@@ -165,46 +239,46 @@ def seed_default_pay_components():
                 'default_amount': Decimal('0.00'),
                 'is_taxable': True,
                 'is_active': True,
-                'display_order': 7,
+                'display_order': 12,
             },
 
             # ── Deductions ──
             {
                 'code': 'PF',
-                'name': 'PF',
+                'name': 'Provident Fund (PF)',
                 'component_type': 'deduction',
                 'calc_type': 'percent_of_base',
-                'rate': Decimal('0.1200'),   # 12% of Basic (employee share)
+                'rate': Decimal('0.1200'),   # 12% of Basic
                 'default_amount': Decimal('0.00'),
                 'is_taxable': False,
                 'is_active': True,
                 'display_order': 1,
             },
             {
-                'code': 'PROFESSIONAL_TAX',
-                'name': 'Professional Tax',
+                'code': 'ESI',
+                'name': 'Employee State Insurance (ESI)',
                 'component_type': 'deduction',
-                'calc_type': 'fixed',
-                'rate': Decimal('0.0000'),
-                'default_amount': Decimal('150.00'),
+                'calc_type': 'percent_of_base',
+                'rate': Decimal('0.0075'),   # 0.75% of gross
+                'default_amount': Decimal('0.00'),
                 'is_taxable': False,
                 'is_active': True,
                 'display_order': 2,
             },
             {
-                'code': 'ESI',
-                'name': 'ESI',
+                'code': 'PROFESSIONAL_TAX',
+                'name': 'Professional Tax (PT)',
                 'component_type': 'deduction',
-                'calc_type': 'percent_of_base',
-                'rate': Decimal('0.0075'),   # 0.75% of gross (employee share)
-                'default_amount': Decimal('0.00'),
+                'calc_type': 'fixed',
+                'rate': Decimal('0.0000'),
+                'default_amount': Decimal('200.00'),
                 'is_taxable': False,
                 'is_active': True,
                 'display_order': 3,
             },
             {
                 'code': 'TDS',
-                'name': 'TDS',
+                'name': 'TDS / Income Tax',
                 'component_type': 'deduction',
                 'calc_type': 'fixed',
                 'rate': Decimal('0.0000'),
@@ -213,14 +287,47 @@ def seed_default_pay_components():
                 'is_active': True,
                 'display_order': 4,
             },
+            {
+                'code': 'LOAN_RECOVERY',
+                'name': 'Loan Recovery',
+                'component_type': 'deduction',
+                'calc_type': 'fixed',
+                'rate': Decimal('0.0000'),
+                'default_amount': Decimal('0.00'),
+                'is_taxable': False,
+                'is_active': True,
+                'display_order': 5,
+            },
+            {
+                'code': 'UNPAID_LEAVE_DEDUCTION',
+                'name': 'Unpaid Leave Deduction (LOP)',
+                'component_type': 'deduction',
+                'calc_type': 'fixed',
+                'rate': Decimal('0.0000'),
+                'default_amount': Decimal('0.00'),
+                'is_taxable': False,
+                'is_active': True,
+                'display_order': 6,
+            },
+            {
+                'code': 'OTHER_DEDUCTIONS',
+                'name': 'Other Deductions',
+                'component_type': 'deduction',
+                'calc_type': 'fixed',
+                'rate': Decimal('0.0000'),
+                'default_amount': Decimal('0.00'),
+                'is_taxable': False,
+                'is_active': True,
+                'display_order': 7,
+            },
 
-            # ── Employer Contributions (not deducted from employee) ──
+            # ── Employer Contributions ──
             {
                 'code': 'EMPLOYER_PF',
                 'name': "Employer's Provident Fund",
                 'component_type': 'employer',
                 'calc_type': 'percent_of_base',
-                'rate': Decimal('0.1200'),   # 12% of Basic (3.67% PF + 8.33% Pension)
+                'rate': Decimal('0.1200'),
                 'default_amount': Decimal('0.00'),
                 'is_taxable': False,
                 'is_active': True,
@@ -231,7 +338,7 @@ def seed_default_pay_components():
                 'name': "Employer's State Insurance",
                 'component_type': 'employer',
                 'calc_type': 'percent_of_base',
-                'rate': Decimal('0.0325'),   # 3.25% of gross
+                'rate': Decimal('0.0325'),
                 'default_amount': Decimal('0.00'),
                 'is_taxable': False,
                 'is_active': True,
@@ -243,6 +350,53 @@ def seed_default_pay_components():
             PayComponent.objects.get_or_create(code=item['code'], defaults=item)
     except Exception as ex:
         logger.warning(f"Error seeding pay components: {ex}")
+
+
+def seed_default_salary_structures():
+    """Seed standard Indian Corporate Salary Structure and associate with employees."""
+    try:
+        from api.models import SalaryStructure, SalaryStructureComponent, PayComponent, EmployeeCompensation
+        structure, created = SalaryStructure.objects.get_or_create(
+            code='IND_STD_2026',
+            defaults={
+                'name': 'Standard Corporate Salary Structure',
+                'description': 'Standard Indian enterprise compensation model with Basic, HRA, Allowances, PF, ESI, PT, and TDS',
+                'currency': 'INR',
+                'is_active': True,
+                'created_by': 'System'
+            }
+        )
+
+        structure_components = [
+            ('BASIC_SALARY', 'percent_of_base', Decimal('1.0000'), Decimal('0.00'), 1),
+            ('HRA', 'percent_of_base', Decimal('0.5000'), Decimal('0.00'), 2),
+            ('CONVEYANCE_ALLOWANCE', 'fixed', Decimal('0.0000'), Decimal('1600.00'), 3),
+            ('MEDICAL_ALLOWANCE', 'fixed', Decimal('0.0000'), Decimal('1250.00'), 4),
+            ('SPECIAL_ALLOWANCE', 'fixed', Decimal('0.0000'), Decimal('3500.00'), 5),
+            ('PF', 'percent_of_base', Decimal('0.1200'), Decimal('0.00'), 10),
+            ('PROFESSIONAL_TAX', 'fixed', Decimal('0.0000'), Decimal('200.00'), 11),
+            ('ESI', 'percent_of_base', Decimal('0.0075'), Decimal('0.00'), 12),
+            ('TDS', 'fixed', Decimal('0.0000'), Decimal('0.00'), 13),
+        ]
+
+        for code, c_type, rate, amt, order in structure_components:
+            comp = PayComponent.objects.filter(code=code).first()
+            if comp:
+                SalaryStructureComponent.objects.get_or_create(
+                    structure=structure,
+                    component=comp,
+                    defaults={
+                        'calc_type': c_type,
+                        'rate': rate,
+                        'amount': amt,
+                        'display_order': order,
+                    }
+                )
+
+        # Assign structure to any EmployeeCompensation that has null salary_structure
+        EmployeeCompensation.objects.filter(salary_structure__isnull=True).update(salary_structure=structure)
+    except Exception as ex:
+        logger.warning(f"Error seeding default salary structures: {ex}")
 
 
 def seed_default_compensations():
@@ -374,12 +528,18 @@ def ensure_payroll_tables():
     """Auto-create MySQL / SQLite payroll tables using Django ORM SchemaEditor if missing."""
     from django.db import connection
     from api.models import (
-        EmployeeCompensation, PayComponent, EmployeePayComponent,
-        PayrollRun, Payslip, PayrollSetting
+        SalaryStructure, PayComponent, SalaryStructureComponent,
+        PayrollPeriod, PayrollRun, PayrollEntry, PayrollAdjustment,
+        PayrollApproval, PayrollPayment, PayrollAuditLog,
+        EmployeeCompensation, EmployeePayComponent,
+        Payslip, PayrollSetting
     )
     models_to_create = [
-        EmployeeCompensation, PayComponent, EmployeePayComponent,
-        PayrollRun, Payslip, PayrollSetting
+        SalaryStructure, PayComponent, SalaryStructureComponent,
+        PayrollPeriod, PayrollRun, PayrollEntry, PayrollAdjustment,
+        PayrollApproval, PayrollPayment, PayrollAuditLog,
+        EmployeeCompensation, EmployeePayComponent,
+        Payslip, PayrollSetting
     ]
     try:
         existing_tables = connection.introspection.table_names()
@@ -391,9 +551,10 @@ def ensure_payroll_tables():
                     except Exception as ex:
                         logger.warning(f"Error creating table {model._meta.db_table}: {ex}")
 
-        # Seed default pay components catalog and baseline employee compensation
+        # Seed default pay components, compensations, and corporate salary structure
         seed_default_pay_components()
         seed_default_compensations()
+        seed_default_salary_structures()
     except Exception as e:
         logger.warning(f"Auto-table creation exception: {e}")
 
@@ -402,10 +563,11 @@ class PayrollService:
     """Handles Indian payroll computations, pay run execution, and payslip workflows."""
 
     @staticmethod
-    def calculate_employee_pay(email: str, start_date: date, end_date: date) -> dict:
+    def calculate_employee_pay(email: str, start_date: date, end_date: date, run_id: int = None) -> dict:
         """
         Calculate earnings, deductions, employer contributions, and net pay
-        for an employee in the Indian payslip format.
+        for an employee supporting configurable SalaryStructure, Attendance/LOP,
+        Overtime, and one-off PayrollAdjustments.
         """
         email = email.strip().lower()
         comp = EmployeeCompensation.objects.filter(
@@ -414,20 +576,21 @@ class PayrollService:
             effective_from__lte=end_date
         ).filter(
             Q(effective_to__isnull=True) | Q(effective_to__gte=start_date)
-        ).order_by('-effective_from').first()
+        ).order_by('-effective_from', '-id').first()
 
         if not comp:
             comp = EmployeeCompensation.objects.filter(
                 email__iexact=email,
                 status='active'
-            ).order_by('-effective_from').first()
+            ).order_by('-effective_from', '-id').first()
 
         if not comp:
             comp = EmployeeCompensation.objects.filter(
                 email__iexact=email
-            ).order_by('-effective_from').first()
+            ).order_by('-effective_from', '-id').first()
 
         base_salary = comp.base_amount if comp else Decimal('0.00')
+        annual_ctc = comp.annual_ctc if (comp and comp.annual_ctc) else (base_salary * Decimal('12'))
         pay_type = comp.pay_type if comp else 'salaried'
         currency = comp.currency if comp else 'INR'
 
@@ -451,6 +614,20 @@ class PayrollService:
         total_overtime_minutes = attendances.aggregate(total=Sum('overtime_minutes'))['total'] or 0
         overtime_hours = Decimal(str(round(total_overtime_minutes / 60.0, 2)))
 
+        try:
+            from api.models import Overtime
+            ot_reqs = Overtime.objects.filter(
+                email__iexact=email,
+                date__gte=start_date,
+                date__lte=end_date,
+                status__iexact='approved'
+            )
+            ot_sum = ot_reqs.aggregate(total=Sum('overtime_hours'))['total']
+            if ot_sum:
+                overtime_hours = max(overtime_hours, Decimal(str(ot_sum)))
+        except Exception:
+            pass
+
         # Approved WFH days
         wfh_count = WfhRequest.objects.filter(
             email__iexact=email,
@@ -465,124 +642,257 @@ class PayrollService:
             status='Approved',
             from_date__lte=end_date,
             to_date__gte=start_date
+        ).exclude(
+            Q(type__iexact='lop') | Q(type__iexact='loss of pay') | Q(type__iexact='unpaid')
         ).count()
 
+        # Explicit unpaid / LOP leaves
+        unpaid_leaves = LeaveRequest.objects.filter(
+            email__iexact=email,
+            status='Approved',
+            from_date__lte=end_date,
+            to_date__gte=start_date
+        ).filter(
+            Q(type__iexact='lop') | Q(type__iexact='loss of pay') | Q(type__iexact='unpaid')
+        ).count()
+
+        # Holiday calendars (attendance_ext/holidays.py): own regional holidays not worked are paid, never LOP.
+        from api.attendance_ext.holidays import count_off_days
+        holiday_off = count_off_days(email, start_date, end_date, skip=attendances.filter(status__in=('present', 'late', 'half-day')).values_list('date', flat=True))
         if attendances.exists():
-            paid_days = min(Decimal(str(total_period_days)), worked_days + Decimal(str(wfh_count + leave_count)))
+            paid_days = min(Decimal(str(total_period_days)), worked_days + Decimal(str(wfh_count + leave_count + holiday_off)))
             raw_lop = Decimal(str(total_period_days)) - paid_days
             lop_days = max(Decimal('0.00'), raw_lop)
         else:
-            # Baseline for salaried staff: if no attendance rows recorded, default to full month less explicit LOP
-            unpaid_leaves = LeaveRequest.objects.filter(
-                email__iexact=email,
-                status='Approved',
-                from_date__lte=end_date,
-                to_date__gte=start_date
-            ).filter(Q(type__iexact='lop') | Q(type__iexact='loss of pay') | Q(type__iexact='unpaid')).count()
+            # Baseline for salaried staff: default to full month less explicit LOP
             lop_days = Decimal(str(unpaid_leaves))
-            paid_days = Decimal(str(total_period_days)) - lop_days
+            paid_days = max(Decimal('0.00'), Decimal(str(total_period_days)) - lop_days)
             worked_days = paid_days
+
+        # ── Check for Assigned Salary Structure ──
+        salary_structure = comp.salary_structure if comp else None
+        if not salary_structure:
+            salary_structure = SalaryStructure.objects.filter(is_active=True).first()
 
         # ── Build Earnings ──
         earnings_data = []
 
-        # Get all active earning components in display order
-        earning_components = PayComponent.objects.filter(
-            component_type='earning', is_active=True
-        ).order_by('display_order', 'code')
+        if salary_structure:
+            structure_earnings = SalaryStructureComponent.objects.filter(
+                structure=salary_structure,
+                component__component_type='earning',
+                component__is_active=True
+            ).select_related('component').order_by('display_order', 'id')
 
-        for comp_obj in earning_components:
-            # Check for per-employee override
-            emp_override = EmployeePayComponent.objects.filter(
-                email__iexact=email,
-                component=comp_obj,
-                effective_from__lte=end_date
-            ).filter(
-                Q(effective_to__isnull=True) | Q(effective_to__gte=start_date)
-            ).order_by('-effective_from').first()
-
-            if not emp_override:
+            for sc in structure_earnings:
+                comp_obj = sc.component
                 emp_override = EmployeePayComponent.objects.filter(
                     email__iexact=email,
                     component=comp_obj
-                ).order_by('-effective_from').first()
+                ).order_by('-id').first()
 
-            if comp_obj.code == 'BASIC_SALARY':
-                amount = base_salary
-            elif comp_obj.calc_type == 'percent_of_base':
-                rate = emp_override.rate if (emp_override and emp_override.rate is not None) else comp_obj.rate
-                amount = (base_salary * rate).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-            elif comp_obj.calc_type == 'fixed':
-                amount = (emp_override.amount if (emp_override and emp_override.amount is not None)
-                          else comp_obj.default_amount)
-            else:
-                amount = Decimal('0.00')
+                if comp_obj.code == 'BASIC_SALARY':
+                    amount = base_salary
+                elif emp_override and emp_override.amount is not None:
+                    amount = emp_override.amount
+                elif emp_override and emp_override.rate is not None:
+                    amount = (base_salary * emp_override.rate).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                elif sc.calc_type == 'percent_of_base':
+                    amount = (base_salary * sc.rate).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                elif sc.calc_type == 'percent_of_ctc':
+                    monthly_ctc = (annual_ctc / Decimal('12'))
+                    amount = (monthly_ctc * sc.rate).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                elif sc.calc_type == 'fixed':
+                    amount = sc.amount if sc.amount is not None else comp_obj.default_amount
+                else:
+                    amount = Decimal('0.00')
 
-            earnings_data.append({
-                'code': comp_obj.code,
-                'label': comp_obj.name,
-                'amount': float(amount)
-            })
+                earnings_data.append({
+                    'code': comp_obj.code,
+                    'label': comp_obj.name,
+                    'amount': float(amount)
+                })
+        else:
+            earning_components = PayComponent.objects.filter(
+                component_type='earning', is_active=True
+            ).order_by('display_order', 'code')
+
+            for comp_obj in earning_components:
+                emp_override = EmployeePayComponent.objects.filter(
+                    email__iexact=email,
+                    component=comp_obj
+                ).order_by('-id').first()
+
+                if comp_obj.code == 'BASIC_SALARY':
+                    amount = base_salary
+                elif comp_obj.calc_type == 'percent_of_base':
+                    rate = emp_override.rate if (emp_override and emp_override.rate is not None) else comp_obj.rate
+                    amount = (base_salary * rate).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                elif comp_obj.calc_type == 'fixed':
+                    amount = (emp_override.amount if (emp_override and emp_override.amount is not None)
+                              else comp_obj.default_amount)
+                else:
+                    amount = Decimal('0.00')
+
+                earnings_data.append({
+                    'code': comp_obj.code,
+                    'label': comp_obj.name,
+                    'amount': float(amount)
+                })
+
+        # Overtime calculation: 1.5x hourly rate based on standard 8-hour workday
+        if overtime_hours > 0:
+            hourly_rate = (base_salary / Decimal(str(total_period_days * 8))).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+            ot_amount = (hourly_rate * Decimal('1.5') * overtime_hours).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+            found_ot = False
+            for e in earnings_data:
+                if e['code'] == 'OVERTIME':
+                    e['amount'] = float(ot_amount)
+                    found_ot = True
+                    break
+            if not found_ot:
+                earnings_data.append({
+                    'code': 'OVERTIME',
+                    'label': 'Overtime Pay',
+                    'amount': float(ot_amount)
+                })
 
         # ── Build Deductions ──
         deductions_data = []
-        gross_earnings = sum(Decimal(str(e['amount'])) for e in earnings_data)
+        gross_without_adjustments = sum(Decimal(str(e['amount'])) for e in earnings_data)
 
-        deduction_components = PayComponent.objects.filter(
-            component_type='deduction', is_active=True
-        ).order_by('display_order', 'code')
+        if salary_structure:
+            structure_deductions = SalaryStructureComponent.objects.filter(
+                structure=salary_structure,
+                component__component_type='deduction',
+                component__is_active=True
+            ).select_related('component').order_by('display_order', 'id')
 
-        for comp_obj in deduction_components:
-            emp_override = EmployeePayComponent.objects.filter(
-                email__iexact=email,
-                component=comp_obj,
-                effective_from__lte=end_date
-            ).filter(
-                Q(effective_to__isnull=True) | Q(effective_to__gte=start_date)
-            ).order_by('-effective_from').first()
-
-            if not emp_override:
+            for sc in structure_deductions:
+                comp_obj = sc.component
                 emp_override = EmployeePayComponent.objects.filter(
                     email__iexact=email,
                     component=comp_obj
-                ).order_by('-effective_from').first()
+                ).order_by('-id').first()
 
-            if comp_obj.code == 'PF':
-                if emp_override and emp_override.amount is not None:
+                if comp_obj.code == 'PF':
+                    if emp_override and emp_override.amount is not None:
+                        amount = emp_override.amount
+                    elif sc.rate > 0:
+                        amount = (base_salary * sc.rate).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                    else:
+                        amount = (base_salary * Decimal('0.12')).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                elif comp_obj.code == 'ESI':
+                    if emp_override and emp_override.amount is not None:
+                        amount = emp_override.amount
+                    elif gross_without_adjustments <= Decimal('21000.00'):
+                        amount = (gross_without_adjustments * Decimal('0.0075')).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                    else:
+                        amount = Decimal('0.00')
+                elif emp_override and emp_override.amount is not None:
                     amount = emp_override.amount
-                elif comp_obj.rate > 0:
-                    amount = (base_salary * comp_obj.rate).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-                else:
-                    amount = (base_salary * Decimal('0.12')).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-            elif comp_obj.code == 'ESI':
-                if emp_override and emp_override.amount is not None:
-                    amount = emp_override.amount
-                elif gross_earnings <= Decimal('21000.00'):
-                    amount = (gross_earnings * Decimal('0.0075')).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                elif emp_override and emp_override.rate is not None:
+                    amount = (base_salary * emp_override.rate).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                elif sc.calc_type == 'percent_of_base':
+                    amount = (base_salary * sc.rate).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                elif sc.calc_type == 'fixed':
+                    amount = sc.amount if sc.amount is not None else comp_obj.default_amount
                 else:
                     amount = Decimal('0.00')
-            elif comp_obj.calc_type == 'percent_of_base':
-                rate = emp_override.rate if (emp_override and emp_override.rate is not None) else comp_obj.rate
-                amount = (base_salary * rate).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-            elif comp_obj.calc_type == 'fixed':
-                amount = (emp_override.amount if (emp_override and emp_override.amount is not None)
-                          else comp_obj.default_amount)
-            else:
-                amount = Decimal('0.00')
 
-            deductions_data.append({
-                'code': comp_obj.code,
-                'label': comp_obj.name,
-                'amount': float(amount)
-            })
+                deductions_data.append({
+                    'code': comp_obj.code,
+                    'label': comp_obj.name,
+                    'amount': float(amount)
+                })
+        else:
+            deduction_components = PayComponent.objects.filter(
+                component_type='deduction', is_active=True
+            ).order_by('display_order', 'code')
 
+            for comp_obj in deduction_components:
+                emp_override = EmployeePayComponent.objects.filter(
+                    email__iexact=email,
+                    component=comp_obj
+                ).order_by('-id').first()
+
+                if comp_obj.code == 'PF':
+                    if emp_override and emp_override.amount is not None:
+                        amount = emp_override.amount
+                    elif comp_obj.rate > 0:
+                        amount = (base_salary * comp_obj.rate).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                    else:
+                        amount = (base_salary * Decimal('0.12')).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                elif comp_obj.code == 'ESI':
+                    if emp_override and emp_override.amount is not None:
+                        amount = emp_override.amount
+                    elif gross_without_adjustments <= Decimal('21000.00'):
+                        amount = (gross_without_adjustments * Decimal('0.0075')).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                    else:
+                        amount = Decimal('0.00')
+                elif comp_obj.calc_type == 'percent_of_base':
+                    rate = emp_override.rate if (emp_override and emp_override.rate is not None) else comp_obj.rate
+                    amount = (base_salary * rate).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                elif comp_obj.calc_type == 'fixed':
+                    amount = (emp_override.amount if (emp_override and emp_override.amount is not None)
+                              else comp_obj.default_amount)
+                else:
+                    amount = Decimal('0.00')
+
+                deductions_data.append({
+                    'code': comp_obj.code,
+                    'label': comp_obj.name,
+                    'amount': float(amount)
+                })
+
+        # Loss of Pay (LOP) deduction
+        if lop_days > 0:
+            daily_rate = (base_salary / Decimal(str(total_period_days))).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+            lop_amount = (daily_rate * lop_days).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+            found_lop = False
+            for d in deductions_data:
+                if d['code'] == 'UNPAID_LEAVE_DEDUCTION':
+                    d['amount'] = float(lop_amount)
+                    found_lop = True
+                    break
+            if not found_lop:
+                deductions_data.append({
+                    'code': 'UNPAID_LEAVE_DEDUCTION',
+                    'label': 'Loss of Pay (Unpaid Leave)',
+                    'amount': float(lop_amount)
+                })
+
+        # ── Incorporate Payroll Adjustments ──
+        if run_id:
+            try:
+                from api.models import PayrollAdjustment
+                adjs = PayrollAdjustment.objects.filter(run_id=run_id, email__iexact=email)
+                for adj in adjs:
+                    adj_code = f"ADJ_{adj.id}"
+                    adj_amt = float(adj.amount)
+                    adj_type = (adj.adjustment_type or '').lower()
+                    if adj_type in ['bonus', 'incentive', 'reimbursement', 'allowance', 'arrear']:
+                        earnings_data.append({
+                            'code': adj_code,
+                            'label': adj.description or f"Adjustment ({adj_type.title()})",
+                            'amount': adj_amt
+                        })
+                    elif adj_type in ['deduction', 'loan_recovery', 'penalty', 'tax']:
+                        deductions_data.append({
+                            'code': adj_code,
+                            'label': adj.description or f"Adjustment ({adj_type.title()})",
+                            'amount': adj_amt
+                        })
+            except Exception as e:
+                logger.warning(f"Error fetching adjustments for {email}: {e}")
+
+        gross_earnings = sum(Decimal(str(e['amount'])) for e in earnings_data)
         total_deductions = sum(Decimal(str(d['amount'])) for d in deductions_data)
         net_pay = max(Decimal('0.00'), gross_earnings - total_deductions)
 
         # ── Employer Contributions (CTC calculation) ──
         employer_contributions_data = []
 
-        # Gross Earning
         employer_contributions_data.append({
             'code': 'GROSS_EARNING',
             'label': 'GROSS EARNING',
@@ -644,19 +954,22 @@ class PayrollService:
         employer_contribution = employer_pf_total + employer_esi
         total_ctc = gross_earnings + employer_contribution
 
-        # ── Employee info snapshot ──
+        # ── Employee metadata snapshot ──
         user = AppUser.objects.filter(email__iexact=email).first()
         employee_name = ''
         if user:
             employee_name = user.full_name or getattr(user, 'name', '')
 
         profile = UserProfile.objects.filter(email__iexact=email).first()
+        department = profile.department if profile else ''
+        designation = profile.designation if profile else ''
         if not employee_name and profile:
-            employee_name = f"{profile.first_name} {profile.last_name}".strip()
+            fn = (profile.first_name or '').strip()
+            ln = (profile.last_name or '').strip()
+            employee_name = f"{fn} {ln}".strip()
         if not employee_name:
             employee_name = email.split('@')[0].title()
 
-        designation = profile.designation if profile else ''
         doj = profile.start_date if profile else None
         emp_id = ''
         if comp:
@@ -666,23 +979,33 @@ class PayrollService:
         if not emp_id and user:
             emp_id = user.employee_id or ''
 
-        return {
+        bank_account = comp.bank_account_number if comp else ''
+        bank_name = comp.bank_name if comp else ''
+        ifsc_code = getattr(comp, 'ifsc_code', '') if comp else ''
+        pan_number = comp.pan_number if comp else ''
+        uan_number = comp.uan_number if comp else ''
+        pf_number = comp.pf_account_number if comp else ''
+
+        result = {
             'email': email,
             'employee_name': employee_name,
             'employee_code': emp_id,
+            'department': department,
             'designation': designation,
             'doj': doj,
-            'pan_number': comp.pan_number if comp else '',
-            'uan_number': comp.uan_number if comp else '',
-            'pf_account_number': comp.pf_account_number if comp else '',
-            'bank_account_number': comp.bank_account_number if comp else '',
-            'bank_name': comp.bank_name if comp else '',
+            'pan_number': pan_number,
+            'uan_number': uan_number,
+            'pf_account_number': pf_number,
+            'bank_account_number': bank_account,
+            'bank_name': bank_name,
+            'ifsc_code': ifsc_code,
             'month_days': total_period_days,
             'worked_days': float(worked_days),
             'paid_days': float(paid_days),
             'lop_days': float(lop_days),
             'overtime_hours': float(overtime_hours),
             'base_salary': float(base_salary),
+            'annual_ctc': float(annual_ctc),
             'gross_earnings': float(gross_earnings),
             'total_deductions': float(total_deductions),
             'net_pay': float(net_pay),
@@ -693,24 +1016,55 @@ class PayrollService:
             'deductions_data': deductions_data,
             'employer_contributions_data': employer_contributions_data,
         }
+        # Extensions: reimbursements, loan EMIs, regime-based TDS, US withholding
+        # (api/payroll_ext). A failing step is logged and skipped.
+        from api.payroll_ext import apply_calculation_hooks
+        return apply_calculation_hooks(result, email, start_date, end_date, run_id)
 
     @staticmethod
-    def create_pay_run(period_label: str, period_start: date, period_end: date, created_by: str = 'system') -> PayrollRun:
-        """Create or update a draft pay run for all active staff."""
+    def create_pay_run(period_label: str, period_start: date, period_end: date, created_by: str = 'system', period_id: int = None) -> PayrollRun:
+        """Create or update a draft pay run for all active staff, preventing duplicate finalized runs."""
         ensure_payroll_tables()
+
+        # Prevent duplicate payroll processing if already approved or paid
+        existing_finalized = PayrollRun.objects.filter(
+            period_label=period_label,
+            status__in=['approved', 'paid']
+        ).first()
+        if existing_finalized:
+            raise ValueError(f"Payroll for period '{period_label}' is already finalized ({existing_finalized.status}). Duplicate processing is prevented.")
+
+        period = None
+        if period_id:
+            period = PayrollPeriod.objects.filter(id=period_id).first()
+        if not period:
+            period, _ = PayrollPeriod.objects.get_or_create(
+                label=period_label,
+                defaults={
+                    'start_date': period_start,
+                    'end_date': period_end,
+                    'status': 'processing',
+                    'notes': f'Period for {period_label}'
+                }
+            )
 
         run, created = PayrollRun.objects.get_or_create(
             period_label=period_label,
             defaults={
                 'period_start': period_start,
                 'period_end': period_end,
+                'period': period,
+                'stage': 4,
                 'frequency': 'monthly',
                 'status': 'draft',
                 'created_by': created_by
             }
         )
+        if not run.period:
+            run.period = period
+            run.save()
 
-        # Get active employees (from AppUser, UserProfile, or EmployeeCompensation)
+        # Active employees
         active_users = AppUser.objects.filter(status='active')
         emails = set(u.email.strip().lower() for u in active_users if u.email)
         comp_emails = set(c.email.strip().lower() for c in EmployeeCompensation.objects.filter(status='active'))
@@ -723,9 +1077,37 @@ class PayrollService:
         emp_count = 0
 
         for email in all_emails:
-            calc = PayrollService.calculate_employee_pay(email, period_start, period_end)
+            calc = PayrollService.calculate_employee_pay(email, period_start, period_end, run_id=run.id)
 
-            payslip, _ = Payslip.objects.update_or_create(
+            # Update or create PayrollEntry
+            entry, _ = PayrollEntry.objects.update_or_create(
+                run=run,
+                email=email,
+                defaults={
+                    'employee_name': calc['employee_name'],
+                    'employee_id': calc.get('employee_code', ''),
+                    'department': calc['department'],
+                    'designation': calc['designation'],
+                    'currency': calc.get('currency', 'INR'),
+                    'worked_days': Decimal(str(calc['worked_days'])),
+                    'paid_days': Decimal(str(calc['paid_days'])),
+                    'lop_days': Decimal(str(calc['lop_days'])),
+                    'overtime_hours': Decimal(str(calc['overtime_hours'])),
+                    'base_salary': Decimal(str(calc['base_salary'])),
+                    'gross_earnings': Decimal(str(calc['gross_earnings'])),
+                    'total_deductions': Decimal(str(calc['total_deductions'])),
+                    'net_pay': Decimal(str(calc['net_pay'])),
+                    'employer_contribution': Decimal(str(calc['employer_contribution'])),
+                    'total_ctc': Decimal(str(calc['total_ctc'])),
+                    'earnings_data': calc['earnings_data'],
+                    'deductions_data': calc['deductions_data'],
+                    'employer_data': calc.get('employer_contributions_data', []),
+                    'status': 'draft',
+                }
+            )
+
+            # Update or create Payslip (for PDF generation and compatibility)
+            Payslip.objects.update_or_create(
                 run=run,
                 email=email,
                 defaults={
@@ -765,8 +1147,10 @@ class PayrollService:
         run.total_deductions = total_deductions
         run.total_net = total_net
         run.employee_count = emp_count
+        run.stage = 6  # Review stage
         run.save()
 
+        audit_payroll_action('run_calculated', 'PayrollRun', run.id, created_by, created_by, notes=f'Payroll calculated for {emp_count} employees')
         return run
 
     @staticmethod
@@ -774,21 +1158,568 @@ class PayrollService:
         """Approve pay run, lock payslips, and generate PDF payslips."""
         run = PayrollRun.objects.get(id=run_id)
         run.status = 'approved'
+        run.stage = 8
         run.approved_by = approved_by
         run.approved_at = timezone.now()
         run.save()
 
+        PayrollEntry.objects.filter(run=run).update(status='approved')
+
         payslips = Payslip.objects.filter(run=run)
         for payslip in payslips:
             payslip.status = 'approved'
-            # Generate PDF data
             pdf_b64 = PayrollService.generate_payslip_pdf(payslip)
             payslip.file_data = pdf_b64
             payslip.file_name = f"Payslip_{run.period_label}_{payslip.email.split('@')[0]}.pdf"
             payslip.file_size = len(pdf_b64)
             payslip.save()
 
+        if run.period:
+            run.period.status = 'approved'
+            run.period.save()
+
+        audit_payroll_action('run_approved', 'PayrollRun', run.id, approved_by, approved_by, notes='Payroll run fully approved and payslips locked')
         return run
+
+    # ── Guided 8-Step Processing Workflow Methods ───────────────────────────
+
+    @staticmethod
+    def step_get_or_create_period(label: str, start_date: date, end_date: date, pay_date: date = None, notes: str = '') -> PayrollPeriod:
+        """Step 1: Select/configure payroll period."""
+        period, _ = PayrollPeriod.objects.get_or_create(
+            label=label,
+            defaults={
+                'start_date': start_date,
+                'end_date': end_date,
+                'pay_date': pay_date,
+                'status': 'draft',
+                'notes': notes or f'Payroll period {label}'
+            }
+        )
+        return period
+
+    @staticmethod
+    def step_fetch_attendance(period_start: date, period_end: date) -> list:
+        """Step 2 & 3: Fetch attendance, paid days, LOP, and overtime for all active employees."""
+        active_users = AppUser.objects.filter(status='active')
+        emails = set(u.email.strip().lower() for u in active_users if u.email)
+        comp_emails = set(c.email.strip().lower() for c in EmployeeCompensation.objects.filter(status='active'))
+        profile_emails = set(p.email.strip().lower() for p in UserProfile.objects.all() if p.email)
+        all_emails = sorted(list(emails.union(comp_emails).union(profile_emails)))
+
+        summary_list = []
+        total_period_days = (period_end - period_start).days + 1
+
+        for email in all_emails:
+            attendances = EmployeeAttendance.objects.filter(
+                email__iexact=email,
+                date__gte=period_start,
+                date__lte=period_end
+            )
+            present_days = attendances.filter(status='present').count()
+            late_days = attendances.filter(status='late').count()
+            half_days = attendances.filter(status='half-day').count()
+            worked_days = float(present_days + late_days) + (0.5 * half_days)
+
+            tot_mins = attendances.aggregate(t=Sum('overtime_minutes'))['t'] or 0
+            ot_hours = round(tot_mins / 60.0, 2)
+
+            wfh = WfhRequest.objects.filter(
+                email__iexact=email, status='Approved',
+                from_date__lte=period_end, to_date__gte=period_start
+            ).count()
+
+            leaves = LeaveRequest.objects.filter(
+                email__iexact=email, status='Approved',
+                from_date__lte=period_end, to_date__gte=period_start
+            ).exclude(Q(type__iexact='lop') | Q(type__iexact='loss of pay') | Q(type__iexact='unpaid')).count()
+
+            unpaid = LeaveRequest.objects.filter(
+                email__iexact=email, status='Approved',
+                from_date__lte=period_end, to_date__gte=period_start
+            ).filter(Q(type__iexact='lop') | Q(type__iexact='loss of pay') | Q(type__iexact='unpaid')).count()
+
+            # Holiday calendars: own regional holidays not worked are paid, never LOP.
+            from api.attendance_ext.holidays import count_off_days
+            holiday_off = count_off_days(email, period_start, period_end, skip=attendances.filter(status__in=('present', 'late', 'half-day')).values_list('date', flat=True))
+            if attendances.exists():
+                paid_days = min(float(total_period_days), worked_days + wfh + leaves + holiday_off)
+                lop_days = max(0.0, float(total_period_days) - paid_days)
+            else:
+                lop_days = float(unpaid)
+                paid_days = max(0.0, float(total_period_days) - lop_days)
+                worked_days = paid_days
+
+            profile = UserProfile.objects.filter(email__iexact=email).first()
+            emp_name = ''
+            dept = ''
+            desig = ''
+            if profile:
+                emp_name = f"{profile.first_name} {profile.last_name}".strip()
+                dept = profile.department or ''
+                desig = profile.designation or ''
+            if not emp_name:
+                u = AppUser.objects.filter(email__iexact=email).first()
+                emp_name = (u.full_name if u else '') or email.split('@')[0].title()
+
+            summary_list.append({
+                'email': email,
+                'employee_name': emp_name,
+                'department': dept,
+                'designation': desig,
+                'total_days': total_period_days,
+                'present_days': present_days,
+                'half_days': half_days,
+                'wfh_days': wfh,
+                'leave_days': leaves,
+                'worked_days': worked_days,
+                'paid_days': paid_days,
+                'lop_days': lop_days,
+                'overtime_hours': ot_hours,
+            })
+        return summary_list
+
+    @staticmethod
+    def step_validate_payroll(run_id: int) -> dict:
+        """Step 5: Validate payroll run for missing bank info, negative net pay, unusual LOP."""
+        run = PayrollRun.objects.get(id=run_id)
+        entries = PayrollEntry.objects.filter(run=run)
+
+        checks = []
+        blocking_errors = 0
+        warnings = 0
+
+        for entry in entries:
+            email = entry.email
+            comp = EmployeeCompensation.objects.filter(email__iexact=email).order_by('-id').first()
+
+            # 1. Missing bank account or IFSC
+            bank_acc = getattr(comp, 'bank_account_number', '') if comp else ''
+            ifsc = getattr(comp, 'ifsc_code', '') if comp else ''
+            if not bank_acc:
+                checks.append({
+                    'type': 'error',
+                    'email': email,
+                    'employee_name': entry.employee_name,
+                    'message': 'Missing Bank Account Number in employee profile'
+                })
+                blocking_errors += 1
+            if not ifsc:
+                checks.append({
+                    'type': 'warning',
+                    'email': email,
+                    'employee_name': entry.employee_name,
+                    'message': 'Missing Bank IFSC Code'
+                })
+                warnings += 1
+
+            # 2. Negative Net Pay
+            if entry.net_pay <= Decimal('0.00'):
+                checks.append({
+                    'type': 'error',
+                    'email': email,
+                    'employee_name': entry.employee_name,
+                    'message': f"Calculated Net Pay is zero or negative (₹{entry.net_pay:.2f})"
+                })
+                blocking_errors += 1
+
+            # 3. High LOP (> 15 days)
+            if entry.lop_days > Decimal('15.00'):
+                checks.append({
+                    'type': 'warning',
+                    'email': email,
+                    'employee_name': entry.employee_name,
+                    'message': f"High Loss of Pay ({entry.lop_days} days)"
+                })
+                warnings += 1
+
+            # 4. Missing PAN / PF UAN
+            pan = getattr(comp, 'pan_number', '') if comp else ''
+            if not pan:
+                checks.append({
+                    'type': 'warning',
+                    'email': email,
+                    'employee_name': entry.employee_name,
+                    'message': 'Missing PAN Number'
+                })
+                warnings += 1
+
+        is_valid = (blocking_errors == 0)
+        return {
+            'is_valid': is_valid,
+            'blocking_count': blocking_errors,
+            'warning_count': warnings,
+            'total_entries': entries.count(),
+            'checks': checks,
+        }
+
+    @staticmethod
+    def step_submit_approval(run_id: int, submitted_by: str, comments: str = '') -> PayrollRun:
+        """Step 7: Submit payroll run for multi-level approval pipeline."""
+        run = PayrollRun.objects.get(id=run_id)
+        run.stage = 7
+        run.status = 'pending_approval'
+        run.notes = f"Submitted for approval by {submitted_by}. {comments}".strip()
+        run.save()
+
+        PayrollApproval.objects.create(
+            run=run,
+            level='payroll_executive',
+            role_name='Payroll Executive',
+            approver_name=submitted_by,
+            action='submitted',
+            comments=comments or 'Submitted payroll for approval workflow'
+        )
+
+        audit_payroll_action('run_submitted_for_approval', 'PayrollRun', run.id, submitted_by, submitted_by, notes=comments)
+        return run
+
+    @staticmethod
+    def step_process_approval(run_id: int, level: str, action: str, approver_email: str, approver_name: str, comments: str = '') -> PayrollRun:
+        """Step 8: Approve, Reject, or Request Corrections at configurable approval levels."""
+        run = PayrollRun.objects.get(id=run_id)
+        role_label = level.replace('_', ' ').title()
+
+        if action in ['approve', 'approved']:
+            norm_action = 'approved'
+        elif action in ['reject', 'rejected']:
+            norm_action = 'rejected'
+        elif action in ['request_corrections', 'corrections_requested']:
+            norm_action = 'corrections_requested'
+        else:
+            norm_action = action
+
+        PayrollApproval.objects.create(
+            run=run,
+            level=level,
+            role_name=role_label,
+            approver_email=approver_email,
+            approver_name=approver_name,
+            action=norm_action,
+            comments=comments or f"Action {norm_action} taken by {role_label}"
+        )
+
+        if norm_action == 'approved':
+            if level in ['finance_manager', 'super_admin'] or run.approvals.filter(action='approved').count() >= 3:
+                # Final sign-off
+                run = PayrollService.approve_pay_run(run.id, approved_by=approver_name)
+            else:
+                next_stage = {
+                    'payroll_executive': 'HR Manager',
+                    'hr_manager': 'Finance Manager',
+                }.get(level, 'Super Admin')
+                run.notes = f"Approved at {role_label} level. Pending {next_stage} approval."
+                run.save()
+
+        elif norm_action == 'rejected':
+            run.status = 'rejected'
+            run.notes = f"Rejected at {role_label} level: {comments}"
+            run.save()
+
+        elif norm_action == 'corrections_requested':
+            run.status = 'needs_correction'
+            run.stage = 6  # Revert to review stage
+            run.notes = f"Corrections requested by {role_label}: {comments}"
+            run.save()
+
+        audit_payroll_action(f"run_{norm_action}", 'PayrollRun', run.id, approver_email, approver_name, notes=comments)
+        return run
+
+    # ── Payment Disbursal Engine ─────────────────────────────────────────────
+
+    @staticmethod
+    def create_payment_batch(run_id: int, payment_method: str = 'bank_transfer') -> dict:
+        """Initialize payment batch records for all approved entries in a run."""
+        run = PayrollRun.objects.get(id=run_id)
+        entries = PayrollEntry.objects.filter(run=run, net_pay__gt=0)
+        created_count = 0
+
+        for entry in entries:
+            comp = EmployeeCompensation.objects.filter(email__iexact=entry.email).order_by('-id').first()
+            bank_acc = getattr(comp, 'bank_account_number', '') if comp else ''
+            ifsc = getattr(comp, 'ifsc_code', '') if comp else ''
+
+            pm, created = PayrollPayment.objects.get_or_create(
+                run=run,
+                entry=entry,
+                defaults={
+                    'email': entry.email,
+                    'employee_name': entry.employee_name,
+                    'amount': entry.net_pay,
+                    'currency': 'INR',
+                    'payment_method': payment_method,
+                    'bank_name': getattr(comp, 'bank_name', '') if comp else '',
+                    'account_number': bank_acc,
+                    'ifsc_or_routing': ifsc,
+                    'status': 'pending',
+                }
+            )
+            if created:
+                created_count += 1
+
+        total_amount = float(PayrollPayment.objects.filter(run=run).aggregate(s=Sum('amount'))['s'] or 0.0)
+        return {
+            'run_id': run.id,
+            'period_label': run.period_label,
+            'total_payments': PayrollPayment.objects.filter(run=run).count(),
+            'newly_created': created_count,
+            'total_amount': total_amount,
+        }
+
+    @staticmethod
+    def disburse_payments(payment_ids: list, reference_prefix: str = 'PAY', disbursed_by: str = 'Finance Manager') -> dict:
+        """Mark payments successful, generate reference numbers, and update entry status."""
+        success_count = 0
+        now = timezone.now()
+        date_str = now.strftime('%Y%m%d')
+
+        payments = PayrollPayment.objects.filter(id__in=payment_ids)
+        for pm in payments:
+            ref_no = f"{reference_prefix}-{date_str}-{pm.id:04d}"
+            pm.status = 'successful'
+            pm.reference_number = ref_no
+            pm.disbursed_at = now
+            pm.disbursed_by = disbursed_by
+            pm.save()
+
+            if pm.entry:
+                pm.entry.payment_status = 'paid'
+                pm.entry.payment_reference = ref_no
+                pm.entry.save()
+            success_count += 1
+
+        # Check if all payments for the run are disbursed
+        if payments.exists():
+            run = payments.first().run
+            if not PayrollPayment.objects.filter(run=run, status__in=['pending', 'processing']).exists():
+                run.status = 'paid'
+                run.save()
+                if run.period:
+                    run.period.status = 'completed'
+                    run.period.save()
+
+        audit_payroll_action('payments_disbursed', 'PayrollPayment', f"{success_count}_records", actor_name=disbursed_by, notes=f'Disbursed {success_count} payments')
+        return {'disbursed_count': success_count}
+
+    @staticmethod
+    def mark_payment_failed(payment_id: int, failure_reason: str, updated_by: str = 'Finance Manager') -> PayrollPayment:
+        """Record payment transaction failure with reason."""
+        pm = PayrollPayment.objects.get(id=payment_id)
+        pm.status = 'failed'
+        pm.failure_reason = failure_reason
+        pm.save()
+
+        if pm.entry:
+            pm.entry.payment_status = 'failed'
+            pm.entry.save()
+
+        audit_payroll_action('payment_failed', 'PayrollPayment', pm.id, actor_name=updated_by, notes=failure_reason)
+        return pm
+
+    @staticmethod
+    def export_bank_neft_csv(run_id: int) -> str:
+        """Export NEFT / RTGS / Direct Deposit CSV file."""
+        run = PayrollRun.objects.get(id=run_id)
+        entries = PayrollEntry.objects.filter(run=run)
+
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow([
+            'Beneficiary Name', 'Bank Name', 'Account Number', 'IFSC Code',
+            'Amount (INR)', 'Payment Reference', 'Payment Status', 'Email'
+        ])
+
+        from api.fields import plain as _plain   # bank file: real values, decrypted server-side
+        for entry in entries:
+            comp = EmployeeCompensation.objects.filter(email__iexact=entry.email).order_by('-id').first()
+            writer.writerow([
+                entry.employee_name,
+                getattr(comp, 'bank_name', '') if comp else '',
+                _plain(getattr(comp, 'bank_account_number', '')) if comp else '',
+                getattr(comp, 'ifsc_code', '') if comp else '',
+                f"{entry.net_pay:.2f}",
+                entry.payment_reference or f"RUN-{run.period_label}",
+                entry.payment_status,
+                entry.email
+            ])
+
+        return output.getvalue()
+
+    # ── Payroll Reports Engine ───────────────────────────────────────────────
+
+    @staticmethod
+    def get_monthly_payroll_report(year: int, month: int) -> dict:
+        """Monthly consolidated payroll report."""
+        label_prefix = f"{year:04d}-{month:02d}"
+        runs = PayrollRun.objects.filter(period_label__startswith=label_prefix)
+
+        gross = float(runs.aggregate(s=Sum('total_gross'))['s'] or 0.0)
+        net = float(runs.aggregate(s=Sum('total_net'))['s'] or 0.0)
+        deductions = float(runs.aggregate(s=Sum('total_deductions'))['s'] or 0.0)
+        employees = runs.aggregate(s=Sum('employee_count'))['s'] or 0
+
+        return {
+            'year': year,
+            'month': month,
+            'period_label': label_prefix,
+            'runs_count': runs.count(),
+            'total_gross': gross,
+            'total_net': net,
+            'total_deductions': deductions,
+            'total_employees': employees,
+        }
+
+    @staticmethod
+    def get_department_payroll_report(run_id: int) -> list:
+        """Department-wise gross, net, and headcount breakdown."""
+        run = PayrollRun.objects.get(id=run_id)
+        entries = PayrollEntry.objects.filter(run=run)
+
+        dept_map = {}
+        for entry in entries:
+            dept = entry.department or 'General'
+            if dept not in dept_map:
+                dept_map[dept] = {
+                    'department': dept,
+                    'headcount': 0,
+                    'gross_salary': Decimal('0.00'),
+                    'total_deductions': Decimal('0.00'),
+                    'net_salary': Decimal('0.00'),
+                }
+            dept_map[dept]['headcount'] += 1
+            dept_map[dept]['gross_salary'] += entry.gross_earnings
+            dept_map[dept]['total_deductions'] += entry.total_deductions
+            dept_map[dept]['net_salary'] += entry.net_pay
+
+        results = []
+        for d in dept_map.values():
+            results.append({
+                'department': d['department'],
+                'headcount': d['headcount'],
+                'gross_salary': float(d['gross_salary']),
+                'total_deductions': float(d['total_deductions']),
+                'net_salary': float(d['net_salary']),
+            })
+        return sorted(results, key=lambda x: x['gross_salary'], reverse=True)
+
+    @staticmethod
+    def get_statutory_tax_report(run_id: int) -> dict:
+        """PF, ESI, Professional Tax, and TDS breakdown for compliance reporting."""
+        run = PayrollRun.objects.get(id=run_id)
+        entries = PayrollEntry.objects.filter(run=run)
+
+        total_pf = Decimal('0.00')
+        total_esi = Decimal('0.00')
+        total_pt = Decimal('0.00')
+        total_tds = Decimal('0.00')
+        total_employer_pf = Decimal('0.00')
+        total_employer_esi = Decimal('0.00')
+
+        items = []
+        for e in entries:
+            epf = Decimal('0.00')
+            eesi = Decimal('0.00')
+            ept = Decimal('0.00')
+            etds = Decimal('0.00')
+
+            for d in (e.deductions_data or []):
+                code = d.get('code', '')
+                amt = Decimal(str(d.get('amount', 0)))
+                if code == 'PF':
+                    epf += amt
+                elif code == 'ESI':
+                    eesi += amt
+                elif code == 'PROFESSIONAL_TAX':
+                    ept += amt
+                elif code == 'TDS':
+                    etds += amt
+
+            total_pf += epf
+            total_esi += eesi
+            total_pt += ept
+            total_tds += etds
+
+            items.append({
+                'email': e.email,
+                'name': e.employee_name,
+                'department': e.department,
+                'gross': float(e.gross_earnings),
+                'pf': float(epf),
+                'esi': float(eesi),
+                'pt': float(ept),
+                'tds': float(etds),
+            })
+
+        return {
+            'run_id': run.id,
+            'period_label': run.period_label,
+            'total_pf': float(total_pf),
+            'total_esi': float(total_esi),
+            'total_pt': float(total_pt),
+            'total_tds': float(total_tds),
+            'employees': items,
+        }
+
+    @staticmethod
+    def get_dashboard_metrics() -> dict:
+        """Aggregated KPIs for the main Payroll Dashboard."""
+        ensure_payroll_tables()
+
+        active_comps = EmployeeCompensation.objects.filter(status='active')
+        total_employees = active_comps.count()
+        if total_employees == 0:
+            total_employees = AppUser.objects.filter(status='active').count()
+
+        latest_run = PayrollRun.objects.order_by('-period_start', '-id').first()
+        gross = float(latest_run.total_gross) if latest_run else 0.0
+        net = float(latest_run.total_net) if latest_run else 0.0
+        deductions = float(latest_run.total_deductions) if latest_run else 0.0
+
+        pending_runs = PayrollRun.objects.filter(status__in=['draft', 'processing', 'needs_correction']).count()
+        processed_runs = PayrollRun.objects.filter(status__in=['approved', 'paid']).count()
+        pending_approvals = PayrollRun.objects.filter(status='pending_approval').count()
+
+        # Monthly trends (last 6 runs)
+        recent_runs_qs = PayrollRun.objects.order_by('-period_start')[:6]
+        trends = []
+        for r in reversed(list(recent_runs_qs)):
+            trends.append({
+                'label': r.period_label,
+                'gross': float(r.total_gross),
+                'net': float(r.total_net),
+                'deductions': float(r.total_deductions),
+            })
+
+        # Department distribution from latest run
+        dept_dist = []
+        if latest_run:
+            dept_dist = PayrollService.get_department_payroll_report(latest_run.id)
+
+        # Top recent runs
+        runs_summary = []
+        for r in PayrollRun.objects.order_by('-id')[:5]:
+            runs_summary.append({
+                'id': r.id,
+                'period_label': r.period_label,
+                'status': r.status,
+                'stage': r.stage,
+                'total_net': float(r.total_net),
+                'employee_count': r.employee_count,
+                'created_at': r.created_at.strftime('%Y-%m-%d') if r.created_at else '',
+            })
+
+        return {
+            'total_employees': total_employees,
+            'total_gross': gross,
+            'total_net': net,
+            'total_deductions': deductions,
+            'pending_payroll_runs': pending_runs,
+            'processed_payroll_runs': processed_runs,
+            'pending_approvals': pending_approvals,
+            'monthly_trends': trends,
+            'department_distribution': dept_dist,
+            'recent_runs': runs_summary,
+        }
 
     @staticmethod
     def _format_amount(val, show_dash=True):
@@ -813,6 +1744,12 @@ class PayrollService:
         """Generate HTML payslip matching the exact Eversoft Indian payslip reference layout."""
         import os
         from django.conf import settings
+        from api.fields import plain as _plain
+        # The payslip document legitimately carries the full identifiers. They
+        # are decrypted here, server-side; a missing key raises
+        # SecretsNotConfigured instead of printing ciphertext on the payslip.
+        _ids = {f: _plain(getattr(payslip, f, '')) for f in
+                ('pan_number', 'bank_account_number', 'pf_account_number', 'uan_number')}
 
         # Company details
         company = CompanyDetail.objects.first()
@@ -1026,15 +1963,15 @@ class PayrollService:
             <td style="padding: 3px 6px; font-weight: bold;">{doj_str}</td>
             <td style="padding: 3px 6px;">PAN</td>
             <td style="padding: 3px 0; text-align: center;">:</td>
-            <td style="padding: 3px 6px; font-weight: bold;">{payslip.pan_number}</td>
+            <td style="padding: 3px 6px; font-weight: bold;">{_ids['pan_number']}</td>
         </tr>
         <tr>
             <td style="padding: 3px 6px;">Bank A/c No.</td>
             <td style="padding: 3px 0; text-align: center;">:</td>
-            <td style="padding: 3px 6px; font-weight: bold;">{payslip.bank_account_number}</td>
+            <td style="padding: 3px 6px; font-weight: bold;">{_ids['bank_account_number']}</td>
             <td style="padding: 3px 6px;">PF A/c No.</td>
             <td style="padding: 3px 0; text-align: center;">:</td>
-            <td style="padding: 3px 6px; font-weight: bold;">{payslip.pf_account_number}</td>
+            <td style="padding: 3px 6px; font-weight: bold;">{_ids['pf_account_number']}</td>
         </tr>
         <tr>
             <td style="padding: 3px 6px;">Designation</td>
@@ -1047,7 +1984,7 @@ class PayrollService:
         <tr>
             <td style="padding: 3px 6px;">UAN</td>
             <td style="padding: 3px 0; text-align: center;">:</td>
-            <td style="padding: 3px 6px; font-weight: bold;">{payslip.uan_number}</td>
+            <td style="padding: 3px 6px; font-weight: bold;">{_ids['uan_number']}</td>
             <td colspan="3"></td>
         </tr>
         <!-- Horizontal Divider -->
@@ -1174,14 +2111,15 @@ class PayrollService:
             'Net Pay (INR)', 'Status'
         ])
 
+        from api.fields import plain as _plain   # bank file: real values, decrypted server-side
         for p in payslips:
             writer.writerow([
                 p.employee_name,
                 p.employee_code,
                 p.email,
                 p.bank_name,
-                p.bank_account_number,
-                p.pan_number,
+                _plain(p.bank_account_number),
+                _plain(p.pan_number),
                 f"{p.net_pay:.2f}",
                 p.status
             ])
