@@ -1980,7 +1980,7 @@
              ' <button class="ob-btn" style="padding:3px 9px" data-hist="' + esc(d.docType) + '">History</button>' +
              (ro ? '' : ' <button class="ob-btn" style="padding:3px 9px" data-quick-upload="' + item.type + '" title="Upload new version">⬆ Replace</button>') +
              (ro ? '' : ' <button class="ob-btn danger" style="padding:3px 9px" data-rm="' + d.id + '">Delete</button>'))
-          : (ro ? '<span class="ob-empty-val">-</span>' : '<button class="ob-btn primary" style="padding:3px 10px;font-size:12px" data-quick-upload="' + item.type + '">⬆ Upload ' + esc(item.label) + '</button>');
+             : (ro ? '<span class="ob-empty-val">-</span>' : '<button class="ob-btn primary" style="padding:3px 10px;font-size:12px" data-quick-upload="' + item.type + '" title="Upload ' + esc(item.label) + '">⬆ Upload File</button>');
 
         return '<tr>' +
           '<td style="vertical-align:middle">' +
