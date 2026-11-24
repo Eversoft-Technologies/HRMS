@@ -298,13 +298,38 @@
     return '#9ca3af';         // absent, offline, invisible, or unknown
   }
 
-  function refreshPresence(force) {
+  /* One shared fetch of the team list for the whole page.
+   *
+   * This script and the Check In/Out page's Team Status panel both need
+   * /api/attendance/team, and each used to ask on its own timer and again on
+   * every attendance event. When a lot of people sign in together that is a
+   * flood of identical requests. Now whoever needs it asks here:
+   *   - a request already on its way is joined, never duplicated;
+   *   - 'soft' (background polls) reuses an answer up to 8 s old;
+   *   - 'hard' (the user just did something) reuses one under 0.8 s old. */
+  var teamRows = [], teamFetchedAt = 0, teamPending = null;
+  function fetchTeam(mode) {
+    if (teamPending) return teamPending;
+    var maxAge = mode === 'soft' ? 8000 : 800;
+    if (teamFetchedAt && Date.now() - teamFetchedAt < maxAge) return Promise.resolve(teamRows);
+    teamPending = fetch('/api/attendance/team')
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (rows) {
+        if (Array.isArray(rows)) { teamRows = rows; teamFetchedAt = Date.now(); }
+        return teamRows;
+      })
+      .catch(function () { return teamRows; })        // offline: keep the last list
+      .then(function (rows) { teamPending = null; return rows; });
+    return teamPending;
+  }
+  window.__hrmsTeamRows = fetchTeam;
+
+  function refreshPresence(force, soft) {
     var now = Date.now();
     if (presenceInFlight) return;
     if (!force && now - presenceFetchedAt < PRESENCE_TTL) return;
     presenceInFlight = true;
-    fetch('/api/attendance/team')
-      .then(function (r) { return r.ok ? r.json() : []; })
+    fetchTeam(soft ? 'soft' : 'hard')
       .then(function (rows) {
         var map = {};
         (Array.isArray(rows) ? rows : []).forEach(function (r) {
@@ -576,10 +601,17 @@
     refreshPresence(true);
     // Only while the tab is in front: a background tab polling every minute
     // for presence nobody is looking at is just load.
-    // Every 15 s while visible, so a colleague's new status shows within ~15 s.
-    setInterval(function () { if (!document.hidden) refreshPresence(true); }, 15000);
+    // Every ~20 s while visible, so a colleague's new status shows within about
+    // that long. The delay is randomised per browser and per round: after a
+    // morning sign-in rush hundreds of tabs would otherwise all poll in step.
+    (function poll() {
+      setTimeout(function () {
+        if (!document.hidden) refreshPresence(true, true);
+        poll();
+      }, 18000 + Math.random() * 8000);
+    })();
     document.addEventListener('visibilitychange', function () {
-      if (!document.hidden) refreshPresence(true);
+      if (!document.hidden) refreshPresence(true, true);
     });
   }
 
