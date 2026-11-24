@@ -44,15 +44,18 @@
     var U = window.__hrmsUI;
     var g = U.g, n = U.n, B = U.B, Us = U.Us, Gn = U.Gn, Hs = U.Hs, le = U.le,
         cn = U.cn, Qe = U.Qe, Bt = U.Bt, Vs = U.Vs, Dr = U.Dr, Et = U.Et;
-    const[L,sL]=g.useState([]),[ld,sld]=g.useState(!0),[er,ser]=g.useState(""),[wr,swr]=g.useState(""),[op,so]=g.useState(!1),[bz,sb]=g.useState(!1),[fm,sf]=g.useState({type:"Casual Leave",fromDate:"",toDate:"",reason:""}),[fe,sfe]=g.useState(""),[q,sq]=g.useState(""),[flt,sflt]=g.useState("All"),[srt,ssrt]=g.useState("newest"),[bal,sbal]=g.useState([]),[exp,sexp]=g.useState(null),[cf,scf]=g.useState(null),[dr,sdr]=g.useState(""),[more,smore]=g.useState({}),[hd,shd]=g.useState(null),[per,sper]=g.useState("today"),[cm,scm]=g.useState((new Date).getMonth()),[hol,shol]=g.useState([]),[holEr,sholEr]=g.useState(!1);
-    /* Our overlay panels live in empty divs this component renders and never
-       re-renders children into: regRef = the ONE missed-punch / regularize
-       panel (hrms-regularize.js, the same one Check In / Out shows), ledRef =
-       the leave balance card that expands into the ledger (hrms-leave-ledger.js).
-       hmeta = /api/holidays?meta=1 (the calendar this list is from, admin
-       switcher); hsel = the calendar id an admin chose to view ("" = own). */
-    const regRef=g.useRef(null),ledRef=g.useRef(null);
-    const[hmeta,shmeta]=g.useState(null),[hsel,shsel]=g.useState("");
+    const[L,sL]=g.useState([]),[ld,sld]=g.useState(!0),[er,ser]=g.useState(""),[wr,swr]=g.useState(""),[op,so]=g.useState(!1),[bz,sb]=g.useState(!1),[fm,sf]=g.useState({type:"Casual Leave",fromDate:"",toDate:"",reason:""}),[fe,sfe]=g.useState(""),[q,sq]=g.useState(""),[flt,sflt]=g.useState("All"),[srt,ssrt]=g.useState("newest"),[lp,slp]=g.useState(1),[lps,slps]=g.useState(10),[bal,sbal]=g.useState([]),[exp,sexp]=g.useState(null),[cf,scf]=g.useState(null),[dr,sdr]=g.useState(""),[more,smore]=g.useState({}),[hd,shd]=g.useState(null),[per,sper]=g.useState("today"),[cm,scm]=g.useState((new Date).getMonth()),[hol,shol]=g.useState([]),[holEr,sholEr]=g.useState(!1);
+    /* Missed Clock-Out — cor holds the correction requests: MY own normally,
+       everyone's once appr resolves true. The mop/mfm/mfe/mbz quartet mirrors
+       op/fm/fe/bz on the Apply Leave form; crj/crn/cre mirror cf on its
+       decline modal. */
+    const[cor,scor]=g.useState([]),[cop,scop]=g.useState(!1),[mop,smo]=g.useState(!1),[mfm,smf]=g.useState({date:"",time:"",reason:""}),[mfe,smfe]=g.useState(""),[mbz,smb]=g.useState(!1),[mAtt,smAtt]=g.useState(null),[mLd,smLd]=g.useState(!1),[hEd,shEd]=g.useState({k:"",v:""});
+    /* isAp, not `appr` — that name is already taken further down by the
+       approved-leave array (var appr=byStatus("Approved")). */
+    /* cexp is deliberately separate from the leave table's `exp`: both hold a
+       bare row id, and a correction id can collide with a leave id, which
+       would expand a row in the other list at the same time. */
+    const[isAp,sIsAp]=g.useState(!1),[cflt,scflt]=g.useState("Pending"),[crj,scrj]=g.useState(null),[crn,scrn]=g.useState(""),[cre,scre]=g.useState(""),[cexp,scexp]=g.useState(null);
   /* pm — the caller's leave-relevant permission flags, null until
      /api/me/permissions resolves: {sa: superAdmin, act: leave.action}.
      Everything role-scoped on this page derives from it: act (or sa) means
@@ -206,6 +209,12 @@
   var totRem=bal.reduce(function(a,b){return a+(b.unlimited?0:(b.remaining||0))},0),totAll=bal.reduce(function(a,b){return a+(b.unlimited?0:(b.allowance||0))},0);
   var qq=q.trim().toLowerCase();
   var rows=g.useMemo(function(){return L.filter(function(z){if(flt!=="All"&&z.status!==flt)return!1;if(!qq)return!0;return((z.employee||"")+" "+(z.email||"")+" "+(z.type||"")).toLowerCase().indexOf(qq)!==-1}).slice().sort(function(a,b){if(srt==="longest")return(b.days||0)-(a.days||0);var x=a.fromDate||"",y=b.fromDate||"";if(x===y)return(b.id||0)-(a.id||0);if(srt==="oldest")return x<y?-1:1;return x<y?1:-1})},[L,flt,qq,srt]);
+  var leavePageCount=Math.max(1,Math.ceil(rows.length/lps));
+  var leavePage=Math.min(lp,leavePageCount);
+  var leaveStart=(leavePage-1)*lps;
+  var pageRows=rows.slice(leaveStart,leaveStart+lps);
+  g.useEffect(function(){slp(1)},[flt,qq,srt,lps]);
+  g.useEffect(function(){if(lp>leavePageCount)slp(leavePageCount)},[lp,leavePageCount]);
   var balColor=function(b){var r=b.allowance?b.remaining/b.allowance:0;return r>=.5?"var(--success)":r>=.25?"var(--warn)":"var(--danger)"};
   var types=g.useMemo(function(){var a=[];L.forEach(function(z){var t=z.type||"Other",f=null;for(var i=0;i<a.length;i++){if(a[i].type===t){f=a[i];break}}if(!f){f={type:t,n:0,days:0};a.push(f)}f.n++;f.days+=z.days||0});a.sort(function(x,y){return y.n-x.n});return a},[L]);
   var maxT=types.reduce(function(m,t){return Math.max(m,t.n)},0)||1;
@@ -331,7 +340,7 @@
             n.jsxs("td",{colSpan:7,style:msgSt,children:[
                   n.jsx("div",{style:{marginBottom:9},children:"No requests match this filter."}),
                   n.jsx("button",{className:"btn-sm",onClick:function(){sflt("All");sq("")},children:"Clear filters"})]})},"nomatch"));
-  else rows.forEach(function(e){var tm=tmeta(e.type);var live=onDay(e,TODAY);
+  else pageRows.forEach(function(e){var tm=tmeta(e.type);var live=onDay(e,TODAY);
         /* Delete belongs to the employee view ONLY: the owner of a
            still-Pending request, in a role without leave.action. Approvers
            (Super Admin included) never see it — they Decline instead, which
@@ -344,28 +353,28 @@
            API allows the assigned approver; never on your own request). */
         var routed=!own&&(e.approverEmail||"").toLowerCase()===myEmail&&!!myEmail,dp=function(code){return routed?{"data-keepcol":"1"}:{"data-perm":code}};body.push(
             n.jsxs("tr",{onClick:function(){sexp(exp===e.id?null:e.id)},style:{cursor:"pointer"},title:"Show reason, approver and applied date",children:[
-                  n.jsx("td",{children:
-                      n.jsxs("div",{style:{display:"flex",alignItems:"center",gap:9},children:[
+                  n.jsx("td",{style:{textAlign:"left",paddingLeft:12},children:
+                      n.jsxs("div",{style:{display:"flex",alignItems:"center",justifyContent:"flex-start",gap:9},children:[
                             n.jsx("span",{style:{color:"var(--text3)",fontSize:10,width:9,display:"inline-block"},children:exp===e.id?"▼":"▶"}),
                             n.jsx(Et,{initials:initials(e.employee||e.email),size:28,gradient:"135deg, "+tm.v+", var(--accent2)"}),
-                            n.jsxs("div",{style:{minWidth:0},children:[
-                                  n.jsxs("div",{style:{fontSize:12,fontWeight:600,display:"flex",alignItems:"center",gap:6},children:[e.employee||e.email,live?
+                            n.jsxs("div",{style:{minWidth:0,textAlign:"left"},children:[
+                                  n.jsxs("div",{style:{fontSize:12,fontWeight:600,display:"flex",alignItems:"center",justifyContent:"flex-start",gap:6},children:[e.employee||e.email,live?
                                         n.jsx("span",{className:"badge green",style:{fontSize:10,padding:"1px 6px"},children:"Out now"}):null]}),
                                   n.jsx("div",{style:{fontSize:11,color:"var(--text3)",overflow:"hidden",textOverflow:"ellipsis"},children:e.email||""})]})]})}),
-                  n.jsx("td",{children:
+                  n.jsx("td",{style:{textAlign:"center"},children:
                       n.jsx("span",{className:"badge "+tm.b,children:e.type})}),
-                  n.jsxs("td",{style:{fontSize:12},children:[dmy(e.fromDate),
+                  n.jsxs("td",{style:{fontSize:12,textAlign:"center"},children:[dmy(e.fromDate),
                         n.jsx("div",{style:{fontSize:11,color:"var(--text3)"},children:wdOf(e.fromDate)})]}),
-                  n.jsxs("td",{style:{fontSize:12},children:[dmy(e.toDate),
+                  n.jsxs("td",{style:{fontSize:12,textAlign:"center"},children:[dmy(e.toDate),
                         n.jsx("div",{style:{fontSize:11,color:"var(--text3)"},children:wdOf(e.toDate)})]}),
-                  n.jsx("td",{children:
+                  n.jsx("td",{style:{textAlign:"center"},children:
                       n.jsxs("span",{style:{display:"inline-flex",alignItems:"baseline",gap:3,background:"var(--bg3)",border:"1px solid var(--border2)",borderRadius:6,padding:"2px 8px"},children:[
                             n.jsx("span",{style:{fontSize:13,fontWeight:700,fontFamily:"var(--font-d)"},children:e.days}),
                             n.jsx("span",{style:{fontSize:11,color:"var(--text3)"},children:(e.days||0)===1?"day":"days"})]})}),
-                  n.jsx("td",{children:
+                  n.jsx("td",{style:{textAlign:"center"},children:
                       n.jsx(Gn,{status:e.status})}),
-                  n.jsx("td",{children:e.status==="Pending"?
-                      n.jsxs("div",{style:{display:"flex",gap:6,flexWrap:"wrap"},children:[e.status==="Pending"?
+                  n.jsx("td",{style:{textAlign:"center"},children:e.status==="Pending"?
+                      n.jsxs("div",{style:{display:"flex",gap:6,flexWrap:"wrap",justifyContent:"center"},children:[e.status==="Pending"?
                             n.jsx("button",{className:"btn-sm",...dp("leave.approve"),style:{fontSize:11,padding:"2px 8px",color:"var(--success)"},onClick:function(ev){ev.stopPropagation();setSt(e.id,"Approved")},children:"Approve"}):null,e.status==="Pending"?
                             n.jsx("button",{className:"btn-sm",...dp("leave.reject"),style:{fontSize:11,padding:"2px 8px",color:"var(--danger)"},onClick:function(ev){ev.stopPropagation();scf(e)},children:"Decline"}):null,showDel?
                             n.jsx("button",{className:"btn-sm","data-keepcol":"1",style:{fontSize:11,padding:"2px 8px",color:"var(--danger)"},onClick:function(ev){ev.stopPropagation();delRq(e)},children:"Delete"}):null]}):
@@ -381,6 +390,49 @@
                             n.jsxs("div",{style:{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(170px,1fr))",gap:14},children:[kv("Reason",e.reason||"— none given —"),kv("Approver",e.approver||"— not actioned yet —"),kv("Applied on",e.createdAt||"—"),kv("Duration",(e.days||0)+((e.days||0)===1?" day":" days")+" · "+prettyD(e.fromDate)+" → "+prettyD(e.toDate))]})]})})},e.id+"-d"))}});
   var selBal=null;
   for(var bi=0;bi<bal.length;bi++){if(bal[bi].type===fm.type){selBal=bal[bi];break}}var dc=dayCount(fm.fromDate,fm.toDate),liveErr=fm.fromDate&&fm.toDate?vErr():"";
+  /* Stamp row + hour tiles. Gross is the span between the recorded clock-in and
+     the time being claimed; effective takes the day's logged breaks off it.
+     Both stay "—" until there is a real clock-in AND an entered time, so the
+     tiles never show a number derived from half the data. */
+  var mIn=mAtt&&mAtt.checkIn?hm(mAtt.checkIn):"";
+  /* A clock-out earlier than the clock-in is the next morning (night shift):
+     18:46 → 03:00 is 8h 14m, not 0. */
+  var toMin=function(t){var h=parseInt(String(t).slice(0,2),10),m=parseInt(String(t).slice(3,5),10);return isNaN(h)||isNaN(m)?NaN:h*60+m};
+  var mInMin=mIn?toMin(mIn):NaN;
+  var mNext=!!(mIn&&mfm.time&&toMin(mfm.time)<=mInMin);
+  var mMin=(function(){if(!mIn||!mfm.time)return 0;var a=mInMin,b=toMin(mfm.time);if(isNaN(a)||isNaN(b)||b===a)return 0;if(b<a)b+=1440;return b-a})();
+  var mBrk=(mAtt&&mAtt.breakMinutes)||0;
+  var mEff=Math.max(0,mMin-mBrk);
+  /* Typing hours: "8:30", "8.5", "8h 30m", "8h", "45m" or "8" → minutes. */
+  var parseDur=function(s){s=String(s||"").trim().toLowerCase();if(!s)return null;var m;
+        if((m=/^(\d{1,2}):(\d{1,2})$/.exec(s)))return +m[1]*60+ +m[2];
+        if((m=/^(\d{1,2})\s*h(?:\s*(\d{1,2})\s*m?)?$/.exec(s)))return +m[1]*60+(m[2]?+m[2]:0);
+        if((m=/^(\d{1,3})\s*m$/.exec(s)))return +m[1];
+        if((m=/^\d{1,2}(?:\.\d+)?$/.exec(s)))return Math.round(parseFloat(s)*60);
+        return null};
+  var durTxt=function(m){return Math.floor(m/60)+":"+pad(m%60)};
+  /* Gross / Effective hours drive the clock-out time (and the other way round). */
+  var setHours=function(k,txt){shEd({k:k,v:txt});var d=parseDur(txt);if(d===null)return;
+        if(!mIn){smfe("There is no clock-in on this day to count hours from — enter the clock-out time instead.");return}
+        var gross=k==="eff"?d+mBrk:d;
+        if(gross<=0||gross>=1440){smfe("Hours must be more than 0 and less than 24.");return}
+        var t=(mInMin+gross)%1440;setMF("time",pad(Math.floor(t/60))+":"+pad(t%60))};
+  var nextDay=function(d){var x=new Date(d+"T00:00:00");x.setDate(x.getDate()+1);return iso(x)};
+  var mSrc=!mAtt?"Clock In":mAtt.isWfh?"Remote Clock In":"Office Clock In";
+  var mOut=mAtt&&mAtt.checkOut?hm(mAtt.checkOut):"";
+  /* Status defaults to Pending when absent so a row can never fall out of every
+     filter bucket and vanish from the queue. */
+  var cst=function(z){return z.status||"Pending"};
+  var CFLT=["All","Pending","Approved","Rejected"];
+  var cCount=function(s){return s==="All"?cor.length:cor.filter(function(z){return cst(z)===s}).length};
+  var cPend=cCount("Pending");
+  var cRows=isAp&&cflt!=="All"?cor.filter(function(z){return cst(z)===cflt}):cor;
+  var cCols=isAp?["Employee","Date","Requested clock-out","Reason","Status","Reviewer","Action"]:["Employee","Date","Requested clock-out","Reason","Status","Reviewer"];
+  var cGrid={display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:10,textAlign:"center"};
+  /* Timeline dot for the detail panel. The leave table has an identical helper,
+     but it is declared inside its row-building loop and is not in scope here. */
+  var cdot=function(on,col){return n.jsx("span",{style:{width:9,height:9,borderRadius:"50%",background:on?col:"var(--border2)",display:"inline-block",flex:"0 0 auto"}})};
+  var cmeta=function(s){return s==="Approved"?{b:"green",v:"var(--success)"}:s==="Rejected"?{b:"red",v:"var(--danger)"}:{b:"orange",v:"var(--warn)"}};
 
   /* ---- render ---- */
   return n.jsxs("div",{children:[
@@ -462,7 +514,7 @@
                         n.jsx("div",{style:{color:"var(--text)"},children:types.length?types.map(function(t){return n.jsx(Dr,{label:t.type,value:t.n+" request"+(t.n===1?"":"s")+" · "+t.days+"d",pct:Math.round(t.n/maxT*100),color:tmeta(t.type).v},t.type)}):
                             n.jsx("div",{style:{fontSize:12,color:"var(--text3)",padding:"4px 0"},children:"No requests to break down yet."})})]})]}),
             n.jsxs("div",{className:"card",children:[
-                  n.jsx(Us,{title:"Leave Requests",subtitle:L.length?rows.length+" of "+L.length+" shown":""}),
+                  n.jsx(Us,{title:"Leave Requests",subtitle:rows.length?"Showing "+(leaveStart+1)+"-"+Math.min(leaveStart+lps,rows.length)+" of "+rows.length+" matching requests ("+L.length+" total)":""}),
                   n.jsxs("div",{style:{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center",marginBottom:14},children:[
                         n.jsx("div",{style:{display:"flex",gap:8,flexWrap:"wrap"},children:["All","Pending","Approved","Rejected"].map(function(s){return n.jsxs("div",{className:"chip"+(flt===s?" active":""),onClick:function(){sflt(s)},children:[s," ",
                                       n.jsx("span",{style:{opacity:.7},children:s==="All"?L.length:byStatus(s).length})]},s)})}),
@@ -477,11 +529,60 @@
                   n.jsx("div",{className:"table-wrap",children:
                       n.jsxs("table",{children:[
                             n.jsx("thead",{children:
-                                n.jsx("tr",{children:["Employee","Type","From","To","Days","Status","Action"].map(function(e){return n.jsx("th",{children:e},e)})})}),
-                            n.jsx("tbody",{children:body})]})})]}),
-            /* Missed punch / Regularize — the same panel as Check In / Out:
-               flagged days, my requests (every kind), the approval queue. */
-            n.jsx("div",{className:"card",style:{marginTop:16},"data-hrms-regz-card":"1",children:n.jsx("div",{ref:regRef})}),
+                                n.jsx("tr",{children:["Employee","Type","From","To","Days","Status","Action"].map(function(e){return n.jsx("th",{style:{textAlign:"center"},children:e},e)})})}),
+                            n.jsx("tbody",{children:body})]})}),
+                  !ld&&!er?n.jsx("div",{style:{display:"flex",alignItems:"center",justifyContent:"flex-end",gap:12,flexWrap:"wrap",minHeight:70,boxSizing:"border-box",padding:"16px 2px",color:"var(--text2)",fontSize:12,borderTop:"1px solid var(--border2)",borderBottom:"1px solid var(--border2)"},children:
+                        n.jsxs("div",{style:{display:"flex",alignItems:"center",gap:10},children:[
+                              n.jsx("label",{children:n.jsx("select",{value:lps,"aria-label":"Requests per page",onChange:function(e){slps(Number(e.target.value));slp(1)},style:{height:36,minWidth:112,color:"var(--text2)",background:"var(--bg2)",border:"1px solid var(--border2)",borderRadius:10,padding:"0 12px",font:"inherit",fontWeight:600,cursor:"pointer"},children:[10,25,50].map(function(size){return n.jsx("option",{value:size,children:size+" / page"},size)})})}),
+                              n.jsx("button",{type:"button",disabled:leavePage<=1,"aria-label":"Previous page",onClick:function(){sexp(null);slp(leavePage-1)},style:{height:36,minWidth:64,color:"var(--text2)",background:"var(--bg2)",border:"1px solid var(--border2)",borderRadius:10,padding:"0 12px",font:"inherit",fontWeight:600,cursor:leavePage<=1?"not-allowed":"pointer",opacity:leavePage<=1?0.45:1},children:"Prev"}),
+                              n.jsx("span",{"aria-current":"page",style:{display:"inline-flex",alignItems:"center",justifyContent:"center",minWidth:40,height:36,boxSizing:"border-box",padding:"0 12px",borderRadius:10,background:"#315eea",color:"#fff",fontSize:13,fontWeight:700},children:leavePage}),
+                              n.jsx("button",{type:"button",disabled:leavePage>=leavePageCount,"aria-label":"Next page",onClick:function(){sexp(null);slp(leavePage+1)},style:{height:36,minWidth:64,color:"var(--text2)",background:"var(--bg2)",border:"1px solid var(--border2)",borderRadius:10,padding:"0 12px",font:"inherit",fontWeight:600,cursor:leavePage>=leavePageCount?"not-allowed":"pointer",opacity:leavePage>=leavePageCount?0.45:1},children:"Next"})]})}):null]}),cor.length?
+            /* Deliberately NOT a <table>: hrms-perms.js locates the Leave
+               action column by scanning every <table> on this route, so a
+               second one here would risk it gating the wrong cells. */
+            n.jsxs("div",{className:"card",style:{marginTop:16},children:[
+                  n.jsxs("div",{onClick:function(){scop(!cop)},role:"button",tabIndex:0,"aria-expanded":cop,onKeyDown:function(e){if(e.key==="Enter"||e.key===" "){e.preventDefault();scop(!cop)}},style:{display:"flex",alignItems:"center",gap:9,cursor:"pointer"},children:[
+                        n.jsx("span",{style:{color:"var(--text3)",fontSize:10,width:9,display:"inline-block"},children:cop?"▼":"▶"}),
+                        n.jsx("div",{className:"card-title",style:{marginBottom:0},children:isAp?"Missed Clock-Out Requests":"My Missed Clock-Out Requests"}),
+                        n.jsx("span",{style:{fontSize:12,color:LBL,marginLeft:"auto"},children:isAp?cPend+" pending of "+cor.length:cor.length+(cor.length===1?" request":" requests")})]}),cop?
+                  n.jsxs("div",{style:{marginTop:12},children:[isAp?
+                        n.jsx("div",{style:{display:"flex",gap:8,flexWrap:"wrap",marginBottom:12},children:CFLT.map(function(s){return n.jsxs("div",{className:"chip"+(cflt===s?" active":""),onClick:function(){scflt(s)},children:[s," ",
+                                    n.jsx("span",{style:{opacity:.7},children:cCount(s)})]},s)})}):null,
+                        n.jsx("div",{style:{...cGrid,fontSize:11,fontWeight:600,textTransform:"uppercase",letterSpacing:.5,color:"var(--text2)",paddingBottom:7},children:cCols.map(function(h){return n.jsx("div",{children:h},h)})}),!cRows.length?
+                        n.jsx("div",{style:{fontSize:12,color:"var(--text3)",padding:"10px 0"},children:isAp?"No "+cflt.toLowerCase()+" requests.":"Nothing submitted yet."}):null,cRows.map(function(c,i){var cm=cmeta(cst(c)),cop2=cexp===c.id,cdec=cst(c)!=="Pending";
+                              /* Wrapper holds the grid row plus, when open, the detail
+                                 panel as a SIBLING — a grid child would be squeezed
+                                 into one column instead of spanning the row. */
+                              return n.jsxs("div",{style:{borderTop:"1px solid var(--border2)"},children:[
+                                    n.jsxs("div",{onClick:function(){scexp(cop2?null:c.id)},title:"Show the full reason and the admin's note",style:{...cGrid,fontSize:12,color:"var(--text2)",padding:"9px 0",alignItems:"center",cursor:"pointer"},children:[
+                                          n.jsxs("div",{style:{display:"flex",alignItems:"center",gap:9,minWidth:0},children:[
+                                                n.jsx("span",{style:{color:"var(--text3)",fontSize:10,width:9,display:"inline-block",flex:"0 0 auto"},children:cop2?"▼":"▶"}),
+                                                n.jsx(Et,{initials:initials(c.employee||c.email),size:28,gradient:"135deg, "+cm.v+", var(--accent2)"}),
+                                                n.jsxs("div",{style:{minWidth:0},children:[
+                                                      n.jsx("div",{style:{fontSize:12,fontWeight:600,color:"var(--text)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"},children:c.employee||c.email||"—"}),
+                                                      n.jsx("div",{style:{fontSize:11.5,color:"var(--text3)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"},children:c.email||""})]})]}),
+                                          n.jsx("div",{style:{color:"var(--text)",fontWeight:600},children:prettyD(c.attendanceDate)}),
+                                          n.jsxs("div",{children:[c.requestedCheckOut?pt(hm(c.requestedCheckOut))+(c.requestedCheckOut.slice(0,10)!==c.attendanceDate?" (+1)":""):"—",
+                                                c.preview?n.jsx("div",{style:{fontSize:11.5,color:"var(--text3)"},title:"Hours if approved",children:hrm(c.preview.workedMinutes)+" worked"+(c.preview.overtimeMinutes?" · "+hrm(c.preview.overtimeMinutes)+" OT":"")}):null]}),
+                                          n.jsx("div",{title:c.reason||"",style:{whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"},children:c.reason||"— none given —"}),
+                                          n.jsx("div",{children:
+                                              n.jsx("span",{className:"badge "+cm.b,style:{fontSize:10,padding:"1px 6px"},children:cst(c)})}),
+                                          n.jsx("div",{style:{whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"},children:c.reviewer||"— not actioned yet —"}),isAp?
+                                          /* stopPropagation, or approving also toggles the panel */
+                                          n.jsx("div",{onClick:function(e){e.stopPropagation()},children:cst(c)==="Pending"?
+                                              n.jsxs("div",{style:{display:"flex",gap:6,flexWrap:"wrap"},children:[
+                                                    n.jsx("button",{className:"btn-sm",onClick:function(){setCSt(c.id,"Approved","")},children:"Approve"}),
+                                                    n.jsx("button",{className:"btn-sm",onClick:function(){setCSt(c.id,"Rejected","")},children:"Reject"})]}):"—"}):null]}),cop2?
+                                    n.jsxs("div",{style:{background:"var(--bg3)",padding:"14px 16px",borderLeft:"3px solid "+cm.v,color:"var(--text)"},children:[
+                                          n.jsxs("div",{style:{display:"flex",alignItems:"center",gap:10,marginBottom:12,flexWrap:"wrap"},children:[cdot(!0,"var(--accent)"),
+                                                n.jsxs("span",{style:{fontSize:12,color:"var(--text2)"},children:["Submitted ",
+                                                      n.jsx("strong",{children:c.createdAt||"—"})]}),
+                                                n.jsx("span",{style:{flex:"0 0 26px",height:1,background:"var(--border2)"}}),cdot(cdec,cm.v),
+                                                n.jsx("span",{style:{fontSize:12,color:"var(--text2)"},children:cdec?cst(c)+(c.reviewer?" by "+c.reviewer:""):"Awaiting a decision"})]}),
+                                          n.jsxs("div",{style:{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(170px,1fr))",gap:14},children:[kv("Reason",c.reason||"— none given —"),kv("Requested clock-out",c.requestedCheckOut?pt(hm(c.requestedCheckOut))+(c.requestedCheckOut.slice(0,10)!==c.attendanceDate?" (next day)":""):"—"),kv("Hours if approved",c.preview?hrm(c.preview.workedMinutes)+" worked · "+hrm(c.preview.grossMinutes)+" gross"+(c.preview.overtimeMinutes?" · "+hrm(c.preview.overtimeMinutes)+" OT":""):"—"),kv("Reviewer",c.reviewer||"— not actioned yet —"),kv("Submitted on",c.createdAt||"—")]}),c.reviewerNote?
+                                          n.jsxs("div",{style:{marginTop:12,padding:"10px 12px",borderRadius:8,background:"var(--bg2)",borderLeft:"3px solid "+cm.v},children:[
+                                                n.jsx("div",{style:{fontSize:11,fontWeight:600,letterSpacing:.5,textTransform:"uppercase",color:"var(--text2)",marginBottom:3},children:cst(c)==="Rejected"?"Reason for rejection":"Admin's note"}),
+                                                n.jsx("div",{style:{fontSize:12,color:"var(--text2)",lineHeight:1.5,wordBreak:"break-word"},children:c.reviewerNote})]}):null]}):null]},c.id||i)})]}):null]}):null,
             n.jsxs(Hs,{open:op,onClose:function(){so(!1);sfe("")},title:"Apply Leave",width:480,children:[
                   n.jsx("div",{style:{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap"},children:TYPES.map(function(t){var on=fm.type===t,m=tmeta(t),b=null;for(var i=0;i<bal.length;i++){if(bal[i].type===t){b=bal[i];break}}return n.jsxs("div",{onClick:function(){setF("type",t)},style:{flex:"1 1 120px",cursor:"pointer",borderRadius:10,padding:"10px 11px",border:"1px solid "+(on?m.v:"var(--border2)"),background:on?"var(--bg3)":"transparent",transition:"all .15s"},children:[
                                 n.jsxs("div",{style:{display:"flex",alignItems:"center",gap:6},children:[

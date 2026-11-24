@@ -189,6 +189,43 @@
   }
 
   /* ── Requires Attention ───────────────────────────────────────────────── */
+  /* A pager for the Attendance History tables. They used to stop at the
+     first 200 rows; now every row is reachable, 10 to a page, with as many
+     pages as the range needs. The page goes back to 1 whenever the number of
+     matching rows changes (new range, search or status filter). */
+  var HIST_PAGE = 10;
+  function makePager(size) {
+    var p = { page: 0, len: -1 };
+    p.start = function (list) {
+      if (list.length !== p.len) { p.len = list.length; p.page = 0; }
+      var pages = Math.max(1, Math.ceil(list.length / size));
+      if (p.page > pages - 1) p.page = pages - 1;
+      if (p.page < 0) p.page = 0;
+      return p.page * size;
+    };
+    p.html = function (list) {
+      if (list.length <= size) return '';
+      var s = p.start(list), pages = Math.ceil(list.length / size);
+      return '<div class="hram-ta-pager">' +
+        '<span class="hram-ta-pager-info">Showing ' + (s + 1) + '–' + Math.min(s + size, list.length) + ' of ' + list.length + '</span>' +
+        '<span class="hram-ta-pager-ctl">' +
+          '<button type="button" data-h-page="prev"' + (p.page <= 0 ? ' disabled' : '') + '>‹ Prev</button>' +
+          '<span class="hram-ta-pager-pg">Page ' + (p.page + 1) + ' of ' + pages + '</span>' +
+          '<button type="button" data-h-page="next"' + (p.page >= pages - 1 ? ' disabled' : '') + '>Next ›</button>' +
+        '</span></div>';
+    };
+    p.wire = function (el, render) {
+      Array.prototype.forEach.call(el.querySelectorAll('[data-h-page]'), function (b) {
+        b.addEventListener('click', function () {
+          if (b.disabled) return;
+          p.page += b.getAttribute('data-h-page') === 'next' ? 1 : -1;
+          render();
+        });
+      });
+    };
+    return p;
+  }
+
   function RequiresAttention() {
     var el = document.createElement('div');
     el.className = 'card hram-card';
@@ -295,6 +332,7 @@
     var range = '30';
     var statusFilter = 'all';
     var customFrom = daysAgoStr(30), customTo = todayStr(), rangeErr = '';
+    var hp = makePager(HIST_PAGE);
     function rangeFrom() { return range === 'custom' ? customFrom : daysAgoStr(Number(range)); }
     function rangeTo() { return range === 'custom' ? customTo : todayStr(); }
     var search = '';
@@ -371,7 +409,7 @@
               '<th>Employee</th><th>Date</th><th>Day</th><th>Check In</th><th>Check Out</th><th>Working</th>' +
               '<th>Break</th><th>OT</th><th>Status</th><th>Mode</th>' +
             '</tr></thead><tbody>' +
-            list.slice(0, 200).map(function (r) {
+            list.slice(hp.start(list), hp.start(list) + HIST_PAGE).map(function (r) {
               return '<tr>' +
                 '<td class="hram-emp-cell"><div class="hram-emp-row">' +
                   '<span class="hram-avatar hram-avatar-sm">' + esc(initials(r.employee || r.email)) + '</span>' +
@@ -387,8 +425,9 @@
                 '</tr>';
             }).join('') +
             '</tbody></table></div>' +
-            (list.length > 200 ? '<div class="hram-caption">Showing first 200 of ' + list.length + ' rows — narrow the range or search to see more.</div>' : '')));
+            hp.html(list)));
 
+      hp.wire(el, render);
       var rangeSel = el.querySelector('.hram-range');
       if (rangeSel) rangeSel.addEventListener('change', function () { range = rangeSel.value; rangeErr = ''; load(); });
       var fromIn = el.querySelector('.hram-from'), toIn = el.querySelector('.hram-to'), applyBtn = el.querySelector('.hram-apply');
@@ -534,7 +573,34 @@
     var controls = document.createElement('div');
     controls.className = 'hram-ta-controls';
     var body = document.createElement('div');
-    var search = '', statusFilter = 'all', rows = [], loaded = false;
+    var search = '', statusFilter = 'all', rows = [], loaded = false, page = 0;
+
+    /* How many employees fit on one page so this card ends level with the
+       Live Team Presence card beside it. That card's own height is the
+       height of what is in it (title + chart), not its stretched box, so
+       it is measured from its contents. When the two cards are stacked
+       (phone / narrow window) there is nothing to line up with: 5 a page. */
+    function pageSize() {
+      try {
+        var host = body.parentNode, card = host && host.parentNode;
+        var pres = cardContaining(/Live Team Presence/i);
+        if (!card || !pres || pres === card) return 5;
+        var cr = card.getBoundingClientRect(), pr = pres.getBoundingClientRect();
+        if (!cr.width || Math.abs(pr.top - cr.top) > 40) return 5;
+        var bottom = 0;
+        Array.prototype.forEach.call(pres.children, function (k) {
+          var r = k.getBoundingClientRect();
+          if (r.height && r.bottom > bottom) bottom = r.bottom;
+        });
+        if (!bottom) return 5;
+        var natural = bottom - pr.top + (parseFloat(getComputedStyle(pres).paddingBottom) || 0);
+        var row = body.querySelector('.hram-ta-row');
+        var rowH = row ? row.getBoundingClientRect().height : 61;
+        var head = body.getBoundingClientRect().top - cr.top;
+        var avail = natural - head - (parseFloat(getComputedStyle(card).paddingBottom) || 0) - 44; // 44 = pager
+        return Math.max(3, Math.min(10, Math.floor(avail / (rowH || 61))));
+      } catch (e) { return 5; }
+    }
 
     function filtered() {
       return rows.filter(function (r) {
@@ -550,9 +616,24 @@
 
     function renderBody() {
       var list = filtered();
+      var size = pageSize();
+      var pages = Math.max(1, Math.ceil(list.length / size));
+      if (page > pages - 1) page = pages - 1;
+      if (page < 0) page = 0;
+      var start = page * size, shown = list.slice(start, start + size);
+      var pager = list.length <= size ? '' :
+        '<div class="hram-ta-pager">' +
+          '<span class="hram-ta-pager-info">Showing ' + (start + 1) + '–' + (start + shown.length) + ' of ' + list.length + '</span>' +
+          '<span class="hram-ta-pager-ctl">' +
+            '<button type="button" data-ta-page="prev"' + (page <= 0 ? ' disabled' : '') + '>‹ Prev</button>' +
+            '<span class="hram-ta-pager-pg">Page ' + (page + 1) + ' of ' + pages + '</span>' +
+            '<button type="button" data-ta-page="next"' + (page >= pages - 1 ? ' disabled' : '') + '>Next ›</button>' +
+          '</span>' +
+        '</div>';
       body.innerHTML = !loaded ? '<div class="hram-empty">Loading…</div>' :
         (!list.length ? '<div class="hram-empty">No attendance records for today.</div>' :
-          list.map(function (r, i) {
+          shown.map(function (r, j) {
+            var i = start + j;
             return '<div class="hram-ta-row">' +
               '<span class="hram-muted hram-ta-num">' + (i + 1) + '</span>' +
               '<span class="hram-avatar">' + esc(initials(r.employee || r.email)) + '</span>' +
@@ -565,8 +646,21 @@
                 '<span class="hram-muted">' + esc(r.checkInTime || '--') + ' → ' + esc(r.checkOutTime || '--') + '</span>' +
               '</div>' +
               '</div>';
-          }).join(''));
+          }).join('') + pager);
     }
+
+    body.addEventListener('click', function (e) {
+      var b = e.target && e.target.closest ? e.target.closest('[data-ta-page]') : null;
+      if (!b || b.disabled) return;
+      page += b.getAttribute('data-ta-page') === 'next' ? 1 : -1;
+      renderBody();
+    });
+    // The page size depends on the neighbouring card, which finishes drawing
+    // a little later and changes with the window: fit again when it does.
+    var refit = null;
+    window.addEventListener('resize', function () {
+      clearTimeout(refit); refit = setTimeout(function () { if (body.isConnected) renderBody(); }, 150);
+    });
 
     controls.innerHTML =
       '<input type="text" class="hram-ta-search" placeholder="Search employee" autocomplete="off" autocapitalize="off" spellcheck="false" name="hram-today-q" data-lpignore="true" data-1p-ignore>' +
@@ -576,13 +670,17 @@
         '<option value="late">Late</option>' +
         '<option value="absent">Absent</option>' +
       '</select>';
-    controls.querySelector('.hram-ta-search').addEventListener('input', function (e) { search = e.target.value; renderBody(); });
-    controls.querySelector('.hram-ta-status').addEventListener('change', function (e) { statusFilter = e.target.value; renderBody(); });
+    controls.querySelector('.hram-ta-search').addEventListener('input', function (e) { search = e.target.value; page = 0; renderBody(); });
+    controls.querySelector('.hram-ta-status').addEventListener('change', function (e) { statusFilter = e.target.value; page = 0; renderBody(); });
 
     function load() {
       api('/api/attendance?date=' + todayStr()).then(function (data) {
         rows = Array.isArray(data) ? data : [];
         loaded = true; renderBody();
+        // once more after the first rows exist (real row height) and after
+        // the presence chart beside it has been drawn
+        setTimeout(function () { if (body.isConnected) renderBody(); }, 60);
+        setTimeout(function () { if (body.isConnected) renderBody(); }, 1200);
       }).catch(function (e) { console.error('[hrms-attendance-ui]', e); rows = []; loaded = true; renderBody(); });
     }
 
@@ -643,6 +741,7 @@
     controls.className = 'hram-ta-controls';
     var body = document.createElement('div');
     var search = '', rateFilter = 'all', period = 'month', rows = [], loaded = false;
+    var mp = makePager(HIST_PAGE);   // 10 employees a page, as many pages as needed
     var dateRange = null; // {from, to} for whichever period is currently loaded
 
     function filtered() {
@@ -663,19 +762,23 @@
           '<div class="hram-table-wrap"><table class="hram-table"><thead><tr>' +
             '<th>#</th><th>ID</th><th>Employee</th><th>Period</th>' +
           '</tr></thead><tbody>' +
-          list.map(function (a, i) {
+          list.slice(mp.start(list), mp.start(list) + HIST_PAGE).map(function (a, j) {
+            var i = mp.start(list) + j;
             return '<tr class="hram-row-click" title="View ' + esc(PERIOD_LABEL[period].toLowerCase()) + ' for ' + esc(a.name || a.email || '') + '">' +
               '<td class="hram-muted">' + (i + 1) + '</td><td class="hram-strong">' + esc(a.email || '--') + '</td>' +
               '<td class="hram-strong">' + esc(a.name) + '</td><td>' + esc(periodText) + '</td></tr>';
           }).join('') + '</tbody></table></div>' +
-          '<div class="hram-caption">Click an employee to view their summary for this period (present, absent, late, overtime, rate).</div>');
+          '<div class="hram-caption">Click an employee to view their summary for this period (present, absent, late, overtime, rate).</div>' +
+          mp.html(list));
 
+      var first = mp.start(list);
       Array.prototype.forEach.call(body.querySelectorAll('.hram-row-click'), function (tr, idx) {
         tr.addEventListener('click', function () {
           if (!dateRange) return;
-          openMonthlySummaryDetail(list[idx], period, dateRange);
+          openMonthlySummaryDetail(list[first + idx], period, dateRange);
         });
       });
+      mp.wire(body, renderBody);
     }
 
     function renderPeriodBar() {
@@ -857,10 +960,11 @@
       '.hram-table{width:100%;border-collapse:collapse;font-size:12px}' +
       '.hram-table thead{background:var(--bg3,#f9fafb)}' +
       '.hram-table th{text-align:left;padding:9px;font-weight:600;color:var(--text3,#6b7280);text-transform:uppercase;font-size:10px;letter-spacing:.03em;white-space:nowrap;position:sticky;top:0;background:var(--bg3,#f9fafb);z-index:1}' +
-      '.hram-table td{padding:9px;border-bottom:1px solid var(--border2,#f3f4f6);white-space:nowrap}' +
+      '.hram-table td{padding:9px;border-bottom:1px solid var(--border2,#f3f4f6);white-space:nowrap;text-align:left}' +
       '.hram-strong{font-weight:600;color:var(--text,#111827)}' +
       '.hram-emp-cell{white-space:normal}' +
-      '.hram-emp-row{display:flex;align-items:center;gap:8px;min-width:170px}' +
+      '.hram-emp-row{display:flex;align-items:center;justify-content:flex-start;gap:8px;min-width:170px;text-align:left}' +
+      '.hram-ta-identity{text-align:left}' +
       '.hram-avatar-sm{width:26px;height:26px;font-size:10px}' +
       '.hram-status-badge{display:inline-block;padding:3px 8px;border-radius:4px;font-weight:600;font-size:10px;text-transform:capitalize;background:var(--bg3,#f3f4f6);color:var(--text2,#374151)}' +
       '.hram-status-badge.late{background:#fef3c7;color:#92400e}' +
@@ -895,7 +999,13 @@
       '.hram-ta-search{width:190px}' +
       '.hram-ms-search{width:190px}' +
       '.hram-ta-row{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border2,#f3f4f6)}' +
-      '.hram-ta-row:last-child{border-bottom:none}' +
+      '.hram-ta-row:last-child,.hram-ta-row:has(+ .hram-ta-pager){border-bottom:none}' +
+      '.hram-ta-pager{display:flex;align-items:center;justify-content:space-between;gap:6px 10px;flex-wrap:wrap;margin-top:6px;padding-top:10px;border-top:1px solid var(--border2,#f3f4f6);font-size:11.5px;color:var(--text3,#6b7280)}' +
+      '.hram-ta-pager-ctl{display:inline-flex;align-items:center;gap:6px}' +
+      '.hram-ta-pager button{height:26px;padding:0 10px;border:1px solid var(--border2,#d1d5db);border-radius:6px;background:var(--bg,#fff);color:var(--text,#111827);font-size:11.5px;font-weight:600;cursor:pointer}' +
+      '.hram-ta-pager button:disabled{opacity:.45;cursor:default}' +
+      '.hram-ta-pager button:not(:disabled):hover{border-color:var(--accent,#6366f1);color:var(--accent,#6366f1)}' +
+      '@media (max-width:640px){.hram-ta-pager button{height:34px;padding:0 12px}}' +
       '.hram-ta-num{width:16px;flex-shrink:0;font-size:11px;text-align:right}' +
       '.hram-ta-identity{display:flex;flex-direction:column;gap:1px;flex:1;min-width:0}' +
       '.hram-ta-identity strong{font-size:13px;font-weight:700;color:var(--text,#111827)}' +
@@ -947,6 +1057,7 @@
     var el = document.createElement('div');
     var range = '30', statusFilter = 'all', rows = [], loaded = false;
     var customFrom = daysAgoStr(30), customTo = todayStr(), rangeErr = '';
+    var hp = makePager(HIST_PAGE);
     function rangeFrom() { return range === 'custom' ? customFrom : daysAgoStr(Number(range)); }
     function rangeTo() { return range === 'custom' ? customTo : todayStr(); }
 
@@ -1011,7 +1122,7 @@
               '<th>Date</th><th>Day</th><th>Check In</th><th>Check Out</th><th>Working</th>' +
               '<th>Break</th><th>OT</th><th>Status</th><th>Mode</th>' +
             '</tr></thead><tbody>' +
-            list.slice(0, 200).map(function (r) {
+            list.slice(hp.start(list), hp.start(list) + HIST_PAGE).map(function (r) {
               return '<tr>' +
                 '<td class="hram-strong">' + esc(r.date) + '</td><td>' + dayShort(r.date) + '</td>' +
                 '<td>' + esc(fmtTime(r.checkInTime)) + '</td>' + pendingCells(r) +
@@ -1019,8 +1130,9 @@
                 '<td>' + (r.isWfh ? 'WFH' : 'Office') + '</td>' +
                 '</tr>';
             }).join('') +
-            '</tbody></table></div>'));
+            '</tbody></table></div>' + hp.html(list)));
 
+      hp.wire(el, render);
       var rangeSel = el.querySelector('.hram-range');
       if (rangeSel) rangeSel.addEventListener('change', function () { range = rangeSel.value; rangeErr = ''; load(); });
       var fromIn = el.querySelector('.hram-from'), toIn = el.querySelector('.hram-to'), applyBtn = el.querySelector('.hram-apply');

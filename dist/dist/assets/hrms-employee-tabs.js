@@ -84,9 +84,16 @@
   }
 
   function selOpts(name, val, opts) {
-    return '<select class="het-filter" data-het="' + esc(name) + '">' + opts.map(function (o) {
-      return '<option value="' + esc(o[0]) + '"' + (String(val) === String(o[0]) ? ' selected' : '') + '>' + esc(o[1]) + '</option>';
-    }).join('') + '</select>';
+    opts = Array.isArray(opts) ? opts : [];
+    return '<select class="het-filter" data-het="' + esc(name) + '">' +
+      opts.map(function (o) {
+        if (!Array.isArray(o) || o.length < 2) return '';
+  
+        return '<option value="' + esc(o[0]) + '"' +
+          (String(val) === String(o[0]) ? ' selected' : '') +
+          '>' + esc(o[1]) + '</option>';
+      }).join('') +
+      '</select>';
   }
   function rangeControls(prefix, val, cfrom, cto, withAll) {
     var opts = [];
@@ -179,49 +186,92 @@
       '.het-bal{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:14px;}',
       '.het-bal .het-tile b{display:block;font-size:20px;font-weight:800;color:var(--text,#0f172a);}',
       '.het-bal .het-tile small{font-size:11px;color:var(--text3,#64748b);}',
-      '.het-ahbar{display:flex;flex-wrap:wrap;justify-content:space-between;gap:10px;margin-bottom:10px;}',
-      '.het-ahchips{display:flex;flex-wrap:wrap;gap:6px;}',
-      '.het-ahc{border:1px solid var(--border2,#e5e7eb);background:var(--bg2,#fff);color:var(--text2,#475569);border-radius:999px;padding:4px 10px;font:inherit;font-size:12px;font-weight:600;cursor:pointer;}',
-      '.het-ahc span{display:inline-block;min-width:18px;margin-left:4px;padding:0 6px;border-radius:999px;background:var(--bg3,#f1f5f9);color:var(--text,#0f172a);font-size:11px;}',
-      '.het-ahc:hover{border-color:var(--accent,#4f8ef7);}',
-      '.het-ahc.on{background:var(--accent,#4f8ef7);border-color:var(--accent,#4f8ef7);color:#fff;}',
-      '.het-ahc.on span{background:rgba(255,255,255,.25);color:#fff;}',
-      '.het-ahctl{display:flex;flex-wrap:wrap;align-items:center;gap:8px;}',
-      '.het-ahiss{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--text2,#475569);cursor:pointer;}',
-      '.het-ahlink{background:none;border:0;color:var(--accent,#4f8ef7);font:inherit;font-size:12px;font-weight:600;cursor:pointer;padding:4px;}',
-      '.het-ahwrap{max-height:420px;overflow:auto;border:1px solid var(--border2,#e5e7eb);border-radius:12px;}',
-      '.het-ahwrap:focus{outline:2px solid var(--accent,#4f8ef7);outline-offset:2px;}',
-      '.het-aht{width:100%;border-collapse:collapse;font-size:12.5px;min-width:780px;}',
-      '.het-aht th{position:sticky;top:0;z-index:1;background:var(--bg3,#f1f5f9);text-align:left;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--text3,#64748b);padding:9px 10px;border-bottom:1px solid var(--border2,#e5e7eb);white-space:nowrap;}',
-      '.het-aht td{padding:9px 10px;border-bottom:1px solid var(--border2,#e5e7eb);vertical-align:middle;white-space:nowrap;color:var(--text,#0f172a);}',
-      '.het-aht td small{display:block;font-size:11px;color:var(--text3,#64748b);}',
-      '.het-aht td i{color:var(--text3,#94a3b8);font-style:normal;}',
-      '.het-aht td.het-ahx{white-space:normal;min-width:160px;color:var(--text2,#475569);}',
-      '.het-aht tbody tr:hover td{background:var(--bg3,#f8fafc);}',
-      '.het-aht tr.weekend td,.het-aht tr.holiday td{background:color-mix(in srgb,var(--bg3,#f1f5f9) 60%,transparent);}',
-      '.het-ahs{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:700;background:var(--bg3,#f1f5f9);color:var(--text2,#475569);}',
-      '.het-ahs.present{background:rgba(16,185,129,.14);color:#059669;}',
-      '.het-ahs.late{background:rgba(245,158,11,.16);color:#b45309;}',
-      '.het-ahs.half-day{background:rgba(249,115,22,.15);color:#c2410c;}',
-      '.het-ahs.absent{background:rgba(239,68,68,.14);color:#dc2626;}',
-      '.het-ahs.leave{background:rgba(139,92,246,.15);color:#7c3aed;}',
-      '.het-ahs.holiday{background:rgba(14,165,233,.15);color:#0284c7;}',
-      '.het-ahs.working{background:rgba(79,142,247,.15);color:var(--accent,#4f8ef7);}',
-      'html[data-theme="dark"] .het-ahs.present{color:#34d399;}html[data-theme="dark"] .het-ahs.late{color:#fbbf24;}html[data-theme="dark"] .het-ahs.half-day{color:#fb923c;}html[data-theme="dark"] .het-ahs.absent{color:#f87171;}html[data-theme="dark"] .het-ahs.leave{color:#a78bfa;}html[data-theme="dark"] .het-ahs.holiday{color:#38bdf8;}',
-      '.het-ahm{display:inline-block;padding:1px 7px;border-radius:6px;font-size:11px;font-weight:600;border:1px solid var(--border2,#e5e7eb);color:var(--text2,#475569);}',
-      '.het-ahm.wfh{border-color:rgba(139,92,246,.4);color:#7c3aed;}',
-      '.het-ahwarn{color:#dc2626;font-weight:600;}',
-      '.het-ahlive{color:var(--accent,#4f8ef7);font-weight:600;}',
-      '.het-ahpg{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;margin-top:10px;font-size:12px;color:var(--text3,#64748b);}',
-      '.het-ahpg b{color:var(--text,#0f172a);}',
-      '.het-ahnav{display:flex;align-items:center;gap:4px;}',
-      '.het-ahnav button{min-width:30px;height:30px;padding:0 8px;border-radius:8px;border:1px solid var(--border2,#e5e7eb);background:var(--bg2,#fff);color:var(--text,#0f172a);font:inherit;font-size:12px;font-weight:600;cursor:pointer;}',
-      '.het-ahnav button.on{background:var(--accent,#4f8ef7);border-color:var(--accent,#4f8ef7);color:#fff;}',
-      '.het-ahnav button:disabled{opacity:.45;cursor:default;}',
-      '.het-ahdots{padding:0 4px;}',
-      '@media(max-width:720px){.het-ahbar{flex-direction:column;}.het-ahwrap{max-height:360px;}}',
+      '.attendance-layout{display:grid;grid-template-columns:1fr 1fr;gap:0 12px;width:100%;}',
+      '.attendance-layout .het-two{grid-column:1/-1;margin-bottom:16px;}',
+      '.attendance-details{grid-column:1;width:100%;box-sizing:border-box;}',
+      '.attendance-history{grid-column:2;grid-row:2;min-width:0;box-sizing:border-box;margin-bottom:12px;}',
+      '.attendance-history-title{font-size:13px;font-weight:700;cursor:pointer;padding:4px 0 12px;}',
+      '.attendance-history-day{border-bottom:1px solid var(--border2,#e5e7eb);}',
+      '.attendance-history-day{display:block;width:100%;}',
+      '.attendance-history-day > summary{display:block;cursor:pointer;pointer-events:auto;}',
+      '.attendance-history-day[open] .attendance-history-content{display:block;}',
+      '.attendance-history-day summary{cursor:pointer;padding:10px 0;font-size:11px;font-weight:600;line-height:1.6;}',
+      '.attendance-history-content{padding:10px;background:var(--bg2,#fff);border-radius:8px;}','.ah-card{background:#1e2538;border:1px solid #293249;border-radius:14px;padding:24px;color:#e5e9f4;width:100%;box-sizing:border-box;}',
+      '.ah-title{font-family:inherit;font-size:17px;font-weight:700;margin-bottom:6px;color:var(--text,#e5e9f4);}',
+      '.ah-subtitle{font-family:inherit;font-size:12.5px;color:var(--text3,#98a5bf);margin-bottom:18px;}',
+      '.ah-tabs{display:grid;grid-template-columns:1fr 1fr;background:var(--bg2,#141c2e);border-radius:9px;padding:4px;margin-bottom:18px;gap:4px;}',
+      '.ah-tab{font-family:inherit;border:0;background:transparent;color:var(--text3,#a4b0c8);padding:10px;border-radius:7px;font-size:12px;font-weight:600;cursor:pointer;}',
+      '.ah-tab.active{background:var(--accent,#39558e);color:#fff;font-weight:700;}',
+      '.ah-label{font-family:inherit;display:block;font-size:11px;font-weight:600;color:var(--text3,#a4b0c8);margin-bottom:7px;}',
+      '.ah-date-row{display:flex;gap:10px;margin-bottom:20px;}',
+      '.ah-date-input{font-family:inherit;font-size:12px;font-weight:500;background:var(--bg2,#141c2e);border:1px solid var(--border2,#293249);color:var(--text,#e5e9f4);border-radius:8px;padding:10px;width:100%;box-sizing:border-box;color-scheme:dark;}',
+      '.ah-nav{font-family:inherit;font-size:15px;background:var(--bg2,#141c2e);border:1px solid var(--border2,#293249);color:var(--text2,#c6d0e4);border-radius:8px;padding:0 16px;cursor:pointer;}',
+      '.ah-day-header{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:16px;}',
+      '.ah-day-title{font-family:inherit;font-size:14px;font-weight:700;color:var(--text,#e5e9f4);}',
+      '.ah-status{background:rgba(34,197,94,.16);color:var(--success,#55e0bf);padding:6px 13px;border-radius:30px;font-family:inherit;font-size:11px;font-weight:600;}',
+      '.ah-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px;}',
+      '.ah-stat-label{font-family:inherit;font-size:11px;font-weight:600;color:var(--text3,#9ca9c1);margin-bottom:7px;}',
+      '.ah-stat-value{font-family:inherit;font-size:18px;font-weight:700;color:var(--text,#e5e9f4);}',
+      '.ah-divider{border:0;border-top:1px solid var(--border2,#354057);margin:16px 0;}',
+      '.ah-columns{display:grid;grid-template-columns:1fr 1fr;gap:18px;}',
+      '.ah-section-title{font-family:inherit;font-size:11px;font-weight:700;color:var(--text3,#9daac2);margin-bottom:12px;}',
+      '.ah-log{display:flex;gap:12px;align-items:center;min-height:34px;font-family:inherit;font-size:12px;}',
+      '.ah-time{font-size:11px;font-weight:600;color:var(--text3,#a7b3ca);min-width:80px;}',
+      '.ah-event{font-size:12px;font-weight:600;}',
+      '.ah-event.checkin{color:#42dfc0;}',
+      '.ah-event.checkout{color:#d4a4ff;}',
+      '.ah-event.breakstart{color:#ffc76a;}',
+      '.ah-event.breakend{color:#88aaff;}',
+      '.ah-location{font-family:inherit;font-size:12px;color:var(--text2,#e5e9f4);margin-bottom:10px;}',
+      '.ah-location small{display:block;font-size:11px;color:var(--text3,#9ca9c1);margin-top:4px;}',
+      '.ah-location a{color:var(--accent,#8dafff);text-decoration:none;}',
+      '.ah-range-inputs{display:grid;grid-template-columns:1fr 1fr auto;gap:12px;align-items:end;margin-bottom:20px;}',
+      '.ah-apply{font-family:inherit;font-size:12px;background:var(--accent,#527fe3);border:0;color:white;padding:11px 20px;border-radius:8px;cursor:pointer;font-weight:700;}',
+      '.ah-range-heading{font-family:inherit;font-size:14px;font-weight:700;margin-bottom:8px;}',
+      '.ah-range-summary{font-family:inherit;font-size:12px;color:var(--text3,#9ca9c1);margin-bottom:18px;}',
+      '.ah-record{background:var(--bg2,#141c2e);border:1px solid var(--border2,#293249);border-radius:10px;padding:14px;margin-bottom:12px;}',
+      '.ah-record-header{display:flex;justify-content:space-between;align-items:center;gap:12px;font-family:inherit;font-size:13px;}',
+      '.ah-record-meta{font-family:inherit;font-size:11px;color:var(--text3,#a1aec6);margin-top:8px;}',
+      '.ah-footer{font-family:inherit;font-size:11px;color:var(--text3,#9ca9c1);margin-top:20px;}',
+      '.ah-filter-panel{position:relative;margin-bottom:16px;font-family:inherit;}',
+      '.ah-filter-heading{font-size:12px;font-weight:600;color:#9ca9c1;margin-bottom:8px;}',
+      '.ah-filter-dropdown{position:relative;}',
+      '.ah-filter-trigger{height:56px;display:flex;align-items:center;justify-content:space-between;background:#141c2e;border:1px solid #293249;border-radius:10px;padding:0 16px;color:#c6d0e4;font-family:inherit;font-size:14px;cursor:pointer;list-style:none;}',
+      '.ah-filter-trigger::-webkit-details-marker{display:none;}',
+      '.ah-filter-dropdown[open] .ah-filter-trigger{border:2px solid #398bff;box-shadow:0 0 8px rgba(57,139,255,.4);}',
+      '.ah-filter-menu{position:absolute;top:calc(100% + 1px);left:0;right:0;z-index:100;background:#1e2538;border:1px solid #398bff;border-radius:0 0 10px 10px;padding:8px 14px;box-shadow:0 5px 15px rgba(0,0,0,.25);}',
+      '.ah-filter-option{display:flex;align-items:center;gap:13px;min-height:43px;padding:3px 10px;background:transparent!important;border:0!important;border-radius:5px;color:#c6d0e4;font-family:inherit;font-size:13px;font-weight:600;cursor:pointer;}',
+      '.ah-filter-option:hover{background:rgba(79,142,247,.10)!important;}',
+      '.ah-filter-option input{appearance:none;width:20px;height:20px;flex-shrink:0;border:2px solid #aab7cb;border-radius:5px;background:transparent;margin:0;cursor:pointer;}',
+      '.ah-filter-option input:checked{background:#398bff;border-color:#398bff;}',
+      '.ah-filter-option input:checked::after{content:"✓";display:block;color:white;font-size:14px;font-weight:700;text-align:center;line-height:17px;}',
+      '.ah-filter-icon{width:23px;height:23px;flex-shrink:0;display:inline-block;}',
+      '.ah-filter-icon.green{color:#35d99a;}',
+      '.ah-filter-icon.purple{color:#d946ef;}',
+      '.ah-filter-icon.orange{color:#f59e0b;}',
+      '.ah-filter-icon.red{color:#fb7185;}',
+      '.ah-filter-icon.blue{color:#3b82f6;}',
+      '.ah-filter-icon.teal{color:#2dd4bf;}',
+      '.ah-filter-footer{border-top:1px solid #354057;margin-top:12px;padding-top:12px;}',
+      '.ah-filter-submit{width:100%;height:50px;background:#216cf0;border:0;border-radius:12px;color:#fff;font-family:inherit;font-size:14px;font-weight:700;cursor:pointer;transition:background .2s ease;}',
+      '.ah-filter-submit:hover{background:#347dfb;}',
+      '.ah-filter-submit:active{transform:scale(.99);}',
+      '.ah-range-overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:99999;}',
+      '.ah-range-popup{position:relative;width:420px;max-width:90%;background:#1b2438;border:1px solid #354057;border-radius:18px;padding:30px 24px 22px;text-align:center;box-shadow:0 15px 45px rgba(0,0,0,.4);font-family:inherit;}',
+      '.ah-popup-icon{width:58px;height:58px;border:4px solid #ff5265;color:#ff5265;border-radius:50%;font-size:42px;font-weight:600;line-height:52px;margin:0 auto 18px;}',
+      '.ah-range-popup h3{font-size:22px;color:#f1f4fb;margin:0 0 12px;}',
+      '.ah-range-popup p{font-size:15px;color:#a4b0c8;margin:0 0 28px;}',
+      '.ah-popup-ok{width:100%;background:#4385f5;color:white;border:0;border-radius:9px;padding:14px;font-size:16px;font-weight:600;cursor:pointer;}',
+      '.ah-popup-close{position:absolute;right:16px;top:12px;background:none;border:0;color:#a4b0c8;font-size:27px;cursor:pointer;}',
+      '.ah-filter-footer{border-top:1px solid #354057;margin-top:12px;padding-top:12px;}',
+      '.ah-filter-submit{width:100%;height:50px;background:#216cf0;border:0;border-radius:12px;color:#fff;font-family:inherit;font-size:14px;font-weight:700;cursor:pointer;transition:background .2s ease;}',
+      '.ah-filter-submit:hover{background:#347dfb;}',
+      '.ah-filter-submit:active{transform:scale(.99);}',
+      '@media(max-width:700px){.ah-stats{grid-template-columns:1fr 1fr;}.ah-columns{grid-template-columns:1fr;}.ah-range-inputs{grid-template-columns:1fr;}.ah-card{padding:16px;}}',
+      '@media(max-width:600px){.attendance-layout{grid-template-columns:1fr;}.attendance-history{grid-column:1;grid-row:auto;}}',
       '@media(max-width:720px){.het-pipe{grid-template-columns:1fr 1fr;}.het-break{grid-template-columns:1fr 1fr;}}',
       '@media(max-width:480px){.het-pipe{grid-template-columns:1fr;}.het-two{grid-template-columns:1fr;}}'
+      
     ].join('');
     var el = document.createElement('style');
     el.id = STYLE_ID;
@@ -407,6 +457,593 @@
   function bk(v, l) { return '<div class="het-bk"><b>' + v + '</b><small>' + esc(l) + '</small></div>'; }
 
   /* ── Check In / Out ─────────────────────────────────────────────────────── */
+  function ahEventClass(event) {
+    var value = String(event || '').toLowerCase();
+  
+    if (/check.?in/.test(value)) return 'checkin';
+    if (/check.?out/.test(value)) return 'checkout';
+    if (/break.*start|start.*break/.test(value)) return 'breakstart';
+    if (/break.*end|end.*break/.test(value)) return 'breakend';
+  
+    return '';
+  }
+  
+  function ahMinutes(value) {
+    value = Number(value) || 0;
+  
+    return Math.floor(value / 60) + 'h ' + (value % 60) + 'm';
+  }
+  
+  function ahDayTitle(date) {
+    var d = new Date(date + 'T12:00:00');
+  
+    return d.toLocaleDateString('en-IN', {
+      weekday: 'long',
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric'
+    });
+  }
+  
+  function ahRenderActivity(day) {
+    var events = day.events || [];
+  
+    if (!events.length) {
+      return '<div class="het-empty">No activity recorded.</div>';
+    }
+  
+    return events.map(function (event) {
+      return '<div class="ah-log">' +
+        '<span class="ah-time">' + esc(event.time || '--') + '</span>' +
+        '<span class="ah-event ' + ahEventClass(event.event || event.label) + '">' +
+          esc(event.label || event.event || 'Activity') +
+        '</span>' +
+      '</div>';
+    }).join('');
+  }
+  
+  function ahRenderLocations(day) {
+    var punches = day.punches || [];
+  
+    if (!punches.length) {
+      return '<div class="het-empty">No location punches recorded.</div>';
+    }
+  
+    return punches.map(function (punch) {
+      var lat = Number(punch.latitude);
+      var lng = Number(punch.longitude);
+  
+      var hasCoordinates =
+        punch.latitude != null &&
+        punch.longitude != null &&
+        isFinite(lat) &&
+        isFinite(lng);
+  
+      var map = hasCoordinates
+        ? '<a href="https://www.google.com/maps?q=' +
+          lat + ',' + lng +
+          '" target="_blank" rel="noopener">View map ↗</a>'
+        : '';
+  
+      return '<div class="ah-location">' +
+        esc(punch.label || 'Location recorded') +
+        '<small>' +
+          esc(punch.time || '') +
+          (map ? ' · ' + map : '') +
+        '</small>' +
+      '</div>';
+    }).join('');
+  }
+  
+  function ahRenderColumns(day, filters) {
+    filters = filters || {};
+
+    var showActivity = filters.activity !== false;
+    var showLocations = filters.locations !== false;
+
+    var columns = [];
+
+    if (showActivity) {
+      columns.push(
+        '<div>' +
+          '<div class="ah-section-title">ACTIVITY</div>' +
+          ahRenderActivity(day) +
+        '</div>'
+      );
+    }
+
+    if (showLocations) {
+      columns.push(
+        '<div>' +
+          '<div class="ah-section-title">LOCATION PUNCHES</div>' +
+          ahRenderLocations(day) +
+        '</div>'
+      );
+    }
+
+    if (!columns.length) {
+      return '<div class="het-empty">Select at least one display filter.</div>';
+    }
+
+    return '<div class="ah-columns">' +
+      columns.join('') +
+    '</div>';
+  }
+  
+  function ahStatus(day) {
+    var status = String(day.status || '').toLowerCase();
+  
+    if (status === 'late') return 'Late';
+    if (status === 'absent') return 'Absent';
+    if (status === 'half_day') return 'Half-day';
+  
+    return day.checkIn ? 'Present' : 'No record';
+  }
+  function renderAttendanceHistory(box, ctx) {
+    var s = ctx.state;
+    s.ahFilters = s.ahFilters || {
+      effective: true,
+      gross: true,
+      break: true,
+      punches: true,
+      activity: true,
+      locations: true
+    };
+  
+    var mode = s.ahMode || 'daily';
+    var date = s.ahDate || s.cioDate || todayIso();
+  
+    var fromDate = s.ahFrom || date;
+    var toDate = s.ahTo || date;
+    function ahShowRangePopup() {
+      var oldPopup = document.querySelector('.ah-range-overlay');
+      if (oldPopup) oldPopup.remove();
+    
+      var overlay = document.createElement('div');
+      overlay.className = 'ah-range-overlay';
+    
+      overlay.innerHTML =
+        '<div class="ah-range-popup">' +
+          '<button class="ah-popup-close" type="button">&times;</button>' +
+          '<div class="ah-popup-icon">!</div>' +
+          '<h3>Date range not allowed</h3>' +
+          '<p>Date range above 5 days is not considered.</p>' +
+          '<button class="ah-popup-ok" type="button">OK</button>' +
+        '</div>';
+    
+      document.body.appendChild(overlay);
+    
+      function closePopup() {
+        overlay.remove();
+      }
+    
+      overlay.querySelector('.ah-popup-ok').onclick = closePopup;
+      overlay.querySelector('.ah-popup-close').onclick = closePopup;
+    }
+    function fetchDays(from, to) {
+      var start = new Date(from + 'T12:00:00');
+      var end = new Date(to + 'T12:00:00');
+  
+      if (isNaN(start.getTime()) || isNaN(end.getTime()) || start > end) {
+        s.ahError = new Error('Please select a valid date range.');
+        s.ahRows = [];
+        renderAttendanceHistory(box, ctx);
+        return;
+      }
+  
+      var dates = [];
+
+for (
+  var current = new Date(start);
+  current <= end;
+  current.setDate(current.getDate() + 1)
+) {
+  dates.push(isoDate(current));
+}
+
+if (dates.length > 5) {
+  s.ahError = null;
+  s.ahRows = null;
+  s.ahLoading = false;
+  s.ahKey = null;
+
+  ahShowRangePopup();
+  return;
+}
+      if (dates.length > 5) {
+        s.ahError = new Error('Please select a range of up to 31 days.');
+        s.ahRows = [];
+        renderAttendanceHistory(box, ctx);
+        return;
+      }
+  
+      var key = ctx.email + ':' + from + ':' + to;
+  
+      if (s.ahKey === key && (s.ahRows || s.ahLoading)) return;
+  
+      s.ahKey = key;
+      s.ahLoading = true;
+      s.ahError = null;
+      s.ahRows = null;
+  
+      Promise.all(dates.map(function (d) {
+        return api(
+          '/api/attendance/day-detail?email=' +
+          encodeURIComponent(ctx.email) +
+          '&date=' +
+          encodeURIComponent(d)
+        );
+      }))
+      .then(function (rows) {
+        if (s.ahKey !== key) return;
+  
+        s.ahRows = rows.reverse();
+        s.ahLoading = false;
+  
+        renderAttendanceHistory(box, ctx);
+      })
+      .catch(function (error) {
+        if (s.ahKey !== key) return;
+  
+        s.ahError = error;
+        s.ahLoading = false;
+  
+        renderAttendanceHistory(box, ctx);
+      });
+    }
+  
+    var html =
+      '<div class="ah-card">' +
+  
+        '<div class="ah-title">Activity History</div>' +
+  
+        '<div class="ah-subtitle">' +
+          'Review activity and recorded locations for any day.' +
+        '</div>' +
+        '<div class="ah-filter-panel">' +
+        '<div class="ah-filter-heading">Filters</div>' +
+
+        '<details class="ah-filter-dropdown">' +
+
+          '<summary class="ah-filter-trigger">' +
+            '<span>☰ &nbsp; Select filters</span>' +
+            '<span>⌄</span>' +
+          '</summary>' +
+
+          '<div class="ah-filter-menu">' +
+
+            ['effective', 'gross', 'break', 'punches', 'activity', 'locations']
+              .map(function (key) {
+                var labels = {
+                  effective: 'Effective',
+                  gross: 'Gross',
+                  break: 'Break',
+                  punches: 'Punches',
+                  activity: 'Activity',
+                  locations: 'Location Punches'
+                };
+                var icons = {
+                  effective: '<svg viewBox="0 0 24 24" class="ah-filter-icon green"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2.5"/><path d="M12 7v5l3 2" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>',
+                
+                  gross: '<svg viewBox="0 0 24 24" class="ah-filter-icon purple"><path d="M4 19V11h4v8H4zm6 0V5h4v14h-4zm6 0V8h4v11h-4z" fill="currentColor"/></svg>',
+                
+                  break: '<svg viewBox="0 0 24 24" class="ah-filter-icon orange"><path d="M5 8h12v8a4 4 0 0 1-4 4H9a4 4 0 0 1-4-4V8zm12 2h2a2 2 0 0 1 0 4h-2" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M9 3l-1 3m6-3l-1 3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
+                
+                  punches: '<svg viewBox="0 0 24 24" class="ah-filter-icon red"><path d="M12 3a8 8 0 0 0-8 8m16 0a8 8 0 0 0-8-8m-5 8a5 5 0 0 1 10 0m-7-2a2 2 0 0 1 4 0v5m-7-3v2a5 5 0 0 0 10 0v-2m-13 0v2a8 8 0 0 0 16 0v-2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
+                
+                  activity: '<svg viewBox="0 0 24 24" class="ah-filter-icon blue"><path d="M6 3h9l4 4v14H6V3z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M14 3v5h5M9 12h7M9 16h7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
+                
+                  locations: '<svg viewBox="0 0 24 24" class="ah-filter-icon teal"><path d="M20 10c0 5-8 12-8 12S4 15 4 10a8 8 0 1 1 16 0z" fill="currentColor"/><circle cx="12" cy="10" r="2.5" fill="#141c2e"/></svg>'
+                };
+
+                var filters = s.ahFilters || {};
+
+                return '<label class="ah-filter-option">' +
+                    '<input type="checkbox" data-ah-filter="' + key + '"' +
+                    (filters[key] !== false ? ' checked' : '') +
+                    '>' +
+                    icons[key] +
+                    '<span>' + labels[key] + '</span>' +
+                '</label>';
+              }).join('') +
+
+              '<div class="ah-filter-footer">' +
+                '<button type="button" class="ah-filter-submit" data-het="ah-filter-submit">' +
+                  'Submit' +
+                '</button>' +
+              '</div>' +
+    
+            '</div>' +
+        '</details>' +
+      '</div>' +
+  
+        '<div class="ah-tabs">' +
+          '<button class="ah-tab ' + (mode === 'daily' ? 'active' : '') +
+            '" data-het="ah-daily">Daily</button>' +
+  
+          '<button class="ah-tab ' + (mode === 'range' ? 'active' : '') +
+            '" data-het="ah-range">Date range</button>' +
+        '</div>';
+  
+    if (mode === 'daily') {
+      html +=
+        '<label class="ah-label">Date</label>' +
+  
+        '<div class="ah-date-row">' +
+  
+          '<input type="date" class="ah-date-input" ' +
+            'data-het="ah-date" value="' + esc(date) + '" max="' + todayIso() + '">' +
+  
+          '<button class="ah-nav" data-het="ah-prev">‹</button>' +
+  
+          '<button class="ah-nav" data-het="ah-next">›</button>' +
+  
+        '</div>';
+    } else {
+      html +=
+        '<div class="ah-range-inputs">' +
+  
+          '<div>' +
+            '<label class="ah-label">From date</label>' +
+            '<input type="date" class="ah-date-input" ' +
+              'data-het="ah-from" value="' + esc(fromDate) + '">' +
+          '</div>' +
+  
+          '<div>' +
+            '<label class="ah-label">To date</label>' +
+            '<input type="date" class="ah-date-input" ' +
+              'data-het="ah-to" value="' + esc(toDate) + '">' +
+          '</div>' +
+  
+          '<button class="ah-apply" data-het="ah-apply">Apply</button>' +
+  
+        '</div>';
+    }
+  
+    if (s.ahLoading) {
+      html += loading('attendance history');
+    } else if (s.ahError) {
+      html += denied(s.ahError, 'attendance history');
+    } else if (s.ahRows && s.ahRows.length) {
+      var rows = s.ahRows;
+  
+      if (mode === 'daily') {
+        var day = rows[0];
+  
+        html +=
+          '<div class="ah-day-header">' +
+            '<div class="ah-day-title">' + esc(ahDayTitle(day.date)) + '</div>' +
+            '<span class="ah-status">' + esc(ahStatus(day)) + '</span>' +
+          '</div>' +
+  
+          '<div class="ah-stats">' +
+
+          (s.ahFilters.effective !== false ?
+            '<div><div class="ah-stat-label">Effective</div>' +
+              '<div class="ah-stat-value">' +
+                ahMinutes(day.effectiveMinutes) +
+              '</div></div>' : '') +
+
+          (s.ahFilters.gross !== false ?
+            '<div><div class="ah-stat-label">Gross</div>' +
+              '<div class="ah-stat-value">' +
+                ahMinutes(day.grossMinutes) +
+              '</div></div>' : '') +
+
+          (s.ahFilters.break !== false ?
+            '<div><div class="ah-stat-label">Break</div>' +
+              '<div class="ah-stat-value">' +
+                ahMinutes(Math.max(0,
+                  (day.grossMinutes || 0) - (day.effectiveMinutes || 0)
+                )) +
+              '</div></div>' : '') +
+
+          (s.ahFilters.punches !== false ?
+            '<div><div class="ah-stat-label">Punches</div>' +
+              '<div class="ah-stat-value">' +
+                (day.punches || []).length +
+              '</div></div>' : '') +
+
+        '</div>' +
+          '<hr class="ah-divider">' +
+  
+          ahRenderColumns(day, s.ahFilters);
+  
+      } else {
+        var totalPunches = 0;
+        var totalMinutes = 0;
+  
+        rows.forEach(function (day) {
+          totalPunches += (day.punches || []).length;
+          totalMinutes += Number(day.effectiveMinutes) || 0;
+        });
+  
+        html +=
+          '<div class="ah-range-heading">' +
+            esc(fmtDate(fromDate)) + ' – ' + esc(fmtDate(toDate)) +
+          '</div>' +
+  
+          '<div class="ah-range-summary">' +
+            rows.length + ' days · ' +
+            totalPunches + ' punches · ' +
+            ahMinutes(totalMinutes) + ' effective' +
+          '</div>';
+  
+        rows.forEach(function (day) {
+          html +=
+            '<div class="ah-record">' +
+  
+              '<div class="ah-record-header">' +
+                '<strong>' + esc(ahDayTitle(day.date)) + '</strong>' +
+                '<span class="ah-status">' + esc(ahStatus(day)) + '</span>' +
+              '</div>' +
+  
+              '<div class="ah-record-meta">' +
+                'Effective ' + ahMinutes(day.effectiveMinutes) +
+                ' · Gross ' + ahMinutes(day.grossMinutes) +
+                ' · Break ' + ahMinutes(Math.max(
+                  0,
+                  (day.grossMinutes || 0) - (day.effectiveMinutes || 0)
+                )) +
+              '</div>' +
+  
+              '<hr class="ah-divider">' +
+  
+              ahRenderColumns(day) +
+  
+            '</div>';
+        });
+      }
+    }
+  
+    html +=
+      '<div class="ah-footer">All times are in IST (UTC+05:30).</div>' +
+      '</div>';
+  
+    box.innerHTML = html;   
+    var submitFilter = q(box, 'ah-filter-submit');
+
+if (submitFilter) {
+  submitFilter.onclick = function () {
+
+    s.ahFilters = s.ahFilters || {};
+
+    box.querySelectorAll('[data-ah-filter]').forEach(function (input) {
+      s.ahFilters[input.getAttribute('data-ah-filter')] = input.checked;
+    });
+
+    renderAttendanceHistory(box, ctx);
+  };
+}
+    var dailyButton = q(box, 'ah-daily');
+    var rangeButton = q(box, 'ah-range');
+    var prevButton = q(box, 'ah-prev');
+    var nextButton = q(box, 'ah-next');
+    var applyButton = q(box, 'ah-apply');
+    if (applyButton) {
+      applyButton.onclick = function () {
+        var from = q(box, 'ah-from').value;
+        var to = q(box, 'ah-to').value;
+    
+        if (!from || !to) {
+          alert('Please select both dates.');
+          return;
+        }
+    
+        var start = new Date(from + 'T12:00:00');
+        var end = new Date(to + 'T12:00:00');
+        var days = Math.round((end - start) / 86400000) + 1;
+    
+        if (days > 5) {
+          Swal.fire({
+            icon: 'error',
+            title: 'Date range not allowed',
+            text: 'Date range above 5 days is not considered.',
+            confirmButtonText: 'OK',
+            confirmButtonColor: '#4285f4'
+          });
+          return;
+        }
+    
+        if (days < 1) {
+          alert('From date cannot be after To date.');
+          return;
+        }
+    
+        s.ahFrom = from;
+        s.ahKey = null;
+        s.ahRows = null;
+        s.ahError = null;
+        s.ahLoading = false;
+    
+        renderAttendanceHistory(box, ctx);
+      };
+    }
+  
+    if (dailyButton) {
+      dailyButton.onclick = function () {
+        s.ahMode = 'daily';
+        s.ahKey = null;
+        s.ahRows = null;
+        renderAttendanceHistory(box, ctx);
+      };
+    }
+  
+    if (rangeButton) {
+      rangeButton.onclick = function () {
+        s.ahMode = 'range';
+        s.ahKey = null;
+        s.ahRows = null;
+        renderAttendanceHistory(box, ctx);
+      };
+    }
+  
+    on(box, 'ah-date', function () {
+      s.ahDate = this.value;
+      s.ahKey = null;
+      s.ahRows = null;
+      renderAttendanceHistory(box, ctx);
+    });
+  
+    on(box, 'ah-from', function () {
+      s.ahFrom = this.value;
+    });
+  
+    on(box, 'ah-to', function () {
+      s.ahTo = this.value;
+    });
+  
+    if (prevButton) {
+      prevButton.onclick = function () {
+        var d = new Date(date + 'T12:00:00');
+        d.setDate(d.getDate() - 1);
+  
+        s.ahDate = isoDate(d);
+        s.ahKey = null;
+        s.ahRows = null;
+  
+        renderAttendanceHistory(box, ctx);
+      };
+    }
+  
+    if (nextButton) {
+      nextButton.onclick = function () {
+        var d = new Date(date + 'T12:00:00');
+        d.setDate(d.getDate() + 1);
+  
+        if (isoDate(d) > todayIso()) return;
+  
+        s.ahDate = isoDate(d);
+        s.ahKey = null;
+        s.ahRows = null;
+  
+        renderAttendanceHistory(box, ctx);
+      };
+    }
+  
+    if (applyButton) {
+      applyButton.onclick = function () {
+        if (fromDate > toDate) {
+          alert('From date cannot be after To date.');
+          return;
+        }
+  
+        s.ahKey = null;
+        s.ahRows = null;
+  
+        renderAttendanceHistory(box, ctx);
+      };
+    }
+  
+    if (!s.ahLoading && !s.ahError && !s.ahRows) {
+      if (mode === 'daily') {
+        fetchDays(date, date);
+      } else {
+        fetchDays(fromDate, toDate);
+      }
+    }
+  }
+  
   function loadDay(box, ctx) {
     var s = ctx.state, d0 = s.cioDate || todayIso();
     return api('/api/attendance/day-detail?email=' + encodeURIComponent(ctx.email) + '&date=' + d0)
@@ -425,11 +1062,162 @@
     var s = ctx.state, d0 = s.cioDate || todayIso();
     var bar = filterBar('<input type="date" class="het-filter" data-het="cio-date" value="' + esc(d0) + '" max="' + todayIso() + '">');
     function wire() {
-      on(box, 'cio-date', function () { s.cioDate = this.value; s.day = null; s.punches = null; render('checkin', box, ctx); });
+      on(box, 'cio-date', function () {
+        s.cioDate = this.value;
+        s.day = null;
+        s.punches = null;
+        s.cioHistoryKey = null;
+        s.cioHistory = null;
+        render('checkin', box, ctx);
+      });
+    
+      on(box, 'cio-history-range', function () {
+        s.cioHistoryRange = this.value;
+        s.cioHistoryKey = null;
+        s.cioHistory = null;
+        s.cioHistoryError = null;
+        render('checkin', box, ctx);
+      });
+      on(box, 'cio-from-date', function () {
+        s.cioFromDate = this.value;
+      });
+      
+      on(box, 'cio-to-date', function () {
+        s.cioToDate = this.value;
+      });
+      
+      on(box, 'cio-apply-range', function () {
+        if (!s.cioFromDate || !s.cioToDate) {
+          alert('Please select both dates.');
+          return;
+        }
+      
+        if (s.cioFromDate > s.cioToDate) {
+          alert('From Date cannot be after To Date.');
+          return;
+        }
+      
+        s.cioHistoryKey = null;
+        s.cioHistory = null;
+        s.cioHistoryError = null;
+      
+        render('checkin', box, ctx);
+      });
+    
+      var panel = q(box, 'history-panel');
+      if (panel) {
+        panel.ontoggle = function () {
+          s.cioHistoryOpen = panel.open;
+          if (panel.open) render('checkin', box, ctx);
+        };
+      }
     }
     if (!s.day) { box.innerHTML = bar + loading('check-in'); wire(); loadDay(box, ctx); return; }
     if (s.dayError) { box.innerHTML = bar + denied(s.dayError, 'check-in records'); wire(); return; }
-    var d = s.day;
+    var d = s.day;var historyRange = s.cioHistoryRange || 'daily';
+    var historyOpen = !!s.cioHistoryOpen;
+    var fromDate = s.cioFromDate || d0;
+    var toDate = s.cioToDate || d0;
+    
+    var selected = new Date(d0 + 'T12:00:00');
+    var start = new Date(selected);
+    var end = new Date(selected);
+    if (historyRange === 'weekly') {
+      start.setDate(start.getDate() - 6);
+    } else if (historyRange === 'monthly') {
+      start = new Date(selected.getFullYear(), selected.getMonth(), 1);
+      end = new Date(selected.getFullYear(), selected.getMonth() + 1, 0);
+    } else if (historyRange === 'custom') {
+      start = new Date(fromDate + 'T12:00:00');
+      end = new Date(toDate + 'T12:00:00');
+    }
+    
+    var dates = [];
+    
+    for (var current = new Date(start); current <= end; current.setDate(current.getDate() + 1)) {
+      if (isoDate(current) <= todayIso()) {
+        dates.push(isoDate(current));
+      }
+    }
+    
+    var historyKey = historyRange + ':' +
+  (historyRange === 'custom' ? fromDate + ':' + toDate : d0);
+    
+    if (historyOpen && s.cioHistoryKey !== historyKey) {
+      s.cioHistoryKey = historyKey;
+      s.cioHistory = null;
+      s.cioHistoryError = null;
+    
+      Promise.all(dates.map(function (date) {
+        return api(
+          '/api/attendance/day-detail?email=' +
+          encodeURIComponent(ctx.email) +
+          '&date=' + date
+        );
+      }))
+      .then(function (rows) {
+        if (s.cioHistoryKey !== historyKey) return;
+        s.cioHistory = rows;
+        settle(box, ctx, 'checkin');
+      })
+      .catch(function (e) {
+        if (s.cioHistoryKey !== historyKey) return;
+        s.cioHistoryError = e;
+        settle(box, ctx, 'checkin');
+      });
+    }
+    
+    var historyHtml = '';
+    
+    if (historyOpen) {
+      if (s.cioHistoryError) {
+        historyHtml = denied(s.cioHistoryError, 'attendance history');
+      } else if (!s.cioHistory) {
+        historyHtml = loading('attendance history');
+      } else {
+        historyHtml = s.cioHistory.map(function (row) {
+    
+          var activity = (row.events || []).map(function (e) {
+            return '<div class="het-log">' +
+              '<span>' + esc(e.time || '') + '</span>' +
+              '<span>' + esc(e.label || e.event || '') + '</span>' +
+              '</div>';
+          }).join('') || empty('No activity.');
+    
+          var locations = (row.punches || []).map(function (p) {
+            var lat = Number(p.latitude);
+            var lng = Number(p.longitude);
+            var hasCoords = p.latitude != null && p.longitude != null &&
+              isFinite(lat) && isFinite(lng);
+    
+            return '<div class="het-log">' +
+              '<span>' + esc(p.time || '') + '</span>' +
+              '<span>' + esc(p.label || 'Location recorded') + '</span>' +
+              '<span>' + (hasCoords
+                ? '<a href="https://www.google.com/maps?q=' +
+                  lat + ',' + lng +
+                  '" target="_blank" rel="noopener">Map ↗</a>'
+                : '') + '</span>' +
+              '</div>';
+          }).join('') || empty('No location punches.');
+    
+          return '<details class="attendance-history-day">' +
+            '<summary>' +
+              esc(row.date) + ' | ' +
+              esc(row.checkIn || '--') + ' | ' +
+              esc(row.checkOut || '--') +
+            '</summary>' +
+            '<div class="attendance-history-content">' +
+              '<div class="het-sec">Activity</div>' +
+              activity +
+              '<div class="het-sec">Location punches</div>' +
+              locations +
+            '</div>' +
+          '</details>';
+    
+        }).join('') || empty('No records.');
+      }
+    }
     var status = String(d.status || '').toLowerCase();
     var badge = d.onTime ? '<span class="het-pill present">On time</span>' : (status ? '<span class="het-pill ' + esc(status) + '">' + esc(d.status) + '</span>' : '');
     var logs = (d.events || []).filter(function (e) { return /check/i.test(e.event || e.label || ''); }).map(function (e) {
@@ -443,16 +1231,47 @@
       return '<div class="het-log"><span class="het-lt">' + esc(p.time || '') + '</span><span class="het-le">' + esc(p.label || 'Location recorded') + (p.approximate && !/^Approximate/.test(p.label || '') ? ' <small title="Device location was not precise">(approximate)</small>' : '') + '</span><span class="het-ll">' + link + '</span></div>';
     }).join('') : empty('No location punches recorded on this day.');
     box.innerHTML = bar +
+      '<div class="attendance-layout">' +
+
       '<div class="het-two">' +
-        '<div class="het-tile"><div class="het-cl">Check In</div><div class="het-cv">' + esc(d.checkIn || '--') + '</div></div>' +
-        '<div class="het-tile"><div class="het-cl">Check Out</div><div class="het-cv">' + esc(d.checkOut || '--') + '</div></div>' +
+      '<div class="het-tile">' +
+        '<div class="het-cl">Check In</div>' +
+        '<div class="het-cv">' + esc(d.checkIn || '--') + '</div>' +
       '</div>' +
-      '<div class="het-hrs"><span>Effective <b>' + fmtMins(d.effectiveMinutes) + '</b></span>' +
-        '<span>Gross <b>' + fmtMins(d.grossMinutes) + '</b></span>' + (badge ? '<span>' + badge + '</span>' : '') +
-        (d.shift && (d.shift.name || d.shift.label) ? '<span>Shift <b>' + esc(d.shift.name || d.shift.label) + '</b></span>' : '') + '</div>' +
-      '<div class="het-sec">Activity</div>' + logs +
-      '<div class="het-sec">Location punches</div>' + punchHtml;
+
+      '<div class="het-tile">' +
+        '<div class="het-cl">Check Out</div>' +
+        '<div class="het-cv">' + esc(d.checkOut || '--') + '</div>' +
+      '</div>' +
+       '</div>' +
+        '<div class="attendance-history" data-het="ah-history-box">' +
+        '</div>' +
+      
+       '<div class="het-tile attendance-details">' +
+        '<div class="het-hrs">' +
+        '<span>Effective <b>' + fmtMins(d.effectiveMinutes) + '</b></span>' +
+        '<span>Gross <b>' + fmtMins(d.grossMinutes) + '</b></span>' +
+        (badge ? '<span>' + badge + '</span>' : '') +
+        (d.shift && (d.shift.name || d.shift.label)
+          ? '<span>Shift <b>' + esc(d.shift.name || d.shift.label) + '</b></span>'
+          : '') +
+      '</div>' +
+
+       '<div class="het-sec">Activity</div>' +
+      logs +
+
+        '<div class="het-sec">Location punches</div>' +
+      punchHtml +
+       '</div>' +
+
+     '</div>';
+
     wire();
+    var historyBox = q(box, 'ah-history-box');
+
+    if (historyBox) {
+    renderAttendanceHistory(historyBox, ctx);
+    }
   }
 
   /* ── Tasks ──────────────────────────────────────────────────────────────── */

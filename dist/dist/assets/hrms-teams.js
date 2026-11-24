@@ -170,15 +170,36 @@
     });
     return html + '</tbody></table></div></div>';
   }
+  /* The unlinked list used to stop at the first 100 records. It now shows 10
+     to a page with as many pages as there are records. */
+  var UN_PAGE = 10;
+  function unStart(rows) {
+    var pages = Math.max(1, Math.ceil(rows.length / UN_PAGE));
+    if (!(state.unPage >= 0)) state.unPage = 0;
+    if (state.unPage > pages - 1) state.unPage = pages - 1;
+    return state.unPage * UN_PAGE;
+  }
+  function unPager(rows) {
+    if (rows.length <= UN_PAGE) return '';
+    var s = unStart(rows), pages = Math.ceil(rows.length / UN_PAGE);
+    var btn = 'height:26px;padding:0 10px;border:1px solid var(--border2,#d1d5db);border-radius:6px;background:var(--bg,#fff);color:var(--text,#111827);font-size:11.5px;font-weight:600;cursor:pointer';
+    return '<div style="display:flex;align-items:center;justify-content:space-between;gap:6px 10px;flex-wrap:wrap;margin-top:10px;font-size:11.5px;color:var(--text3,#6b7280)">' +
+      '<span>Showing ' + (s + 1) + '–' + Math.min(s + UN_PAGE, rows.length) + ' of ' + rows.length + '</span>' +
+      '<span style="display:inline-flex;align-items:center;gap:6px">' +
+        '<button type="button" data-ht="unpage" data-id="prev" style="' + btn + (state.unPage <= 0 ? ';opacity:.45;cursor:default' : '') + '"' + (state.unPage <= 0 ? ' disabled' : '') + '>‹ Prev</button>' +
+        '<span>Page ' + (state.unPage + 1) + ' of ' + pages + '</span>' +
+        '<button type="button" data-ht="unpage" data-id="next" style="' + btn + (state.unPage >= pages - 1 ? ';opacity:.45;cursor:default' : '') + '"' + (state.unPage >= pages - 1 ? ' disabled' : '') + '>Next ›</button>' +
+      '</span></div>';
+  }
   function unresolvedCard() {
     var rows = state.unresolved || [];
     if (!canEdit() || !rows.length) return '';
     return '<div class="card"><div class="ht-head"><div><div class="ht-title">Unlinked approvers &amp; reviewers <span class="badge orange">' + rows.length + '</span></div>' +
       '<div class="ht-sub">Older records whose approver, reviewer or team lead is only a typed name, or pending requests from people with no manager linked. Link managers on profiles and leads on teams; new requests then route automatically.</div></div></div>' +
       '<div class="ht-wrap"><table><thead><tr><th>Record</th><th>#</th><th>Employee</th><th>Recorded name</th><th>Status</th></tr></thead><tbody>' +
-      rows.slice(0, 100).map(function (r) {
+      rows.slice(unStart(rows), unStart(rows) + UN_PAGE).map(function (r) {
         return '<tr><td>' + esc(r.kind) + '</td><td>' + esc(r.id) + '</td><td>' + esc(r.employee || '—') + '</td><td>' + esc(r.name) + '</td><td>' + esc(r.status || '') + '</td></tr>';
-      }).join('') + '</tbody></table></div>' + (rows.length > 100 ? '<div class="ht-sub" style="margin-top:8px">Showing the first 100.</div>' : '') + '</div>';
+      }).join('') + '</tbody></table></div>' + unPager(rows) + '</div>';
   }
   function render() {
     var root = document.getElementById(ROOT_ID);
@@ -199,6 +220,7 @@
     var root = document.getElementById(ROOT_ID);
     var kind = el.getAttribute('data-ht'), id = el.getAttribute('data-id');
     if (kind === 'toggle') { state.open[id] = !state.open[id]; render(); return; }
+    if (kind === 'unpage') { if (!el.disabled) { state.unPage = (state.unPage || 0) + (id === 'next' ? 1 : -1); render(); } return; }
     if (kind === 'new') { state.creating = !state.creating; render(); return; }
     if (kind === 'create') {
       var val = function (f) { var x = root.querySelector('[data-ht-f="' + f + '"]'); return x ? x.value.trim() : ''; };

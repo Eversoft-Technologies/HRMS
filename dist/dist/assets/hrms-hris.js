@@ -1439,29 +1439,28 @@
   function decorateList() {
     var table = document.querySelector('.content table');
     if (!table) return;
+    table.querySelectorAll('thead th').forEach(function (th) {
+      th.style.textAlign = 'center';
+    });
     var rows = table.querySelectorAll('tbody tr');
     if (!rows.length) return;
     ensureStyle();
     loadListPermissions();
     var unmatched = false;
     rows.forEach(function (tr) {
-      if (tr.hasAttribute('data-hris-skip')) return;
-      var email = tr.getAttribute('data-hris-email');
-      if (!email) {
-        var nameEl = tr.querySelector('td .av-row span') || tr.querySelector('td');
-        var name = nameEl ? listNameKey(nameEl.textContent) : '';
-        if (!name || tr.children.length < 3) { tr.setAttribute('data-hris-skip', '1'); return; }   // the "no employees" placeholder row
-        email = listCache && listCache[name];
-        if (!email) { unmatched = true; return; }
-        tr.setAttribute('data-hris-email', email);
-        tr.style.cursor = 'pointer';
-        tr.title = 'Open employee profile';
-        tr.addEventListener('click', function (ev) {
-          if (ev.target.closest('a, button, input, select')) return;
-          navTo(profileUrl(email));
-        });
-      }
-      if (listCanDelete) addDeleteAction(table, tr);
+      if (tr.hasAttribute('data-hris-email') || tr.hasAttribute('data-hris-skip')) return;
+      var nameEl = tr.querySelector('td .av-row span') || tr.querySelector('td');
+      var name = nameEl ? (nameEl.textContent || '').trim().toLowerCase() : '';
+      if (!name || tr.children.length < 3) { tr.setAttribute('data-hris-skip', '1'); return; }   // the "no employees" placeholder row
+      var email = listCache && listCache[name];
+      if (!email) { unmatched = true; return; }
+      tr.setAttribute('data-hris-email', email);
+      tr.style.cursor = 'pointer';
+      tr.title = 'Open employee profile';
+      tr.addEventListener('click', function (ev) {
+        if (ev.target.closest('a, button, input, select')) return;
+        navTo(profileUrl(email));
+      });
     });
     if ((!listCache || unmatched) && !listLoading && Date.now() - listFetchedAt > 5000) {
       listLoading = true;
