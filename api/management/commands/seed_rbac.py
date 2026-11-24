@@ -43,6 +43,7 @@ class Command(BaseCommand):
                 {'name': 'Onboarding Group', 'module': 'Onboarding', 'desc': 'Work authorization, documents, verification, and employee onboarding'},
                 {'name': 'Workspace Group', 'module': 'Workspace', 'desc': 'Service desk tickets, timesheets and attendance history'},
                 {'name': 'Attendance Policy Group', 'module': 'Attendance', 'desc': 'Attendance policies, penalties, overtime, holidays, office networks and regularization'},
+                {'name': 'Project Group', 'module': 'Employees', 'desc': 'Task Tracker projects'},
             ]
             groups = {}
             for g_info in groups_data:
@@ -144,6 +145,11 @@ class Command(BaseCommand):
                 {'name': 'Approve Regularization & Short Leave', 'code': 'attendance.regularize.approve', 'group': 'Attendance Policy Group'},
                 {'name': 'Manage Holiday Calendars', 'code': 'holiday.manage', 'group': 'Attendance Policy Group'},
                 {'name': 'Manage Office Networks (Wi-Fi/IP)', 'code': 'attendance.network.manage', 'group': 'Attendance Policy Group'},
+                {'name': 'View Projects', 'code': 'project.view', 'group': 'Project Group'},
+                {'name': 'Create Projects', 'code': 'project.create', 'group': 'Project Group'},
+                {'name': 'Edit Projects', 'code': 'project.edit', 'group': 'Project Group'},
+                {'name': 'Delete Projects', 'code': 'project.delete', 'group': 'Project Group'},
+                {'name': 'Manage Projects', 'code': 'project.manage', 'group': 'Project Group'},
             ]
             permissions = {}
             for p_info in perms_data:
@@ -207,13 +213,13 @@ class Command(BaseCommand):
                     # HR Executive is the recruiter today: creates and edits the
                     # candidate, but cannot verify, approve, or touch payroll.
                     'onboarding.view', 'onboarding.create', 'onboarding.edit',
-                    'ticket.manage', 'attendance.audit', 'task.create',
+                    'ticket.manage', 'attendance.audit', 'task.create', 'project.view',
                 ],
                 'Employee': [
                     # task.edit (not task.delete) lets an employee accept/reject
                     # their own assigned tasks from the To Do column.
                     'employee.view', 'task.edit', 'task.create', 'attendance.view', 'attendance.create',
-                    'leave.view', 'leave.create', 'settings.view'
+                    'leave.view', 'leave.create', 'settings.view', 'project.view',
                 ],
                 'Recruiter (India)': [
                     'recruitment.view', 'recruitment.create', 'recruitment.edit',
@@ -231,6 +237,7 @@ class Command(BaseCommand):
                     'settings.view',
                     'onboarding.view', 'onboarding.approve',
                     'timesheet.approve', 'task.create', 'attendance.policy.view',
+                    'project.view', 'project.create', 'project.edit',
                 ],
                 # A lead reviews their team's work. Deliberately without
                 # submission.action / leave.action / onboarding.* — grant those
@@ -239,6 +246,7 @@ class Command(BaseCommand):
                     'employee.view', 'submission.view_all', 'task.edit', 'task.delete',
                     'attendance.view', 'leave.view', 'settings.view',
                     'timesheet.approve', 'task.create',
+                    'project.view', 'project.create', 'project.edit',
                 ],
                 'IT Admin': [
                     'settings.view',
