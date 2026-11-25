@@ -3212,6 +3212,37 @@ html[data-theme="light"] div[style*="position: fixed"]:has(span:is([style*="Pipe
   flex: 0 0 auto;
 }
 
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .leave-request-type-badge {
+  display: grid;
+  grid-template-columns: 6px minmax(0, 1fr);
+  column-gap: 6px;
+  align-items: center;
+  text-align: center;
+}
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .leave-request-type-badge::before {
+  position: static;
+  grid-column: 1;
+  justify-self: center;
+}
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .leave-request-type-label {
+  grid-column: 2;
+  text-align: center;
+}
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .leave-request-status-cell .badge::before {
+  position: static;
+  grid-column: 1;
+  justify-self: center;
+}
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .survey-campaign-badge::before {
+  position: static;
+  grid-column: 1;
+  justify-self: center;
+}
+:where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .survey-campaign-label {
+  grid-column: 2;
+  text-align: center;
+}
+
 /* --- avatars respond with their row ------------------------------------ */
 :where(body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"]))) :is(.content, .main > :not(.topbar):not(.content)) .av {
   border: 1px solid color-mix(in srgb, var(--accent) 26%, transparent);
