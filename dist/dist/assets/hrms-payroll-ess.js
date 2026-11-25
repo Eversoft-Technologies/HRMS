@@ -146,6 +146,22 @@
       '.pess-doc{width:100%;height:65vh;border:1px solid var(--border2);border-radius:8px;background:#fff}',
       '.pess-net{font-size:20px;font-weight:800}.pess-net.pos{color:var(--success)}.pess-net.neg{color:var(--danger)}',
       'html[data-theme="light"] .pess-overlay{background:rgba(15,23,42,.35)}',
+      /* Timesheets-style accent strip + hover lift (opt-in via .pess-acc) */
+      '.pess-acc{--pess-c:var(--border2);position:relative;overflow:hidden;box-sizing:border-box;transition:transform .2s cubic-bezier(.22,1,.36,1),box-shadow .2s ease,border-color .2s ease}',
+      '.pess-acc:before{content:"";position:absolute;top:0;left:0;right:0;height:2px;background:var(--pess-c);transition:height .2s ease}',
+      '.pess-acc:hover{border-color:color-mix(in srgb,var(--pess-c) 45%,var(--border2));transform:translateY(-2px);box-shadow:0 6px 16px rgba(15,23,42,.08)}',
+      '.pess-acc:hover:before{height:3px}',
+      '.pess-loan.pess-acc{background:var(--bg2);padding-top:14px}',
+      '.pess-c-blue{--pess-c:var(--accent)}.pess-c-purple{--pess-c:var(--accent2)}.pess-c-green{--pess-c:var(--accent3)}.pess-c-orange{--pess-c:var(--accent4)}',
+      '.pess-c-warn{--pess-c:var(--warn)}.pess-c-danger{--pess-c:var(--danger)}.pess-c-muted{--pess-c:var(--text3)}.pess-c-violet{--pess-c:#8b5cf6}',
+      '.pess-hov{transition:transform .2s cubic-bezier(.22,1,.36,1),box-shadow .2s ease,border-color .2s ease}',
+      '.pess-hov:hover{border-color:color-mix(in srgb,var(--accent) 45%,var(--border2));transform:translateY(-2px);box-shadow:0 6px 16px rgba(15,23,42,.08)}',
+      '@media (hover:none){.pess-hov:hover{transform:none;box-shadow:none}}',
+      '@media (prefers-reduced-motion: reduce){.pess-hov{transition:none}}',
+      '.pess-acc .pess-table tbody tr td{transition:background-color .15s ease}.pess-acc .pess-table tbody tr:hover td{background:color-mix(in srgb,var(--pess-c) 7%,transparent)}',
+      '.pess-acc .pess-kv{transition:background-color .15s ease;border-radius:6px;padding-left:6px;padding-right:6px;margin:0 -6px}.pess-acc .pess-kv:hover{background:color-mix(in srgb,var(--pess-c) 7%,transparent)}',
+      '@media (hover:none){.pess-acc:hover{transform:none;box-shadow:none}}',
+      '@media (prefers-reduced-motion: reduce){.pess-acc,.pess-acc:before{transition:none}}',
       '@media (max-width:600px){.pess-card{padding:13px 12px}.pess-total{font-size:23px}.pess-table{font-size:12px}.pess-table td,.pess-table th{padding:7px 6px}}'
     ].join('\n');
     var st = document.createElement('style');
@@ -418,7 +434,8 @@
     var paidPct = total > 0 ? Math.max(0, Math.min(100, (total - Number(l.outstanding || 0)) / total * 100)) : 0;
     if (l.status === 'requested' || l.status === 'approved' || l.status === 'rejected' || l.status === 'withdrawn') paidPct = 0;
     if (l.status === 'closed') paidPct = 100;
-    return '<div class="pess-loan"><div class="pess-loan-h"><div><b>' + esc(l.kind === 'advance' ? 'Salary advance' : 'Loan') + ' · ' + esc(money(l.principal)) + '</b>' +
+    var LOAN_ACC = { requested: 'warn', approved: 'blue', active: 'green', closed: 'violet', rejected: 'danger', withdrawn: 'muted', cancelled: 'muted' };
+    return '<div class="pess-loan pess-acc pess-c-' + (LOAN_ACC[l.status] || 'muted') + '"><div class="pess-loan-h"><div><b>' + esc(l.kind === 'advance' ? 'Salary advance' : 'Loan') + ' · ' + esc(money(l.principal)) + '</b>' +
       (l.employeeName ? ' <span class="pess-muted pess-small">' + esc(l.employeeName) + ' (' + esc(l.email) + ')</span>' : '') +
       '<div class="pess-muted pess-small">' + esc(l.tenureMonths) + ' month(s) · ' + esc(l.interestRate) + '% p.a. · EMI ' + esc(money(l.emi)) +
       ' · requested ' + esc(fmtDate(l.createdAt)) + '</div></div><div>' + statusBadge(l.status) + '</div></div>' +
@@ -437,10 +454,10 @@
       var adv = lim.advance || {}, ln = lim.loan || {};
       body.innerHTML =
         '<div class="pess-kpis">' +
-        '<div class="pess-kpi"><span>Max salary advance</span><b>' + esc(money(adv.maxAmount)) + '</b></div>' +
-        '<div class="pess-kpi"><span>Max loan</span><b>' + esc(money(ln.maxAmount)) + '</b></div>' +
-        '<div class="pess-kpi"><span>Max tenure (loan)</span><b>' + esc(ln.maxTenure) + ' months</b></div>' +
-        '<div class="pess-kpi"><span>Loan interest</span><b>' + esc(ln.interestRate) + '% p.a.</b></div></div>' +
+        '<div class="pess-kpi pess-acc pess-c-green"><span>Max salary advance</span><b>' + esc(money(adv.maxAmount)) + '</b></div>' +
+        '<div class="pess-kpi pess-acc pess-c-blue"><span>Max loan</span><b>' + esc(money(ln.maxAmount)) + '</b></div>' +
+        '<div class="pess-kpi pess-acc pess-c-purple"><span>Max tenure (loan)</span><b>' + esc(ln.maxTenure) + ' months</b></div>' +
+        '<div class="pess-kpi pess-acc pess-c-orange"><span>Loan interest</span><b>' + esc(ln.interestRate) + '% p.a.</b></div></div>' +
         '<div class="pess-grid2"><div class="pess-card"><h3>Request an advance or loan</h3>' +
         '<div class="pess-grid2"><div class="pess-field"><label>Type</label><select class="input-field" data-f="kind">' +
         options([{ value: 'advance', label: 'Salary advance' }, { value: 'loan', label: 'Loan' }], 'advance') + '</select></div>' +
@@ -511,7 +528,7 @@
       body.innerHTML =
         '<div class="pess-row" style="margin-bottom:12px"><select class="input-field" data-f="fy">' + options(fyList(), my.fy) + '</select>' +
         '<span class="pess-muted pess-small">' + esc(fmtDate(d.from)) + ' – ' + esc(fmtDate(d.to)) + ' · ' + esc(d.payslipCount) + ' payslip(s)</span></div>' +
-        '<div class="pess-card"><h3>Total rewards ' + esc(d.fy) + '</h3><div class="pess-muted pess-small">Everything the company invests in you this year</div>' +
+        '<div class="pess-card pess-hov"><h3>Total rewards ' + esc(d.fy) + '</h3><div class="pess-muted pess-small">Everything the company invests in you this year</div>' +
         '<div class="pess-total">' + esc(money(total, d.currency)) + '</div>' +
         (comps.length ? '<div class="pess-bar" role="img" aria-label="Breakdown of total rewards">' + bar + '</div><div class="pess-legend">' + legend + '</div>' : '<div class="pess-empty">No pay data for this year yet.</div>') + '</div>' +
         '<div class="pess-grid2"><div class="pess-card"><h3>Breakdown</h3><div class="pess-table-wrap"><table class="pess-table"><tbody>' + detailRows +
