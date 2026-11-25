@@ -370,7 +370,8 @@
                                         n.jsx("span",{className:"badge green",style:{fontSize:10,padding:"1px 6px"},children:"Out now"}):null]}),
                                   n.jsx("div",{style:{fontSize:11,color:"var(--text3)",overflow:"hidden",textOverflow:"ellipsis"},children:e.email||""})]})]})}),
                   n.jsx("td",{style:{textAlign:"center"},children:
-                      n.jsx("span",{className:"badge "+tm.b,children:e.type})}),
+                      n.jsx("span",{className:"badge "+tm.b+" leave-request-type-badge",style:{width:104,justifyContent:"center"},children:
+                          n.jsx("span",{className:"leave-request-type-label",children:e.type})})}),
                   n.jsxs("td",{style:{fontSize:12,textAlign:"center"},children:[dmy(e.fromDate),
                         n.jsx("div",{style:{fontSize:11,color:"var(--text3)"},children:wdOf(e.fromDate)})]}),
                   n.jsxs("td",{style:{fontSize:12,textAlign:"center"},children:[dmy(e.toDate),
@@ -379,8 +380,8 @@
                       n.jsxs("span",{style:{display:"inline-flex",alignItems:"baseline",gap:3,background:"var(--bg3)",border:"1px solid var(--border2)",borderRadius:6,padding:"2px 8px"},children:[
                             n.jsx("span",{style:{fontSize:13,fontWeight:700,fontFamily:"var(--font-d)"},children:e.days}),
                             n.jsx("span",{style:{fontSize:11,color:"var(--text3)"},children:(e.days||0)===1?"day":"days"})]})}),
-                  n.jsx("td",{style:{textAlign:"center"},children:
-                      n.jsx(Gn,{status:e.status})}),
+                  n.jsx("td",{className:"leave-request-status-cell",style:{textAlign:"center"},children:
+                      n.jsx(Gn,{status:e.status,style:{width:104,display:"grid",gridTemplateColumns:"6px minmax(0, 1fr)",columnGap:6,alignItems:"center",textAlign:"center",justifyContent:"center"}})}),
                   n.jsx("td",{style:{textAlign:"center"},children:e.status==="Pending"?
                       n.jsxs("div",{style:{display:"flex",gap:6,flexWrap:"wrap",justifyContent:"center"},children:[e.status==="Pending"?
                             n.jsx("button",{className:"btn-sm",...dp("leave.approve"),style:{fontSize:11,padding:"2px 8px",color:"var(--success)"},onClick:function(ev){ev.stopPropagation();setSt(e.id,"Approved")},children:"Approve"}):null,e.status==="Pending"?
