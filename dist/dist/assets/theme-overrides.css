@@ -3529,3 +3529,77 @@ html[data-theme="light"] div:has(> #hrms-kpi-btn) button:hover, html[data-theme=
 @media (hover: none), (prefers-reduced-motion: reduce) {
   .wsq .wsq-kpis > *:hover { transform: none; }
 }
+/* ── Dashboard KPI cards: flat box, left accent bar, no blue hover glow ── */
+#hrms-live-dashboard-wrap .stat-card,
+#hrms-live-dashboard-wrap .stat-card.blue,
+#hrms-live-dashboard-wrap .stat-card.purple,
+#hrms-live-dashboard-wrap .stat-card.green,
+#hrms-live-dashboard-wrap .stat-card.orange {
+  background: var(--bg3) !important;
+  border: 1px solid var(--border2) !important;
+  border-radius: 12px;
+  padding: 18px 20px;
+  display: flex;
+  flex-direction: column;
+  box-shadow: none !important;
+}
+
+/* accent bar: top edge -> left edge (colors still come from .blue/.purple/.green/.orange) */
+#hrms-live-dashboard-wrap .stat-card::before {
+  top: 0;
+  bottom: 0;
+  left: 0;
+  right: auto;
+  width: 3px;
+  height: auto !important;
+}
+
+/* hover: small lift only, no shadow, no blue border */
+#hrms-live-dashboard-wrap .stat-card:hover {
+  transform: translateY(-2px);
+  box-shadow: none !important;
+  border-color: var(--border2) !important;
+}
+
+/* big number first, small uppercase label under it */
+#hrms-live-dashboard-wrap .stat-card .stat-value {
+  order: 1;
+  font-size: 32px;
+  font-weight: 800;
+  line-height: 1.1;
+}
+#hrms-live-dashboard-wrap .stat-card .stat-label {
+  order: 2;
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: .5px;
+  color: var(--text3);
+  margin: 4px 0 8px;
+}
+#hrms-live-dashboard-wrap .stat-card .stat-sub   { order: 3; }
+#hrms-live-dashboard-wrap .stat-card .stat-trend { order: 4; }
+/* Dashboard KPI cards: blue border + glow on hover */
+html body #hrms-live-dashboard-wrap .stat-card:hover,
+html body #hrms-live-dashboard-wrap .stat-card:focus-visible {
+  transform: translateY(-2px) !important;
+  border: 1px solid var(--accent) !important;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent),
+              0 10px 26px color-mix(in srgb, var(--accent) 28%, transparent) !important;
+  outline: none !important;
+  background: var(--bg3) !important;
+  background-image: none !important;
+}
+
+/* Access Control stat cards: blue border + glow on hover */
+#hrms-rbac-page .hrms-rbac-stat {
+  transition: transform .15s ease, box-shadow .2s ease, border-color .2s ease;
+}
+#hrms-rbac-page .hrms-rbac-stat:hover {
+  transform: translateY(-2px);
+  border-top-color: var(--accent) !important;
+  border-right-color: var(--accent) !important;
+  border-bottom-color: var(--accent) !important;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent),
+              0 10px 26px color-mix(in srgb, var(--accent) 28%, transparent) !important;
+}

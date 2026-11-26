@@ -185,8 +185,14 @@
     return out;
   }
 
-   function syncActive() {
+  function syncActive() {
     var items = document.querySelectorAll('.sidebar a.nav-item[href]');
+    var settings = settingsNavItem();
+    if (settings && settingsDrawerOpen()) { lightSettings(items, settings); return; }
+    var dimmed = releaseSettings();
+
+    var path = location.pathname.replace(/\/+$/, '') || '/';
+
     // The Access Control console is an overlay on /settings (the URL does not change),
     // so while it is open its own sidebar link is the current page, not Settings.
     var rbacLink = document.getElementById('hrms-rbac-link');
@@ -197,6 +203,7 @@
       }
       return;
     }
+
     var best = null, bestLen = -1;
     for (var i = 0; i < items.length; i++) {
       var href = (items[i].getAttribute('href') || '').replace(/\/+$/, '') || '/';
