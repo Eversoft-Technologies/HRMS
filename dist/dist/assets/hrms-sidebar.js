@@ -187,7 +187,7 @@
     return out;
   }
 
-   function syncActive() {
+  function syncActive() {
     var items = document.querySelectorAll('.sidebar a.nav-item[href]');
     var routePath = String(location.pathname || '').replace(/\/+$/, '') || '/';
     for (var p = 0; p < PAYROLL_SECTION_PATHS.length; p++) {
@@ -206,6 +206,7 @@
       }
       return;
     }
+
     var best = null, bestLen = -1;
     for (var i = 0; i < items.length; i++) {
       var href = (items[i].getAttribute('href') || '').replace(/\/+$/, '') || '/';
