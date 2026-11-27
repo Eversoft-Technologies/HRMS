@@ -291,6 +291,8 @@
       '.ob-badge.warn{background:rgba(245,158,11,.15);color:#f59e0b}',
       '.ob-badge.err{background:rgba(239,68,68,.15);color:#ef4444}',
       '.ob-badge.neutral{background:var(--bg3,#1c2433);color:var(--muted,#8a9bb8)}',
+      '.ob-work-auth-wrap .ob-wa-badge-cell{text-align:center!important;vertical-align:middle}',
+      '.ob-work-auth-wrap .ob-badge{display:inline-flex;align-items:center;justify-content:center;width:132px;height:24px;padding:0 6px;box-sizing:border-box;line-height:1}',
       /* pagination */
       '.ob-pg{display:flex;align-items:center;gap:10px;padding:12px 2px;font-size:12px;color:var(--muted,#8a9bb8)}',
       '.ob-pg .sp{flex:1}',
@@ -1449,7 +1451,8 @@
           var val = c[2] ? c[2](r) : r[c[0]];
           if (val == null || val === '' || val === '—' || val === '-') val = '<span class="ob-empty-val">-</span>';
           else if (!c[2]) val = esc(val);
-          return '<td>' + val + '</td>';
+          var badgeCell = state.page === '/work-auth' && c[2] ? ' class="ob-wa-badge-cell"' : '';
+          return '<td' + badgeCell + '>' + val + '</td>';
         }).join('') + '</tr>';
       }).join('');
     }
@@ -1458,7 +1461,7 @@
         '<input class="ob-in ob-search" id="ob-search" placeholder="Search…" value="' + esc(state.search) + '">' +
         '<div style="position:relative"><button class="ob-btn" id="ob-export">⭳ Export ▾</button></div>' +
       '</div>' +
-      '<div class="ob-wrap"><table class="ob-table"><thead><tr>' + head + '</tr></thead><tbody>' +
+      '<div class="ob-wrap' + (state.page === '/work-auth' ? ' ob-work-auth-wrap' : '') + '"><table class="ob-table"><thead><tr>' + head + '</tr></thead><tbody>' +
       body + '</tbody></table></div>' +
       '<div class="ob-pg"><span>' + rows.length + ' row(s)</span></div>';
   }

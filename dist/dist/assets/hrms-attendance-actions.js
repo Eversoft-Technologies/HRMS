@@ -166,6 +166,8 @@
       A + ' .haa-dot{justify-self:end;}',
       T + ' .haa-head,' + T + ' .haa-tr{grid-template-columns:1fr 1fr 1fr;}',
       T + ' .c-status{justify-self:center;text-align:center;}',
+      T + ' .haa-tr .c-status{justify-self:stretch;display:flex;align-items:center;justify-content:center;}',
+      T + ' .haa-tr .c-status .haa-pill{display:inline-flex;align-items:center;justify-content:center;width:88px;height:24px;padding:0 6px;box-sizing:border-box;}',
       '.haa-scope .haa-tr .c-nm,.haa-scope .haa-tr .c-ev{color:var(--text);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}',
       T + ' .haa-tr .c-nm{display:flex;align-items:center;gap:8px;}',
       '.haa-scope .haa-avwrap{position:relative;display:inline-flex;flex-shrink:0;}',

@@ -43,6 +43,8 @@
   box-shadow: 0 10px 26px rgba(12, 20, 40, .14);
   border-color: color-mix(in srgb, var(--accent) 20%, var(--border2));
 }
+.hram-no-lift:hover,
+.hram-no-lift :hover { transform: none !important; }
 
 /* ---------- rows inside the attendance lists ---------- */
 .hrms-att-admin tbody tr,
