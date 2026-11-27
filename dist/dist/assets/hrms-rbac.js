@@ -1121,7 +1121,7 @@
       '.hrms-rbac-h2{font-family:var(--font-d);font-size:15px;font-weight:700;}' +
       '.hrms-rbac-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:4px;}' +
       '.hrms-rbac-stat{background:var(--bg3);border:1px solid var(--border2);border-left:3px solid var(--accent);border-radius:12px;padding:18px 20px;transition:transform .15s;}' +
-      '.hrms-rbac-stat:hover{transform:translateY(-2px);}' +
+      '.hrms-rbac-stat:hover{border-color: color-mix(in srgb, var(--accent) 26%, var(--border2));transform:translateY(-2px);}' +
       '.hrms-rbac-stat.b-green{border-left-color:var(--success);}.hrms-rbac-stat.b-orange{border-left-color:var(--warn);}.hrms-rbac-stat.b-purple{border-left-color:var(--accent2,#7c5cfc);}.hrms-rbac-stat.b-blue{border-left-color:var(--accent);}' +
       '.hrms-rbac-statv{font-family:var(--font-d);font-size:32px;font-weight:800;}' +
       '.hrms-rbac-statl{font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin-top:4px;}' +
