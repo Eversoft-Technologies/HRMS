@@ -150,8 +150,12 @@
       '.mt-scope .input-field{width:auto;min-width:150px;max-width:240px;padding:7px 10px}',
       '.mt-check{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:var(--text2);cursor:pointer;user-select:none}',
       '.mt-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:16px}',
-      '.mt-kpi{background:var(--bg2);border:1px solid var(--border2);border-radius:10px;padding:13px 15px;cursor:pointer;text-align:left;font-family:inherit;color:var(--text);transition:border-color .15s}',
-      '.mt-kpi:hover,.mt-kpi:focus-visible{border-color:var(--accent);outline:none}',
+      '.mt-kpi{--mt-c:var(--border2);background:var(--bg2);border:1px solid var(--border2);border-radius:var(--radius,10px);padding:15px 16px 13px;cursor:pointer;text-align:left;font-family:inherit;color:var(--text);position:relative;overflow:hidden;box-sizing:border-box;transition:transform .2s cubic-bezier(.22,1,.36,1),box-shadow .2s ease,border-color .2s ease}',
+      '.mt-kpi:before{content:"";position:absolute;top:0;left:0;right:0;height:2px;background:var(--mt-c);transition:height .2s ease}',
+      '.mt-kpi:hover,.mt-kpi:focus-visible{border-color:color-mix(in srgb,var(--mt-c) 45%,var(--border2));transform:translateY(-2px);box-shadow:0 6px 16px rgba(15,23,42,.08);outline:none}',
+      '.mt-kpi:hover:before,.mt-kpi:focus-visible:before{height:3px}',
+      '.mt-a-success{--mt-c:var(--success)}.mt-a-accent{--mt-c:var(--accent)}.mt-a-warn{--mt-c:var(--warn)}.mt-a-danger{--mt-c:var(--danger)}',
+      '.mt-a-violet{--mt-c:#8b5cf6}.mt-a-teal{--mt-c:#14b8a6}.mt-a-muted{--mt-c:var(--text3)}.mt-a-rose{--mt-c:#f43f5e}',
       '.mt-kpi span{font-size:11px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.7px}',
       '.mt-kpi b{display:block;font-size:24px;font-weight:700;margin-top:4px}',
       '.mt-kpi.mt-k-warn b{color:var(--warn)}.mt-kpi.mt-k-danger b{color:var(--danger)}.mt-kpi.mt-k-ok b{color:var(--success)}',
@@ -161,7 +165,10 @@
       '.mt-tab .mt-n{display:inline-block;min-width:18px;padding:0 6px;margin-left:6px;border-radius:999px;font-size:11px;line-height:18px;background:var(--accent);color:#fff;text-align:center}',
       '.mt-chips{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}',
       '.mt-chip{border:1px solid var(--border2);background:var(--bg2);color:var(--text2);border-radius:999px;padding:5px 11px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;display:inline-flex;align-items:center;gap:6px}',
-      '.mt-chip.on{border-color:var(--accent);color:var(--accent);background:color-mix(in srgb,var(--accent) 10%,var(--bg2))}',
+      '.mt-chip{--mt-c:var(--accent);transition:background-color .15s ease,border-color .15s ease,color .15s ease,transform .15s ease}',
+      '.mt-chip:hover{border-color:color-mix(in srgb,var(--mt-c) 45%,var(--border2));background:color-mix(in srgb,var(--mt-c) 8%,var(--bg2));color:var(--text);transform:translateY(-1px)}',
+      '.mt-chip.on{border-color:color-mix(in srgb,var(--mt-c) 60%,transparent);color:var(--mt-c);background:color-mix(in srgb,var(--mt-c) 12%,var(--bg2))}',
+      '.mt-chip.mt-a-muted.on{color:var(--text)}',
       '.mt-chip i{font-style:normal;color:var(--text3);font-weight:500}',
       '.mt-dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex:none}',
       '.mt-bar{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:10px 12px;margin-bottom:10px;border:1px solid var(--border2);border-radius:10px;background:var(--bg2)}',
@@ -201,7 +208,11 @@
       '.mt-result{border:1px solid var(--border2);border-radius:10px;padding:10px 14px;margin-bottom:12px;font-size:13px;background:var(--bg2)}',
       '.mt-result ul{margin:6px 0 0;padding-left:18px;color:var(--text2);font-size:12.5px}',
       '.mt-people{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:10px}',
-      '.mt-person{display:flex;gap:10px;align-items:center;padding:11px 12px;border:1px solid var(--border2);border-radius:10px;background:var(--bg2);min-width:0}',
+      '.mt-person{--mt-c:var(--border2);display:flex;gap:10px;align-items:center;padding:13px 12px 11px;border:1px solid var(--border2);border-radius:10px;background:var(--bg2);min-width:0;position:relative;overflow:hidden;box-sizing:border-box;transition:transform .2s cubic-bezier(.22,1,.36,1),box-shadow .2s ease,border-color .2s ease}',
+      '.mt-person:before{content:"";position:absolute;top:0;left:0;right:0;height:2px;background:var(--mt-c)}',
+      '.mt-person:hover{border-color:color-mix(in srgb,var(--mt-c) 45%,var(--border2));transform:translateY(-2px);box-shadow:0 6px 16px rgba(15,23,42,.08)}',
+      '@media (hover:none){.mt-kpi:hover,.mt-person:hover,.mt-chip:hover{transform:none;box-shadow:none}}',
+      '@media (prefers-reduced-motion: reduce){.mt-kpi,.mt-person,.mt-chip{transition:none}}',
       '.mt-person .mt-pname,.mt-person .mt-pmeta{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
       '.mt-pname{font-size:13.5px;font-weight:650}',
       '.mt-pmeta{font-size:12px;color:var(--text3)}',
@@ -418,11 +429,11 @@
     var pend = state.inbox ? state.inbox.count : 0;
     var over = state.workload && state.workload.counts ? state.workload.counts.overloaded : 0;
     var k = [
-      ['approvals', '', 'Pending approvals', pend, pend ? 'mt-k-warn' : 'mt-k-ok'],
-      ['today', 'office', 'In office', c.office || 0, ''],
-      ['today', 'remote', 'WFH / remote', c.remote || 0, ''],
-      ['today', 'leave', 'On leave', c.leave || 0, ''],
-      ['workload', '', 'Overloaded', over, over ? 'mt-k-danger' : '']
+      ['approvals', '', 'Pending approvals', pend, (pend ? 'mt-k-warn' : 'mt-k-ok') + ' mt-a-warn'],
+      ['today', 'office', 'In office', c.office || 0, 'mt-a-success'],
+      ['today', 'remote', 'WFH / remote', c.remote || 0, 'mt-a-accent'],
+      ['today', 'leave', 'On leave', c.leave || 0, 'mt-a-violet'],
+      ['workload', '', 'Overloaded', over, (over ? 'mt-k-danger' : '') + ' mt-a-rose']
     ];
     if (isProject()) k = k.slice(1);
     return k.map(function (x) {
@@ -599,7 +610,7 @@
     var h = '<div class="mt-chips" role="group" aria-label="Filter by status"><button type="button" class="mt-chip' + (!state.bucket ? ' on' : '') + '" data-mt-bucket-f="">Everyone <i>' + d.members.length + '</i></button>';
     d.buckets.forEach(function (b) {
       var n = d.counts[b.key] || 0;
-      h += '<button type="button" class="mt-chip' + (state.bucket === b.key ? ' on' : '') + '" data-mt-bucket-f="' + b.key + '"' + (n ? '' : ' style="opacity:.6"') + '><span class="mt-dot mt-bg-' + BUCKET_CLS[b.key] + '"></span>' + esc(b.label) + ' <i>' + n + '</i></button>';
+      h += '<button type="button" class="mt-chip mt-a-' + (BUCKET_CLS[b.key] || 'muted') + (state.bucket === b.key ? ' on' : '') + '" data-mt-bucket-f="' + b.key + '"' + (n ? '' : ' style="opacity:.6"') + '><span class="mt-dot mt-bg-' + BUCKET_CLS[b.key] + '"></span>' + esc(b.label) + ' <i>' + n + '</i></button>';
     });
     h += '</div>';
     var list = d.members.filter(function (p) { return !state.bucket || p.bucket === state.bucket; });
@@ -607,7 +618,7 @@
     if (!list.length) return h + '<div class="card mt-empty">Nobody in this group right now.</div>';
     h += '<div class="mt-people">' + list.map(function (p) {
       var late = p.late ? ' ' + badge('Late', 'danger') : '';
-      return '<div class="mt-person">' + avatar(p) + '<div class="mt-main"><div class="mt-pname">' + esc(p.name) + '</div>' +
+      return '<div class="mt-person mt-a-' + (BUCKET_CLS[p.bucket] || 'muted') + '">' + avatar(p) + '<div class="mt-main"><div class="mt-pname">' + esc(p.name) + '</div>' +
         '<div class="mt-pmeta">' + esc(p.designation || p.department || p.email) + '</div>' +
         '<div class="mt-pstat"><span><span class="mt-dot mt-bg-' + BUCKET_CLS[p.bucket] + '" style="margin-right:6px"></span>' + esc(statusLine(p)) + '</span>' + late + '</div></div></div>';
     }).join('') + '</div>';

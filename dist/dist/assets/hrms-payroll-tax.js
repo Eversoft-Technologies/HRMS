@@ -95,6 +95,19 @@
     return '';
   }
   function num(v) { var n = Number(v); return isFinite(n) ? n : 0; }
+  function bindNumericFields(root, selector) {
+    qa(root, selector).forEach(function (el) {
+      el.addEventListener('keydown', function (e) {
+        if (['e', 'E', '+', '-'].indexOf(e.key) !== -1) e.preventDefault();
+      });
+      el.addEventListener('input', function () {
+        var clean = el.value.replace(/[^\d.]/g, '');
+        var parts = clean.split('.');
+        if (parts.length > 2) clean = parts.shift() + '.' + parts.join('');
+        if (el.value !== clean) el.value = clean;
+      });
+    });
+  }
 
   /* ── style ─────────────────────────────────────────────────────────────── */
   function injectStyle() {
@@ -105,9 +118,13 @@
       '.ptax-h1{font-size:20px;font-weight:700;margin:0}',
       '.ptax-sub{font-size:13px;color:var(--text3);margin-top:4px;max-width:720px}',
       '.ptax-tabs{display:flex;gap:4px;border-bottom:1px solid var(--border2);margin-bottom:16px;overflow-x:auto}',
-      '.ptax-tab{background:none;border:none;border-bottom:2px solid transparent;padding:9px 14px;font-size:13px;font-weight:600;color:var(--text3);cursor:pointer;font-family:inherit;margin-bottom:-1px;white-space:nowrap}',
+      '.ptax-tab{background:none;border:none;border-bottom:2px solid transparent;padding:9px 14px;font-size:13px;font-weight:600;color:var(--text3);cursor:pointer;font-family:inherit;margin-bottom:-1px;white-space:nowrap;transition:color .15s ease,background .15s ease,box-shadow .15s ease,transform .15s ease}',
+      '.ptax-tab:hover{color:var(--text);background:color-mix(in srgb,var(--accent) 10%,transparent);box-shadow:0 10px 26px rgba(0,0,0,.28);transform:translateY(-1px)}',
       '.ptax-tab.on{color:var(--accent);border-bottom-color:var(--accent)}',
-      '.ptax-grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr));gap:16px;align-items:start}',
+      '.ptax-tab.on:hover{color:var(--accent)}',
+      '.ptax-page .card{transition:box-shadow .2s ease,border-color .2s ease}',
+      '.ptax-page .card:hover,.ptax-reg:hover,.ptax-sec:hover{box-shadow:0 10px 26px rgba(0,0,0,.28);border-color:var(--border2)}',
+      '.ptax-grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr));gap:16px;align-items:stretch}',
       '.ptax-stack>*+*{margin-top:16px}',
       '.ptax-row{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end}',
       '.ptax-row>.ptax-field{flex:1;min-width:140px}',
@@ -146,12 +163,13 @@
       '.ptax-chip.on{border-color:var(--accent);color:var(--accent);background:color-mix(in srgb,var(--accent) 10%,var(--bg2))}',
       '.ptax-regimes{display:grid;grid-template-columns:1fr 1fr;gap:12px}',
       '@media (max-width:640px){.ptax-regimes{grid-template-columns:1fr}.ptax-num{width:100px}}',
-      '.ptax-reg{border:1px solid var(--border2);border-radius:10px;padding:14px;background:var(--bg2)}',
-      '.ptax-reg.on{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset}',
+      '.ptax-reg{border:1px solid var(--border2);border-radius:10px;padding:14px;background:var(--bg2);transition:box-shadow .2s ease,border-color .2s ease}',
+      '.ptax-reg.on{border-color:var(--border2);box-shadow:none}',
+      '.ptax-reg.on:hover{box-shadow:0 10px 26px rgba(0,0,0,.28);border-color:var(--border2)}',
       '.ptax-reg h4{margin:0 0 4px;font-size:14px}',
       '.ptax-reg .big{font-size:22px;font-weight:700;margin:6px 0 2px}',
       '.ptax-reg .lower{color:var(--success);font-size:11.5px;font-weight:700}',
-      '.ptax-sec{border:1px solid var(--border2);border-radius:10px;padding:12px 14px;margin-bottom:12px;background:var(--bg2)}',
+      '.ptax-sec{border:1px solid var(--border2);border-radius:10px;padding:12px 14px;margin-bottom:12px;background:var(--bg2);transition:box-shadow .2s ease,border-color .2s ease}',
       '.ptax-sec-h{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:baseline;margin-bottom:8px}',
       '.ptax-sec-h b{font-size:13px}',
       '.ptax-meter{font-size:12px;color:var(--text2);white-space:nowrap}',
@@ -173,6 +191,7 @@
       '.ptax-busy{opacity:.6;pointer-events:none}',
       '.ptax-mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px}',
       'html[data-theme="light"] .ptax-overlay{background:rgba(15,23,42,.35)}',
+      '@media (hover:none){.ptax-page .card:hover,.ptax-reg:hover,.ptax-sec:hover{box-shadow:none;border-color:var(--border2)}.ptax-reg.on:hover{box-shadow:none;border-color:var(--border2)}.ptax-tab:hover{color:var(--text3);background:none;box-shadow:none;transform:none}.ptax-tab.on:hover{color:var(--accent)}}',
     ].join('\n');
     var st = document.createElement('style');
     st.id = STYLE_ID;
@@ -731,7 +750,7 @@
       var rows = ME.items.map(function (it, idx) {
         if (it.section !== s.code) return '';
         return '<div class="ptax-item"><input class="input-field" data-i="' + idx + '" data-f="description" placeholder="Description (e.g. PPF, LIC policy no.)" value="' + esc(it.description || '') + '" maxlength="120"' + (ed ? '' : ' disabled') + '>' +
-          '<input class="input-field" style="text-align:right" inputmode="decimal" data-i="' + idx + '" data-f="declared" placeholder="Amount ₹" value="' + esc(it.declared === 0 || it.declared ? it.declared : '') + '"' + (ed ? '' : ' disabled') + '>' +
+          '<input type="text" class="input-field" style="text-align:right" inputmode="decimal" pattern="[0-9]*[.]?[0-9]*" maxlength="12" data-i="' + idx + '" data-f="declared" placeholder="Amount ₹" value="' + esc(it.declared === 0 || it.declared ? it.declared : '') + '"' + (ed ? '' : ' disabled') + '>' +
           (s.code.indexOf('80D') === 0 ? '<label class="ptax-check"><input type="checkbox" data-i="' + idx + '" data-f="senior"' + (it.senior ? ' checked' : '') + (ed ? '' : ' disabled') + '> senior</label>' : '<span></span>') +
           (ed ? '<button class="ptax-x" data-rm="' + idx + '" title="Remove">×</button>' : '<span></span>') +
           proofRow(it.id, savedIds[it.id], proofsBy[it.id] || [], it.verified) + '</div>';
@@ -758,6 +777,7 @@
     return (list || up || ver) ? '<div class="ptax-proofs">' + list + up + ver + '</div>' : '';
   }
   function bindItems(box) {
+    bindNumericFields(box, '[data-f="declared"]');
     on(box, '[data-f]', 'input', function (e, el) {
       var it = ME.items[parseInt(el.getAttribute('data-i'), 10)], f = el.getAttribute('data-f');
       it[f] = el.type === 'checkbox' ? el.checked : el.value;
@@ -799,13 +819,14 @@
     var proofs = (d.proofs || []).filter(function (p) { return p.item_id === 'hra'; });
     var annual = num(h.monthly_rent) * 12;
     box.innerHTML =
-      '<div class="ptax-row"><div class="ptax-field"><label>Monthly rent (₹)</label><input class="input-field" inputmode="decimal" data-h="monthly_rent" value="' + esc(h.monthly_rent) + '"' + (ed ? '' : ' disabled') + '></div>' +
+      '<div class="ptax-row"><div class="ptax-field"><label>Monthly rent (₹)</label><input type="text" class="input-field" inputmode="decimal" pattern="[0-9]*[.]?[0-9]*" maxlength="12" data-h="monthly_rent" value="' + esc(h.monthly_rent) + '"' + (ed ? '' : ' disabled') + '></div>' +
       '<div class="ptax-field"><label class="ptax-check" style="margin-top:22px"><input type="checkbox" data-h="metro"' + (h.metro ? ' checked' : '') + (ed ? '' : ' disabled') + '> Metro city (Delhi, Mumbai, Kolkata, Chennai)</label></div></div>' +
       '<div class="ptax-row"><div class="ptax-field"><label>Landlord name</label><input class="input-field" data-h="landlord_name" maxlength="120" value="' + esc(h.landlord_name) + '"' + (ed ? '' : ' disabled') + '></div>' +
       '<div class="ptax-field"><label>Landlord PAN' + (annual > 100000 ? ' (required)' : '') + '</label><input class="input-field" data-h="landlord_pan" maxlength="10" autocomplete="off" style="text-transform:uppercase" placeholder="' +
         esc(saved.landlord_pan ? saved.landlord_pan + ' (saved — type to replace)' : 'AAAAA9999A') + '"' + (ed ? '' : ' disabled') + '></div></div>' +
       '<div class="ptax-hint" data-hhint="1">' + hraHint(annual) + '</div>' +
       (saved.monthly_rent > 0 ? '<div class="ptax-proofs" style="margin-top:8px">' + proofRow('hra', true, proofs, saved.verified_monthly_rent).replace(/^<div class="ptax-proofs">|<\/div>$/g, '') + '</div>' : '');
+    bindNumericFields(box, '[data-h="monthly_rent"]');
     on(box, '[data-h]', 'input', function (e, el) {
       var k = el.getAttribute('data-h');
       h[k] = el.type === 'checkbox' ? el.checked : el.value;
