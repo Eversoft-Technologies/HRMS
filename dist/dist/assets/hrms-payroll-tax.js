@@ -719,7 +719,9 @@
         (d.regime !== r && !d.regime_locked && d.can_edit ? '<button class="btn-sm" style="margin-top:10px" data-pick="' + r + '">Switch to ' + (r === 'new' ? 'new' : 'old') + ' regime</button>' : '') + '</div>';
     }
     box.innerHTML = lockTxt + '<div class="ptax-regimes">' + tile('new', 'New regime (115BAC)') + tile('old', 'Old regime') + '</div>' +
-      (est && est.available ? '<details style="margin-top:12px"><summary style="cursor:pointer;font-size:12.5px;color:var(--accent)">Show the side-by-side calculation</summary><div style="margin-top:10px">' + compareTable(est) + '</div></details>' : '') +
+      '<details style="margin-top:12px"><summary style="cursor:pointer;font-size:12.5px;color:var(--accent)">Show the side-by-side calculation</summary><div style="margin-top:10px">' +
+        (est && est.available ? compareTable(est) : '<div class="ptax-hint">' + (est ? esc(est.reason || 'A salary estimate is not available yet.') : 'Calculating your estimate…') + '</div>') +
+      '</div></details>' +
       '<div data-me="rmsg"></div>';
     on(box, '[data-pick]', 'click', function (e, btn) {
       var r = btn.getAttribute('data-pick');

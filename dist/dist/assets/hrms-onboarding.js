@@ -1564,8 +1564,8 @@
         '<div class="ob-panel" id="ob-wa-panel"><h3>Work Authorization Fields</h3><div class="ob-skel" style="height:40px"></div></div>'
       : '';
 
-    return '<div class="ob-grid2">' + cfPanel + '</div>' +
-      '<div class="ob-grid2">' +
+    return '<div class="ob-grid2 ob-settings-grid">' + cfPanel + '</div>' +
+      '<div class="ob-grid2 ob-settings-grid">' +
       '<div class="ob-panel"><h3>Workflow Stages</h3>' + rows(STAGES.map(function (s, i) {
         return [(i + 1) + '. ' + s[1], badge(s[0], 'neutral')];
       })) + '</div>' +
