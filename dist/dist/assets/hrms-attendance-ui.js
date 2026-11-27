@@ -228,7 +228,7 @@
 
   function RequiresAttention() {
     var el = document.createElement('div');
-    el.className = 'card hram-card';
+    el.className = 'card hram-card hram-no-lift';
     var tab = 'approvals';
     var data = { approvals: [], late: [], missing: [], highOt: [] };
     var loaded = false;
@@ -328,7 +328,7 @@
   /* ── Attendance History ───────────────────────────────────────────────── */
   function AttendanceHistory() {
     var el = document.createElement('div');
-    el.className = 'card hram-card hram-history';
+    el.className = 'card hram-card hram-history hram-no-lift';
     var range = '30';
     var statusFilter = 'all';
     var customFrom = daysAgoStr(30), customTo = todayStr(), rangeErr = '';
@@ -420,7 +420,7 @@
                 '</div></td>' +
                 '<td>' + esc(r.date) + '</td><td>' + dayShort(r.date) + '</td>' +
                 '<td>' + esc(fmtTime(r.checkInTime)) + '</td>' + pendingCells(r) +
-                '<td><span class="hram-status-badge ' + esc((r.status || '').toLowerCase()) + '">' + esc(r.status || '--') + '</span></td>' +
+                '<td class="hram-status-cell"><span class="hram-status-badge ' + esc((r.status || '').toLowerCase()) + '">' + esc(r.status || '--') + '</span></td>' +
                 '<td>' + (r.isWfh ? 'WFH' : 'Office') + '</td>' +
                 '</tr>';
             }).join('') +
@@ -477,9 +477,9 @@
     var wrap = document.createElement('div');
     wrap.className = 'grid-2 hram-grid';
     var ratesCard = document.createElement('div');
-    ratesCard.className = 'card hram-card';
+    ratesCard.className = 'card hram-card hram-no-lift';
     var leaveCard = document.createElement('div');
-    leaveCard.className = 'card hram-card';
+    leaveCard.className = 'card hram-card hram-no-lift';
     wrap.appendChild(ratesCard);
     wrap.appendChild(leaveCard);
 
@@ -970,6 +970,8 @@
       '.hram-status-badge.late{background:#fef3c7;color:#92400e}' +
       '.hram-status-badge.present{background:#dcfce7;color:#166534}' +
       '.hram-status-badge.absent{background:#fee2e2;color:#991b1b}' +
+      '.hram-table td.hram-status-cell{text-align:center;vertical-align:middle}' +
+      '.hram-status-cell .hram-status-badge{display:inline-flex;align-items:center;justify-content:center;width:90px;height:24px;padding:0 6px;box-sizing:border-box;line-height:1}' +
       '.hram-caption{font-size:11px;color:var(--text3,#9ca3af);margin-top:8px}' +
       '.hram-grid{margin-top:14px}' +
       '.hram-ring-row{display:flex;gap:16px;margin-bottom:8px}' +
@@ -1126,7 +1128,7 @@
               return '<tr>' +
                 '<td class="hram-strong">' + esc(r.date) + '</td><td>' + dayShort(r.date) + '</td>' +
                 '<td>' + esc(fmtTime(r.checkInTime)) + '</td>' + pendingCells(r) +
-                '<td><span class="hram-status-badge ' + esc((r.status || '').toLowerCase()) + '">' + esc(r.status || '--') + '</span></td>' +
+                '<td class="hram-status-cell"><span class="hram-status-badge ' + esc((r.status || '').toLowerCase()) + '">' + esc(r.status || '--') + '</span></td>' +
                 '<td>' + (r.isWfh ? 'WFH' : 'Office') + '</td>' +
                 '</tr>';
             }).join('') +

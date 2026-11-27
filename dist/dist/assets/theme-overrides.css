@@ -3323,7 +3323,7 @@ body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"])):not(:has(#
 body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"])):not(:has(#hrms-chat-page)) :is(.content, .main > :not(.topbar):not(.content)) :is(.kanban-card, .stat-card, .kpi-card, .hram-card, .hrms-iv-status-card, .ob-card, .ts-day:not(.locked)):hover {
   transform: translateY(-2px);
   border-color: color-mix(in srgb, var(--accent) 55%, var(--border2));
-  background-color: color-mix(in srgb, var(--accent) 5%, var(--bg2));
+  /* background-color: color-mix(in srgb, var(--accent) 5%, var(--bg2)); */
   box-shadow: 0 10px 24px rgba(15, 23, 42, .16), 0 2px 6px rgba(15, 23, 42, .08);
 }
 body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"])):not(:has(#hrms-chat-page)) :is(.content, .main > :not(.topbar):not(.content)) .ts-day:not(.locked):hover {
