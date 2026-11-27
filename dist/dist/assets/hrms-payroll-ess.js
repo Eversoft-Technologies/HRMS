@@ -424,7 +424,8 @@
     var paidPct = total > 0 ? Math.max(0, Math.min(100, (total - Number(l.outstanding || 0)) / total * 100)) : 0;
     if (l.status === 'requested' || l.status === 'approved' || l.status === 'rejected' || l.status === 'withdrawn') paidPct = 0;
     if (l.status === 'closed') paidPct = 100;
-    return '<div class="pess-loan"><div class="pess-loan-h"><div><b>' + esc(l.kind === 'advance' ? 'Salary advance' : 'Loan') + ' · ' + esc(money(l.principal)) + '</b>' +
+    var LOAN_ACC = { requested: 'warn', approved: 'blue', active: 'green', closed: 'violet', rejected: 'danger', withdrawn: 'muted', cancelled: 'muted' };
+    return '<div class="pess-loan pess-acc pess-c-' + (LOAN_ACC[l.status] || 'muted') + '"><div class="pess-loan-h"><div><b>' + esc(l.kind === 'advance' ? 'Salary advance' : 'Loan') + ' · ' + esc(money(l.principal)) + '</b>' +
       (l.employeeName ? ' <span class="pess-muted pess-small">' + esc(l.employeeName) + ' (' + esc(l.email) + ')</span>' : '') +
       '<div class="pess-muted pess-small">' + esc(l.tenureMonths) + ' month(s) · ' + esc(l.interestRate) + '% p.a. · EMI ' + esc(money(l.emi)) +
       ' · requested ' + esc(fmtDate(l.createdAt)) + '</div></div><div>' + statusBadge(l.status) + '</div></div>' +
@@ -443,10 +444,10 @@
       var adv = lim.advance || {}, ln = lim.loan || {};
       body.innerHTML =
         '<div class="pess-kpis">' +
-        '<div class="pess-kpi"><span>Max salary advance</span><b>' + esc(money(adv.maxAmount)) + '</b></div>' +
-        '<div class="pess-kpi"><span>Max loan</span><b>' + esc(money(ln.maxAmount)) + '</b></div>' +
-        '<div class="pess-kpi"><span>Max tenure (loan)</span><b>' + esc(ln.maxTenure) + ' months</b></div>' +
-        '<div class="pess-kpi"><span>Loan interest</span><b>' + esc(ln.interestRate) + '% p.a.</b></div></div>' +
+        '<div class="pess-kpi pess-acc pess-c-green"><span>Max salary advance</span><b>' + esc(money(adv.maxAmount)) + '</b></div>' +
+        '<div class="pess-kpi pess-acc pess-c-blue"><span>Max loan</span><b>' + esc(money(ln.maxAmount)) + '</b></div>' +
+        '<div class="pess-kpi pess-acc pess-c-purple"><span>Max tenure (loan)</span><b>' + esc(ln.maxTenure) + ' months</b></div>' +
+        '<div class="pess-kpi pess-acc pess-c-orange"><span>Loan interest</span><b>' + esc(ln.interestRate) + '% p.a.</b></div></div>' +
         '<div class="pess-grid2"><div class="pess-card"><h3>Request an advance or loan</h3>' +
         '<div class="pess-grid2"><div class="pess-field"><label>Type</label><select class="input-field" data-f="kind">' +
         options([{ value: 'advance', label: 'Salary advance' }, { value: 'loan', label: 'Loan' }], 'advance') + '</select></div>' +
@@ -517,7 +518,7 @@
       body.innerHTML =
         '<div class="pess-row" style="margin-bottom:12px"><select class="input-field" data-f="fy">' + options(fyList(), my.fy) + '</select>' +
         '<span class="pess-muted pess-small">' + esc(fmtDate(d.from)) + ' – ' + esc(fmtDate(d.to)) + ' · ' + esc(d.payslipCount) + ' payslip(s)</span></div>' +
-        '<div class="pess-card"><h3>Total rewards ' + esc(d.fy) + '</h3><div class="pess-muted pess-small">Everything the company invests in you this year</div>' +
+        '<div class="pess-card pess-hov"><h3>Total rewards ' + esc(d.fy) + '</h3><div class="pess-muted pess-small">Everything the company invests in you this year</div>' +
         '<div class="pess-total">' + esc(money(total, d.currency)) + '</div>' +
         (comps.length ? '<div class="pess-bar" role="img" aria-label="Breakdown of total rewards">' + bar + '</div><div class="pess-legend">' + legend + '</div>' : '<div class="pess-empty">No pay data for this year yet.</div>') + '</div>' +
         '<div class="pess-grid2"><div class="pess-card"><h3>Breakdown</h3><div class="pess-table-wrap"><table class="pess-table"><tbody>' + detailRows +
