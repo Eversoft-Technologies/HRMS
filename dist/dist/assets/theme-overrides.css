@@ -79,8 +79,9 @@ html[data-theme="light"] ::-webkit-scrollbar-thumb {
    Make form fields, cards and chrome read cleanly on the light palette. */
 
 /* Form fields: crisp white field, visible border, clear focus ring. */
+
 html[data-theme="light"] .input-field {
-  background: #ffffff;
+  background: var(--bg3, #e2e3e7);
   border-color: #d6deeb;
   color: var(--text);
 }
@@ -95,7 +96,7 @@ html[data-theme="light"] .input-field:focus {
   box-shadow: 0 0 0 3px rgba(47, 111, 224, 0.14);
 }
 html[data-theme="light"] .input-field:disabled {
-  background: #f3f5fa;
+  background: var(--bg3, #e2e3e7);
   color: var(--text2);
   cursor: not-allowed;
 }
@@ -115,7 +116,7 @@ html[data-theme="light"] .sidebar {
   box-shadow: 1px 0 3px rgba(20, 30, 60, 0.035);
 }
 html[data-theme="light"] .topbar-search {
-  background: #f2f5fa;
+  background: var(--bg3, #e2e3e7);
   border-color: #dce3ee;
 }
 

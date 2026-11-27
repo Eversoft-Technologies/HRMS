@@ -3,6 +3,7 @@
 The admin UI is a sidecar hand-written against these endpoints, so nothing but
 a test keeps the two in step. Each case sends exactly what the browser sends.
 """
+import json
 import os
 import sys
 
@@ -80,6 +81,39 @@ class AttendanceAdminApiTests(TestCase):
         asg = ShiftAssignment.objects.get(email='person@example.com')
         self.assertEqual(asg.shift_id, shift.id)
         self.assertIsNone(asg.effective_to)
+
+    def test_updating_a_shift_assignment(self):
+        from datetime import date
+
+        person = 'person@example.com'
+        AppUser.objects.get_or_create(email=person, defaults={'full_name': 'Person', 'password': 'x'})
+        old_shift = Shift.objects.create(name='Day')
+        new_shift = Shift.objects.create(name='Evening')
+        assignment = ShiftAssignment.objects.create(
+            email=person, shift=old_shift, effective_from=date(2026, 1, 1))
+
+        resp = self.client.put(
+            f'/api/shift-assignments/{assignment.id}',
+            data=json.dumps({
+                'email': person,
+                'shift': new_shift.id,
+                'shiftId': new_shift.id,
+                'effectiveFrom': '2026-02-01',
+                'effective_from': '2026-02-01',
+                'effectiveTo': '2026-02-28',
+                'effective_to': '2026-02-28',
+                'timezone': 'IST',
+            }),
+            content_type='application/json',
+            HTTP_X_USER_EMAIL=self.admin,
+        )
+        self.assertEqual(resp.status_code, 200, resp.content[:300])
+
+        assignment.refresh_from_db()
+        self.assertEqual(assignment.shift_id, new_shift.id)
+        self.assertEqual(assignment.effective_from, date(2026, 2, 1))
+        self.assertEqual(assignment.effective_to, date(2026, 2, 28))
+        self.assertEqual(assignment.timezone, 'IST')
 
     def test_an_assigned_shift_wins_over_the_default(self):
         """The whole point of assignment: it must drive late/overtime maths."""

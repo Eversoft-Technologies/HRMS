@@ -381,7 +381,7 @@
             '<div style="font-size:11px;color:var(--text3)">' + esc(u.email) + '</div></div></div></td>' +
           '<td><select class="hrms-rbac-inline-sel" data-act="change-role" data-id="' + u.id + '" data-name="' + esc(u.name) + '">' +
             '<option value="">— none —</option>' + roleOpts + '</select></td>' +
-          '<td><span class="badge ' + (u.status === 'active' ? 'green' : 'gray') + '">' + esc(u.status) + '</span></td>' +
+          '<td><span class="badge ' + (u.status === 'active' ? 'green' : 'gray') + '">' + esc((u.status || '').replace(/^./, function (c) { return c.toUpperCase(); })) + '</span></td>' +
           '<td><div class="hrms-rbac-actions">' +
             '<button class="btn-sm" data-act="toggle-status" data-id="' + u.id + '" data-status="' + u.status + '" data-name="' + esc(u.name) + '">' + (u.status === 'active' ? 'Disable' : 'Enable') + '</button>' +
             '<button class="btn-sm hrms-rbac-del" data-act="del-user" data-id="' + u.id + '" data-name="' + esc(u.name) + '">Delete</button>' +
@@ -396,7 +396,7 @@
           '</div></div>' +
         (showForm ? userForm(roles) : '') +
         '<div id="rbac-confirm-panel"></div>' +
-        '<div class="table-wrap"><table><thead><tr><th>User</th><th>Role</th><th>Status</th><th>Actions</th></tr></thead>' +
+        '<div class="table-wrap"><table class="hrms-rbac-users-table"><thead><tr><th>User</th><th>Role</th><th>Status</th><th>Actions</th></tr></thead>' +
         '<tbody>' + (rows || '<tr><td colspan="4" class="hrms-rbac-empty">No users yet.</td></tr>') + '</tbody></table></div>');
       // Wire search
       var si = document.getElementById('rbac-search-users');
@@ -458,7 +458,7 @@
           '</div></div>' +
         (showForm ? roleForm(showForm) : '') +
         '<div id="rbac-confirm-panel"></div>' +
-        '<div class="table-wrap"><table><thead><tr>' +
+        '<div class="table-wrap"><table class="hrms-rbac-roles-table"><thead><tr>' +
           '<th>Role</th><th>Permissions</th><th>Users</th><th>Status</th><th>Actions</th>' +
           '</tr></thead><tbody>' + (rows || '<tr><td colspan="5" class="hrms-rbac-empty">No roles yet.</td></tr>') + '</tbody></table></div>');
       // Wire search
@@ -573,7 +573,7 @@
         '<div class="hrms-rbac-bar"><div class="hrms-rbac-h2">Permission Groups</div>' +
           '<button class="btn-primary" data-act="new-group">+ Create Group</button></div>' +
         (form ? groupForm(mods, form) : '') +
-        '<div class="table-wrap"><table><thead><tr><th>Group</th><th>Module</th><th>Permissions</th><th>Status</th><th>Actions</th></tr></thead>' +
+        '<div class="table-wrap"><table class="hrms-rbac-groups-table"><thead><tr><th>Group</th><th>Module</th><th>Permissions</th><th>Status</th><th>Actions</th></tr></thead>' +
         '<tbody>' + (rows || '<tr><td colspan="5" class="hrms-rbac-empty">No groups yet.</td></tr>') + '</tbody></table></div>');
     });
   }
@@ -735,7 +735,7 @@
         '</div>' +
 
         (form ? permForm(groups, form) : '') +
-        '<div class="table-wrap"><table><thead><tr><th>Permission</th><th>Code</th><th>Group</th><th>Module</th><th>Status</th><th>Actions</th></tr></thead>' +
+        '<div class="table-wrap"><table class="hrms-rbac-permissions-table"><thead><tr><th>Permission</th><th>Code</th><th>Group</th><th>Module</th><th>Status</th><th>Actions</th></tr></thead>' +
         '<tbody>' + (rows || '<tr><td colspan="6" class="hrms-rbac-empty">No permissions match.</td></tr>') + '</tbody></table></div>');
 
       var qEl = document.getElementById('rbac-perm-q');
@@ -1126,6 +1126,18 @@
       '.hrms-rbac-statv{font-family:var(--font-d);font-size:32px;font-weight:800;}' +
       '.hrms-rbac-statl{font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin-top:4px;}' +
       '.hrms-rbac-actions{display:flex;gap:6px;flex-wrap:wrap;}' +
+      '.hrms-rbac-users-table th:nth-child(2),.hrms-rbac-users-table th:nth-child(3),.hrms-rbac-users-table td:nth-child(2),.hrms-rbac-users-table td:nth-child(3){text-align:center;}' +
+      '.hrms-rbac-users-table td:nth-child(2) .hrms-rbac-inline-sel{display:block;margin:0 auto;}' +
+      '.hrms-rbac-users-table td:nth-child(3) .badge{display:inline-flex;align-items:center;justify-content:center;width:96px;}' +
+      '.hrms-rbac-roles-table th:nth-child(2),.hrms-rbac-roles-table th:nth-child(3),.hrms-rbac-roles-table th:nth-child(4),.hrms-rbac-roles-table td:nth-child(2),.hrms-rbac-roles-table td:nth-child(3),.hrms-rbac-roles-table td:nth-child(4){text-align:center;}' +
+      '.hrms-rbac-roles-table td:nth-child(2) .badge,.hrms-rbac-roles-table td:nth-child(4) .badge{display:inline-flex;align-items:center;justify-content:center;width:96px;}' +
+      '.hrms-rbac-roles-table .hrms-rbac-actions{gap:10px;flex-wrap:nowrap;}' +
+      '.hrms-rbac-groups-table th:nth-child(2),.hrms-rbac-groups-table th:nth-child(3),.hrms-rbac-groups-table th:nth-child(4),.hrms-rbac-groups-table td:nth-child(2),.hrms-rbac-groups-table td:nth-child(3),.hrms-rbac-groups-table td:nth-child(4){text-align:center;}' +
+      '.hrms-rbac-groups-table td:nth-child(2) .badge,.hrms-rbac-groups-table td:nth-child(3) .badge,.hrms-rbac-groups-table td:nth-child(4) .badge{display:inline-flex;align-items:center;justify-content:center;width:96px;}' +
+      '.hrms-rbac-groups-table .hrms-rbac-actions{gap:10px;flex-wrap:nowrap;}' +
+      '.hrms-rbac-permissions-table th:nth-child(2),.hrms-rbac-permissions-table th:nth-child(3),.hrms-rbac-permissions-table th:nth-child(4),.hrms-rbac-permissions-table th:nth-child(5),.hrms-rbac-permissions-table td:nth-child(2),.hrms-rbac-permissions-table td:nth-child(3),.hrms-rbac-permissions-table td:nth-child(4),.hrms-rbac-permissions-table td:nth-child(5){text-align:center;}' +
+      '.hrms-rbac-permissions-table td:nth-child(3) .badge,.hrms-rbac-permissions-table td:nth-child(5) .badge{display:inline-flex;align-items:center;justify-content:center;width:112px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}' +
+      '.hrms-rbac-permissions-table .hrms-rbac-actions{gap:10px;flex-wrap:nowrap;}' +
       '.hrms-rbac-del{color:var(--danger)!important;}' +
       '.hrms-rbac-av{width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,var(--accent2,#7c5cfc),var(--accent));color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;flex-shrink:0;}' +
       '.hrms-rbac-form{margin-bottom:14px;}' +
