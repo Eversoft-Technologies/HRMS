@@ -141,6 +141,8 @@
   var DRAWER_LIT = 'data-sb-drawer-lit';        // on Settings while we light it
   var DRAWER_DIMMED = 'data-sb-drawer-dimmed';  // on links we un-lit for it
 
+  var PAYROLL_SECTION_PATHS = ['/payroll/compliance', '/payroll/banking', '/payroll/us', '/payroll/separations'];
+
   function settingsDrawerOpen() {
     var head = document.querySelector('.hrms-drawer-head');
     if (!head) return false;
@@ -187,10 +189,17 @@
 
    function syncActive() {
     var items = document.querySelectorAll('.sidebar a.nav-item[href]');
+    var routePath = String(location.pathname || '').replace(/\/+$/, '') || '/';
+    for (var p = 0; p < PAYROLL_SECTION_PATHS.length; p++) {
+      if (routePath === PAYROLL_SECTION_PATHS[p] || routePath.indexOf(PAYROLL_SECTION_PATHS[p] + '/') === 0) {
+        routePath = '/payroll/run';
+        break;
+      }
+    }
     // The Access Control console is an overlay on /settings (the URL does not change),
     // so while it is open its own sidebar link is the current page, not Settings.
     var rbacLink = document.getElementById('hrms-rbac-link');
-    if (rbacLink && path === '/settings' && document.getElementById('hrms-rbac-page')) {
+    if (rbacLink && routePath === '/settings' && document.getElementById('hrms-rbac-page')) {
       for (var r = 0; r < items.length; r++) {
         var on = items[r] === rbacLink;
         if (items[r].classList.contains('active') !== on) items[r].classList.toggle('active', on);
@@ -201,7 +210,7 @@
     for (var i = 0; i < items.length; i++) {
       var href = (items[i].getAttribute('href') || '').replace(/\/+$/, '') || '/';
       if (href.charAt(0) !== '/') continue;
-      var hit = href === '/' ? path === '/' : (path === href || path.indexOf(href + '/') === 0);
+      var hit = href === '/' ? routePath === '/' : (routePath === href || routePath.indexOf(href + '/') === 0);
       if (hit && href.length > bestLen) { bestLen = href.length; best = items[i]; }
     }
     if (!best) {

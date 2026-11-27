@@ -73,6 +73,13 @@
     // hrms-sidebar.js lights "Settings" while the account drawer is open;
     // don't take that highlight away (it hands it back when the drawer closes).
     if (window.__hrmsSettingsDrawerOpen && window.__hrmsSettingsDrawerOpen()) return;
+    var payrollSections = ['/payroll/compliance', '/payroll/banking', '/payroll/us', '/payroll/separations'];
+    for (var i = 0; base && i < payrollSections.length; i++) {
+      if (base === payrollSections[i] || base.indexOf(payrollSections[i] + '/') === 0) {
+        base = '/payroll/run';
+        break;
+      }
+    }
     document.querySelectorAll('.sidebar a.nav-item').forEach(function (a) {
       var h = a.getAttribute('href') || '';
       var on = !!base && (h === base || h.indexOf(base + '/') === 0);
