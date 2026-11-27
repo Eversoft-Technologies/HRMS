@@ -27,7 +27,8 @@
                 arrangements: [], roster: [], homes: [], mapFeed: { fences: [], employees: [] },
                 departurePolicy: { enabled: true, timeout_minutes: 10, warning_seconds: 10, warning_sound: true, recheckin_requires_approval: true },
                 mapMode: 'markers', mapFilter: 'all', deptFilter: 'all', basemap: 'auto',
-                searchQuery: '', asgSearch: '', asgPage: 1, asgPageSize: 10, busy: false, errors: {} };
+                searchQuery: '', asgSearch: '', asgPage: 1, asgPageSize: 10, busy: false, errors: {},
+                editingFenceId: null, editingAssignmentId: null };
 
   /* ── basemap providers & geocoding ───────────────────────────────────── */
   var BASEMAPS = {
@@ -1749,7 +1750,8 @@
       '</div>' +
       '<div id="haa-picker"></div>' +
       '<div style="margin-top:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' +
-      '<button class="haa-btn" id="haa-f-add">Add location</button>' +
+      '<button class="haa-btn" id="haa-f-add">' + (state.editingFenceId != null ? 'Update location' : 'Add location') + '</button>' +
+      '<button class="haa-btn sec" id="haa-f-cancel" style="' + (state.editingFenceId != null ? '' : 'display:none;') + '">Cancel edit</button>' +
       '<button class="haa-btn sec" id="haa-f-here">Use my current position</button>' +
       '<span style="font-size:12px;color:var(--haa-muted);">Place the centre precisely — a coordinate rounded to one ' +
       'decimal place is 11&nbsp;km out.</span>' +
@@ -2105,7 +2107,7 @@
         '<td>' + timing + '</td>' +
         '<td>' + esc(a.effectiveFrom || a.effective_from || '') + '</td>' +
         '<td>' + esc(a.effectiveTo || a.effective_to || 'open-ended') + '</td>' +
-        '<td style="text-align:right"><button class="haa-btn" data-edit-asg="' + a.id + '">Edit</button> <button class="haa-btn dgr" data-del-asg="' + a.id + '">Remove</button></td>'
+        '<td style="text-align:right"><div style="display:inline-flex;gap:8px;align-items:center"><button class="haa-btn" data-edit-asg="' + a.id + '">Edit</button><button class="haa-btn dgr" data-del-asg="' + a.id + '">Remove</button></div></td>'
     }).join('');
     return errorBanner('shifts') +
       '<div class="haa-card"><div style="font-weight:700;margin-bottom:12px;font-size:14px;">Create a shift</div>' +
@@ -2132,8 +2134,9 @@
       '</select></div>' +
       '<div><label class="haa-lbl">Effective from</label><input class="haa-in" id="haa-a-from" type="date"></div>' +
       '<div><label class="haa-lbl">Until (optional)</label><input class="haa-in" id="haa-a-to" type="date"></div>' +
-      '</div><div style="margin-top:12px"><button class="haa-btn" id="haa-a-add"' +
-      (state.shifts.length ? '' : ' disabled') + '>Assign</button></div></div>' +
+      '</div><div style="margin-top:12px;display:flex;gap:8px;align-items:center"><button class="haa-btn" id="haa-a-add"' +
+      (state.shifts.length ? '' : ' disabled') + '>' + (state.editingAssignmentId != null ? 'Update assignment' : 'Assign') + '</button>' +
+      '<button class="haa-btn sec" id="haa-a-cancel" style="' + (state.editingAssignmentId != null ? '' : 'display:none;') + '">Cancel edit</button></div></div>' +
       (state.assignments.length
         ? '<input class="haa-in" id="haa-asg-search" type="text" placeholder="Search employee…" ' +
           'autocomplete="off" style="max-width:280px;margin-bottom:10px" value="' + esc(state.asgSearch || '') + '">' +
@@ -2995,7 +2998,10 @@
       var latEl = body.querySelector('#haa-f-lat'), lngEl = body.querySelector('#haa-f-lng');
       // Seed from an existing fence so a second office starts near the first,
       // not in the middle of the country.
-      var seed = state.fences[0];
+      var editingFence = state.editingFenceId == null ? null : state.fences.find(function (f) {
+        return String(f.id) === String(state.editingFenceId);
+      });
+      var seed = editingFence || state.fences[0];
       state.picker = createPicker(host, {
         lat: seed ? seed.latitude : null,
         lng: seed ? seed.longitude : null,
@@ -3012,26 +3018,92 @@
       if (radEl) radEl.oninput = function () {
         state.picker.setRadius(parseInt(radEl.value, 10) || 0);
       };
+
+      function fillFenceForm(fence) {
+        body.querySelector('#haa-f-name').value = fence.name || '';
+        body.querySelector('#haa-f-rad').value = fence.radiusMeters || fence.radius_meters || 200;
+        body.querySelector('#haa-f-lat').value = fence.latitude != null ? fence.latitude : '';
+        body.querySelector('#haa-f-lng').value = fence.longitude != null ? fence.longitude : '';
+        state.picker.setCentre(fence.latitude, fence.longitude, 17);
+        state.picker.setRadius(fence.radiusMeters || fence.radius_meters || 200);
+        body.querySelector('#haa-f-add').textContent = 'Update location';
+        body.querySelector('#haa-f-cancel').style.display = '';
+      }
+
+      function clearFenceForm() {
+        state.editingFenceId = null;
+        body.querySelector('#haa-f-name').value = '';
+        body.querySelector('#haa-f-rad').value = '200';
+        body.querySelector('#haa-f-add').textContent = 'Add location';
+        body.querySelector('#haa-f-cancel').style.display = 'none';
+        state.picker.setRadius(200);
+        if (seed) {
+          state.picker.setCentre(seed.latitude, seed.longitude, 17);
+        } else {
+          body.querySelector('#haa-f-lat').value = '';
+          body.querySelector('#haa-f-lng').value = '';
+        }
+      }
+
+      if (editingFence) fillFenceForm(editingFence);
+
+      [latEl, lngEl].forEach(function (coordEl) {
+        if (!coordEl) return;
+        coordEl.onchange = function () {
+          var latRaw = val('haa-f-lat'), lngRaw = val('haa-f-lng');
+          var lat = Number(latRaw), lng = Number(lngRaw);
+          if (latRaw && lngRaw && isFinite(lat) && isFinite(lng) &&
+              lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
+            state.picker.setCentre(lat, lng, 17);
+          }
+        };
+      });
+
+      var cancelEdit = body.querySelector('#haa-f-cancel');
+      if (cancelEdit) cancelEdit.onclick = clearFenceForm;
+
+      body.querySelectorAll('[data-edit-fence]').forEach(function (button) {
+        button.onclick = function () {
+          var id = button.getAttribute('data-edit-fence');
+          var fence = state.fences.find(function (f) { return String(f.id) === String(id); });
+          if (!fence) return toast('Could not find that office location. Refresh and try again.', true);
+          state.editingFenceId = fence.id;
+          fillFenceForm(fence);
+        };
+      });
     }
 
     var add = body.querySelector('#haa-f-add');
     if (add) add.onclick = function () {
       var name = val('haa-f-name');
-      var c = state.picker ? state.picker.getCentre() : null;
-      var lat = c ? c.lat : parseFloat(val('haa-f-lat'));
-      var lng = c ? c.lng : parseFloat(val('haa-f-lng'));
-      var rad = parseInt(val('haa-f-rad'), 10) || 200;
+      var latRaw = val('haa-f-lat'), lngRaw = val('haa-f-lng'), radRaw = val('haa-f-rad');
+      var lat = Number(latRaw), lng = Number(lngRaw), rad = Number(radRaw);
       if (!name) return toast('Give the location a name', true);
-      if (!isFinite(lat) || !isFinite(lng)) return toast('Place the centre on the map first', true);
-      api('/api/attendance/geofences', {
-        method: 'POST',
+      if (!latRaw || !lngRaw || !isFinite(lat) || !isFinite(lng) ||
+          lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+        return toast('Enter valid coordinates or place the centre on the map', true);
+      }
+      if (!/^\d+$/.test(radRaw) || rad < 20) return toast('Radius must be a whole number of at least 20 metres', true);
+
+      var editingId = state.editingFenceId;
+      add.disabled = true;
+      add.textContent = editingId == null ? 'Adding…' : 'Updating…';
+      api(editingId == null ? '/api/attendance/geofences' : '/api/attendance/geofences/' + encodeURIComponent(editingId), {
+        method: editingId == null ? 'POST' : 'PUT',
         body: JSON.stringify({
           name: name,
           latitude: Number(lat.toFixed(6)), longitude: Number(lng.toFixed(6)),
           radiusMeters: rad, radius_meters: rad
         })
-      }).then(function () { toast('Location added'); loadAll(); })
-        .catch(function (e) { toast(e.message, true); });
+      }).then(function () {
+        state.editingFenceId = null;
+        toast(editingId == null ? 'Location added' : 'Location updated');
+        loadAll();
+      }).catch(function (e) {
+        add.disabled = false;
+        add.textContent = state.editingFenceId == null ? 'Add location' : 'Update location';
+        toast(e.message, true);
+      });
     };
 
     var here = body.querySelector('#haa-f-here');
@@ -3113,22 +3185,76 @@
 
     bindAsgPager(body);
 
+    function fillAssignmentForm(assignment) {
+      setRosterCombobox('haa-a-email', assignment.email);
+      body.querySelector('#haa-a-shift').value = assignment.shiftId || assignment.shift || '';
+      body.querySelector('#haa-a-tz').value = assignment.timezone || 'IST';
+      body.querySelector('#haa-a-from').value = assignment.effectiveFrom || assignment.effective_from || '';
+      body.querySelector('#haa-a-to').value = assignment.effectiveTo || assignment.effective_to || '';
+      body.querySelector('#haa-a-add').textContent = 'Update assignment';
+      body.querySelector('#haa-a-cancel').style.display = '';
+    }
+
+    function clearAssignmentForm() {
+      state.editingAssignmentId = null;
+      setRosterCombobox('haa-a-email', '');
+      body.querySelector('#haa-a-shift').value = state.shifts.length ? state.shifts[0].id : '';
+      body.querySelector('#haa-a-tz').value = 'IST';
+      body.querySelector('#haa-a-from').value = '';
+      body.querySelector('#haa-a-to').value = '';
+      body.querySelector('#haa-a-add').textContent = 'Assign';
+      body.querySelector('#haa-a-cancel').style.display = 'none';
+    }
+
+    var editingAssignment = !body.querySelector('#haa-a-add') || state.editingAssignmentId == null
+      ? null
+      : state.assignments.find(function (assignment) {
+          return String(assignment.id) === String(state.editingAssignmentId);
+        });
+    if (editingAssignment) fillAssignmentForm(editingAssignment);
+
+    body.querySelectorAll('[data-edit-asg]').forEach(function (button) {
+      button.onclick = function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        var id = button.getAttribute('data-edit-asg');
+        var assignment = state.assignments.find(function (item) { return String(item.id) === String(id); });
+        if (!assignment) return toast('Could not find that shift assignment. Refresh and try again.', true);
+        state.editingAssignmentId = assignment.id;
+        fillAssignmentForm(assignment);
+      };
+    });
+
+    var cancelAssignmentEdit = body.querySelector('#haa-a-cancel');
+    if (cancelAssignmentEdit) cancelAssignmentEdit.onclick = clearAssignmentForm;
+
     var aAdd = body.querySelector('#haa-a-add');
     if (aAdd) aAdd.onclick = function () {
       var email = val('haa-a-email'), from = val('haa-a-from'), to = val('haa-a-to');
       var shiftId = parseInt(val('haa-a-shift'), 10);
       var tz = val('haa-a-tz') || 'IST';
       if (!email || !from || !shiftId) return toast('Employee, shift and start date are required', true);
-      api('/api/shift-assignments', {
-        method: 'POST',
+      if (to && to < from) return toast('The end date cannot be before the start date', true);
+      var editingId = state.editingAssignmentId;
+      aAdd.disabled = true;
+      aAdd.textContent = editingId == null ? 'Assigning…' : 'Updating…';
+      api(editingId == null ? '/api/shift-assignments' : '/api/shift-assignments/' + encodeURIComponent(editingId), {
+        method: editingId == null ? 'POST' : 'PUT',
         body: JSON.stringify({
           email: email, shift: shiftId, shiftId: shiftId,
           effectiveFrom: from, effective_from: from,
           effectiveTo: to || null, effective_to: to || null,
           timezone: tz
         })
-      }).then(function () { toast('Shift assigned'); loadAll(); })
-        .catch(function (e) { toast(e.message, true); });
+      }).then(function () {
+        state.editingAssignmentId = null;
+        toast(editingId == null ? 'Shift assigned' : 'Shift assignment updated');
+        loadAll();
+      }).catch(function (e) {
+        aAdd.disabled = false;
+        aAdd.textContent = state.editingAssignmentId == null ? 'Assign' : 'Update assignment';
+        toast(e.message, true);
+      });
     };
 
     function bindDelete(attr, url, label) {
@@ -3147,72 +3273,6 @@
     bindDelete('data-del-fence', '/api/attendance/geofences/', 'location');
     bindDelete('data-del-shift', '/api/shifts/', 'shift');
     bindDelete('data-del-asg', '/api/shift-assignments/', 'assignment');
-    bindEdit('data-edit-asg')
-    function bindEdit(attr) {
-    body.onclick = function (e) {
-        var el = e.target.closest('[' + attr + ']');
-        if (!el) return;
-        e.stopPropagation();
-        var id = el.getAttribute(attr);
-        
-        if (attr === 'data-edit-asg') {
-            var assignment = state.assignments.find(function (a) {
-                return a.id == id || a.id == parseInt(id, 10) || String(a.id) === String(id);
-            });
-            if (assignment) {
-                setRosterCombobox('haa-a-email', assignment.email);
-                document.getElementById('haa-a-shift').value = assignment.shiftId || assignment.shift;
-                document.getElementById('haa-a-from').value = assignment.effectiveFrom || '';
-                document.getElementById('haa-a-to').value = assignment.effectiveTo || '';
-                state.editingAssignmentId = assignment.id;
-            }
-        } else {
-            var fence = state.fences && state.fences.find(function (f) {
-                return f.id == id || f.id == parseInt(id, 10) || String(f.id) === String(id);
-            });
-            if (fence) {
-                state.editingFenceId = fence.id;
-                document.getElementById('haa-f-name').value = fence.name || '';
-                document.getElementById('haa-f-rad').value = fence.radiusMeters || fence.radius || '';
-                document.getElementById('haa-f-lat').value = fence.latitude || '';
-                document.getElementById('haa-f-lng').value = fence.longitude || '';
-            }
-        }
-    };
-}
-
-bindEdit('data-edit-fence');
-bindEdit('data-edit-asg');
-    function bindEdit(attr) {
-        var els = body.querySelectorAll('[' + attr + ']');
-        for (var i = 0; i < els.length; i++) {
-            (function (el) {
-                el.onclick = function (e) {
-                    e.stopPropagation();
-                    var id = el.getAttribute(attr);
-                    var fence = state.fences && state.fences.find(function(f) { 
-                        return f.id == id || f.id == parseInt(id, 10) || String(f.id) === String(id); 
-                    });
-                    
-                    if (fence) {
-                        // Store the editing ID so the save action knows we are updating
-                        state.editingFenceId = fence.id;
-                        
-                        document.getElementById('haa-f-name').value = fence.name || '';
-                        document.getElementById('haa-f-rad').value = fence.radiusMeters || fence.radius_meters || 200;
-                        document.getElementById('haa-f-lat').value = fence.latitude || '';
-                        document.getElementById('haa-f-lng').value = fence.longitude || '';
-                        
-                        // Change button text to indicate update mode
-                        var addBtn = document.getElementById('haa-f-add');
-                        if (addBtn) addBtn.textContent = 'Update Location';
-                    }
-                };
-            })(els[i]);
-        }
-    }
-    bindEdit('data-edit-fence');
-
     function decide(attr, decision) {
       var els = body.querySelectorAll('[' + attr + ']');
       for (var i = 0; i < els.length; i++) {
