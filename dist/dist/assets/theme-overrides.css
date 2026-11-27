@@ -3495,3 +3495,25 @@ html[data-theme="light"] div:has(> #hrms-kpi-btn) button:hover, html[data-theme=
 @media (hover: none), (prefers-reduced-motion: reduce) {
   .wsq .wsq-kpis > *:hover { transform: none; }
 }
+
+/* Match the remaining dashboard panels to the Headcount card without changing it. */
+@media (hover: hover) {
+  #hrms-live-dashboard-wrap .hrms-dash-charts > .hrms-dash-pro-card:hover,
+  #hrms-live-dashboard-wrap .hrms-dash-3col-row > .hrms-dash-pro-card:nth-child(1):hover,
+  #hrms-live-dashboard-wrap .hrms-dash-3col-row > .hrms-dash-pro-card:nth-child(2):hover,
+  #hrms-live-dashboard-wrap .hrms-dash-3col-row > .hrms-dash-pro-card:nth-child(3):hover {
+    transform: none !important;
+    border-color: #899FCC !important;
+    box-shadow: 0 10px 26px rgba(12, 20, 40, .10) !important;
+  }
+  :root[data-theme="dark"] body:not(:has(.sidebar a.nav-item.active[href="/employees/checkin"])):not(:has(#hrms-chat-page))
+  :is(.content, .main > :not(.topbar):not(.content)) #hrms-live-dashboard-wrap
+  :is(.hrms-dash-charts > .hrms-dash-pro-card,
+      .hrms-dash-3col-row > .hrms-dash-pro-card:nth-child(1),
+      .hrms-dash-3col-row > .hrms-dash-pro-card:nth-child(2),
+      .hrms-dash-3col-row > .hrms-dash-pro-card:nth-child(3)):hover {
+    border-color: color-mix(in srgb, var(--accent) 62%, var(--border2)) !important;
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 34%, transparent),
+                0 10px 30px color-mix(in srgb, var(--accent) 20%, transparent) !important;
+  }
+}

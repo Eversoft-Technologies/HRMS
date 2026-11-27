@@ -129,20 +129,31 @@
       '.pus-h1{font-size:20px;font-weight:700;margin:0}',
       '.pus-sub{font-size:13px;color:var(--text3);margin-top:4px}',
       '.pus-tabs{display:flex;gap:4px;border-bottom:1px solid var(--border2);margin-bottom:16px;overflow-x:auto}',
-      '.pus-tab{background:none;border:none;border-bottom:2px solid transparent;padding:9px 14px;font-size:13px;font-weight:600;color:var(--text3);cursor:pointer;font-family:inherit;margin-bottom:-1px;white-space:nowrap}',
+      '.pus-tab{background:none;border:none;border-bottom:2px solid transparent;border-radius:8px 8px 0 0;padding:9px 14px;font-size:13px;font-weight:600;color:var(--text3);cursor:pointer;font-family:inherit;margin-bottom:-1px;white-space:nowrap;transition:color .15s ease,background .15s ease,box-shadow .15s ease,transform .15s ease}',
+      '.pus-tab:hover{color:var(--text);background:color-mix(in srgb,var(--accent) 10%,transparent);box-shadow:0 10px 26px rgba(0,0,0,.28);transform:translateY(-1px)}',
       '.pus-tab.on{color:var(--accent);border-bottom-color:var(--accent)}',
+      '.pus-tab.on:hover{color:var(--accent)}',
       '.pus-bar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:14px}',
       '.pus-bar .input-field{width:auto;min-width:110px;padding:7px 10px}',
       '.pus-grow{flex:1}',
-      '.pus-card{background:var(--bg2);border:1px solid var(--border2);border-radius:12px;padding:16px;margin-bottom:16px;min-width:0}',
+      '.pus-card{background:var(--bg2);border:1px solid var(--border2);border-radius:12px;padding:16px;margin-bottom:16px;min-width:0;box-shadow:0 2px 8px rgba(0,0,0,.15);transition:transform .2s cubic-bezier(.22,1,.36,1),box-shadow .2s ease,border-color .2s ease}',
+      '.pus-card:hover{transform:none;box-shadow:0 10px 26px rgba(0,0,0,.28);border-color:var(--accent,#4f8ef7)}',
       '.pus-card h4{margin:0 0 10px;font-size:14px;font-weight:700}',
       '.pus-grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px}',
       '.pus-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:16px}',
-      '.pus-kpi{background:var(--bg2);border:1px solid var(--border2);border-radius:10px;padding:12px 14px}',
+      '.pus-kpi{background:var(--bg2);border:1px solid var(--border2);border-radius:10px;padding:12px 14px;box-shadow:0 2px 8px rgba(0,0,0,.15);transition:box-shadow .2s ease,border-color .2s ease}',
+      '.pus-kpi:hover{box-shadow:0 10px 26px rgba(0,0,0,.28);border-color:var(--accent,#4f8ef7)}',
       '.pus-kpi span{display:block;font-size:11px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.7px}',
       '.pus-kpi b{display:block;font-size:20px;font-weight:700;margin-top:4px;word-break:break-word}',
       '.pus-table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}',
       '.pus-table{width:100%;border-collapse:collapse;font-size:13px}',
+      '.pus-tax-table{table-layout:fixed}',
+      '.pus-tax-col-status{width:14%}',
+      '.pus-tax-col-updated{width:18%}',
+      '.pus-tax-col-action{width:12%}',
+      '.pus-tax-col-region{width:10%}',
+      '.pus-tax-col-values{width:46%}',
+      '.pus-tax-table th.pus-tax-status,.pus-tax-table td.pus-tax-status{text-align:center}',
       '.pus-table th{text-align:left;font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.8px;padding:8px 10px;border-bottom:1px solid var(--border2);white-space:nowrap}',
       '.pus-table td{padding:9px 10px;border-bottom:1px solid var(--border);vertical-align:middle}',
       '.pus-table td.n,.pus-table th.n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}',
@@ -199,6 +210,7 @@
       '.pus-chip{border:1px solid var(--border2);background:var(--bg3);color:var(--text2);border-radius:999px;padding:4px 12px;font-size:12px;cursor:pointer;font-family:inherit}',
       '.pus-chip.on{border-color:var(--accent);color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,transparent)}',
       'html[data-theme="light"] .pus-overlay{background:rgba(15,23,42,.35)}',
+      '@media (hover:none){.pus-card:hover{transform:none;box-shadow:0 2px 8px rgba(0,0,0,.15);border-color:var(--border2)}.pus-kpi:hover{box-shadow:0 2px 8px rgba(0,0,0,.15);border-color:var(--border2)}.pus-tab:hover{color:var(--text3);background:none;box-shadow:none;transform:none}.pus-tab.on:hover{color:var(--accent)}}',
       'html[data-theme="light"] .pus-banner{background:color-mix(in srgb,var(--warn) 9%,#fff)}'
     ].join('\n');
     var el = document.createElement('style');
@@ -420,11 +432,15 @@
       groups.forEach(function (g) {
         var list = d.tables.filter(function (t) { return t.kind === g[0]; });
         if (!list.length) return;
-        html += '<div class="pus-card"><h4>' + esc(g[1]) + '</h4><div class="pus-table-wrap"><table class="pus-table"><thead><tr>' + (g[0] === 'state' || g[0] === 'suta' ? '<th>State</th>' : '') +
-          '<th>Values</th><th>Status</th><th>Updated</th><th></th></tr></thead><tbody>' +
+        var hasRegion = g[0] === 'state' || g[0] === 'suta';
+        var columns = hasRegion ?
+          '<colgroup><col class="pus-tax-col-region"><col class="pus-tax-col-values"><col class="pus-tax-col-status"><col class="pus-tax-col-updated"><col class="pus-tax-col-action"></colgroup>' :
+          '<colgroup><col style="width:56%"><col class="pus-tax-col-status"><col class="pus-tax-col-updated"><col class="pus-tax-col-action"></colgroup>';
+        html += '<div class="pus-card"><h4>' + esc(g[1]) + '</h4><div class="pus-table-wrap"><table class="pus-table pus-tax-table">' + columns + '<thead><tr>' + (hasRegion ? '<th>State</th>' : '') +
+          '<th>Values</th><th class="pus-tax-status">Status</th><th>Updated</th><th></th></tr></thead><tbody>' +
           list.map(function (t) {
-            return '<tr>' + (g[0] === 'state' || g[0] === 'suta' ? '<td><b>' + esc(t.region) + '</b></td>' : '') + '<td>' + esc(tableSummary(t)) + '</td>' +
-              '<td>' + (t.verified ? badge('Verified', 'pus-c-success') + '<div class="pus-small pus-muted">' + esc(t.verifiedBy || '') + '</div>' : badge('Verify', 'pus-c-warn')) + '</td>' +
+            return '<tr>' + (hasRegion ? '<td><b>' + esc(t.region) + '</b></td>' : '') + '<td>' + esc(tableSummary(t)) + '</td>' +
+              '<td class="pus-tax-status">' + (t.verified ? badge('Verified', 'pus-c-success') + '<div class="pus-small pus-muted">' + esc(t.verifiedBy || '') + '</div>' : badge('Verify', 'pus-c-warn')) + '</td>' +
               '<td class="pus-small pus-muted">' + esc(fmtDate(t.updatedAt)) + '<div>' + esc(t.updatedBy || '') + '</div></td>' +
               '<td style="white-space:nowrap"><button class="btn-sm" data-t="' + t.id + '">Edit</button>' + (g[0] === 'state' || g[0] === 'suta' ? ' <button class="pus-link danger" data-del="' + t.id + '">Delete</button>' : '') + '</td></tr>';
           }).join('') + '</tbody></table></div></div>';
