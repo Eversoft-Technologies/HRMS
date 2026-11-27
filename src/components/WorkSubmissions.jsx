@@ -600,7 +600,7 @@ export default function WorkSubmissions() {
                     key={col}
                     style={{
                       padding: "12px 14px",
-                      textAlign: col === "AI SCORE" || col === "ACTION" ? "center" : "left",
+                      textAlign: col === "TYPE" || col === "STATUS" || col === "AI SCORE" || col === "ACTION" ? "center" : "left",
                       fontSize: 11,
                       fontWeight: 700,
                       color: "var(--text3, #64748b)",
@@ -664,7 +664,7 @@ export default function WorkSubmissions() {
                       </td>
 
                       {/* TYPE */}
-                      <td style={{ padding: "14px", borderBottom: "1px solid var(--border2, #f1f5f9)" }}>
+                      <td style={{ padding: "14px", borderBottom: "1px solid var(--border2, #f1f5f9)", textAlign: "center" }}>
                         <span
                           style={{
                             background: typeStyle.bg,
@@ -672,9 +672,14 @@ export default function WorkSubmissions() {
                             border: `1px solid ${typeStyle.border}`,
                             borderRadius: 6,
                             padding: "4px 10px",
-                            fontSize: 11,
+                            fontSize: 10.5,
                             fontWeight: 600,
-                            display: "inline-block"
+                            display: "inline-flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            width: 86,
+                            boxSizing: "border-box",
+                            whiteSpace: "nowrap"
                           }}
                         >
                           {row.type}
@@ -729,25 +734,29 @@ export default function WorkSubmissions() {
                       </td>
 
                       {/* STATUS */}
-                      <td style={{ padding: "14px", borderBottom: "1px solid var(--border2, #f1f5f9)" }}>
+                      <td style={{ padding: "14px", borderBottom: "1px solid var(--border2, #f1f5f9)", textAlign: "center" }}>
                         {row.status === "Approved" && (
-                          <span style={{ background: "#ecfdf5", color: "#10b981", border: "1px solid #a7f3d0", borderRadius: 12, padding: "4px 12px", fontSize: 11.5, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 6 }}>
-                            <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#10b981" }} /> Approved
+                          <span style={{ background: "#ecfdf5", color: "#10b981", border: "1px solid #a7f3d0", borderRadius: 12, padding: "4px 8px", fontSize: 11.5, fontWeight: 600, display: "grid", gridTemplateColumns: "6px minmax(0, 1fr) 12px", alignItems: "center", columnGap: 7, textAlign: "center", width: 104, boxSizing: "border-box", margin: "0 auto" }}>
+                            <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#10b981", gridColumn: 1, justifySelf: "center" }} />
+                            <span style={{ gridColumn: 2 }}>Approved</span>
                           </span>
                         )}
                         {row.status === "Pending" && (
-                          <span style={{ background: "#fffbe6", color: "#d97706", border: "1px solid #fde68a", borderRadius: 12, padding: "4px 12px", fontSize: 11.5, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 6 }}>
-                            <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#d97706" }} /> Pending
+                          <span style={{ background: "#fffbe6", color: "#d97706", border: "1px solid #fde68a", borderRadius: 12, padding: "4px 8px", fontSize: 11.5, fontWeight: 600, display: "grid", gridTemplateColumns: "6px minmax(0, 1fr) 12px", alignItems: "center", columnGap: 7, textAlign: "center", width: 104, boxSizing: "border-box", margin: "0 auto" }}>
+                            <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#d97706", gridColumn: 1, justifySelf: "center" }} />
+                            <span style={{ gridColumn: 2 }}>Pending</span>
                           </span>
                         )}
                         {row.status === "In Review" && (
-                          <span style={{ background: "#eff6ff", color: "#3b82f6", border: "1px solid #bfdbfe", borderRadius: 12, padding: "4px 12px", fontSize: 11.5, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 6 }}>
-                            <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#3b82f6" }} /> In Review
+                          <span style={{ background: "#eff6ff", color: "#3b82f6", border: "1px solid #bfdbfe", borderRadius: 12, padding: "4px 8px", fontSize: 11.5, fontWeight: 600, display: "grid", gridTemplateColumns: "6px minmax(0, 1fr) 12px", alignItems: "center", columnGap: 7, textAlign: "center", width: 104, boxSizing: "border-box", margin: "0 auto" }}>
+                            <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#3b82f6", gridColumn: 1, justifySelf: "center" }} />
+                            <span style={{ gridColumn: 2 }}>In Review</span>
                           </span>
                         )}
                         {row.status === "Rejected" && (
-                          <span style={{ background: "#fef2f2", color: "#ef4444", border: "1px solid #fecaca", borderRadius: 12, padding: "4px 12px", fontSize: 11.5, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 6 }}>
-                            <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#ef4444" }} /> Rejected
+                          <span style={{ background: "#fef2f2", color: "#ef4444", border: "1px solid #fecaca", borderRadius: 12, padding: "4px 8px", fontSize: 11.5, fontWeight: 600, display: "grid", gridTemplateColumns: "6px minmax(0, 1fr) 12px", alignItems: "center", columnGap: 7, textAlign: "center", width: 104, boxSizing: "border-box", margin: "0 auto" }}>
+                            <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#ef4444", gridColumn: 1, justifySelf: "center" }} />
+                            <span style={{ gridColumn: 2 }}>Rejected</span>
                           </span>
                         )}
                       </td>

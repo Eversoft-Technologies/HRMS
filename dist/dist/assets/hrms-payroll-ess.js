@@ -81,15 +81,19 @@
       '.pess-h1{font-size:20px;font-weight:700;margin:0}',
       '.pess-sub{font-size:13px;color:var(--text3);margin-top:4px}',
       '.pess-tabs{display:flex;gap:4px;border-bottom:1px solid var(--border2);margin-bottom:16px;overflow-x:auto}',
-      '.pess-tab{background:none;border:none;border-bottom:2px solid transparent;padding:9px 14px;font-size:13px;font-weight:600;color:var(--text3);cursor:pointer;font-family:inherit;margin-bottom:-1px;white-space:nowrap}',
+      '.pess-tab{background:none;border:none;border-bottom:2px solid transparent;padding:9px 14px;font-size:13px;font-weight:600;color:var(--text3);cursor:pointer;font-family:inherit;margin-bottom:-1px;white-space:nowrap;transition:color .15s ease,background .15s ease,box-shadow .15s ease,transform .15s ease}',
+      '.pess-tab:hover{color:var(--text);background:color-mix(in srgb,var(--accent) 10%,transparent);box-shadow:0 10px 26px rgba(0,0,0,.28);transform:translateY(-1px)}',
       '.pess-tab.on{color:var(--accent);border-bottom-color:var(--accent)}',
-      '.pess-card{background:var(--bg2);border:1px solid var(--border2);border-radius:12px;padding:16px 18px;margin-bottom:14px;min-width:0}',
+      '.pess-tab.on:hover{color:var(--accent)}',
+      '.pess-card{background:var(--bg2);border:1px solid var(--border2);border-radius:12px;padding:16px 18px;margin-bottom:14px;min-width:0;box-shadow:0 2px 8px rgba(0,0,0,.15);transition:transform .2s cubic-bezier(.22,1,.36,1),box-shadow .2s ease,border-color .2s ease}',
+      '.pess-card:hover{transform:none;box-shadow:0 10px 26px rgba(0,0,0,.28);border-color:var(--accent,#4f8ef7)}',
       '.pess-card h3{margin:0 0 12px;font-size:15px;font-weight:700}',
       '.pess-grid2{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px}',
       '.pess-grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}',
       '@media (max-width:860px){.pess-grid2,.pess-grid3{grid-template-columns:1fr}}',
       '.pess-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:14px}',
-      '.pess-kpi{background:var(--bg3);border:1px solid var(--border2);border-radius:10px;padding:12px 14px}',
+      '.pess-kpi{background:var(--bg3);border:1px solid var(--border2);border-radius:10px;padding:12px 14px;box-shadow:0 2px 8px rgba(0,0,0,.15);transition:box-shadow .2s ease,border-color .2s ease}',
+      '.pess-kpi:hover{box-shadow:0 10px 26px rgba(0,0,0,.28);border-color:var(--accent,#4f8ef7)}',
       '.pess-kpi span{display:block;font-size:11px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.7px}',
       '.pess-kpi b{display:block;font-size:19px;font-weight:700;margin-top:4px;word-break:break-word}',
       '.pess-table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}',
@@ -133,7 +137,8 @@
       '.pess-total{font-size:28px;font-weight:800;margin:4px 0 12px}',
       '.pess-progress{height:8px;border-radius:5px;background:var(--bg3);overflow:hidden;border:1px solid var(--border2)}',
       '.pess-progress i{display:block;height:100%;background:var(--success)}',
-      '.pess-loan{border:1px solid var(--border2);border-radius:10px;padding:12px 14px;margin-bottom:10px;background:var(--bg3)}',
+      '.pess-loan{border:1px solid var(--border2);border-radius:10px;padding:12px 14px;margin-bottom:10px;background:var(--bg3);transition:box-shadow .2s ease,border-color .2s ease}',
+      '.pess-loan:hover{box-shadow:0 10px 26px rgba(0,0,0,.28);border-color:var(--accent,#4f8ef7)}',
       '.pess-loan-h{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:8px}',
       '.pess-kv{display:flex;justify-content:space-between;gap:10px;font-size:12.5px;padding:5px 0;border-bottom:1px solid var(--border)}',
       '.pess-kv:last-child{border-bottom:none}.pess-kv span:first-child{color:var(--text3)}.pess-kv span:last-child{text-align:right;word-break:break-word}',
@@ -146,6 +151,7 @@
       '.pess-doc{width:100%;height:65vh;border:1px solid var(--border2);border-radius:8px;background:#fff}',
       '.pess-net{font-size:20px;font-weight:800}.pess-net.pos{color:var(--success)}.pess-net.neg{color:var(--danger)}',
       'html[data-theme="light"] .pess-overlay{background:rgba(15,23,42,.35)}',
+      '@media (hover:none){.pess-card:hover,.pess-loan:hover{transform:none;box-shadow:0 2px 8px rgba(0,0,0,.15);border-color:var(--border2)}.pess-kpi:hover{box-shadow:0 2px 8px rgba(0,0,0,.15);border-color:var(--border2)}.pess-tab:hover{color:var(--text3);background:none;box-shadow:none;transform:none}.pess-tab.on:hover{color:var(--accent)}}',
       '@media (max-width:600px){.pess-card{padding:13px 12px}.pess-total{font-size:23px}.pess-table{font-size:12px}.pess-table td,.pess-table th{padding:7px 6px}}'
     ].join('\n');
     var st = document.createElement('style');
@@ -418,7 +424,8 @@
     var paidPct = total > 0 ? Math.max(0, Math.min(100, (total - Number(l.outstanding || 0)) / total * 100)) : 0;
     if (l.status === 'requested' || l.status === 'approved' || l.status === 'rejected' || l.status === 'withdrawn') paidPct = 0;
     if (l.status === 'closed') paidPct = 100;
-    return '<div class="pess-loan"><div class="pess-loan-h"><div><b>' + esc(l.kind === 'advance' ? 'Salary advance' : 'Loan') + ' · ' + esc(money(l.principal)) + '</b>' +
+    var LOAN_ACC = { requested: 'warn', approved: 'blue', active: 'green', closed: 'violet', rejected: 'danger', withdrawn: 'muted', cancelled: 'muted' };
+    return '<div class="pess-loan pess-acc pess-c-' + (LOAN_ACC[l.status] || 'muted') + '"><div class="pess-loan-h"><div><b>' + esc(l.kind === 'advance' ? 'Salary advance' : 'Loan') + ' · ' + esc(money(l.principal)) + '</b>' +
       (l.employeeName ? ' <span class="pess-muted pess-small">' + esc(l.employeeName) + ' (' + esc(l.email) + ')</span>' : '') +
       '<div class="pess-muted pess-small">' + esc(l.tenureMonths) + ' month(s) · ' + esc(l.interestRate) + '% p.a. · EMI ' + esc(money(l.emi)) +
       ' · requested ' + esc(fmtDate(l.createdAt)) + '</div></div><div>' + statusBadge(l.status) + '</div></div>' +
@@ -437,10 +444,10 @@
       var adv = lim.advance || {}, ln = lim.loan || {};
       body.innerHTML =
         '<div class="pess-kpis">' +
-        '<div class="pess-kpi"><span>Max salary advance</span><b>' + esc(money(adv.maxAmount)) + '</b></div>' +
-        '<div class="pess-kpi"><span>Max loan</span><b>' + esc(money(ln.maxAmount)) + '</b></div>' +
-        '<div class="pess-kpi"><span>Max tenure (loan)</span><b>' + esc(ln.maxTenure) + ' months</b></div>' +
-        '<div class="pess-kpi"><span>Loan interest</span><b>' + esc(ln.interestRate) + '% p.a.</b></div></div>' +
+        '<div class="pess-kpi pess-acc pess-c-green"><span>Max salary advance</span><b>' + esc(money(adv.maxAmount)) + '</b></div>' +
+        '<div class="pess-kpi pess-acc pess-c-blue"><span>Max loan</span><b>' + esc(money(ln.maxAmount)) + '</b></div>' +
+        '<div class="pess-kpi pess-acc pess-c-purple"><span>Max tenure (loan)</span><b>' + esc(ln.maxTenure) + ' months</b></div>' +
+        '<div class="pess-kpi pess-acc pess-c-orange"><span>Loan interest</span><b>' + esc(ln.interestRate) + '% p.a.</b></div></div>' +
         '<div class="pess-grid2"><div class="pess-card"><h3>Request an advance or loan</h3>' +
         '<div class="pess-grid2"><div class="pess-field"><label>Type</label><select class="input-field" data-f="kind">' +
         options([{ value: 'advance', label: 'Salary advance' }, { value: 'loan', label: 'Loan' }], 'advance') + '</select></div>' +
@@ -511,7 +518,7 @@
       body.innerHTML =
         '<div class="pess-row" style="margin-bottom:12px"><select class="input-field" data-f="fy">' + options(fyList(), my.fy) + '</select>' +
         '<span class="pess-muted pess-small">' + esc(fmtDate(d.from)) + ' – ' + esc(fmtDate(d.to)) + ' · ' + esc(d.payslipCount) + ' payslip(s)</span></div>' +
-        '<div class="pess-card"><h3>Total rewards ' + esc(d.fy) + '</h3><div class="pess-muted pess-small">Everything the company invests in you this year</div>' +
+        '<div class="pess-card pess-hov"><h3>Total rewards ' + esc(d.fy) + '</h3><div class="pess-muted pess-small">Everything the company invests in you this year</div>' +
         '<div class="pess-total">' + esc(money(total, d.currency)) + '</div>' +
         (comps.length ? '<div class="pess-bar" role="img" aria-label="Breakdown of total rewards">' + bar + '</div><div class="pess-legend">' + legend + '</div>' : '<div class="pess-empty">No pay data for this year yet.</div>') + '</div>' +
         '<div class="pess-grid2"><div class="pess-card"><h3>Breakdown</h3><div class="pess-table-wrap"><table class="pess-table"><tbody>' + detailRows +
